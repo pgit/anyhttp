@@ -1,4 +1,3 @@
 .cache
+.vscode
 build
-*.pcap
-.bash_history
