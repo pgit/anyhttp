@@ -34,9 +34,8 @@
 				"xaver.clang-format",
 				"vadimcn.vscode-lldb",
 				"usernamehw.errorlens",
-				"ms-azuretools.vscode-docker"
-			]
-			
+				"matepek.vscode-catch2-test-adapter"
+			]			
 		}
 	},
 

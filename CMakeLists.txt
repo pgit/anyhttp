@@ -30,6 +30,12 @@ link_directories(${CMAKE_SOURCE_DIR}/../nghttp2/install/lib)
 find_package(fmt)
 
 #
+# fmtlog
+#
+include_directories(/fmtlog/fmt/include)
+link_directories(/usr/lib)
+
+#
 # range-v3
 #
 include_directories(/usr/local/include/range-v3)
@@ -37,3 +43,4 @@ include_directories(/usr/local/include/range-v3)
 # --------------------------------------------------------------------------------------------------
 
 add_subdirectory(src)
+add_subdirectory(test)
