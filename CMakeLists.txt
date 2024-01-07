@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD 20)
 # find boost
 # https://github.com/madmongo1/blog-december-2020/blob/master/CMakeLists.txt
 #
-find_package(Boost COMPONENTS system thread atomic coroutine url REQUIRED)
+find_package(Boost COMPONENTS system thread atomic coroutine url filesystem REQUIRED)
 if (Boost_VERSION VERSION_LESS 1.78)
     message(FATAL_ERROR "Boost 1.78 or higher required")
 endif ()
@@ -39,6 +39,11 @@ link_directories(/usr/lib)
 # range-v3
 #
 include_directories(/usr/local/include/range-v3)
+
+#
+# spodlog
+#
+find_package(spdlog REQUIRED)
 
 # --------------------------------------------------------------------------------------------------
 

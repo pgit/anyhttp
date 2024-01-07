@@ -1,7 +1,5 @@
 
 #include "anyhttp/session.hpp"
-#include "anyhttp/detect_http2.hpp"
-#include "anyhttp/server.hpp"
 #include "anyhttp/stream.hpp"
 
 #include <boost/asio/buffer.hpp>
@@ -161,7 +159,7 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
 
 awaitable<void> Session::do_session(std::vector<uint8_t> data)
 {
-   m_socket.set_option(tcp::no_delay(true));
+   m_socket.set_option(ip::tcp::no_delay(true));
 
    //
    // setup nghttp2 callbacks

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "common.hpp"
+#include "common.hpp"  // IWYU pragma: keep
+#include "server_impl.hpp"
 
 #include <map>
 
@@ -13,7 +14,6 @@ using namespace std::chrono_literals;
 using namespace boost::asio;
 namespace asio = boost::asio;
 
-using tcp = asio::ip::tcp; // from <boost/asio/ip/tcp.hpp>
 using asio::awaitable;
 using asio::co_spawn;
 
@@ -26,14 +26,15 @@ using stream = asio::as_tuple_t<asio::deferred_t>::as_default_on_t<asio::ip::tcp
 #define mlogi(x, ...) logi("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
 #define mlogw(x, ...) logw("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
 
+
+
 class Stream;
 class Session
 {
 public:
-   explicit Session(asio::any_io_executor executor, tcp::socket&& socket)
-      : m_executor(std::move(executor)), m_socket(std::move(socket)),
-        m_logPrefix(fmt::format("{}", m_socket.remote_endpoint()))
-
+   explicit Session(Server::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket)
+      : m_parent(parent), m_executor(std::move(executor)), m_socket(std::move(socket)),
+        m_logPrefix(fmt::format("{}", normalize(m_socket.remote_endpoint())))
    {
       mlogd("session created");
       m_send_buffer.resize(64 * 1024);
@@ -49,7 +50,7 @@ public:
    awaitable<void> send_loop(stream& stream);
    awaitable<void> recv_loop(stream& stream);
 
-
+   Server::Impl& parent() { return m_parent; }
    const auto& executor() const { return m_executor; }
 
    asio::any_completion_handler<void()> m_send_handler;
@@ -125,6 +126,7 @@ public:
    stream m_socket;
 
 private:
+   Server::Impl& m_parent;
    asio::any_io_executor m_executor;
    std::string m_logPrefix;
 

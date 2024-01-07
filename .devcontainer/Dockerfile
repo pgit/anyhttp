@@ -26,6 +26,16 @@ RUN cd /home/${USERNAME} && \
     echo >>.gdbinit "source /home/${USERNAME}/asio-debugger-extensions/gdb/pretty_printer.py" && \
     chown $USERNAME .gdbinit
 
+
+#
+# spdlog
+#
+# https://github.com/gabime/spdlog
+#
+RUN git clone https://github.com/gabime/spdlog.git && \
+    cd spdlog && mkdir build && cd build && \
+    cmake .. && make -j && make install
+
 #
 # enable persistent bash history in container
 #

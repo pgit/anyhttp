@@ -103,17 +103,22 @@ public:
    {
       assert(!m_read_handler);
 
+      //
       // Define a function object that contains the code to launch the asynchronous
       // operation. This is passed the concrete completion handler, followed by any
       // additional arguments that were passed through the call to async_initiate.
+      //
       auto init = [&](asio::completion_handler_for<void(std::vector<std::uint8_t>)> auto handler)
       {
+         assert(!m_read_handler);
+
+#if 1
+         m_read_handler = std::move(handler);
+#else
          // According to the rules for asynchronous operations, we need to track
          // outstanding work against the handler's associated executor until the
          // asynchronous operation is complete.
          auto work = boost::asio::make_work_guard(handler);
-
-         assert(!m_read_handler);
 
          // Launch the operation with a callback that will receive the result and
          // pass it through to the asynchronous operation's completion handler.
@@ -139,8 +144,8 @@ public:
                }));
             logd("[{}] async_read_some: dispatching... done", logPrefix);
          };
-
          logd("[{}] async_read_some: read handler set", logPrefix);
+#endif
          call_handler_loop();
       };
 
@@ -164,12 +169,15 @@ public:
       {
          assert(!sendHandler);
 
-         auto work = boost::asio::make_work_guard(handler);
-
          logd("[{}] async_write: buffer={} is_deferred={}", logPrefix, buffer.size(), is_deferred);
 
          sendBuffer = std::move(buffer);
          sendBufferView = boost::asio::buffer(sendBuffer);
+#if 1
+         sendHandler = std::move(handler);
+#else
+         auto work = boost::asio::make_work_guard(handler);
+
          sendHandler =
             [handler = std::move(handler), work = std::move(work), logPrefix = logPrefix]() mutable
          {
@@ -187,6 +195,7 @@ public:
                   }));
             logd("[{}] async_write: dispatching... done", logPrefix);
          };
+#endif
 
          if (is_deferred)
          {
@@ -304,7 +313,7 @@ public:
 
       //
       // It is a little faster to just submit headers here and the response later, when there
-      // is some data to send. Currently, there may be an extra DEFERRED round trip.
+      // is some data to send. Otherwise, there is an extra DEFERRED round trip.
       //
       // auto rv = nghttp2_submit_response(parent.session, id, nva.data(), nva.size(), &prd);
 
@@ -356,6 +365,7 @@ public:
       // TODO: Implement request queue. Until then, separate preparation of request/response from
       //       the actual handling.
       //
+      // parent.parent().requestHandler()(Request{}, Response{});
       co_spawn(executor(), do_request(), detached);
    }
 

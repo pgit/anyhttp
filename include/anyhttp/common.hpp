@@ -5,15 +5,14 @@
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 
-#include <fmtlog.h>
+#include <spdlog/spdlog.h>
 
 #include <nghttp2/nghttp2.h>
 
-// https://fmt.dev/latest/api.html#std-ostream-support
-template <>
-struct fmt::formatter<boost::asio::ip::tcp::endpoint> : ostream_formatter
+namespace anyhttp
 {
-};
+using namespace std::chrono_literals;
+using namespace boost::asio;
 
 // Create nghttp2_nv from string literal |name| and std::string |value|.
 template <size_t N>
@@ -48,3 +47,30 @@ Defer<F, T...> defer(F&& f, T&&... t)
    return Defer<F, T...>(std::forward<F>(f), std::forward<T>(t)...);
 }
 
+inline ip::address normalize(ip::address addr)
+{
+   if (addr.is_v6())
+   {
+      auto v6 = addr.to_v6();
+      if (v6.is_v4_mapped())
+         return v6.to_v4();
+   }
+   return addr;
+}
+
+inline ip::tcp::endpoint normalize(const ip::tcp::endpoint& endpoint)
+{
+   return {normalize(endpoint.address()), endpoint.port()};
+}
+}; // namespace anyhttp
+
+// https://fmt.dev/latest/api.html#std-ostream-support
+template <>
+struct fmt::formatter<boost::asio::ip::tcp::endpoint> : ostream_formatter
+{
+};
+
+#define loge(...) spdlog::error(__VA_ARGS__)
+#define logw(...) spdlog::warn(__VA_ARGS__)
+#define logi(...) spdlog::info(__VA_ARGS__)
+#define logd(...) spdlog::debug(__VA_ARGS__)

@@ -280,7 +280,7 @@ public:
    std::vector<uint8_t> sendBuffer;
    asio::any_completion_handler<void()> sendHandler;
    bool is_deferred = false;
-   
+
    std::string logPrefix;
 
    Stream(Session& parent, int id_)
@@ -994,7 +994,20 @@ awaitable<void> listener()
    {
       auto socket = co_await acceptor.async_accept(deferred);
       auto session = std::make_shared<Session>(std::move(socket), executor);
-      co_spawn(executor, session->do_session(), [session](const std::exception_ptr&) {});
+      co_spawn(executor, session->do_session(),
+               [session](const std::exception_ptr& ptr)
+               {
+                  std::string result;
+                  try
+                  {
+                     std::rethrow_exception(ptr);
+                  }
+                  catch (std::exception& ex)
+                  {
+                     loge("exception: {}", ex.what());
+                  }
+                  return result;
+               });
    }
 }
 
