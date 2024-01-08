@@ -1,6 +1,7 @@
 #pragma once
 #include "server.hpp"
 
+#include <boost/asio/any_completion_handler.hpp>
 #include <set>
 
 #include <boost/asio.hpp>
@@ -12,13 +13,38 @@ using namespace boost::asio;
 namespace anyhttp::server
 {
 
+// =================================================================================================
+
+class Stream;
 class Request::Impl
 {
+public:
+   explicit Impl(Stream& stream) : m_stream(stream){};
+
+   void async_read_some(asio::any_completion_handler<void(std::vector<std::uint8_t>)>&& handler);
+   const asio::any_io_executor& executor() const;
+   
+private:
+   Stream& m_stream;
 };
+
+// -------------------------------------------------------------------------------------------------
 
 class Response::Impl
 {
+public:
+   explicit Impl(Stream& stream) : m_stream(stream){};
+
+   const asio::any_io_executor& executor() const;
+   void write_head(unsigned int status_code, Headers headers);
+   void async_write(asio::any_completion_handler<void()>&& handler, std::vector<uint8_t> bufffer);
+
+private:
+   Stream& m_stream;
+   nghttp2_data_provider prd;
 };
+
+// =================================================================================================
 
 class Session;
 class Server::Impl
@@ -37,7 +63,9 @@ public:
    ip::tcp::endpoint local_endpoint() const { return m_acceptor.local_endpoint(); }
 
    void setRequestHandler(RequestHandler&& handler) { m_requestHandler = std::move(handler); }
+   void setRequestHandler(RequestHandlerCoro&& handler) { m_requestHandlerCoro = std::move(handler); }
    const RequestHandler& requestHandler() const { return m_requestHandler; }
+   const RequestHandlerCoro& requestHandlerCoro() const { return m_requestHandlerCoro; }
 
    void run();
 
@@ -47,6 +75,9 @@ private:
    ip::tcp::acceptor m_acceptor;
    std::set<std::shared_ptr<Session>> m_sessions;
    RequestHandler m_requestHandler;
+   RequestHandlerCoro m_requestHandlerCoro;
 };
+
+// =================================================================================================
 
 } // namespace anyhttp::server

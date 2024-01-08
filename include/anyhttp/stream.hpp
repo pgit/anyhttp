@@ -214,6 +214,21 @@ public:
       return boost::asio::async_initiate<CompletionToken, void()>(init, token, std::move(buffer));
    }
 
+   void async_write(asio::any_completion_handler<void()>&& handler, std::vector<uint8_t> buffer)
+   {
+      assert(!sendHandler);
+      sendHandler = std::move(handler);
+      sendBuffer = std::move(buffer);
+      sendBufferView = boost::asio::buffer(sendBuffer);
+
+      if (is_deferred)
+      {
+         is_deferred = false;
+         nghttp2_session_resume_data(parent.session, id);
+         parent.start_write();
+      }
+   }
+
    // ==============================================================================================
 
    ssize_t read_callback(uint8_t* buf, size_t length, uint32_t* data_flags)
@@ -365,8 +380,19 @@ public:
       // TODO: Implement request queue. Until then, separate preparation of request/response from
       //       the actual handling.
       //
-      // parent.parent().requestHandler()(Request{}, Response{});
+#if 0
       co_spawn(executor(), do_request(), detached);
+#else
+      Request request(std::make_unique<Request::Impl>(*this));
+      Response response(std::make_unique<Response::Impl>(*this));
+
+      if (auto& handler = parent.parent().requestHandlerCoro())
+         co_spawn(executor(), handler(std::move(request), std::move(response)), detached);
+      else if (auto& handler = parent.parent().requestHandler())
+         parent.parent().requestHandler()(std::move(request), std::move(response));
+      else
+         assert(false); // no requesthandler set
+#endif
    }
 
    inline const asio::any_io_executor& executor() const { return parent.executor(); }

@@ -1,5 +1,5 @@
-#include "anyhttp/common.hpp"
 #include "anyhttp/server_impl.hpp"
+#include "anyhttp/common.hpp"
 #include "anyhttp/detect_http2.hpp"
 #include "anyhttp/stream.hpp" // IWYU pragma: keep
 
@@ -17,6 +17,52 @@ using asio::deferred;
 namespace anyhttp::server
 {
 
+// =================================================================================================
+
+void Request::Impl::async_read_some(
+   asio::any_completion_handler<void(std::vector<std::uint8_t>)>&& handler)
+{
+   assert(!m_stream.m_read_handler);
+   m_stream.m_read_handler = std::move(handler);
+   m_stream.call_handler_loop();
+}
+
+const asio::any_io_executor& Request::Impl::executor() const { return m_stream.executor(); }
+
+// -------------------------------------------------------------------------------------------------
+
+const asio::any_io_executor& Response::Impl::executor() const { return m_stream.executor(); }
+
+void Response::Impl::write_head(unsigned int status_code, Headers headers)
+{
+   auto nva = std::vector<nghttp2_nv>();
+   nva.reserve(2);
+   std::string date = "Sat, 01 Apr 2023 09:33:09 GMT";
+   nva.push_back(make_nv_ls(":status", fmt::format("{}", status_code)));
+   nva.push_back(make_nv_ls("date", date));
+
+   // TODO: headers
+   std::ignore = headers;
+
+   prd.source.ptr = &m_stream;
+   prd.read_callback = [](nghttp2_session*, int32_t, uint8_t* buf, size_t length,
+                          uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t
+   {
+      auto stream = static_cast<Stream*>(source->ptr);
+      assert(stream);
+      return stream->read_callback(buf, length, data_flags);
+   };
+
+   nghttp2_submit_response(m_stream.parent.session, m_stream.id, nva.data(), nva.size(), &prd);
+}
+
+void Response::Impl::async_write(asio::any_completion_handler<void()>&& handler,
+                                 std::vector<uint8_t> buffer)
+{
+   m_stream.async_write(std::move(handler), std::move(buffer));
+}
+
+// =================================================================================================
 
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
@@ -29,10 +75,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
 
 Server::Impl::~Impl() { logi("Server: dtor"); }
 
-void Server::Impl::run()
-{
-   co_spawn(m_executor, listen_loop(), detached);
-}
+void Server::Impl::run() { co_spawn(m_executor, listen_loop(), detached); }
 
 awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 {
@@ -88,7 +131,10 @@ awaitable<void> Server::Impl::listen_loop()
 
    for (;;)
    {
-      auto socket = co_await m_acceptor.async_accept(deferred);
+      auto [ec, socket] = co_await m_acceptor.async_accept(as_tuple(deferred));
+      if (ec)
+         break;
+
       co_spawn(
          executor, [&]() { return handleConnection(std::move(socket)); },
          [](const std::exception_ptr&) {});
