@@ -17,7 +17,7 @@ link_libraries(spdlog::spdlog_header_only)
 add_executable(hello hello.cpp)
 
 add_library(anyhttp)
-target_sources(anyhttp PRIVATE server.cpp server_impl.cpp session.cpp)
+target_sources(anyhttp PRIVATE server.cpp server_impl.cpp session.cpp stream.cpp)
 target_include_directories(anyhttp PUBLIC ../include)
 
 add_executable(server)

@@ -11,6 +11,13 @@ using namespace boost::asio::experimental::awaitable_operators;
 
 namespace anyhttp::server
 {
+namespace nghttp2
+{
+
+#define mloge(x, ...) loge("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
+#define mlogd(x, ...) logd("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
+#define mlogi(x, ...) logi("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
+#define mlogw(x, ...) logw("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
 
 // =================================================================================================
 
@@ -157,6 +164,21 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
 
 // =================================================================================================
 
+template <class T>
+using nghttp2_unique_ptr = std::unique_ptr<T, void (*)(T*)>;
+
+#define NGHTTP2_NEW(X)                                                                             \
+   static nghttp2_unique_ptr<nghttp2_##X> nghttp2_##X##_new()                                      \
+   {                                                                                               \
+      nghttp2_##X* ptr;                                                                            \
+      if (nghttp2_##X##_new(&ptr))                                                                 \
+         throw std::runtime_error("nghttp2_" #X "_new");                                           \
+      return {ptr, nghttp2_##X##_del};                                                             \
+   }
+
+NGHTTP2_NEW(session_callbacks)
+NGHTTP2_NEW(option)
+
 awaitable<void> Session::do_session(std::vector<uint8_t> data)
 {
    m_socket.set_option(ip::tcp::no_delay(true));
@@ -178,12 +200,8 @@ awaitable<void> Session::do_session(std::vector<uint8_t> data)
    //        }, user_data=self, options=options)
    //        self.session.submit_settings(self._settings)
    //
-   nghttp2_session_callbacks* callbacks;
-   auto rv = nghttp2_session_callbacks_new(&callbacks);
-   if (rv != 0)
-      throw std::runtime_error("nghttp2_session_callbacks_new");
-
-   auto cb_del = defer(nghttp2_session_callbacks_del, callbacks);
+   auto callbacks_unique = nghttp2_session_callbacks_new();
+   auto callbacks = callbacks_unique.get();
 
    //
    // https://nghttp2.org/documentation/nghttp2_session_server_new.html
@@ -205,16 +223,12 @@ awaitable<void> Session::do_session(std::vector<uint8_t> data)
    //
    // pynghttp2 does also disable "HTTP messaging semantics", but we don't do
    //
-   nghttp2_option* options;
-   nghttp2_option_new(&options);
-   // nghttp2_option_set_no_http_messaging(options, 1);
-   nghttp2_option_set_no_auto_window_update(options, 1);
+   auto options = nghttp2_option_new();
+   // nghttp2_option_set_no_http_messaging(options.get(), 1);
+   nghttp2_option_set_no_auto_window_update(options.get(), 1);
 
-   rv = nghttp2_session_server_new2(&session, callbacks, this, options);
-   if (rv != 0)
+   if (auto rv = nghttp2_session_server_new2(&session, callbacks, this, options.get()))
       throw std::runtime_error("nghttp2_session_server_new");
-
-   nghttp2_option_del(options);
 
    nghttp2_settings_entry ent{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, &ent, 1);
@@ -223,7 +237,7 @@ awaitable<void> Session::do_session(std::vector<uint8_t> data)
    // Let NGHTTP2 parse what we have received so far.
    // This must happen after submitting the server settings.
    //
-   rv = nghttp2_session_mem_recv(session, data.data(), data.size());
+   ssize_t rv = nghttp2_session_mem_recv(session, data.data(), data.size());
    if (rv < 0 || rv != data.size())
       throw std::runtime_error("nghttp2_session_mem_recv");
 
@@ -232,7 +246,7 @@ awaitable<void> Session::do_session(std::vector<uint8_t> data)
    //
    co_await (send_loop(m_socket) && recv_loop(m_socket));
 
-   logd("[{}] session done", m_logPrefix);
+   mlogd("session done");
 }
 
 // ----------------------------------------------------------------------------------------
@@ -250,12 +264,12 @@ awaitable<void> Session::send_loop(stream& stream)
    {
       const uint8_t* data; // data is valid until next call, so we don't need to copy it
 
-      logd("[{}] send loop: nghttp2_session_mem_send...", m_logPrefix);
+      mlogd("send loop: nghttp2_session_mem_send...");
       const auto nread = nghttp2_session_mem_send(session, &data);
-      logd("[{}] send loop: nghttp2_session_mem_send... {} bytes", m_logPrefix, nread);
+      mlogd("send loop: nghttp2_session_mem_send... {} bytes", nread);
       if (nread < 0)
       {
-         logw("[{}] send loop: closing stream and throwing", m_logPrefix);
+         logw("send loop: closing stream and throwing");
          stream.close(); // will also cancel the read loop
          throw std::runtime_error("nghttp2_session_mem_send");
       }
@@ -269,7 +283,7 @@ awaitable<void> Session::send_loop(stream& stream)
             asio::buffer_copy(asio::mutable_buffer(p, p1 - p), asio::buffer(data, nread));
          assert(nread == copied);
          p += nread;
-         logd("[{}] send loop: buffered {} more bytes, total {}", m_logPrefix, nread, p - p0);
+         mlogd("send loop: buffered {} more bytes, total {}", nread, p - p0);
       }
 
       //
@@ -279,14 +293,14 @@ awaitable<void> Session::send_loop(stream& stream)
       {
          const std::array<asio::const_buffer, 2> seq{asio::buffer(p0, p - p0),
                                                      asio::buffer(data, nread)};
-         logd("[{}] send loop: writing {} bytes...", m_logPrefix, to_write);
+         mlogd("send loop: writing {} bytes...", to_write);
          auto [ec, written] = co_await asio::async_write(stream, seq);
          if (ec)
          {
-            loge("[{}] send loop: error writing {} bytes: {}", m_logPrefix, to_write, ec.message());
+            mloge("send loop: error writing {} bytes: {}", to_write, ec.message());
             break;
          }
-         logd("[{}] send loop: writing {} bytes... done, wrote {}", m_logPrefix, to_write, written);
+         mlogd("send loop: writing {} bytes... done, wrote {}", to_write, written);
          assert(to_write == written);
          p = p0;
       }
@@ -297,21 +311,21 @@ awaitable<void> Session::send_loop(stream& stream)
       else if (nread == 0)
       {
          if (nghttp2_session_want_write(session) && nghttp2_session_want_read(session))
-            logd("[{}] send loop: session still wants to read and write", m_logPrefix);
+            mlogd("send loop: session still wants to read and write");
          else if (nghttp2_session_want_write(session))
-            logd("[{}] send loop: session still wants to write", m_logPrefix);
+            mlogd("send loop: session still wants to write");
          else if (nghttp2_session_want_read(session))
-            logd("[{}] send loop: session still wants to read", m_logPrefix);
+            mlogd("send loop: session still wants to read");
          else
             break;
 
-         logd("[{}] send loop: waiting...", m_logPrefix);
+         mlogd("send loop: waiting...");
          co_await async_wait_send(deferred);
-         logd("[{}] send loop: waiting... done", m_logPrefix);
+         mlogd("send loop: waiting... done");
       }
    }
 
-   logd("[{}] send loop: done", m_logPrefix);
+   mlogd("send loop: done");
 }
 
 //
@@ -345,7 +359,8 @@ awaitable<void> Session::recv_loop(stream& stream)
    }
 
    start_write();
-   mlogi("recv loop: {}, served {} requests",reason, m_requestCounter);
+   mlogi("recv loop: {}, served {} requests", reason, m_requestCounter);
 }
 
+} // namespace nghttp2
 } // namespace anyhttp::server

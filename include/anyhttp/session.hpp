@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common.hpp"  // IWYU pragma: keep
+#include "common.hpp" // IWYU pragma: keep
 #include "server_impl.hpp"
 
 #include <map>
@@ -19,14 +19,14 @@ using asio::co_spawn;
 
 namespace anyhttp::server
 {
+namespace nghttp2
+{
 
 using stream = asio::as_tuple_t<asio::deferred_t>::as_default_on_t<asio::ip::tcp::socket>;
 
 #define mlogd(x, ...) logd("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
 #define mlogi(x, ...) logi("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
 #define mlogw(x, ...) logw("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
-
-
 
 class Stream;
 class Session
@@ -42,6 +42,8 @@ public:
 
    ~Session()
    {
+      m_streams.clear();
+      mlogd("streams deleted");
       nghttp2_session_del(session);
       mlogd("session destroyed");
    }
@@ -62,7 +64,9 @@ public:
          [&](asio::completion_handler_for<void()> auto handler)
          {
             assert(!m_send_handler);
-
+#if 1
+            m_send_handler = std::move(handler);
+#else
             auto work = boost::asio::make_work_guard(handler);
             m_send_handler = [handler = std::move(handler), work = std::move(work)]() mutable
             {
@@ -75,6 +79,7 @@ public:
                      std::move(handler)();
                   }));
             };
+#endif
          },
          token);
    }
@@ -136,4 +141,5 @@ private:
    size_t m_requestCounter = 0;
 };
 
+} // namespace nghttp2
 } // namespace anyhttp::server

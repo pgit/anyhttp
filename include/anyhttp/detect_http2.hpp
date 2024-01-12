@@ -1,6 +1,7 @@
 #pragma once
 #include <boost/asio.hpp>
 #include <boost/asio/experimental/co_composed.hpp>
+#include <boost/beast/core/stream_traits.hpp>
 #include <boost/logic/tribool.hpp>
 
 #include <cstring>
@@ -44,6 +45,8 @@ template <typename AsyncReadStream, typename DynamicBuffer, typename CompletionT
 auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& buffer,
                                        CompletionToken&& token)
 {
+   static_assert(boost::beast::is_async_read_stream<AsyncReadStream>::value,
+                 "AsyncReadStream type requirements not met");
    static_assert(asio::is_dynamic_buffer<DynamicBuffer>::value,
                  "DynamicBuffer type requirements not met");
 
@@ -71,6 +74,7 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
                      co_return {{}, static_cast<bool>(result)};
 
                   auto prepared = buffer.prepare(1460);
+                  // auto prepared = buffer.prepare(16 * 1024 + 116);
                   size_t n = co_await stream.async_read_some(prepared, deferred);
                   buffer.commit(n);
                }

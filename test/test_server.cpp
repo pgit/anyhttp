@@ -39,6 +39,7 @@ std::string what(const std::exception_ptr& ptr)
    return result;
 }
 
+using namespace anyhttp;
 using namespace anyhttp::server;
 
 class Echo : public testing::Test
@@ -55,12 +56,17 @@ protected:
             for (;;)
             {
                auto buffer = co_await request.async_read_some(deferred);
-
                auto len = buffer.size();
+               if (len == 0)
+               {
+                  auto timer = steady_timer(request.executor());
+                  timer.expires_after(250ms);
+                  co_await timer.async_wait(deferred);
+               }
                co_await response.async_write(std::move(buffer), deferred);
 
-               if (len == 0)
-                  break;
+               // if (len == 0)
+                  // break;
             }
             co_return;
          });

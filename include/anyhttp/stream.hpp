@@ -3,6 +3,9 @@
 #include "common.hpp"
 #include "session.hpp"
 
+#include <boost/asio/error.hpp>
+#include <boost/system/detail/error_code.hpp>
+#include <boost/system/detail/system_category.hpp>
 #include <deque>
 
 #include <boost/asio.hpp>
@@ -11,6 +14,37 @@
 
 namespace anyhttp::server
 {
+namespace nghttp2
+{
+
+class NGHttp2Request : public Request::Impl
+{
+public:
+   explicit NGHttp2Request(Stream& stream);
+   ~NGHttp2Request() override;
+   void detach() override;
+
+   void async_read_some(Request::ReadSomeHandler&& handler) override;
+   const asio::any_io_executor& executor() const override;
+
+   Stream* stream;
+};
+
+class NGHttp2Response : public Response::Impl
+{
+public:
+   explicit NGHttp2Response(Stream& stream);
+   ~NGHttp2Response() override;
+   void detach() override;
+
+   void write_head(unsigned int status_code, Headers headers) override;
+   void async_write(Response::WriteHandler&& handler, std::vector<uint8_t> bufffer) override;
+   const asio::any_io_executor& executor() const override;
+
+   Stream* stream;
+   nghttp2_data_provider prd;
+};
+
 
 class Stream : public std::enable_shared_from_this<Stream>
 {
@@ -22,9 +56,10 @@ public:
 
    using Buffer = std::vector<uint8_t>;
    std::deque<Buffer> m_pending_read_buffers;
+   bool is_reading_finished = false;
 
    std::vector<uint8_t> sendBuffer;
-   asio::any_completion_handler<void()> sendHandler;
+   Response::WriteHandler sendHandler;
    bool is_deferred = false;
 
    std::string logPrefix;
@@ -49,15 +84,18 @@ public:
 
       while (!m_pending_read_buffers.empty() && m_read_handler)
       {
+         // move read handler into local variable, it may be set again by the handler
          auto handler = std::move(m_read_handler);
-         assert(!m_read_handler);
-
          auto buffer = std::move(m_pending_read_buffers.front());
          m_pending_read_buffers.pop_front();
          auto buffer_length = buffer.size();
 
+         assert(!is_reading_finished);
+         if (buffer_length == 0)
+            is_reading_finished = true;
+
          logd("[{}] read_callback: calling handler with {} bytes...", logPrefix, buffer_length);
-         std::move(handler)(std::move(buffer));
+         std::move(handler)(boost::system::error_code{}, std::move(buffer));
          if (m_read_handler)
             logd("[{}] read_callback: READ HANDLER RESPAWNED!!!! ({} pending)", logPrefix,
                  m_pending_read_buffers.size());
@@ -88,17 +126,23 @@ public:
       call_handler_loop();
    }
 
-   ~Stream() { logd("[{}] Stream: dtor", logPrefix); }
+   ~Stream()
+   {
+      logd("[{}] Stream: dtor", logPrefix);
+      if (request)
+         request->detach();
+      if (response)
+         response->detach();
+   }
 
    // ==============================================================================================
 
-   // std::function<void(std::vector<std::uint8_t>)> m_read_handler;
-   asio::any_completion_handler<void(std::vector<std::uint8_t>)> m_read_handler;
+   Request::ReadSomeHandler m_read_handler;
 
    //
    // https://www.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp
    //
-   template <boost::asio::completion_token_for<void(std::vector<std::uint8_t>)> CompletionToken>
+   template <boost::asio::completion_token_for<Request::ReadSome> CompletionToken>
    auto async_read_some(CompletionToken&& token)
    {
       assert(!m_read_handler);
@@ -108,10 +152,15 @@ public:
       // operation. This is passed the concrete completion handler, followed by any
       // additional arguments that were passed through the call to async_initiate.
       //
-      auto init = [&](asio::completion_handler_for<void(std::vector<std::uint8_t>)> auto handler)
+      auto init = [&](asio::completion_handler_for<Request::ReadSome> auto handler)
       {
          assert(!m_read_handler);
-
+         if (is_reading_finished)
+         {
+            logw("[{}] async_read_some: stream already finished", logPrefix);
+            handler(boost::asio::error::misc_errors::eof, std::vector<std::uint8_t>{});
+            return;
+         }
 #if 1
          m_read_handler = std::move(handler);
 #else
@@ -123,7 +172,8 @@ public:
          // Launch the operation with a callback that will receive the result and
          // pass it through to the asynchronous operation's completion handler.
          m_read_handler = [handler = std::move(handler), work = std::move(work),
-                           logPrefix = logPrefix](std::vector<std::uint8_t> result) mutable
+                           logPrefix = logPrefix](boost::system::error_code ec,
+                                                  std::vector<std::uint8_t> result) mutable
          {
             // Get the handler's associated allocator. If the handler does not
             // specify an allocator, use the recycling allocator as the default.
@@ -135,11 +185,11 @@ public:
             logd("[{}] async_read_some: dispatching...", logPrefix);
             boost::asio::dispatch(
                work.get_executor(),
-               boost::asio::bind_allocator(alloc, [handler = std::move(handler),
+               boost::asio::bind_allocator(alloc, [handler = std::move(handler), ec,
                                                    result = std::move(result),
                                                    logPrefix = logPrefix]() mutable { //
                   logd("[{}] async_read_some: running dispatched handler...", logPrefix);
-                  std::move(handler)(result);
+                  std::move(handler)(ec, result);
                   logd("[{}] async_read_some: running dispatched handler... done", logPrefix);
                }));
             logd("[{}] async_read_some: dispatching... done", logPrefix);
@@ -154,18 +204,18 @@ public:
       // specify the completion signature of the operation. We must also return the
       // result of the call since the completion token may produce a return value,
       // such as a future.
-      return boost::asio::async_initiate<CompletionToken, void(std::vector<std::uint8_t>)>(
+      return boost::asio::async_initiate<CompletionToken, Request::ReadSome>(
          init, // First, pass the function object that launches the operation,
          token); // then the completion token that will be transformed to a handler.
    }
 
    // ----------------------------------------------------------------------------------------------
 
-   template <boost::asio::completion_token_for<void()> CompletionToken>
+   template <boost::asio::completion_token_for<Response::Write> CompletionToken>
    auto async_write(std::vector<std::uint8_t> buffer, CompletionToken&& token)
    {
-      auto init =
-         [&](asio::completion_handler_for<void()> auto handler, std::vector<uint8_t> buffer)
+      auto init = [&](asio::completion_handler_for<Response::Write> auto handler,
+                      std::vector<uint8_t> buffer)
       {
          assert(!sendHandler);
 
@@ -178,8 +228,8 @@ public:
 #else
          auto work = boost::asio::make_work_guard(handler);
 
-         sendHandler =
-            [handler = std::move(handler), work = std::move(work), logPrefix = logPrefix]() mutable
+         sendHandler = [handler = std::move(handler), work = std::move(work),
+                        logPrefix = logPrefix](boost::system::error_code ec) mutable
          {
             auto alloc = boost::asio::get_associated_allocator(
                handler, boost::asio::recycling_allocator<void>());
@@ -188,9 +238,9 @@ public:
             boost::asio::dispatch(
                work.get_executor(),
                boost::asio::bind_allocator(
-                  alloc, [handler = std::move(handler), logPrefix = logPrefix]() mutable { //
+                  alloc, [handler = std::move(handler), ec, logPrefix = logPrefix]() mutable { //
                      logd("[{}] async_write: running dispatched handler...", logPrefix);
-                     std::move(handler)();
+                     std::move(handler)(ec);
                      logd("[{}] async_write: running dispatched handler... done", logPrefix);
                   }));
             logd("[{}] async_write: dispatching... done", logPrefix);
@@ -211,10 +261,11 @@ public:
          }
       };
 
-      return boost::asio::async_initiate<CompletionToken, void()>(init, token, std::move(buffer));
+      return boost::asio::async_initiate<CompletionToken, Response::Write>(init, token,
+                                                                           std::move(buffer));
    }
 
-   void async_write(asio::any_completion_handler<void()>&& handler, std::vector<uint8_t> buffer)
+   void async_write(Response::WriteHandler&& handler, std::vector<uint8_t> buffer)
    {
       assert(!sendHandler);
       sendHandler = std::move(handler);
@@ -260,7 +311,7 @@ public:
          if (copied == sendBufferView.size())
          {
             logd("[{}] write callback: running handler...", logPrefix);
-            std::move(sendHandler)();
+            std::move(sendHandler)(boost::system::error_code{});
             logd("[{}] write callback: running handler... done", logPrefix);
             if (sendHandler)
             {
@@ -284,7 +335,7 @@ public:
       else
       {
          logd("[{}] write callback: EOF", logPrefix);
-         std::move(sendHandler)();
+         std::move(sendHandler)(boost::system::error_code{});
          *data_flags |= NGHTTP2_DATA_FLAG_EOF;
       }
 
@@ -341,7 +392,7 @@ public:
       {
 
          logd("[{}] CORO: async_read_some...", logPrefix);
-         auto buffer = co_await async_read_some(deferred);
+         auto [ec, buffer] = co_await async_read_some(as_tuple(deferred));
          logd("[{}] CORO: async_read_some... done", logPrefix);
 
          if (!headersSent)
@@ -383,17 +434,21 @@ public:
 #if 0
       co_spawn(executor(), do_request(), detached);
 #else
-      Request request(std::make_unique<Request::Impl>(*this));
-      Response response(std::make_unique<Response::Impl>(*this));
+      Request request(std::make_unique<NGHttp2Request>(*this));
+      Response response(std::make_unique<NGHttp2Response>(*this));
 
       if (auto& handler = parent.parent().requestHandlerCoro())
          co_spawn(executor(), handler(std::move(request), std::move(response)), detached);
       else if (auto& handler = parent.parent().requestHandler())
          parent.parent().requestHandler()(std::move(request), std::move(response));
       else
-         assert(false); // no requesthandler set
+         co_spawn(executor(), do_request(), detached);
+         // assert(false); // no requesthandler set
 #endif
    }
+
+   Request::Impl* request = nullptr;
+   Response::Impl* response = nullptr;
 
    inline const asio::any_io_executor& executor() const { return parent.executor(); }
 
@@ -403,4 +458,5 @@ public:
    int id;
 };
 
+} // namespace nghttp2
 } // namespace anyhttp::server

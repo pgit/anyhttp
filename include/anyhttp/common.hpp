@@ -70,7 +70,48 @@ struct fmt::formatter<boost::asio::ip::tcp::endpoint> : ostream_formatter
 {
 };
 
-#define loge(...) spdlog::error(__VA_ARGS__)
-#define logw(...) spdlog::warn(__VA_ARGS__)
-#define logi(...) spdlog::info(__VA_ARGS__)
-#define logd(...) spdlog::debug(__VA_ARGS__)
+// https://fmt.dev/latest/api.html#std-ostream-support
+template <>
+struct fmt::formatter<std::__thread_id> : ostream_formatter
+{
+};
+
+
+// -------------------------------------------------------------------------------------------------
+
+#if 0
+#define loge(...) SPDLOG_ERROR(__VA_ARGS__)
+#define logw(...) SPDLOG_WARN(__VA_ARGS__)
+#define logi(...) SPDLOG_INFO(__VA_ARGS__)
+#define logd(...) SPDLOG_DEBUG(__VA_ARGS__)
+#else
+#define loge(...)                                                                                  \
+   do                                                                                              \
+   {                                                                                               \
+      if (spdlog::default_logger_raw()->should_log(spdlog::level::err))                            \
+         spdlog::default_logger_raw()->error(__VA_ARGS__);                                         \
+   } while (false)
+
+#define logw(...)                                                                                  \
+   do                                                                                              \
+   {                                                                                               \
+      if (spdlog::default_logger_raw()->should_log(spdlog::level::warn))                           \
+         spdlog::default_logger_raw()->warn(__VA_ARGS__);                                          \
+   } while (false)
+
+#define logi(...)                                                                                  \
+   do                                                                                              \
+   {                                                                                               \
+      if (spdlog::default_logger_raw()->should_log(spdlog::level::info))                           \
+         spdlog::default_logger_raw()->info(__VA_ARGS__);                                          \
+   } while (false)
+
+#define logd(...)                                                                                  \
+   do                                                                                              \
+   {                                                                                               \
+      if (spdlog::default_logger_raw()->should_log(spdlog::level::debug))                          \
+         spdlog::default_logger_raw()->debug(__VA_ARGS__);                                         \
+   } while (false)
+#endif
+
+// =================================================================================================

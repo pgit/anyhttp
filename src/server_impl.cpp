@@ -3,11 +3,13 @@
 #include "anyhttp/detect_http2.hpp"
 #include "anyhttp/stream.hpp" // IWYU pragma: keep
 
+#include <boost/asio/error.hpp>
 #include <set>
 
 #include <boost/asio.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
+#include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
 
 using namespace std::chrono_literals;
@@ -19,48 +21,10 @@ namespace anyhttp::server
 
 // =================================================================================================
 
-void Request::Impl::async_read_some(
-   asio::any_completion_handler<void(std::vector<std::uint8_t>)>&& handler)
-{
-   assert(!m_stream.m_read_handler);
-   m_stream.m_read_handler = std::move(handler);
-   m_stream.call_handler_loop();
-}
-
-const asio::any_io_executor& Request::Impl::executor() const { return m_stream.executor(); }
-
-// -------------------------------------------------------------------------------------------------
-
-const asio::any_io_executor& Response::Impl::executor() const { return m_stream.executor(); }
-
-void Response::Impl::write_head(unsigned int status_code, Headers headers)
-{
-   auto nva = std::vector<nghttp2_nv>();
-   nva.reserve(2);
-   std::string date = "Sat, 01 Apr 2023 09:33:09 GMT";
-   nva.push_back(make_nv_ls(":status", fmt::format("{}", status_code)));
-   nva.push_back(make_nv_ls("date", date));
-
-   // TODO: headers
-   std::ignore = headers;
-
-   prd.source.ptr = &m_stream;
-   prd.read_callback = [](nghttp2_session*, int32_t, uint8_t* buf, size_t length,
-                          uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t
-   {
-      auto stream = static_cast<Stream*>(source->ptr);
-      assert(stream);
-      return stream->read_callback(buf, length, data_flags);
-   };
-
-   nghttp2_submit_response(m_stream.parent.session, m_stream.id, nva.data(), nva.size(), &prd);
-}
-
-void Response::Impl::async_write(asio::any_completion_handler<void()>&& handler,
-                                 std::vector<uint8_t> buffer)
-{
-   m_stream.async_write(std::move(handler), std::move(buffer));
-}
+Request::Impl::Impl() noexcept = default;
+Request::Impl::~Impl() = default;
+Response::Impl::Impl() noexcept = default;
+Response::Impl::~Impl() = default;
 
 // =================================================================================================
 
@@ -96,10 +60,15 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       co_return;
    }
 
-   auto session = std::make_shared<Session>(*this, executor, std::move(socket));
-   m_sessions.emplace(session);
+   auto session = std::make_shared<nghttp2::Session>(*this, executor, std::move(socket));
+   // m_sessions.emplace(session);
+#if 1
+   co_await session->do_session(std::move(data));
+   // m_sessions.erase(session);
+#else
    co_spawn(executor, session->do_session(std::move(data)),
             [this, session](const std::exception_ptr&) { m_sessions.erase(session); });
+#endif
 }
 
 void Server::Impl::listen()
@@ -140,5 +109,7 @@ awaitable<void> Server::Impl::listen_loop()
          [](const std::exception_ptr&) {});
    }
 }
+
+// =================================================================================================
 
 } // namespace anyhttp::server

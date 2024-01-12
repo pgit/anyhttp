@@ -11,8 +11,7 @@ Request::Request(std::unique_ptr<Request::Impl> impl) : m_impl(std::move(impl)) 
 Request::Request(Request&&) noexcept = default;
 Request::~Request() = default;
 
-void Request::async_read_some_any(
-   asio::any_completion_handler<void(std::vector<std::uint8_t>)>&& handler)
+void Request::async_read_some_any(ReadSomeHandler&& handler)
 {
    m_impl->async_read_some(std::move(handler));
 }
@@ -30,8 +29,7 @@ void Response::write_head(unsigned int status_code, Headers headers)
    m_impl->write_head(status_code, std::move(headers));
 }
 
-void Response::async_write_any(asio::any_completion_handler<void()>&& handler,
-                               std::vector<std::uint8_t> buffer)
+void Response::async_write_any(WriteHandler&& handler, std::vector<std::uint8_t> buffer)
 {
    m_impl->async_write(std::move(handler), std::move(buffer));
 }

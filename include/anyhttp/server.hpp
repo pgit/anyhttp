@@ -4,6 +4,7 @@
 
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/async_result.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/bind_allocator.hpp>
 #include <boost/asio/dispatch.hpp>
@@ -35,24 +36,24 @@ public:
    const asio::any_io_executor& executor() const;
 
 public:
-   asio::any_completion_handler<void(std::vector<std::uint8_t>)> m_read_handler;
+   using ReadSome = void(boost::system::error_code, std::vector<std::uint8_t>);
+   using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
 
    //
    // https://www.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp
    //
-   template <boost::asio::completion_token_for<void(std::vector<std::uint8_t>)> CompletionToken>
+   template <boost::asio::completion_token_for<ReadSome> CompletionToken>
    auto async_read_some(CompletionToken&& token)
    {
-      return boost::asio::async_initiate<CompletionToken, void(std::vector<std::uint8_t>)>(
-         [&](asio::completion_handler_for<void(std::vector<std::uint8_t>)> auto handler) { //
+      return boost::asio::async_initiate<CompletionToken, ReadSome>(
+         [&](asio::completion_handler_for<ReadSome> auto handler) { //
             async_read_some_any(std::move(handler));
          },
          token);
    }
 
 private:
-   void
-   async_read_some_any(asio::any_completion_handler<void(std::vector<std::uint8_t>)>&& handler);
+   void async_read_some_any(ReadSomeHandler&& handler);
 
 private:
    std::unique_ptr<Impl> m_impl;
@@ -69,20 +70,22 @@ public:
    const asio::any_io_executor& executor() const;
    void write_head(unsigned int status_code, Headers headers);
 
-   template <boost::asio::completion_token_for<void(std::vector<std::uint8_t>)> CompletionToken>
+public:
+   using Write = void(boost::system::error_code);
+   using WriteHandler = asio::any_completion_handler<Write>;
+
+   template <boost::asio::completion_token_for<Write> CompletionToken>
    auto async_write(std::vector<std::uint8_t> buffer, CompletionToken&& token)
    {
-      return boost::asio::async_initiate<CompletionToken, void()>(
-         [&](asio::completion_handler_for<void()> auto handler,
-             std::vector<uint8_t> buffer) { //
+      return boost::asio::async_initiate<CompletionToken, Write>(
+         [&](asio::completion_handler_for<Write> auto handler, std::vector<uint8_t> buffer) { //
             async_write_any(std::move(handler), std::move(buffer));
          },
          token, std::move(buffer));
    }
 
 private:
-   void async_write_any(asio::any_completion_handler<void()>&& handler,
-                        std::vector<std::uint8_t> buffer);
+   void async_write_any(WriteHandler&& handler, std::vector<std::uint8_t> buffer);
 
    std::unique_ptr<Impl> m_impl;
 };
