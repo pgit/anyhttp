@@ -60,7 +60,7 @@ protected:
                if (len == 0)
                {
                   auto timer = steady_timer(request.executor());
-                  timer.expires_after(250ms);
+                  timer.expires_after(50ms);
                   co_await timer.async_wait(deferred);
                }
                co_await response.async_write(std::move(buffer), deferred);

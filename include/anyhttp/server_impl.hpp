@@ -1,14 +1,12 @@
 #pragma once
 #include "server.hpp"
 
+#include <boost/asio.hpp>
 #include <boost/asio/any_completion_handler.hpp>
+
 #include <set>
 
-#include <boost/asio.hpp>
-
 #include <spdlog/spdlog.h>
-
-using namespace boost::asio;
 
 namespace anyhttp::server
 {
@@ -60,7 +58,10 @@ public:
    ip::tcp::endpoint local_endpoint() const { return m_acceptor.local_endpoint(); }
 
    void setRequestHandler(RequestHandler&& handler) { m_requestHandler = std::move(handler); }
-   void setRequestHandler(RequestHandlerCoro&& handler) { m_requestHandlerCoro = std::move(handler); }
+   void setRequestHandler(RequestHandlerCoro&& handler)
+   {
+      m_requestHandlerCoro = std::move(handler);
+   }
    const RequestHandler& requestHandler() const { return m_requestHandler; }
    const RequestHandlerCoro& requestHandlerCoro() const { return m_requestHandlerCoro; }
 

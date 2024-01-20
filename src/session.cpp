@@ -240,6 +240,9 @@ awaitable<void> Session::do_session(std::vector<uint8_t> data)
    ssize_t rv = nghttp2_session_mem_recv(session, data.data(), data.size());
    if (rv < 0 || rv != data.size())
       throw std::runtime_error("nghttp2_session_mem_recv");
+   
+   data.clear();
+   data.shrink_to_fit();
 
    //
    // send/receive loop

@@ -1,13 +1,14 @@
 #include "anyhttp/server_impl.hpp"
+#include "anyhttp/beast/session.hpp"
 #include "anyhttp/common.hpp"
 #include "anyhttp/detect_http2.hpp"
 #include "anyhttp/stream.hpp" // IWYU pragma: keep
 
-#include <boost/asio/error.hpp>
-#include <set>
-
 #include <boost/asio.hpp>
+#include <boost/asio/error.hpp>
 #include <boost/asio/ip/tcp.hpp>
+
+#include <boost/beast/core/flat_buffer.hpp>
 
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
@@ -31,13 +32,15 @@ Response::Impl::~Impl() = default;
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
-   spdlog::set_level(spdlog::level::info);
+   spdlog::set_level(spdlog::level::debug);
    spdlog::info("Server: ctor");
    listen();
    run();
 }
 
 Server::Impl::~Impl() { logi("Server: dtor"); }
+
+// -------------------------------------------------------------------------------------------------
 
 void Server::Impl::run() { co_spawn(m_executor, listen_loop(), detached); }
 
@@ -50,25 +53,19 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    //
    std::vector<uint8_t> data;
    auto buffer = boost::asio::dynamic_buffer(data);
-   if (!co_await async_detect_http2_client_preface(socket, buffer, deferred))
+   if (co_await async_detect_http2_client_preface(socket, buffer, deferred))
    {
-      fmt::print("no HTTP2 client preface detected ({} bytes in buffer), closing connection\n",
-                 buffer.size());
-
-      socket.shutdown(asio::ip::tcp::socket::shutdown_send);
-      socket.close();
-      co_return;
+      logi("[{}] detected HTTP2 client preface, {} bytes in buffer",
+           normalize(socket.remote_endpoint()), buffer.size());
+      auto session = std::make_shared<nghttp2::Session>(*this, executor, std::move(socket));
+      co_await session->do_session(std::move(data));
    }
-
-   auto session = std::make_shared<nghttp2::Session>(*this, executor, std::move(socket));
-   // m_sessions.emplace(session);
-#if 1
-   co_await session->do_session(std::move(data));
-   // m_sessions.erase(session);
-#else
-   co_spawn(executor, session->do_session(std::move(data)),
-            [this, session](const std::exception_ptr&) { m_sessions.erase(session); });
-#endif
+   else
+   {
+      logi("[{}] assuming HTTP/1.1 cleartext", normalize(socket.remote_endpoint()));
+      auto session = std::make_shared<beast_impl::Session>(*this, executor, std::move(socket));
+      co_await session->do_session(std::move(data));
+   }
 }
 
 void Server::Impl::listen()
