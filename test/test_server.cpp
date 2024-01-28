@@ -9,13 +9,12 @@
 #include <boost/process/args.hpp>
 
 #include <boost/process/args.hpp>
-#include <exception>
 #include <gtest/gtest.h>
 
 #include <fmt/ostream.h>
 
+using namespace std::chrono_literals;
 namespace bp = boost::process;
-
 using namespace boost::asio;
 namespace asio = boost::asio;
 
@@ -24,20 +23,6 @@ using asio::as_tuple;
 using asio::awaitable;
 using asio::co_spawn;
 using asio::deferred;
-
-std::string what(const std::exception_ptr& ptr)
-{
-   std::string result;
-   try
-   {
-      std::rethrow_exception(ptr);
-   }
-   catch (std::exception& ex)
-   {
-      result = fmt::format("exception: {}", ex.what());
-   }
-   return result;
-}
 
 using namespace anyhttp;
 using namespace anyhttp::server;

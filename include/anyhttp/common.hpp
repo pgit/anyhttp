@@ -1,5 +1,6 @@
 #pragma once
 
+#include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
 #include <fmt/format.h>
@@ -9,10 +10,23 @@
 
 #include <nghttp2/nghttp2.h>
 
+#include <map>
+
 namespace anyhttp
 {
-using namespace std::chrono_literals;
-using namespace boost::asio;
+namespace asio = boost::asio;
+
+// =================================================================================================
+
+using Headers = std::map<std::string, std::string>;
+
+using ReadSome = void(boost::system::error_code, std::vector<std::uint8_t>);
+using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
+
+using Write = void(boost::system::error_code);
+using WriteHandler = asio::any_completion_handler<Write>;
+
+// =================================================================================================
 
 // Create nghttp2_nv from string literal |name| and std::string |value|.
 template <size_t N>
@@ -47,7 +61,7 @@ Defer<F, T...> defer(F&& f, T&&... t)
    return Defer<F, T...>(std::forward<F>(f), std::forward<T>(t)...);
 }
 
-inline ip::address normalize(ip::address addr)
+inline asio::ip::address normalize(asio::ip::address addr)
 {
    if (addr.is_v6())
    {
@@ -58,11 +72,14 @@ inline ip::address normalize(ip::address addr)
    return addr;
 }
 
-inline ip::tcp::endpoint normalize(const ip::tcp::endpoint& endpoint)
+inline asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint)
 {
    return {normalize(endpoint.address()), endpoint.port()};
 }
+
 }; // namespace anyhttp
+
+// =================================================================================================
 
 // https://fmt.dev/latest/api.html#std-ostream-support
 template <>
@@ -76,6 +93,19 @@ struct fmt::formatter<std::__thread_id> : ostream_formatter
 {
 };
 
+inline std::string what(const std::exception_ptr& ptr)
+{
+   std::string result;
+   try
+   {
+      std::rethrow_exception(ptr);
+   }
+   catch (std::exception& ex)
+   {
+      result = fmt::format("exception: {}", ex.what());
+   }
+   return result;
+}
 
 // -------------------------------------------------------------------------------------------------
 

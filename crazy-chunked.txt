@@ -1,0 +1,21 @@
+POST / HTTP/1.1
+Host: localhost
+Trailer: Expires, Content-MD5, Missing
+Transfer-Encoding: chunked
+
+7
+First
+
+f;quality=1.0
+Hello, world!
+
+10;file=abc.txt;quality=0.7
+The Next Chunk
+
+8;last
+Last one
+0
+Expires: never
+Content-MD5: f4a5c16584f03d90
+Extra: trailer
+

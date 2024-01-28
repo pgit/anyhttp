@@ -1,8 +1,10 @@
 #include "anyhttp/server_impl.hpp"
-#include "anyhttp/beast/session.hpp"
+#include "anyhttp/beast_session.hpp"
 #include "anyhttp/common.hpp"
 #include "anyhttp/detect_http2.hpp"
-#include "anyhttp/stream.hpp" // IWYU pragma: keep
+
+#include "anyhttp/beast_session.hpp"
+#include "anyhttp/nghttp2_session.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/error.hpp>
@@ -14,8 +16,7 @@
 #include <spdlog/spdlog.h>
 
 using namespace std::chrono_literals;
-using asio::co_spawn;
-using asio::deferred;
+using namespace boost::asio;
 
 namespace anyhttp::server
 {
@@ -32,7 +33,7 @@ Response::Impl::~Impl() = default;
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
-   spdlog::set_level(spdlog::level::debug);
+   spdlog::set_level(spdlog::level::info);
    spdlog::info("Server: ctor");
    listen();
    run();
@@ -46,6 +47,7 @@ void Server::Impl::run() { co_spawn(m_executor, listen_loop(), detached); }
 
 awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 {
+   logi("[{}] new connection", normalize(socket.remote_endpoint()));
    auto executor = co_await boost::asio::this_coro::executor;
 
    //
@@ -57,16 +59,18 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer",
            normalize(socket.remote_endpoint()), buffer.size());
-      auto session = std::make_shared<nghttp2::Session>(*this, executor, std::move(socket));
-      co_await session->do_session(std::move(data));
+      auto session = std::make_shared<nghttp2::NGHttp2Session>(*this, executor, std::move(socket));
+      co_await session->do_server_session(std::move(data));
    }
    else
    {
       logi("[{}] assuming HTTP/1.1 cleartext", normalize(socket.remote_endpoint()));
-      auto session = std::make_shared<beast_impl::Session>(*this, executor, std::move(socket));
+      auto session = std::make_shared<beast_impl::BeastSession>(*this, executor, std::move(socket));
       co_await session->do_session(std::move(data));
    }
 }
+
+// -------------------------------------------------------------------------------------------------
 
 void Server::Impl::listen()
 {
@@ -91,6 +95,8 @@ void Server::Impl::listen()
    logi("Server: listening on {}", endpoint);
 }
 
+// -------------------------------------------------------------------------------------------------
+
 awaitable<void> Server::Impl::listen_loop()
 {
    auto executor = co_await boost::asio::this_coro::executor;
@@ -103,7 +109,11 @@ awaitable<void> Server::Impl::listen_loop()
 
       co_spawn(
          executor, [&]() { return handleConnection(std::move(socket)); },
-         [](const std::exception_ptr&) {});
+         [](const std::exception_ptr& ex)
+         {
+            if (ex)
+               logw("exception: {}", what(ex));
+         });
    }
 }
 

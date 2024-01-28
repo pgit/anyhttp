@@ -1,5 +1,5 @@
 
-#include "anyhttp/beast/session.hpp"
+#include "anyhttp/beast_session.hpp"
 
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
@@ -17,17 +17,20 @@
 #include <boost/beast/http/write.hpp>
 #include <boost/beast/version.hpp>
 
-namespace beast = boost::beast;
 
 // https://fmt.dev/latest/api.html#std-ostream-support
 template <>
 struct fmt::formatter<boost::string_view> : ostream_formatter
 {
 };
+
 template <>
 struct fmt::formatter<boost::core::basic_string_view<char>> : ostream_formatter
 {
 };
+
+using namespace boost::asio;
+namespace beast = boost::beast;
 
 namespace anyhttp::server
 {
@@ -41,10 +44,10 @@ namespace beast_impl
 
 // =================================================================================================
 
-awaitable<void> Session::do_session(std::vector<uint8_t> data)
+awaitable<void> BeastSession::do_session(std::vector<uint8_t> data)
 {
    mlogd("do_session");
-   m_socket.set_option(ip::tcp::no_delay(true));
+   m_socket.set_option(asio::ip::tcp::no_delay(true));
 
    beast::tcp_stream stream(std::move(m_socket));
 

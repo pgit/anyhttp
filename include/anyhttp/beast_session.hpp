@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../common.hpp" // IWYU pragma: keep
-#include "../server_impl.hpp"
+#include "common.hpp" // IWYU pragma: keep
+#include "server_impl.hpp"
 
 #include <boost/asio.hpp>
 
@@ -16,11 +16,13 @@ using stream = asio::as_tuple_t<asio::deferred_t>::as_default_on_t<asio::ip::tcp
 #define mlogi(x, ...) logi("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
 #define mlogw(x, ...) logw("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
 
-class Stream;
-class Session
+// =================================================================================================
+
+class BeastSession
 {
 public:
-   explicit Session(Server::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket)
+   explicit BeastSession(Server::Impl& parent, asio::any_io_executor executor,
+                    asio::ip::tcp::socket&& socket)
       : m_parent(parent), m_executor(std::move(executor)), m_socket(std::move(socket)),
         m_logPrefix(fmt::format("{}", normalize(m_socket.remote_endpoint())))
    {
@@ -28,9 +30,9 @@ public:
       m_send_buffer.resize(64 * 1024);
    }
 
-   ~Session() { mlogd("streams deleted"); }
+   ~BeastSession() { mlogd("streams deleted"); }
 
-   awaitable<void> do_session(std::vector<uint8_t> data);
+   asio::awaitable<void> do_session(std::vector<uint8_t> data);
 
    Server::Impl& parent() { return m_parent; }
    const auto& executor() const { return m_executor; }
@@ -50,5 +52,7 @@ private:
    size_t m_requestCounter = 0;
 };
 
-} // namespace beast
+// =================================================================================================
+
+} // namespace beast_impl
 } // namespace anyhttp::server

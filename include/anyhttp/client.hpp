@@ -11,41 +11,30 @@
 #include <boost/asio/ip/basic_endpoint.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
-#include <map>
+#include <boost/url.hpp>
 
-namespace anyhttp::server
+namespace anyhttp::client
 {
+struct Config
+{
+   boost::urls::url url{"http://localhost:8080"};
+};
 
 // =================================================================================================
 
-struct Config
+class Response
 {
-   std::string listen_address = "::";
-   uint16_t port = 8080;
-};
-
-// -------------------------------------------------------------------------------------------------
-
-namespace asio = boost::asio;
-using Headers = std::map<std::string, std::string>;
-
-class Request
-{
-public:
    class Impl;
-   explicit Request(std::unique_ptr<Impl> impl);
-   Request(Request&& other) noexcept;
-   ~Request();
+   std::unique_ptr<Impl> m_impl;
+
+public:
+   explicit Response(std::unique_ptr<Impl> impl);
+   Response(Response&& other) noexcept;
+   ~Response();
 
    const asio::any_io_executor& executor() const;
+   void write_head(unsigned int status_code, Headers headers);
 
-public:
-   using ReadSome = void(boost::system::error_code, std::vector<std::uint8_t>);
-   using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
-
-   //
-   // https://www.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp
-   //
    template <boost::asio::completion_token_for<ReadSome> CompletionToken>
    auto async_read_some(CompletionToken&& token)
    {
@@ -58,25 +47,38 @@ public:
 
 private:
    void async_read_some_any(ReadSomeHandler&& handler);
-
-private:
-   std::unique_ptr<Impl> m_impl;
 };
 
-// -------------------------------------------------------------------------------------------------
+// =================================================================================================
 
-class Response
+class Request
 {
 public:
    class Impl;
-   explicit Response(std::unique_ptr<Impl> impl);
-   Response(Response&& other) noexcept;
-   ~Response();
+   explicit Request(std::unique_ptr<Impl> impl);
+   Request(Request&& other) noexcept;
+   ~Request();
 
    const asio::any_io_executor& executor() const;
    void write_head(unsigned int status_code, Headers headers);
 
 public:
+   using GetResponse = void (boost::system::error_code, Response&&);
+   using GetResponseHandler = asio::any_completion_handler<GetResponse>;
+
+   template <boost::asio::completion_token_for<GetResponse> CompletionToken>
+   auto async_get_response(CompletionToken&& token)
+   {
+      return boost::asio::async_initiate<CompletionToken, GetResponse>(
+         [&](asio::completion_handler_for<GetResponse> auto handler) { //
+            async_get_response_any(std::move(handler));
+         },
+         token);
+   }
+
+public:
+   using Write = void(boost::system::error_code);
+   using WriteHandler = asio::any_completion_handler<Write>;
 
    template <boost::asio::completion_token_for<Write> CompletionToken>
    auto async_write(std::vector<std::uint8_t> buffer, CompletionToken&& token)
@@ -90,24 +92,20 @@ public:
 
 private:
    void async_write_any(WriteHandler&& handler, std::vector<std::uint8_t> buffer);
+   void async_get_response_any(GetResponseHandler&& handler, Response);
 
    std::unique_ptr<Impl> m_impl;
 };
 
-// -------------------------------------------------------------------------------------------------
+// =================================================================================================
 
-using RequestHandler = std::function<void(Request, Response)>;
-using RequestHandlerCoro = std::function<asio::awaitable<void>(Request, Response)>;
-
-class Server
+class Client
 {
 public:
-   Server(asio::any_io_executor executor, Config config);
-   ~Server();
+   Client(asio::any_io_executor executor, Config config);
+   ~Client();
 
-   void setRequestHandler(RequestHandler&& handler);
-   void setRequestHandlerCoro(RequestHandlerCoro&& handler);
-
+   Request submit(boost::urls::url url, Headers headers);
    asio::ip::tcp::endpoint local_endpoint() const;
 
 public:

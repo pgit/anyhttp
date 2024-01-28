@@ -51,7 +51,7 @@ void Server::setRequestHandlerCoro(RequestHandlerCoro&& handler)
    impl->setRequestHandler(std::move(handler));
 }
 
-ip::tcp::endpoint Server::local_endpoint() const { return impl->local_endpoint(); }
+asio::ip::tcp::endpoint Server::local_endpoint() const { return impl->local_endpoint(); }
 
 Server::~Server() = default;
 
