@@ -22,7 +22,7 @@ public:
    virtual ~Impl();
 
    virtual const asio::any_io_executor& executor() const = 0;
-   virtual void write_head(unsigned int status_code, Headers headers) = 0;
+   virtual void write_head(unsigned int status_code, Fields headers) = 0;
    virtual void async_write(WriteHandler&& handler, std::vector<uint8_t> bufffer) = 0;
    virtual void detach() = 0;
 };
@@ -52,7 +52,7 @@ public:
    const boost::asio::any_io_executor& executor() const { return m_executor; }
 
    asio::awaitable<void> connect();
-   Request submit(boost::urls::url url, Headers headers);
+   Request submit(boost::urls::url url, Fields headers);
    asio::ip::tcp::endpoint local_endpoint() const { return m_acceptor.local_endpoint(); }
 
    void run();

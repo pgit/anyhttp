@@ -28,8 +28,6 @@ int main(int argc, char* argv[])
    Config config{.url = boost::urls::url(argv[1])};
    Client client(context.get_executor(), config);
 
-
-
    context.run();
    return 0;
 }

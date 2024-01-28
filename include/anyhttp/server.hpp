@@ -2,16 +2,7 @@
 
 #include "common.hpp" // IWYU pragma: keep
 
-#include <boost/asio/any_completion_handler.hpp>
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/async_result.hpp>
 #include <boost/asio/awaitable.hpp>
-#include <boost/asio/bind_allocator.hpp>
-#include <boost/asio/dispatch.hpp>
-#include <boost/asio/ip/basic_endpoint.hpp>
-#include <boost/asio/ip/tcp.hpp>
-
-#include <map>
 
 namespace anyhttp::server
 {
@@ -24,10 +15,7 @@ struct Config
    uint16_t port = 8080;
 };
 
-// -------------------------------------------------------------------------------------------------
-
-namespace asio = boost::asio;
-using Headers = std::map<std::string, std::string>;
+// =================================================================================================
 
 class Request
 {
@@ -74,10 +62,9 @@ public:
    ~Response();
 
    const asio::any_io_executor& executor() const;
-   void write_head(unsigned int status_code, Headers headers);
+   void write_head(unsigned int status_code, Fields headers);
 
 public:
-
    template <boost::asio::completion_token_for<Write> CompletionToken>
    auto async_write(std::vector<std::uint8_t> buffer, CompletionToken&& token)
    {
@@ -94,7 +81,7 @@ private:
    std::unique_ptr<Impl> m_impl;
 };
 
-// -------------------------------------------------------------------------------------------------
+// =================================================================================================
 
 using RequestHandler = std::function<void(Request, Response)>;
 using RequestHandlerCoro = std::function<asio::awaitable<void>(Request, Response)>;
@@ -102,6 +89,7 @@ using RequestHandlerCoro = std::function<asio::awaitable<void>(Request, Response
 class Server
 {
 public:
+   class Impl;
    Server(asio::any_io_executor executor, Config config);
    ~Server();
 
@@ -109,9 +97,6 @@ public:
    void setRequestHandlerCoro(RequestHandlerCoro&& handler);
 
    asio::ip::tcp::endpoint local_endpoint() const;
-
-public:
-   class Impl;
 
 private:
    std::unique_ptr<Impl> impl;

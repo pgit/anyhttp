@@ -7,12 +7,16 @@
 #include <boost/asio/signal_set.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
+#include <csignal>
+#include <iostream>
+
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/iota.hpp>
 #include <range/v3/view/transform.hpp>
 
 namespace rv = ranges::views;
 
+using namespace std::chrono_literals;
 using namespace boost::asio;
 using namespace anyhttp;
 using namespace anyhttp::server;
@@ -26,8 +30,19 @@ int main()
                   ranges::to<std::vector>;
 
    io_context context;
-   Server server(context.get_executor(), {.port = 8080});
-   server.setRequestHandlerCoro(
+   auto server = std::make_optional<Server>(context.get_executor(), Config{.port = 8080});
+
+#if 0
+   signal_set signals(context, SIGINT, SIGTERM);
+   signals.async_wait(
+      [&](auto, auto)
+      {
+         std::cout << std::endl << "INTERRUPTED" << std::endl;
+         server.reset();
+      });
+#endif
+
+   server->setRequestHandlerCoro(
       [&](Request request, Response response) -> awaitable<void>
       {
          response.write_head(200, {});
@@ -38,7 +53,7 @@ int main()
                logd("async_read_some...");
                auto buffer = co_await request.async_read_some(deferred);
                logd("async_read_some... done");
-               // logi("{}", buffer.size());
+            // logi("{}", buffer.size());
 #if 0
                auto timer = steady_timer(request.executor());
                timer.expires_after(1ms);
@@ -74,6 +89,10 @@ int main()
          co_return;
       });
    context.run();
+
+   work.reset();
+   for (auto& thread : threads)
+      thread.join();
 
    return 0;
 }

@@ -66,7 +66,7 @@ const asio::any_io_executor& NGHttp2Response::executor() const
    return stream->executor();
 }
 
-void NGHttp2Response::write_head(unsigned int status_code, Headers headers)
+void NGHttp2Response::write_head(unsigned int status_code, Fields headers)
 {
    assert(stream);
 

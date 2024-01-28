@@ -341,7 +341,7 @@ awaitable<void> NGHttp2Session::do_client_session(std::vector<uint8_t> data)
 
 // -------------------------------------------------------------------------------------------------
 
-client::Request NGHttp2Session::submit(boost::urls::url url, Headers headers) 
+client::Request NGHttp2Session::submit(boost::urls::url url, Fields headers) 
 {
    return client::Request{nullptr};
 }

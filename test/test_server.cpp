@@ -51,13 +51,13 @@ protected:
                co_await response.async_write(std::move(buffer), deferred);
 
                // if (len == 0)
-                  // break;
+               // break;
             }
             co_return;
          });
    }
 
-   awaitable<std::string> spawn_coro(bp::filesystem::path path, std::vector<std::string> args)
+   awaitable<std::string> spawn_process(bp::filesystem::path path, std::vector<std::string> args)
    {
       bp::async_pipe out(context);
       bp::child child(
@@ -84,7 +84,7 @@ protected:
 
    auto spawn(bp::filesystem::path path, std::vector<std::string> args)
    {
-      return co_spawn(context, spawn_coro(std::move(path), std::move(args)), use_future);
+      return co_spawn(context, spawn_process(std::move(path), std::move(args)), use_future);
    }
 
    boost::asio::io_context context;
@@ -104,6 +104,14 @@ TEST_F(Echo, Curl)
    auto url = fmt::format("http://127.0.0.1:{}", server->local_endpoint().port());
    auto future =
       spawn("/usr/bin/curl", {"--http2-prior-knowledge", "--data-binary", "@CMakeLists.txt", url});
+   context.run();
+   EXPECT_EQ(future.get().size(), 1160);
+}
+
+TEST_F(Echo, CurlHttp11)
+{
+   auto url = fmt::format("http://127.0.0.1:{}", server->local_endpoint().port());
+   auto future = spawn("/usr/bin/curl", {"--data-binary", "@CMakeLists.txt", url});
    context.run();
    EXPECT_EQ(future.get().size(), 1160);
 }

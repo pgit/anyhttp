@@ -36,7 +36,7 @@ public:
    virtual ~Impl();
 
    virtual const asio::any_io_executor& executor() const = 0;
-   virtual void write_head(unsigned int status_code, Headers headers) = 0;
+   virtual void write_head(unsigned int status_code, Fields fields) = 0;
    virtual void async_write(WriteHandler&& handler, std::vector<uint8_t> bufffer) = 0;
    virtual void detach() = 0;
 };

@@ -38,7 +38,7 @@ public:
    ~NGHttp2Response() override;
    void detach() override;
 
-   void write_head(unsigned int status_code, Headers headers) override;
+   void write_head(unsigned int status_code, Fields headers) override;
    void async_write(WriteHandler&& handler, std::vector<uint8_t> buffer) override;
    const asio::any_io_executor& executor() const override;
 

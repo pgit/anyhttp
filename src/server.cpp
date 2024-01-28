@@ -24,7 +24,7 @@ Response::Response(std::unique_ptr<Response::Impl> impl) : m_impl(std::move(impl
 Response::Response(Response&&) noexcept = default;
 Response::~Response() = default;
 
-void Response::write_head(unsigned int status_code, Headers headers)
+void Response::write_head(unsigned int status_code, Fields headers)
 {
    m_impl->write_head(status_code, std::move(headers));
 }

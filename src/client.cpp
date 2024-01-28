@@ -13,11 +13,6 @@ Request::Request(std::unique_ptr<Request::Impl> impl) : m_impl(std::move(impl)) 
 Request::Request(Request&&) noexcept = default;
 Request::~Request() = default;
 
-void Request::write_head(unsigned int status_code, Headers headers)
-{
-   m_impl->write_head(status_code, std::move(headers));
-}
-
 void Request::async_write_any(WriteHandler&& handler, std::vector<std::uint8_t> buffer)
 {
    m_impl->async_write(std::move(handler), std::move(buffer));
@@ -43,7 +38,7 @@ Client::Client(boost::asio::any_io_executor executor, Config config)
 {
 }
 
-Request Client::submit(boost::urls::url url, Headers headers)
+Request Client::submit(boost::urls::url url, Fields headers)
 {
    return impl->submit(std::move(url), std::move(headers));
 }

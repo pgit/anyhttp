@@ -18,7 +18,7 @@ namespace asio = boost::asio;
 
 // =================================================================================================
 
-using Headers = std::map<std::string, std::string>;
+using Fields = std::map<std::string, std::string>;
 
 using ReadSome = void(boost::system::error_code, std::vector<std::uint8_t>);
 using ReadSomeHandler = asio::any_completion_handler<ReadSome>;

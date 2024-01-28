@@ -18,7 +18,7 @@ public:
    Session(Session&& other) noexcept;
    ~Session();
 
-   client::Request submit(boost::urls::url url, Headers headers);
+   client::Request submit(boost::urls::url url, Fields headers);
 
 private:
    std::unique_ptr<Impl> impl;

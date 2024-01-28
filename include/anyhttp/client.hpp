@@ -2,19 +2,14 @@
 
 #include "common.hpp" // IWYU pragma: keep
 
-#include <boost/asio/any_completion_handler.hpp>
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/async_result.hpp>
-#include <boost/asio/awaitable.hpp>
-#include <boost/asio/bind_allocator.hpp>
-#include <boost/asio/dispatch.hpp>
-#include <boost/asio/ip/basic_endpoint.hpp>
-#include <boost/asio/ip/tcp.hpp>
 
 #include <boost/url.hpp>
 
 namespace anyhttp::client
 {
+
+// =================================================================================================
+
 struct Config
 {
    boost::urls::url url{"http://localhost:8080"};
@@ -24,16 +19,16 @@ struct Config
 
 class Response
 {
-   class Impl;
-   std::unique_ptr<Impl> m_impl;
-
 public:
+   class Impl;
    explicit Response(std::unique_ptr<Impl> impl);
    Response(Response&& other) noexcept;
    ~Response();
 
    const asio::any_io_executor& executor() const;
-   void write_head(unsigned int status_code, Headers headers);
+
+public:
+   void write_head(unsigned int status_code, Fields headers);
 
    template <boost::asio::completion_token_for<ReadSome> CompletionToken>
    auto async_read_some(CompletionToken&& token)
@@ -47,9 +42,10 @@ public:
 
 private:
    void async_read_some_any(ReadSomeHandler&& handler);
+   std::unique_ptr<Impl> m_impl;
 };
 
-// =================================================================================================
+// -------------------------------------------------------------------------------------------------
 
 class Request
 {
@@ -60,7 +56,6 @@ public:
    ~Request();
 
    const asio::any_io_executor& executor() const;
-   void write_head(unsigned int status_code, Headers headers);
 
 public:
    using GetResponse = void (boost::system::error_code, Response&&);
@@ -105,7 +100,7 @@ public:
    Client(asio::any_io_executor executor, Config config);
    ~Client();
 
-   Request submit(boost::urls::url url, Headers headers);
+   Request submit(boost::urls::url url, Fields headers);
    asio::ip::tcp::endpoint local_endpoint() const;
 
 public:

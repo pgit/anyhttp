@@ -6,9 +6,10 @@
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ip/detail/endpoint.hpp>
 #include <boost/asio/ip/tcp.hpp>
-
 #include <boost/asio/steady_timer.hpp>
+
 #include <boost/beast/core/flat_buffer.hpp>
+#include <boost/beast/http/message.hpp>
 
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
@@ -74,9 +75,9 @@ awaitable<void> Client::Impl::connect()
    co_await m_session->do_client_session(std::move(data));
 }
 
-Request Client::Impl::submit(boost::urls::url url, Headers headers)
+Request Client::Impl::submit(boost::urls::url url, Fields headers)
 {
-   return m_session->submit(url, headers);
+   return m_session->submit(std::move(url), std::move(headers));
 
 }
 
