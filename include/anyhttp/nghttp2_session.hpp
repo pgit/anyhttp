@@ -38,11 +38,19 @@ public:
    NGHttp2Session(client::Client::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket);
    ~NGHttp2Session() override;
 
+   void create_client_session();
+
    // ----------------------------------------------------------------------------------------------
 
    client::Request submit(boost::urls::url url, Fields headers) override;
    awaitable<void> do_server_session(std::vector<uint8_t> data) override;
    awaitable<void> do_client_session(std::vector<uint8_t> data) override;
+   void cancel() override
+   {
+      boost::system::error_code ec;
+      std::ignore = m_socket.shutdown(boost::asio::socket_base::shutdown_both, ec);
+      logw("[{}] shutdown: {}", m_logPrefix, ec.message());
+   }
 
    // ----------------------------------------------------------------------------------------------
 
@@ -97,6 +105,13 @@ public:
          stream = it->second;
          m_streams.erase(it);
       }
+
+      if (m_streams.empty() && m_client)
+      {
+         logi("[{}] last stream closed, terminating session...", m_logPrefix);
+         nghttp2_session_terminate_session(session, NGHTTP2_STREAM_CLOSED);
+      }
+
       return stream;
    }
 

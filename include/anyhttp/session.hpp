@@ -14,14 +14,14 @@ class Session
 {
 public:
    class Impl;
-   explicit Session(std::unique_ptr<Impl> impl);
+   explicit Session(std::shared_ptr<Impl> impl);
    Session(Session&& other) noexcept;
    ~Session();
 
    client::Request submit(boost::urls::url url, Fields headers);
 
 private:
-   std::unique_ptr<Impl> impl;
+   const std::shared_ptr<Impl> m_impl;
 };
 
 // =================================================================================================

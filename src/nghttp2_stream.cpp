@@ -14,28 +14,29 @@ namespace anyhttp::nghttp2
 
 // =================================================================================================
 
-NGHttp2Request::NGHttp2Request(NGHttp2Stream& stream) : Impl(), stream(&stream)
+NGHttp2Reader::NGHttp2Reader(NGHttp2Stream& stream)
+   : server::Request::Impl(), client::Response::Impl(), stream(&stream)
 {
    stream.request = this;
 }
 
-NGHttp2Request::~NGHttp2Request()
+NGHttp2Reader::~NGHttp2Reader()
 {
    if (stream)
       stream->request = nullptr;
 }
 
-void NGHttp2Request::detach() { stream = nullptr; }
+void NGHttp2Reader::detach() { stream = nullptr; }
 
 // -------------------------------------------------------------------------------------------------
 
-const asio::any_io_executor& NGHttp2Request::executor() const
+const asio::any_io_executor& NGHttp2Reader::executor() const
 {
    assert(stream);
    return stream->executor();
 }
 
-void NGHttp2Request::async_read_some(ReadSomeHandler&& handler)
+void NGHttp2Reader::async_read_some(ReadSomeHandler&& handler)
 {
    assert(stream);
    assert(!stream->m_read_handler);
@@ -45,28 +46,25 @@ void NGHttp2Request::async_read_some(ReadSomeHandler&& handler)
 
 // =================================================================================================
 
-NGHttp2Response::NGHttp2Response(NGHttp2Stream& stream) : stream(&stream)
-{
-   stream.response = this;
-}
+NGHttp2Writer::NGHttp2Writer(NGHttp2Stream& stream) : stream(&stream) { stream.response = this; }
 
-NGHttp2Response::~NGHttp2Response()
+NGHttp2Writer::~NGHttp2Writer()
 {
    if (stream)
       stream->response = nullptr;
 }
 
-void NGHttp2Response::detach() { stream = nullptr; }
+void NGHttp2Writer::detach() { stream = nullptr; }
 
 // -------------------------------------------------------------------------------------------------
 
-const asio::any_io_executor& NGHttp2Response::executor() const
+const asio::any_io_executor& NGHttp2Writer::executor() const
 {
    assert(stream);
    return stream->executor();
 }
 
-void NGHttp2Response::write_head(unsigned int status_code, Fields headers)
+void NGHttp2Writer::write_head(unsigned int status_code, Fields headers)
 {
    assert(stream);
 
@@ -91,12 +89,17 @@ void NGHttp2Response::write_head(unsigned int status_code, Fields headers)
    nghttp2_submit_response(stream->parent.session, stream->id, nva.data(), nva.size(), &prd);
 }
 
-void NGHttp2Response::async_write(WriteHandler&& handler, std::vector<uint8_t> buffer)
+void NGHttp2Writer::async_write(WriteHandler&& handler, std::vector<uint8_t> buffer)
 {
    if (!stream)
-      handler(boost::asio::error::basic_errors::connection_aborted);
+      std::move(handler)(boost::asio::error::basic_errors::connection_aborted);
    else
       stream->async_write(std::move(handler), std::move(buffer));
+}
+
+void NGHttp2Writer::async_get_response(client::Request::GetResponseHandler&& handler)
+{
+   stream->async_get_response(std::move(handler));
 }
 
 // =================================================================================================
@@ -149,7 +152,8 @@ void NGHttp2Stream::call_handler_loop()
         m_pending_read_buffers.size());
 }
 
-void NGHttp2Stream::call_on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len)
+void NGHttp2Stream::call_on_data(nghttp2_session* session, int32_t id_, const uint8_t* data,
+                                 size_t len)
 {
    std::ignore = id_;
    assert(id == id_);
@@ -202,6 +206,12 @@ void NGHttp2Stream::async_write(WriteHandler&& handler, std::vector<uint8_t> buf
       nghttp2_session_resume_data(parent.session, id);
       parent.start_write();
    }
+}
+
+void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& handler)
+{
+   assert(!responseHandler);
+   responseHandler = std::move(handler);
 }
 
 // ==============================================================================================
@@ -344,8 +354,22 @@ awaitable<void> NGHttp2Stream::do_request()
    co_return;
 }
 
+void NGHttp2Stream::call_on_response()
+{
+   logd("[{}] call_on_response:", logPrefix);
+
+   if (responseHandler)
+   {
+      auto impl = client::Response{std::make_unique<NGHttp2Reader>(*this)};
+      std::move(responseHandler)(boost::system::error_code{}, std::move(impl));
+      responseHandler = nullptr;
+   }
+}
+
 void NGHttp2Stream::call_on_request()
 {
+   logd("[{}] call_on_request:", logPrefix);
+
    //
    // An incomming new request should be put into a queue of the server session. From there,
    // new requests can then be retrieved asynchronously by the user.
@@ -358,8 +382,8 @@ void NGHttp2Stream::call_on_request()
 #if 0
       co_spawn(executor(), do_request(), detached);
 #else
-   server::Request request(std::make_unique<NGHttp2Request>(*this));
-   server::Response response(std::make_unique<NGHttp2Response>(*this));
+   server::Request request(std::make_unique<NGHttp2Reader>(*this));
+   server::Response response(std::make_unique<NGHttp2Writer>(*this));
 
    if (auto& handler = parent.server().requestHandlerCoro())
       co_spawn(executor(), handler(std::move(request), std::move(response)), detached);

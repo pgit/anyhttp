@@ -18,17 +18,6 @@
 #include <boost/beast/version.hpp>
 
 
-// https://fmt.dev/latest/api.html#std-ostream-support
-template <>
-struct fmt::formatter<boost::string_view> : ostream_formatter
-{
-};
-
-template <>
-struct fmt::formatter<boost::core::basic_string_view<char>> : ostream_formatter
-{
-};
-
 using namespace boost::asio;
 namespace beast = boost::beast;
 

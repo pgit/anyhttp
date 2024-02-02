@@ -16,7 +16,7 @@ link_libraries(spdlog::spdlog_header_only)
 
 add_library(anyhttp)
 file(GLOB anyhttp_sources CONFIGURE_DEPENDS *.cpp)
-list(FILTER anyhttp_sources EXCLUDE REGEX "_main.cpp$")
+list(FILTER anyhttp_sources EXCLUDE REGEX "_main\.cpp$")
 target_sources(anyhttp PRIVATE ${anyhttp_sources})
 target_include_directories(anyhttp PUBLIC ../include)
 

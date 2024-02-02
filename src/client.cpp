@@ -18,6 +18,11 @@ void Request::async_write_any(WriteHandler&& handler, std::vector<std::uint8_t> 
    m_impl->async_write(std::move(handler), std::move(buffer));
 }
 
+void Request::async_get_response_any(Request::GetResponseHandler&& handler)
+{
+   m_impl->async_get_response(std::move(handler));
+}
+
 const asio::any_io_executor& Request::executor() const { return m_impl->executor(); }
 
 // -------------------------------------------------------------------------------------------------
@@ -38,14 +43,16 @@ Client::Client(boost::asio::any_io_executor executor, Config config)
 {
 }
 
-Request Client::submit(boost::urls::url url, Fields headers)
+Client::~Client() = default;
+
+
+void Client::async_connect_any(ConnectHandler&& handler)
 {
-   return impl->submit(std::move(url), std::move(headers));
+   impl->async_connect(std::move(handler));
 }
 
+const asio::any_io_executor& Client::executor() const { return impl->executor(); }
 asio::ip::tcp::endpoint Client::local_endpoint() const { return impl->local_endpoint(); }
-
-Client::~Client() = default;
 
 // =================================================================================================
 

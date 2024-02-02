@@ -1,10 +1,11 @@
 
 #include "anyhttp/nghttp2_session.hpp"
-#include "anyhttp/nghttp2_stream.hpp"
 #include "anyhttp/client_impl.hpp"
+#include "anyhttp/nghttp2_stream.hpp"
 
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
+#include <boost/url/format.hpp>
 
 #include <nghttp2/nghttp2.h>
 
@@ -23,6 +24,8 @@ namespace anyhttp::nghttp2
 int on_begin_headers_callback(nghttp2_session*, const nghttp2_frame* frame, void* user_data)
 {
    auto handler = static_cast<NGHttp2Session*>(user_data);
+
+   logd("[{}] on_begin_header_callback:", handler->logPrefix());
 
    if (frame->hd.type != NGHTTP2_HEADERS || frame->headers.cat != NGHTTP2_HCAT_REQUEST)
    {
@@ -96,12 +99,16 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
 
    case NGHTTP2_HEADERS:
    {
-      if (!stream || frame->headers.cat != NGHTTP2_HCAT_REQUEST)
+      if (!stream)
       {
          break;
       }
 
-      stream->call_on_request();
+      if (frame->headers.cat == NGHTTP2_HCAT_REQUEST)
+         stream->call_on_request();
+      else if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE)
+         stream->call_on_response();
+
       if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)
       {
          stream->call_on_data(session, frame->hd.stream_id, nullptr, 0);
@@ -154,9 +161,10 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
    std::ignore = error_code;
 
    auto handler = static_cast<NGHttp2Session*>(user_data);
+   logd("[{}.{}] on_stream_close_callback:", handler->logPrefix(), stream_id);
+
    auto stream = handler->close_stream(stream_id);
    assert(stream);
-   logd("[{}.{}] on_stream_close_callback:", handler->logPrefix(), stream_id);
    // post(stream->executor(), [stream]() {});
    return 0;
 }
@@ -239,6 +247,7 @@ NGHttp2Session::NGHttp2Session(client::Client::Impl& parent, any_io_executor exe
    : NGHttp2Session(std::move(executor), std::move(socket))
 {
    m_client = &parent;
+   create_client_session();
 }
 
 NGHttp2Session::~NGHttp2Session()
@@ -293,7 +302,7 @@ awaitable<void> NGHttp2Session::do_server_session(std::vector<uint8_t> data)
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> NGHttp2Session::do_client_session(std::vector<uint8_t> data)
+void NGHttp2Session::create_client_session()
 {
    m_socket.set_option(ip::tcp::no_delay(true));
    auto callbacks = setup_callbacks();
@@ -319,7 +328,10 @@ awaitable<void> NGHttp2Session::do_client_session(std::vector<uint8_t> data)
                                              {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
+}
 
+awaitable<void> NGHttp2Session::do_client_session(std::vector<uint8_t> data)
+{
    //
    // Let NGHTTP2 parse what we have received so far.
    // This must happen after submitting the server settings.
@@ -330,7 +342,7 @@ awaitable<void> NGHttp2Session::do_client_session(std::vector<uint8_t> data)
 
    data.clear();
    data.shrink_to_fit();
-
+   
    //
    // send/receive loop
    //
@@ -341,9 +353,66 @@ awaitable<void> NGHttp2Session::do_client_session(std::vector<uint8_t> data)
 
 // -------------------------------------------------------------------------------------------------
 
-client::Request NGHttp2Session::submit(boost::urls::url url, Fields headers) 
+client::Request NGHttp2Session::submit(boost::urls::url url, Fields headers)
 {
-   return client::Request{nullptr};
+   mlogd("submit: {}", url.buffer());
+
+   auto stream = std::make_shared<NGHttp2Stream>(*this, 0);
+   stream->url = url;
+
+   //
+   // https://nghttp2.org/documentation/types.html#c.nghttp2_data_source_read_callback
+   //
+   // This callback is run by nghttp2 when it is ready to accept data to be sent.
+   //
+   nghttp2_data_provider prd;
+   prd.source.ptr = stream.get();
+   prd.read_callback = [](nghttp2_session* session, int32_t stream_id, uint8_t* buf, size_t length,
+                          uint32_t* data_flags, nghttp2_data_source* source,
+                          void* user_data) -> ssize_t
+   {
+      std::ignore = session;
+      std::ignore = stream_id;
+      std::ignore = user_data;
+      std::ignore = source;
+
+      auto stream = static_cast<NGHttp2Stream*>(source->ptr);
+      assert(stream);
+      return stream->read_callback(buf, length, data_flags);
+   };
+
+   //
+   // Submit request, full headers and producer callback for the body.
+   //
+   auto view = boost::urls::parse_uri(url);
+   std::string method("POST");
+   std::string scheme(view->scheme());
+   std::string path("/");
+   std::string authority(view->host_address());
+   auto nva = std::vector<nghttp2_nv>();
+   nva.reserve(4);
+   nva.push_back(make_nv_ls(":method", method));
+   nva.push_back(make_nv_ls(":scheme", scheme));
+   nva.push_back(make_nv_ls(":path", path));
+   nva.push_back(make_nv_ls(":authority", authority));
+   for (auto nv : nva)
+      mlogd("submit: {}={}", std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen),
+            std::string_view(reinterpret_cast<const char*>(nv.value), nv.valuelen));
+
+   auto id = nghttp2_submit_request(session, nullptr, nva.data(), nva.size(), &prd, this);
+   stream->id = id;
+   stream->logPrefix = fmt::format("{}.{}", logPrefix(), id);
+   if (id < 0)
+   {
+      mloge("submit: nghttp2_submit_request: ERROR: {}", id);
+      return client::Request{nullptr};  // FIXME: std::expect? exception?
+   }
+   logd("submit: stream={}", id);
+
+
+   m_streams.emplace(id, stream);
+
+   return client::Request{std::make_unique<NGHttp2Writer>(*stream)};
 }
 
 // =================================================================================================

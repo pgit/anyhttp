@@ -1,6 +1,7 @@
 #pragma once
 #include "client.hpp"
 #include "session.hpp"
+#include "session_impl.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_completion_handler.hpp>
@@ -24,6 +25,7 @@ public:
    virtual const asio::any_io_executor& executor() const = 0;
    virtual void write_head(unsigned int status_code, Fields headers) = 0;
    virtual void async_write(WriteHandler&& handler, std::vector<uint8_t> bufffer) = 0;
+   virtual void async_get_response(client::Request::GetResponseHandler&& handler) = 0;
    virtual void detach() = 0;
 };
 
@@ -51,17 +53,15 @@ public:
    const Config& config() const { return m_config; }
    const boost::asio::any_io_executor& executor() const { return m_executor; }
 
-   asio::awaitable<void> connect();
-   Request submit(boost::urls::url url, Fields headers);
-   asio::ip::tcp::endpoint local_endpoint() const { return m_acceptor.local_endpoint(); }
+   asio::awaitable<void> connect(ConnectHandler handler);
+   void async_connect(ConnectHandler&& handler);
 
-   void run();
+   asio::ip::tcp::endpoint local_endpoint() const { return m_acceptor.local_endpoint(); }
 
 private:
    Config m_config;
    boost::asio::any_io_executor m_executor;
    asio::ip::tcp::acceptor m_acceptor;
-   std::shared_ptr<Session::Impl> m_session;
 };
 
 // =================================================================================================

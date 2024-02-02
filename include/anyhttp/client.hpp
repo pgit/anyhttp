@@ -2,8 +2,12 @@
 
 #include "common.hpp" // IWYU pragma: keep
 
-
 #include <boost/url.hpp>
+
+namespace anyhttp
+{
+class Session;
+}
 
 namespace anyhttp::client
 {
@@ -58,7 +62,7 @@ public:
    const asio::any_io_executor& executor() const;
 
 public:
-   using GetResponse = void (boost::system::error_code, Response&&);
+   using GetResponse = void(boost::system::error_code, Response);
    using GetResponseHandler = asio::any_completion_handler<GetResponse>;
 
    template <boost::asio::completion_token_for<GetResponse> CompletionToken>
@@ -87,29 +91,43 @@ public:
 
 private:
    void async_write_any(WriteHandler&& handler, std::vector<std::uint8_t> buffer);
-   void async_get_response_any(GetResponseHandler&& handler, Response);
+   void async_get_response_any(GetResponseHandler&& handler);
 
    std::unique_ptr<Impl> m_impl;
 };
 
 // =================================================================================================
 
+using Connect = void(boost::system::error_code, Session);
+using ConnectHandler = asio::any_completion_handler<Connect>;
+
 class Client
 {
 public:
+   class Impl;
    Client(asio::any_io_executor executor, Config config);
    ~Client();
 
-   Request submit(boost::urls::url url, Fields headers);
+   const asio::any_io_executor& executor() const;
+
+   template <boost::asio::completion_token_for<Connect> CompletionToken>
+   auto async_connect(CompletionToken&& token)
+   {
+      return boost::asio::async_initiate<CompletionToken, Connect>(
+         [&](asio::completion_handler_for<Connect> auto handler) { //
+            async_connect_any(std::move(handler));
+         },
+         token);
+   }
+
    asio::ip::tcp::endpoint local_endpoint() const;
 
-public:
-   class Impl;
-
 private:
+   void async_connect_any(ConnectHandler&& handler);
+
    std::unique_ptr<Impl> impl;
 };
 
 // =================================================================================================
 
-} // namespace anyhttp::server
+} // namespace anyhttp::client

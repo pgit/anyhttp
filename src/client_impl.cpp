@@ -34,16 +34,15 @@ Response::Impl::~Impl() = default;
 Client::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
-   spdlog::set_level(spdlog::level::debug);
+   spdlog::set_level(spdlog::level::info);
    spdlog::info("Client: ctor");
-   run();
 }
 
 Client::Impl::~Impl() { logi("Client: dtor"); }
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> Client::Impl::connect()
+awaitable<void> Client::Impl::connect(ConnectHandler handler)
 {
    auto executor = co_await boost::asio::this_coro::executor;
 
@@ -71,17 +70,16 @@ awaitable<void> Client::Impl::connect()
    std::vector<uint8_t> data;
    auto buffer = boost::asio::dynamic_buffer(data);
  
-   m_session = std::make_shared<nghttp2::NGHttp2Session>(*this, executor, std::move(socket));
-   co_await m_session->do_client_session(std::move(data));
+   auto impl = std::make_shared<nghttp2::NGHttp2Session>(*this, executor, std::move(socket));
+   std::move(handler)(boost::system::error_code{}, Session{impl});
+   handler = nullptr;
+   co_await impl->do_client_session(std::move(data));
 }
 
-Request Client::Impl::submit(boost::urls::url url, Fields headers)
+void Client::Impl::async_connect(ConnectHandler&& handler)
 {
-   return m_session->submit(std::move(url), std::move(headers));
-
+   co_spawn(m_executor, connect(std::move(handler)), detached);
 }
-
-void Client::Impl::run() { co_spawn(m_executor, connect(), detached); }
 
 // =================================================================================================
 

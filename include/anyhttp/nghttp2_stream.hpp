@@ -2,15 +2,17 @@
 
 #include "common.hpp"
 #include "server_impl.hpp"
+#include "client_impl.hpp"
 
+#include "nghttp2/nghttp2.h"
+
+#include <boost/asio.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <boost/system/detail/system_category.hpp>
+#include <boost/url/url.hpp>
+
 #include <deque>
-
-#include <boost/asio.hpp>
-
-#include "nghttp2/nghttp2.h"
 
 namespace anyhttp::nghttp2
 {
@@ -18,11 +20,11 @@ namespace anyhttp::nghttp2
 // =================================================================================================
 
 class NGHttp2Stream;
-class NGHttp2Request : public server::Request::Impl
+class NGHttp2Reader : public server::Request::Impl, public client::Response::Impl
 {
 public:
-   explicit NGHttp2Request(NGHttp2Stream& stream);
-   ~NGHttp2Request() override;
+   explicit NGHttp2Reader(NGHttp2Stream& stream);
+   ~NGHttp2Reader() override;
    void detach() override;
 
    void async_read_some(server::Request::ReadSomeHandler&& handler) override;
@@ -31,15 +33,18 @@ public:
    NGHttp2Stream* stream;
 };
 
-class NGHttp2Response : public server::Response::Impl
+// -------------------------------------------------------------------------------------------------
+
+class NGHttp2Writer : public server::Response::Impl, public client::Request::Impl
 {
 public:
-   explicit NGHttp2Response(NGHttp2Stream& stream);
-   ~NGHttp2Response() override;
+   explicit NGHttp2Writer(NGHttp2Stream& stream);
+   ~NGHttp2Writer() override;
    void detach() override;
 
    void write_head(unsigned int status_code, Fields headers) override;
    void async_write(WriteHandler&& handler, std::vector<uint8_t> buffer) override;
+   void async_get_response(client::Request::GetResponseHandler&& handler) override;
    const asio::any_io_executor& executor() const override;
 
    NGHttp2Stream* stream;
@@ -65,7 +70,10 @@ public:
    WriteHandler sendHandler;
    bool is_deferred = false;
 
+   client::Request::GetResponseHandler responseHandler;
+
    std::string logPrefix;
+   boost::urls::url url;
 
 public:
    NGHttp2Stream(NGHttp2Session& parent, int id);
@@ -73,7 +81,6 @@ public:
 
    void call_handler_loop();
    void call_on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len);
-
 
    // ==============================================================================================
 
@@ -194,11 +201,14 @@ public:
    void resume();
 
    void async_write(WriteHandler&& handler, std::vector<uint8_t> buffer);
+   void async_get_response(client::Request::GetResponseHandler&& handler);
 
    // ==============================================================================================
 
    ssize_t read_callback(uint8_t* buf, size_t length, uint32_t* data_flags);
    asio::awaitable<void> do_request();
+
+   void call_on_response();
    void call_on_request();
 
    server::Request::Impl* request = nullptr;

@@ -3,6 +3,7 @@
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
+#include <boost/core/detail/string_view.hpp>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 
@@ -90,6 +91,12 @@ struct fmt::formatter<boost::asio::ip::tcp::endpoint> : ostream_formatter
 // https://fmt.dev/latest/api.html#std-ostream-support
 template <>
 struct fmt::formatter<std::__thread_id> : ostream_formatter
+{
+};
+
+// https://fmt.dev/latest/api.html#std-ostream-support
+template <>
+struct fmt::formatter<boost::core::string_view> : ostream_formatter
 {
 };
 

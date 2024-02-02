@@ -33,7 +33,7 @@ Response::Impl::~Impl() = default;
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
-   spdlog::set_level(spdlog::level::debug);
+   spdlog::set_level(spdlog::level::info);
    spdlog::info("Server: ctor");
    listen();
    run();
