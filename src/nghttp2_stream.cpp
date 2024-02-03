@@ -89,12 +89,12 @@ void NGHttp2Writer::write_head(unsigned int status_code, Fields headers)
    nghttp2_submit_response(stream->parent.session, stream->id, nva.data(), nva.size(), &prd);
 }
 
-void NGHttp2Writer::async_write(WriteHandler&& handler, std::vector<uint8_t> buffer)
+void NGHttp2Writer::async_write(WriteHandler&& handler, asio::const_buffer buffer)
 {
    if (!stream)
       std::move(handler)(boost::asio::error::basic_errors::connection_aborted);
    else
-      stream->async_write(std::move(handler), std::move(buffer));
+      stream->async_write(buffer, std::move(handler));
 }
 
 void NGHttp2Writer::async_get_response(client::Request::GetResponseHandler&& handler)
@@ -193,12 +193,11 @@ void NGHttp2Stream::resume()
    }
 }
 
-void NGHttp2Stream::async_write(WriteHandler&& handler, std::vector<uint8_t> buffer)
+void NGHttp2Stream::async_write(WriteHandler&& handler, asio::const_buffer buffer)
 {
    assert(!sendHandler);
    sendHandler = std::move(handler);
-   sendBuffer = std::move(buffer);
-   sendBufferView = boost::asio::buffer(sendBuffer);
+   sendBuffer = buffer;
 
    if (is_deferred)
    {
@@ -229,42 +228,27 @@ ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data
    }
 
    size_t copied = 0;
-   if (!sendBuffer.empty())
+   if (sendBuffer.size())
    {
-      assert(sendBufferView.data() >= sendBuffer.data());
-      assert(sendBufferView.data() < sendBuffer.data() + sendBuffer.size());
-
       //
       // TODO: we might be able to avoid copying by using NGHTTP2_DATA_FLAG_NO_COPY. This
       // will make nghttp2 call nghttp2_send_data_callback, which must emit a single, full
       // DATA frame.
       //
-      copied = asio::buffer_copy(boost::asio::buffer(buf, length), sendBufferView);
+      copied = asio::buffer_copy(boost::asio::buffer(buf, length), sendBuffer);
 
       logd("[{}] write callback: copied {} bytes", logPrefix, copied);
-      if (copied == sendBufferView.size())
+      sendBuffer += copied;
+      if (sendBuffer.size() == 0)
       {
          logd("[{}] write callback: running handler...", logPrefix);
          std::move(sendHandler)(boost::system::error_code{});
          logd("[{}] write callback: running handler... done", logPrefix);
          if (sendHandler)
-         {
             logd("[{}] write callback: SEND HANDLER RESPAWNED", logPrefix);
-            sendBufferView = boost::asio::buffer(sendBuffer);
-         }
-         else
-         {
-            sendBuffer.clear();
-            sendBufferView = boost::asio::buffer(sendBuffer);
-         }
-      }
-      else
-      {
-         sendBufferView += copied;
-         assert(sendBufferView.size() > 0);
       }
 
-      logd("[{}] write callback: {} bytes left", logPrefix, sendBufferView.size());
+      logd("[{}] write callback: {} bytes left", logPrefix, sendBuffer.size());
    }
    else
    {
@@ -343,7 +327,7 @@ awaitable<void> NGHttp2Stream::do_request()
 
       auto buffer_length = buffer.size();
       logd("[{}] CORO: echoing {} bytes...", logPrefix, buffer_length);
-      co_await async_write(std::move(buffer), deferred);
+      co_await async_write(asio::buffer(buffer), deferred);
       logd("[{}] CORO: echoing {} bytes... done", logPrefix, buffer_length);
 
       if (len == 0)

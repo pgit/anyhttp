@@ -48,7 +48,7 @@ protected:
                   timer.expires_after(50ms);
                   co_await timer.async_wait(deferred);
                }
-               co_await response.async_write(std::move(buffer), deferred);
+               co_await response.async_write(asio::buffer(buffer), deferred);
 
                // if (len == 0)
                // break;

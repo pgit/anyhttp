@@ -32,7 +32,7 @@ awaitable<void> do_request(Session& session, boost::urls::url url)
 
    for (size_t i = 0; i < 1; ++i)
    {
-      co_await request.async_write(buffer, deferred);
+      co_await request.async_write(asio::buffer(buffer), deferred);
       co_await response.async_read_some(deferred);
    }
 

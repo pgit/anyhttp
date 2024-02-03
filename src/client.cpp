@@ -13,9 +13,9 @@ Request::Request(std::unique_ptr<Request::Impl> impl) : m_impl(std::move(impl)) 
 Request::Request(Request&&) noexcept = default;
 Request::~Request() = default;
 
-void Request::async_write_any(WriteHandler&& handler, std::vector<std::uint8_t> buffer)
+void Request::async_write_any(WriteHandler&& handler, asio::const_buffer buffer)
 {
-   m_impl->async_write(std::move(handler), std::move(buffer));
+   m_impl->async_write(std::move(handler), buffer);
 }
 
 void Request::async_get_response_any(Request::GetResponseHandler&& handler)

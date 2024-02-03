@@ -74,7 +74,7 @@ int main()
 
                auto len = buffer.size();
                logd("async_write...");
-               co_await response.async_write(std::move(buffer), deferred);
+               co_await response.async_write(asio::buffer(buffer), deferred);
                logd("async_write... done");
 
                if (len == 0)

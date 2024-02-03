@@ -2,6 +2,7 @@
 
 #include "common.hpp" // IWYU pragma: keep
 
+#include <boost/asio/buffer.hpp>
 #include <boost/url.hpp>
 
 namespace anyhttp
@@ -80,17 +81,17 @@ public:
    using WriteHandler = asio::any_completion_handler<Write>;
 
    template <boost::asio::completion_token_for<Write> CompletionToken>
-   auto async_write(std::vector<std::uint8_t> buffer, CompletionToken&& token)
+   auto async_write(asio::const_buffer buffer, CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
-         [&](asio::completion_handler_for<Write> auto handler, std::vector<uint8_t> buffer) { //
-            async_write_any(std::move(handler), std::move(buffer));
+         [&](asio::completion_handler_for<Write> auto handler, asio::const_buffer buffer) { //
+            async_write_any(std::move(handler), buffer);
          },
-         token, std::move(buffer));
+         token, buffer);
    }
 
 private:
-   void async_write_any(WriteHandler&& handler, std::vector<std::uint8_t> buffer);
+   void async_write_any(WriteHandler&& handler, asio::const_buffer buffer);
    void async_get_response_any(GetResponseHandler&& handler);
 
    std::unique_ptr<Impl> m_impl;

@@ -29,9 +29,9 @@ void Response::write_head(unsigned int status_code, Fields headers)
    m_impl->write_head(status_code, std::move(headers));
 }
 
-void Response::async_write_any(WriteHandler&& handler, std::vector<std::uint8_t> buffer)
+void Response::async_write_any(WriteHandler&& handler, asio::const_buffer buffer)
 {
-   m_impl->async_write(std::move(handler), std::move(buffer));
+   m_impl->async_write(std::move(handler), buffer);
 }
 
 // =================================================================================================

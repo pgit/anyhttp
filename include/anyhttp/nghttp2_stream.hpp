@@ -43,7 +43,7 @@ public:
    void detach() override;
 
    void write_head(unsigned int status_code, Fields headers) override;
-   void async_write(WriteHandler&& handler, std::vector<uint8_t> buffer) override;
+   void async_write(WriteHandler&& handler, asio::const_buffer buffer) override;
    void async_get_response(client::Request::GetResponseHandler&& handler) override;
    const asio::any_io_executor& executor() const override;
 
@@ -66,7 +66,7 @@ public:
    std::deque<Buffer> m_pending_read_buffers;
    bool is_reading_finished = false;
 
-   std::vector<uint8_t> sendBuffer;
+   asio::const_buffer sendBuffer;
    WriteHandler sendHandler;
    bool is_deferred = false;
 
@@ -159,16 +159,15 @@ public:
    // ----------------------------------------------------------------------------------------------
 
    template <boost::asio::completion_token_for<Write> CompletionToken>
-   auto async_write(std::vector<std::uint8_t> buffer, CompletionToken&& token)
+   auto async_write(asio::const_buffer buffer, CompletionToken&& token)
    {
-      auto init = [&](asio::completion_handler_for<Write> auto handler, std::vector<uint8_t> buffer)
+      auto init = [&](asio::completion_handler_for<Write> auto handler, asio::const_buffer buffer)
       {
          assert(!sendHandler);
 
          logd("[{}] async_write: buffer={} is_deferred={}", logPrefix, buffer.size(), is_deferred);
 
-         sendBuffer = std::move(buffer);
-         sendBufferView = boost::asio::buffer(sendBuffer);
+         sendBuffer = buffer;
 #if 1
          sendHandler = std::move(handler);
 #else
@@ -195,12 +194,12 @@ public:
          resume();
       };
 
-      return boost::asio::async_initiate<CompletionToken, Write>(init, token, std::move(buffer));
+      return boost::asio::async_initiate<CompletionToken, Write>(init, token, buffer);
    }
 
    void resume();
 
-   void async_write(WriteHandler&& handler, std::vector<uint8_t> buffer);
+   void async_write(WriteHandler&& handler, asio::const_buffer buffer);
    void async_get_response(client::Request::GetResponseHandler&& handler);
 
    // ==============================================================================================
@@ -218,7 +217,6 @@ public:
 
 public:
    NGHttp2Session& parent;
-   boost::asio::const_buffer sendBufferView;
    int id;
 };
 
