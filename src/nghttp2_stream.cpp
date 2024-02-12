@@ -36,6 +36,12 @@ const asio::any_io_executor& NGHttp2Reader::executor() const
    return stream->executor();
 }
 
+boost::url_view NGHttp2Reader::url() const
+{
+   assert(stream);
+   return {stream->url};
+}
+
 void NGHttp2Reader::async_read_some(ReadSomeHandler&& handler)
 {
    assert(stream);
@@ -211,6 +217,8 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
 {
    assert(!responseHandler);
    responseHandler = std::move(handler);
+   if (has_response)
+      call_on_response();
 }
 
 // ==============================================================================================
@@ -348,11 +356,16 @@ void NGHttp2Stream::call_on_response()
       std::move(responseHandler)(boost::system::error_code{}, std::move(impl));
       responseHandler = nullptr;
    }
+   else
+   {
+      logw("[{}] call_on_response: not waiting for a response, yet", logPrefix);
+      has_response = true;
+   }
 }
 
 void NGHttp2Stream::call_on_request()
 {
-   logd("[{}] call_on_request:", logPrefix);
+   logi("[{}] call_on_request: {}", logPrefix, url.buffer());
 
    //
    // An incomming new request should be put into a queue of the server session. From there,

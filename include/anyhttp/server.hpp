@@ -3,6 +3,7 @@
 #include "common.hpp" // IWYU pragma: keep
 
 #include <boost/asio/awaitable.hpp>
+#include <boost/url/urls.hpp>
 
 namespace anyhttp::server
 {
@@ -30,6 +31,8 @@ public:
 public:
    using ReadSome = void(boost::system::error_code, std::vector<std::uint8_t>);
    using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
+
+   boost::url_view url() const;
 
    //
    // https://www.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp

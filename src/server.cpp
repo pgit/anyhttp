@@ -11,6 +11,8 @@ Request::Request(std::unique_ptr<Request::Impl> impl) : m_impl(std::move(impl)) 
 Request::Request(Request&&) noexcept = default;
 Request::~Request() = default;
 
+boost::url_view Request::url() const { return m_impl->url(); }
+
 void Request::async_read_some_any(ReadSomeHandler&& handler)
 {
    m_impl->async_read_some(std::move(handler));

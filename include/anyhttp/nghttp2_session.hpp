@@ -14,19 +14,11 @@
 using namespace std::chrono_literals;
 
 using namespace boost::asio;
-namespace asio = boost::asio;
-
-using asio::awaitable;
-using asio::co_spawn;
 
 namespace anyhttp::nghttp2
 {
 
 using stream = asio::as_tuple_t<asio::deferred_t>::as_default_on_t<asio::ip::tcp::socket>;
-
-#define mlogd(x, ...) logd("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
-#define mlogi(x, ...) logi("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
-#define mlogw(x, ...) logw("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
 
 class NGHttp2Stream;
 class NGHttp2Session : public ::anyhttp::Session::Impl
@@ -62,12 +54,16 @@ public:
       assert(m_server);
       return *m_server;
    }
+
    client::Client::Impl& client()
    {
       assert(m_client);
       return *m_client;
    }
+
    const auto& executor() const { return m_executor; }
+
+   // ----------------------------------------------------------------------------------------------
 
    asio::any_completion_handler<void()> m_send_handler;
 

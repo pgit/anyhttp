@@ -1,4 +1,5 @@
 #include "anyhttp/client_impl.hpp"
+#include "anyhttp/beast_session.hpp"
 #include "anyhttp/nghttp2_session.hpp"
 
 #include <boost/asio.hpp>
@@ -34,7 +35,7 @@ Response::Impl::~Impl() = default;
 Client::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
-   spdlog::set_level(spdlog::level::info);
+   spdlog::set_level(spdlog::level::debug);
    spdlog::info("Client: ctor");
 }
 
@@ -69,8 +70,18 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    //
    std::vector<uint8_t> data;
    auto buffer = boost::asio::dynamic_buffer(data);
- 
-   auto impl = std::make_shared<nghttp2::NGHttp2Session>(*this, executor, std::move(socket));
+
+   std::shared_ptr<Session::Impl> impl;
+   switch (config().protocol)
+   {
+   case Protocol::http11:
+      impl = std::make_shared<beast_impl::BeastSession>(*this, executor, std::move(socket));
+      break;
+   case Protocol::http2:
+      impl = std::make_shared<nghttp2::NGHttp2Session>(*this, executor, std::move(socket));
+      break;
+   };
+
    std::move(handler)(boost::system::error_code{}, Session{impl});
    handler = nullptr;
    co_await impl->do_client_session(std::move(data));

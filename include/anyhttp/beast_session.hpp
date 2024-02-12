@@ -1,49 +1,110 @@
 #pragma once
 
 #include "common.hpp" // IWYU pragma: keep
+
+#include "client_impl.hpp"
 #include "server_impl.hpp"
+#include "session_impl.hpp"
 
 #include <boost/asio.hpp>
 
-namespace anyhttp::server
-{
-namespace beast_impl
-{
+#include <boost/beast/core.hpp>
+#include <boost/beast/http/buffer_body.hpp>
+#include <boost/beast/http/parser.hpp>
 
-using stream = asio::as_tuple_t<asio::deferred_t>::as_default_on_t<asio::ip::tcp::socket>;
+using namespace boost::asio;
 
-#define mlogd(x, ...) logd("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
-#define mlogi(x, ...) logi("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
-#define mlogw(x, ...) logw("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
+namespace anyhttp::beast_impl
+{
 
 // =================================================================================================
 
-class BeastSession
+class BeastSession;
+class BeastReader : public server::Request::Impl, public client::Response::Impl
 {
 public:
-   explicit BeastSession(Server::Impl& parent, asio::any_io_executor executor,
-                    asio::ip::tcp::socket&& socket)
-      : m_parent(parent), m_executor(std::move(executor)), m_socket(std::move(socket)),
-        m_logPrefix(fmt::format("{}", normalize(m_socket.remote_endpoint())))
+   explicit BeastReader(BeastSession& session);
+   ~BeastReader() override;
+   void detach() override;
+
+   boost::url_view url() const override;
+   void async_read_some(server::Request::ReadSomeHandler&& handler) override;
+   const asio::any_io_executor& executor() const override;
+
+   BeastSession* session;
+};
+
+// -------------------------------------------------------------------------------------------------
+
+class BeastWriter : public server::Response::Impl, public client::Request::Impl
+{
+public:
+   explicit BeastWriter(BeastSession& session);
+   ~BeastWriter() override;
+   void detach() override;
+
+   void write_head(unsigned int status_code, Fields headers) override;
+   void async_write(WriteHandler&& handler, asio::const_buffer buffer) override;
+   void async_get_response(client::Request::GetResponseHandler&& handler) override;
+   const asio::any_io_executor& executor() const override;
+
+   BeastSession* session;
+};
+
+// =================================================================================================
+
+using stream = asio::as_tuple_t<asio::deferred_t>::as_default_on_t<asio::ip::tcp::socket>;
+
+class BeastSession : public ::anyhttp::Session::Impl
+{
+   BeastSession(any_io_executor executor, ip::tcp::socket&& socket);
+
+public:
+   BeastSession(server::Server::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket);
+   BeastSession(client::Client::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket);
+   ~BeastSession() override;
+
+   // ----------------------------------------------------------------------------------------------
+
+   client::Request submit(boost::urls::url url, Fields headers) override;
+   awaitable<void> do_server_session(std::vector<uint8_t> data) override;
+   awaitable<void> do_client_session(std::vector<uint8_t> data) override;
+   void cancel() override
    {
-      mlogd("session created");
-      m_send_buffer.resize(64 * 1024);
+      boost::system::error_code ec;
+      std::ignore = m_stream.socket().shutdown(boost::asio::socket_base::shutdown_both, ec);
+      logw("[{}] shutdown: {}", m_logPrefix, ec.message());
    }
 
-   ~BeastSession() { mlogd("streams deleted"); }
+   // ----------------------------------------------------------------------------------------------
 
-   asio::awaitable<void> do_session(std::vector<uint8_t> data);
+   void async_read_some(server::Request::ReadSomeHandler&& handler);
 
-   Server::Impl& parent() { return m_parent; }
+   // ----------------------------------------------------------------------------------------------
+
+   server::Server::Impl& server()
+   {
+      assert(m_server);
+      return *m_server;
+   }
+
+   client::Client::Impl& client()
+   {
+      assert(m_client);
+      return *m_client;
+   }
+
    const auto& executor() const { return m_executor; }
    const std::string& logPrefix() const { return m_logPrefix; }
 
 public:
-   nghttp2_session* session = nullptr;
-   stream m_socket;
+   boost::urls::url url;
+   boost::beast::tcp_stream m_stream;
+   boost::beast::http::request_parser<boost::beast::http::buffer_body> request_parser;
 
 private:
-   Server::Impl& m_parent;
+   server::Server::Impl* m_server = nullptr;
+   client::Client::Impl* m_client = nullptr;
    asio::any_io_executor m_executor;
    std::string m_logPrefix;
 
@@ -54,5 +115,4 @@ private:
 
 // =================================================================================================
 
-} // namespace beast_impl
-} // namespace anyhttp::server
+} // namespace anyhttp::beast_impl

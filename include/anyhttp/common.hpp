@@ -100,6 +100,19 @@ struct fmt::formatter<boost::core::string_view> : ostream_formatter
 {
 };
 
+// https://github.com/fmtlib/fmt/issues/2865
+template <>
+struct fmt::formatter<std::filesystem::path>: formatter<std::string_view>
+{
+    template <typename FormatContext>
+    auto format(const std::filesystem::path& path, FormatContext& ctx)
+    {
+        return formatter<std::string_view>::format(path.string(), ctx);
+    }
+};
+
+// -------------------------------------------------------------------------------------------------
+
 inline std::string what(const std::exception_ptr& ptr)
 {
    std::string result;
@@ -150,5 +163,10 @@ inline std::string what(const std::exception_ptr& ptr)
          spdlog::default_logger_raw()->debug(__VA_ARGS__);                                         \
    } while (false)
 #endif
+
+#define mloge(x, ...) loge("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
+#define mlogd(x, ...) logd("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
+#define mlogi(x, ...) logi("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
+#define mlogw(x, ...) logw("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
 
 // =================================================================================================

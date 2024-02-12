@@ -8,6 +8,13 @@
 namespace anyhttp
 {
 class Session;
+
+enum class Protocol
+{
+   http11,
+   http2
+};
+
 }
 
 namespace anyhttp::client
@@ -18,6 +25,7 @@ namespace anyhttp::client
 struct Config
 {
    boost::urls::url url{"http://localhost:8080"};
+   Protocol protocol{Protocol::http2};
 };
 
 // =================================================================================================

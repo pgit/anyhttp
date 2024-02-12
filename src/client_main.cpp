@@ -7,6 +7,7 @@
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/detached.hpp>
+#include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
 #include <boost/asio/use_awaitable.hpp>
@@ -22,22 +23,33 @@ using namespace anyhttp::client;
 using namespace boost::asio;
 using namespace std::chrono_literals;
 
+using namespace boost::asio::experimental::awaitable_operators;
+
+awaitable<void> send(Request& request, size_t bytes)
+{
+   std::vector<uint8_t> buffer;
+   buffer.resize(64 * 1024 - 1);
+   co_await request.async_write(asio::buffer(buffer), deferred);
+   co_await request.async_write({}, deferred);
+}
+
+awaitable<void> receive(Request& request, size_t bytes)
+{
+   auto response = co_await request.async_get_response(asio::deferred);
+   while (bytes > 0)
+   {
+      auto buf = co_await response.async_read_some(deferred);
+      bytes -= buf.size();
+   }
+   co_await response.async_read_some(deferred);
+}
+
 awaitable<void> do_request(Session& session, boost::urls::url url)
 {
    auto request = session.submit(url, {});
-   auto response = co_await request.async_get_response(asio::deferred);
 
-   std::vector<uint8_t> buffer;
-   buffer.resize(64 * 1024 - 1);
-
-   for (size_t i = 0; i < 1; ++i)
-   {
-      co_await request.async_write(asio::buffer(buffer), deferred);
-      co_await response.async_read_some(deferred);
-   }
-
-   co_await request.async_write({}, deferred);
-   co_await response.async_read_some(deferred);
+   size_t bytes = 64 * 1024 - 1;
+   co_await (send(request, bytes) && receive(request, bytes));
 }
 
 awaitable<void> do_requests(any_io_executor executor, Session& session, boost::urls::url url)

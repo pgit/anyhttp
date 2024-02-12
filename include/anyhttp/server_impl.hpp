@@ -23,6 +23,7 @@ public:
    virtual ~Impl();
 
    virtual const asio::any_io_executor& executor() const = 0;
+   virtual boost::url_view url() const = 0;
    virtual void async_read_some(ReadSomeHandler&& handler) = 0;
    virtual void detach() = 0;
 };

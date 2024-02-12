@@ -14,11 +14,6 @@ using namespace boost::asio::experimental::awaitable_operators;
 namespace anyhttp::nghttp2
 {
 
-#define mloge(x, ...) loge("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
-#define mlogd(x, ...) logd("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
-#define mlogi(x, ...) logi("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
-#define mlogw(x, ...) logw("[{}] " x, m_logPrefix __VA_OPT__(, ) __VA_ARGS__)
-
 // =================================================================================================
 
 int on_begin_headers_callback(nghttp2_session*, const nghttp2_frame* frame, void* user_data)
@@ -48,8 +43,24 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
    std::ignore = flags;
 
    auto handler = static_cast<NGHttp2Session*>(user_data);
-   logd("[{}] on_header_callback: {}={}", handler->logPrefix(), make_string_view(name, namelen),
-        make_string_view(value, valuelen));
+   auto namesv = make_string_view(name, namelen);
+   auto valuesv = make_string_view(value, valuelen);
+   logd("[{}] on_header_callback: {}={}", handler->logPrefix(), namesv, valuesv);
+
+   auto stream = handler->find_stream(frame->hd.stream_id);
+   assert(stream);
+
+   if (namesv == ":method")
+      stream->method = valuesv;
+   else if (namesv == ":path")
+      stream->url.set_path(valuesv);
+   else if (namesv == ":scheme")
+      stream->url.set_scheme(valuesv);
+   else if (namesv == ":authority")
+      stream->url.set_encoded_authority(valuesv);
+   else if (namesv == ":host")
+      stream->url.set_host(valuesv);
+
    return 0;
 }
 
@@ -109,10 +120,9 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
       else if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE)
          stream->call_on_response();
 
+      // no body?
       if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)
-      {
          stream->call_on_data(session, frame->hd.stream_id, nullptr, 0);
-      }
 
       handler->start_write();
       break;
@@ -323,7 +333,8 @@ void NGHttp2Session::create_client_session()
    nghttp2_settings_entry ent{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, &ent, 1);
 
-   const uint32_t window_size = 256 * 1024 * 1024;
+   // const uint32_t window_size = 256 * 1024 * 1024;
+   const uint32_t window_size = 1024 * 1024;
    std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
                                              {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
@@ -342,7 +353,7 @@ awaitable<void> NGHttp2Session::do_client_session(std::vector<uint8_t> data)
 
    data.clear();
    data.shrink_to_fit();
-   
+
    //
    // send/receive loop
    //
@@ -356,6 +367,8 @@ awaitable<void> NGHttp2Session::do_client_session(std::vector<uint8_t> data)
 client::Request NGHttp2Session::submit(boost::urls::url url, Fields headers)
 {
    mlogd("submit: {}", url.buffer());
+
+   std::ignore = headers;
 
    auto stream = std::make_shared<NGHttp2Stream>(*this, 0);
    stream->url = url;
@@ -387,7 +400,7 @@ client::Request NGHttp2Session::submit(boost::urls::url url, Fields headers)
    auto view = boost::urls::parse_uri(url);
    std::string method("POST");
    std::string scheme(view->scheme());
-   std::string path("/");
+   std::string path(view->path());
    std::string authority(view->host_address());
    auto nva = std::vector<nghttp2_nv>();
    nva.reserve(4);
@@ -405,10 +418,9 @@ client::Request NGHttp2Session::submit(boost::urls::url url, Fields headers)
    if (id < 0)
    {
       mloge("submit: nghttp2_submit_request: ERROR: {}", id);
-      return client::Request{nullptr};  // FIXME: std::expect? exception?
+      return client::Request{nullptr}; // FIXME: std::expect? exception?
    }
    logd("submit: stream={}", id);
-
 
    m_streams.emplace(id, stream);
 

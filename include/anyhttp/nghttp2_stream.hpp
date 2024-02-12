@@ -1,8 +1,8 @@
 #pragma once
 
+#include "client_impl.hpp"
 #include "common.hpp"
 #include "server_impl.hpp"
-#include "client_impl.hpp"
 
 #include "nghttp2/nghttp2.h"
 
@@ -27,6 +27,7 @@ public:
    ~NGHttp2Reader() override;
    void detach() override;
 
+   boost::url_view url() const override;
    void async_read_some(server::Request::ReadSomeHandler&& handler) override;
    const asio::any_io_executor& executor() const override;
 
@@ -71,8 +72,10 @@ public:
    bool is_deferred = false;
 
    client::Request::GetResponseHandler responseHandler;
+   bool has_response = false;
 
    std::string logPrefix;
+   std::string method;
    boost::urls::url url;
 
 public:

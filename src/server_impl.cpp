@@ -33,7 +33,7 @@ Response::Impl::~Impl() = default;
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
-   spdlog::set_level(spdlog::level::info);
+   spdlog::set_level(spdlog::level::debug);
    spdlog::info("Server: ctor");
    listen();
    run();
@@ -66,7 +66,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    {
       logi("[{}] assuming HTTP/1.1 cleartext", normalize(socket.remote_endpoint()));
       auto session = std::make_shared<beast_impl::BeastSession>(*this, executor, std::move(socket));
-      co_await session->do_session(std::move(data));
+      co_await session->do_server_session(std::move(data));
    }
 }
 
