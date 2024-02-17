@@ -52,7 +52,7 @@ int main()
             {
                logd("async_read_some...");
                auto buffer = co_await request.async_read_some(deferred);
-               logd("async_read_some... done");
+               logd("async_read_some... done, {} bytes", buffer.size());
             // logi("{}", buffer.size());
 #if 0
                auto timer = steady_timer(request.executor());

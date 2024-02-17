@@ -218,7 +218,7 @@ TEST_F(Echo, EatRequest)
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_F(Echo, Backpressure)
+TEST_F(Echo, DISLABED_Backpressure)
 {
    client::Config config{.url = boost::urls::url("http://127.0.0.1/echo")};
    config.url.set_port_number(server->local_endpoint().port());

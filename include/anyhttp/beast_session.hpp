@@ -8,16 +8,22 @@
 
 #include <boost/asio.hpp>
 
+#include <boost/asio/buffer.hpp>
 #include <boost/beast/core.hpp>
-#include <boost/beast/http/buffer_body.hpp>
 #include <boost/beast/http/parser.hpp>
+#include <boost/beast/http/serializer.hpp>
+#include <boost/beast/http/buffer_body.hpp>
 
 using namespace boost::asio;
+namespace http = boost::beast::http;
 
 namespace anyhttp::beast_impl
 {
 
 // =================================================================================================
+
+template<bool IsServer>
+struct Stream;
 
 class BeastSession;
 class BeastReader : public server::Request::Impl, public client::Response::Impl
@@ -31,6 +37,7 @@ public:
    void async_read_some(server::Request::ReadSomeHandler&& handler) override;
    const asio::any_io_executor& executor() const override;
 
+   Stream<false>* stream;
    BeastSession* session;
 };
 
@@ -79,6 +86,8 @@ public:
    // ----------------------------------------------------------------------------------------------
 
    void async_read_some(server::Request::ReadSomeHandler&& handler);
+   void write_head(unsigned int status_code, Fields headers);
+   void async_write(WriteHandler&& handler, asio::const_buffer buffer);
 
    // ----------------------------------------------------------------------------------------------
 
@@ -100,7 +109,17 @@ public:
 public:
    boost::urls::url url;
    boost::beast::tcp_stream m_stream;
-   boost::beast::http::request_parser<boost::beast::http::buffer_body> request_parser;
+   std::vector<uint8_t> m_data;
+   decltype(dynamic_buffer(m_data)) m_buffer{m_data};
+
+   std::vector<uint8_t> request_buffer;
+   http::request_parser<boost::beast::http::buffer_body> request_parser;
+   http::response<http::buffer_body> response;  
+   http::response_serializer<http::buffer_body> response_serializer{response};
+   
+   http::request<http::buffer_body> request; 
+   http::request_serializer<http::buffer_body> request_serializer{request};
+   http::response_parser<boost::beast::http::buffer_body> response_parser;
 
 private:
    server::Server::Impl* m_server = nullptr;

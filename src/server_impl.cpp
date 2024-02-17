@@ -51,7 +51,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    auto executor = co_await boost::asio::this_coro::executor;
 
    //
-   // detect HTTP2 client preface, abort connection if not found
+   // detect HTTP2 client preface, fallback to HTTP/1.1 if not found
    //
    std::vector<uint8_t> data;
    auto buffer = boost::asio::dynamic_buffer(data);
@@ -64,7 +64,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    }
    else
    {
-      logi("[{}] assuming HTTP/1.1 cleartext", normalize(socket.remote_endpoint()));
+      logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", normalize(socket.remote_endpoint()));
       auto session = std::make_shared<beast_impl::BeastSession>(*this, executor, std::move(socket));
       co_await session->do_server_session(std::move(data));
    }

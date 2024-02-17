@@ -33,6 +33,7 @@ public:
    using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
 
    boost::url_view url() const;
+   std::optional<size_t> content_length() const noexcept;
 
    //
    // https://www.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp

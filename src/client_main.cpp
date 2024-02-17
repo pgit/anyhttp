@@ -35,7 +35,7 @@ awaitable<void> send(Request& request, size_t bytes)
 
 awaitable<void> receive(Request& request, size_t bytes)
 {
-   auto response = co_await request.async_get_response(asio::deferred);
+   auto response = co_await request.async_get_response(deferred);
    while (bytes > 0)
    {
       auto buf = co_await response.async_read_some(deferred);
@@ -60,7 +60,7 @@ awaitable<void> do_requests(any_io_executor executor, Session& session, boost::u
 
 awaitable<void> do_session(Client& client, boost::urls::url url)
 {
-   auto session = co_await client.async_connect(asio::deferred);
+   auto session = co_await client.async_connect(deferred);
 
    for (size_t i = 0; i < 10; ++i)
       co_spawn(client.executor(), do_requests(client.executor(), session, url), detached);
@@ -79,7 +79,7 @@ int main(int argc, char* argv[])
    Client client(context.get_executor(), config);
 
    for (size_t i = 0; i < 4; ++i)
-      co_spawn(context, do_session(client, config.url), asio::detached);
+      co_spawn(context, do_session(client, config.url), detached);
 
    context.run();
    return 0;
