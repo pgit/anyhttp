@@ -82,19 +82,26 @@ void BeastSession::async_read_some(ReadSomeHandler&& handler)
       return;
    }
 
-   request_buffer.resize(1024);
+   request_buffer.resize(1460);
    request_parser.get().body().data = request_buffer.data();
    request_parser.get().body().size = request_buffer.size();
    boost::beast::http::async_read_some(
       m_stream, m_buffer, request_parser,
       [this, handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
       {
-         mlogd("async_read_some: n={} ({})", n, ec.message());
+         auto& body = request_parser.get().body();
+         size_t payload = request_buffer.size() - body.size;
+         mlogd("async_read_some: n={} (body={}) ({})", n, payload, ec.message());
          if (ec == beast::http::error::need_buffer)
             ec = {}; // FIXME: maybe we should keep 'need_buffer' to avoid extra empty-buffer round
                      // trip
-         request_buffer.resize(n);
-         (std::move(handler))(ec, std::move(request_buffer));
+         if (!ec && payload == 0)
+            async_read_some(std::move(handler));
+         else
+         {
+           request_buffer.resize(payload);
+            (std::move(handler))(ec, std::move(request_buffer));
+         }
       });
 }
 
