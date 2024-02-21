@@ -75,10 +75,10 @@ int main(int argc, char* argv[])
    }
 
    io_context context;
-   Config config{.url = boost::urls::url(argv[1])};
+   Config config{.url = boost::urls::url(argv[1]), .protocol = Protocol::http11};
    Client client(context.get_executor(), config);
 
-   for (size_t i = 0; i < 4; ++i)
+   for (size_t i = 0; i < 1; ++i)
       co_spawn(context, do_session(client, config.url), detached);
 
    context.run();

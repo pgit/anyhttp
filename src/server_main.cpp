@@ -30,7 +30,7 @@ int main()
    io_context context;
    auto server = std::make_optional<Server>(context.get_executor(), Config{.port = 8080});
 
-#if 1
+#if 0
    signal_set signals(context, SIGINT, SIGTERM);
    signals.async_wait(
       [&](auto, auto)
@@ -43,7 +43,8 @@ int main()
    server->setRequestHandlerCoro(
       [&](Request request, Response response) -> awaitable<void>
       {
-         response.content_length(request.content_length().value_or(0));
+         if (request.content_length())
+            response.content_length(request.content_length().value());
          response.write_head(200, {});
          try
          {
@@ -73,17 +74,20 @@ int main()
 
                logd("async_write...");
                co_await response.async_write(asio::buffer(buffer), deferred);
-               logd("async_write... done, wrote {} bytes", buffer.size());
 
-               if (buffer.empty())
+               if (!buffer.empty())
+                  logd("async_write... done, wrote {} bytes", buffer.size());
+               else
+               {
+                  logd("async_write... done, wrote {} bytes, finished", buffer.size());
                   break;
+               }
             }
          }
          catch (std::exception& ex)
          {
             logw("exception: {}", ex.what());
          }
-         logd("done");
          co_return;
       });
    context.run();

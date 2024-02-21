@@ -64,8 +64,8 @@ boost::url_view BeastReader::url() const
 
 std::optional<size_t> BeastReader::content_length() const noexcept
 {
-   if (session->request_parser.content_length())
-      return session->request_parser.content_length().value();
+   if (session->request_parser->content_length())
+      return session->request_parser->content_length().value();
    else
       return std::nullopt;
 }
@@ -81,28 +81,29 @@ void BeastReader::async_read_some(ReadSomeHandler&& handler)
 // https://www.boost.org/doc/libs/1_84_0/libs/beast/doc/html/beast/using_http/parser_stream_operations/incremental_read.html
 void BeastSession::async_read_some(ReadSomeHandler&& handler)
 {
-   mlogd("async_read_some: is_done={} size={} capacity={}", request_parser.is_done(),
+   mlogd("async_read_some: is_done={} size={} capacity={}", request_parser->is_done(),
          m_buffer.size(), m_buffer.capacity());
 
-   if (request_parser.is_done())
+   if (request_parser->is_done())
    {
       (std::move(handler))(boost::system::error_code{}, std::vector<uint8_t>{});
       return;
    }
 
    request_buffer.resize(1460);
-   request_parser.get().body().data = request_buffer.data();
-   request_parser.get().body().size = request_buffer.size();
+   request_parser->get().body().data = request_buffer.data();
+   request_parser->get().body().size = request_buffer.size();
    boost::beast::http::async_read_some(
-      m_stream, m_buffer, request_parser,
+      m_stream, m_buffer, *request_parser,
       [this, handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
       {
-         auto& body = request_parser.get().body();
+         auto& body = request_parser->get().body();
          size_t payload = request_buffer.size() - body.size;
-         mlogd("async_read_some: n={} (body={}) ({})", n, payload, ec.message());
+         mlogd("async_read_some: n={} (body={}) ({}) is_done={} size={} capacity={}", n, payload,
+               ec.message(), request_parser->is_done(), m_buffer.size(), m_buffer.capacity());
          if (ec == beast::http::error::need_buffer)
-            ec = {}; // FIXME: maybe we should keep 'need_buffer' to avoid extra empty-buffer round
-                     // trip
+            ec = {}; // FIXME: maybe we should keep 'need_buffer' to avoid extra empty round trip
+
          if (!ec && payload == 0)
             async_read_some(std::move(handler));
          else
@@ -156,11 +157,14 @@ void BeastWriter::async_get_response(client::Request::GetResponseHandler&& handl
 
 void BeastSession::write_head(unsigned int status_code, Fields headers)
 {
+   if (!response.has_content_length())
+      response.chunked(true);
+
    response.body().data = nullptr;
    response.result(status_code);
    for (auto&& header : headers)
       response.set(header.first, header.second);
-   http::write_header(m_stream, response_serializer);
+   http::write_header(m_stream, *response_serializer);
    // async_write_header(m_stream, response_serializer, use_awaitable);
 }
 
@@ -174,7 +178,7 @@ void BeastSession::async_write(WriteHandler&& handler, asio::const_buffer buffer
    response.body().size = buffer.size();
    response.body().more = buffer.size() != 0;
 
-   http::async_write(m_stream, response_serializer,
+   http::async_write(m_stream, *response_serializer,
                      [this, handler = std::move(handler)](boost::system::error_code ec,
                                                           size_t n) mutable { //
                         mlogd("async_write: n={} ({})", n, ec.message());
@@ -223,7 +227,7 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
    mlogd("do_server_session, {} bytes in buffer", data.size());
    m_stream.socket().set_option(asio::ip::tcp::no_delay(true));
 
-   // Set the timeout.
+   // Set the timeout. TODO: don't rely on beast timeouts
    m_stream.expires_after(std::chrono::seconds(30));
 
    bool close = false;
@@ -235,21 +239,22 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
    // data.reserve(std::min(data.size(), 16 * 1024UL));
    // auto buffer = boost::asio::dynamic_buffer(data);
    m_data = std::move(data);
-   m_data.reserve(std::min(data.size(), 16 * 1024UL));
+   m_data.reserve(std::max(data.size(), 16 * 1024UL));
 
    using namespace beast::http;
    for (;;)
    {
+      logd("");
+      request_parser.emplace();
       mlogd("waiting for request (size={} capacity={})", m_buffer.size(), m_buffer.capacity());
-      m_buffer.prepare(1460);
       auto [ec, len] =
-         co_await async_read_header(m_stream, m_buffer, request_parser, as_tuple(deferred));
+         co_await async_read_header(m_stream, m_buffer, *request_parser, as_tuple(deferred));
       mlogd("async_read_header: len={} size={} capacity={} ec={}", len, m_buffer.size(),
             m_buffer.capacity(), ec.message());
       if (ec)
          break;
 
-      auto& req = request_parser.get();
+      auto& req = request_parser->get();
       mlogd("{} {} (need_eof={})", req.method_string(), req.target(), req.need_eof());
       for (auto& header : req)
          mlogd("  {}: {}", header.name_string(), header.value());
@@ -258,7 +263,8 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
       url.set_path(req.target());
 
       this->response =
-         beast::http::response<buffer_body>{status::ok, request_parser.get().version()};
+         beast::http::response<buffer_body>{status::ok, request_parser->get().version()};
+      response_serializer.emplace(response);
       this->response.set(field::server, "anyhttp");
 
       server::Request request(std::make_unique<BeastReader>(*this));
@@ -274,27 +280,26 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
          mlogd("request needs EOF, closing connection");
          break;
       }
-      if (response_serializer.get().need_eof())
+      if (response_serializer->get().need_eof())
       {
          mlogd("response needs EOF, closing connection");
          break;
       }
-      break;
 #if 0
-      beast::http::response<buffer_body> res{status::ok, request_parser.get().version()};
+      beast::http::response<buffer_body> res{status::ok, request_parser->get().version()};
       res.set(field::server, "Beast");
       // if (req.count(field::content_type))
       //   res.set(field::content_type, req[field::content_type]);
       // res.set(field::connection, "close");
       if (req.has_content_length())
-         res.content_length(request_parser.content_length());
+         res.content_length(request_parser->content_length());
       else if (req.chunked())
          res.chunked(true);
-      else if (request_parser.is_done())
+      else if (request_parser->is_done())
          res.content_length(0);
 
       res.body().data = nullptr;
-      res.body().more = !request_parser.is_done();
+      res.body().more = !request_parser->is_done();
       mlogd("more={} size={} buffer={}", res.body().more, res.body().size, buffer.size());
 
       // We need the serializer here because the serializer requires
@@ -309,15 +314,15 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
       do
       {
          std::array<char, 16 * 1024> buf;
-         request_parser.get().body().data = buf.data();
-         request_parser.get().body().size = buf.size();
+         request_parser->get().body().data = buf.data();
+         request_parser->get().body().size = buf.size();
 
          // auto [ec, n] = co_await async_read_some(stream, buffer, parser, as_tuple(deferred));
          mlogd("async_read: ... (bytes left in buffer: {})", buffer.size());
          auto [ec, n] = co_await async_read(m_stream, buffer, request_parser, as_tuple(use_awaitable));
          // auto n = co_await async_read(stream, buffer, parser, redirect_error(use_awaitable, ec));
          mlogd("async_read: ... done, n={} (body={}) buffer={} is_done={} ({})", n,
-               buf.size() - request_parser.get().body().size, buffer.size(), request_parser.is_done(),
+               buf.size() - request_parser->get().body().size, buffer.size(), request_parser->is_done(),
                ec.message());
          if (n == 0)
             break;
@@ -328,8 +333,8 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
          // mlogd("[{}]", std::string_view((char*)res.body().data, res.body().size));
 
          res.body().data = buf.data();
-         res.body().size = buf.size() - request_parser.get().body().size;
-         res.body().more = !request_parser.is_done();
+         res.body().size = buf.size() - request_parser->get().body().size;
+         res.body().more = !request_parser->is_done();
          if (res.body().size == 0)
             continue;
 
@@ -354,6 +359,8 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
       mlogd("");
 #endif
    }
+
+   mlogi("closing stream");
 
    m_stream.close();
 

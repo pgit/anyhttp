@@ -115,9 +115,9 @@ public:
    decltype(dynamic_buffer(m_data)) m_buffer{m_data};
 
    std::vector<uint8_t> request_buffer;
-   http::request_parser<boost::beast::http::buffer_body> request_parser;
+   std::optional<http::request_parser<boost::beast::http::buffer_body>> request_parser;
    http::response<http::buffer_body> response;  
-   http::response_serializer<http::buffer_body> response_serializer{response};
+   std::optional<http::response_serializer<http::buffer_body>> response_serializer{response};
    
    http::request<http::buffer_body> request; 
    http::request_serializer<http::buffer_body> request_serializer{request};

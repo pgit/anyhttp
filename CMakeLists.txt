@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
     add_compile_definitions(BOOST_ASIO_ENABLE_BUFFER_DEBUGGING)
-    add_compile_definitions(BOOST_ASIO_ENABLE_HANDLER_TRACKING)
+    # add_compile_definitions(BOOST_ASIO_ENABLE_HANDLER_TRACKING)
 endif()
 
 # --------------------------------------------------------------------------------------------------

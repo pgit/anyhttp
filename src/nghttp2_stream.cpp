@@ -377,7 +377,7 @@ void NGHttp2Stream::call_on_response()
 
 void NGHttp2Stream::call_on_request()
 {
-   logi("[{}] call_on_request: {}", logPrefix, url.buffer());
+   logd("[{}] call_on_request: {}", logPrefix, url.buffer());
 
    //
    // An incomming new request should be put into a queue of the server session. From there,
