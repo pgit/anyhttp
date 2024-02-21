@@ -4,6 +4,7 @@
 #include <boost/asio.hpp>
 #include <boost/asio/any_completion_handler.hpp>
 
+#include <memory>
 #include <set>
 
 namespace anyhttp
@@ -24,6 +25,7 @@ public:
 
    virtual const asio::any_io_executor& executor() const = 0;
    virtual boost::url_view url() const = 0;
+   virtual std::optional<size_t> content_length() const noexcept = 0;
    virtual void async_read_some(ReadSomeHandler&& handler) = 0;
    virtual void detach() = 0;
 };
@@ -37,6 +39,7 @@ public:
    virtual ~Impl();
 
    virtual const asio::any_io_executor& executor() const = 0;
+   virtual void content_length(std::optional<size_t> content_length) = 0 ;
    virtual void write_head(unsigned int status_code, Fields fields) = 0;
    virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
    virtual void detach() = 0;
@@ -44,7 +47,7 @@ public:
 
 // =================================================================================================
 
-class Server::Impl
+class Server::Impl : public std::enable_shared_from_this<Server::Impl>
 {
 public:
    Impl(boost::asio::any_io_executor executor, Config config);
@@ -68,6 +71,7 @@ public:
    const RequestHandlerCoro& requestHandlerCoro() const { return m_requestHandlerCoro; }
 
    void run();
+   void destroy();
 
 private:
    Config m_config;
@@ -76,6 +80,7 @@ private:
    std::set<std::shared_ptr<Session>> m_sessions;
    RequestHandler m_requestHandler;
    RequestHandlerCoro m_requestHandlerCoro;
+   bool m_stopped = false;
 };
 
 // =================================================================================================

@@ -7,7 +7,9 @@
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/url/format.hpp>
 
+#include <charconv>
 #include <nghttp2/nghttp2.h>
+#include <string>
 
 using namespace boost::asio::experimental::awaitable_operators;
 
@@ -60,6 +62,11 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
       stream->url.set_encoded_authority(valuesv);
    else if (namesv == ":host")
       stream->url.set_host(valuesv);
+   else if (namesv == "content-length")
+   {
+      stream->content_length.emplace();
+      std::from_chars(valuesv.begin(), valuesv.end(), *stream->content_length);
+   }
 
    return 0;
 }

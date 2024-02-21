@@ -66,6 +66,7 @@ public:
    ~Response();
 
    const asio::any_io_executor& executor() const;
+   void content_length(std::optional<size_t> content_length);
    void write_head(unsigned int status_code, Fields headers);
 
 public:
@@ -103,7 +104,7 @@ public:
    asio::ip::tcp::endpoint local_endpoint() const;
 
 private:
-   std::unique_ptr<Impl> impl;
+   std::shared_ptr<Impl> impl;
 };
 
 // =================================================================================================

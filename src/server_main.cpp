@@ -7,9 +7,7 @@
 #include <boost/asio/signal_set.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
-#include <csignal>
-#include <iostream>
-
+#include <fmt/ostream.h>
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/iota.hpp>
 #include <range/v3/view/transform.hpp>
@@ -32,12 +30,12 @@ int main()
    io_context context;
    auto server = std::make_optional<Server>(context.get_executor(), Config{.port = 8080});
 
-#if 0
+#if 1
    signal_set signals(context, SIGINT, SIGTERM);
    signals.async_wait(
       [&](auto, auto)
       {
-         std::cout << std::endl << "INTERRUPTED" << std::endl;
+         logw("interrupt");
          server.reset();
       });
 #endif
@@ -45,6 +43,7 @@ int main()
    server->setRequestHandlerCoro(
       [&](Request request, Response response) -> awaitable<void>
       {
+         response.content_length(request.content_length().value_or(0));
          response.write_head(200, {});
          try
          {
@@ -52,7 +51,7 @@ int main()
             {
                logd("async_read_some...");
                auto buffer = co_await request.async_read_some(deferred);
-               logd("async_read_some... done, {} bytes", buffer.size());
+               logd("async_read_some... done, read {} bytes", buffer.size());
             // logi("{}", buffer.size());
 #if 0
                auto timer = steady_timer(request.executor());
@@ -72,12 +71,11 @@ int main()
                }
 #endif
 
-               auto len = buffer.size();
                logd("async_write...");
                co_await response.async_write(asio::buffer(buffer), deferred);
-               logd("async_write... done");
+               logd("async_write... done, wrote {} bytes", buffer.size());
 
-               if (len == 0)
+               if (buffer.empty())
                   break;
             }
          }

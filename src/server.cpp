@@ -13,6 +13,8 @@ Request::~Request() = default;
 
 boost::url_view Request::url() const { return m_impl->url(); }
 
+std::optional<size_t> Request::content_length() const noexcept { return m_impl->content_length(); }
+
 void Request::async_read_some_any(ReadSomeHandler&& handler)
 {
    m_impl->async_read_some(std::move(handler));
@@ -25,6 +27,11 @@ const asio::any_io_executor& Request::executor() const { return m_impl->executor
 Response::Response(std::unique_ptr<Response::Impl> impl) : m_impl(std::move(impl)) {}
 Response::Response(Response&&) noexcept = default;
 Response::~Response() = default;
+
+void Response::content_length(std::optional<size_t> content_length)
+{
+   m_impl->content_length(content_length);
+}
 
 void Response::write_head(unsigned int status_code, Fields headers)
 {
@@ -41,6 +48,7 @@ void Response::async_write_any(WriteHandler&& handler, asio::const_buffer buffer
 Server::Server(boost::asio::any_io_executor executor, Config config)
    : impl(std::make_unique<Server::Impl>(std::move(executor), std::move(config)))
 {
+   impl->run();
 }
 
 void Server::setRequestHandler(RequestHandler&& handler)
@@ -55,7 +63,7 @@ void Server::setRequestHandlerCoro(RequestHandlerCoro&& handler)
 
 asio::ip::tcp::endpoint Server::local_endpoint() const { return impl->local_endpoint(); }
 
-Server::~Server() = default;
+Server::~Server() { impl->destroy(); }
 
 // =================================================================================================
 

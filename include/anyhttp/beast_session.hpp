@@ -34,6 +34,7 @@ public:
    void detach() override;
 
    boost::url_view url() const override;
+   std::optional<size_t> content_length() const noexcept override;
    void async_read_some(server::Request::ReadSomeHandler&& handler) override;
    const asio::any_io_executor& executor() const override;
 
@@ -50,6 +51,7 @@ public:
    ~BeastWriter() override;
    void detach() override;
 
+   void content_length(std::optional<size_t> content_length) override;
    void write_head(unsigned int status_code, Fields headers) override;
    void async_write(WriteHandler&& handler, asio::const_buffer buffer) override;
    void async_get_response(client::Request::GetResponseHandler&& handler) override;

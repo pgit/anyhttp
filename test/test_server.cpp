@@ -76,6 +76,10 @@ awaitable<void> eat_request(server::Request request, server::Response response)
 
 // -------------------------------------------------------------------------------------------------
 
+class Empty : public testing::Test
+{
+};
+
 class Echo : public testing::Test
 {
 protected:
@@ -131,6 +135,21 @@ protected:
    std::filesystem::path testFile{"CMakeLists.txt"};
    size_t testFileSize = file_size(testFile);
 };
+
+// =================================================================================================
+
+TEST_F(Echo, StopBeforeStarted)
+{
+   server.reset();
+   context.run();
+}
+
+TEST_F(Echo, Stop)
+{
+   context.run_one();
+   server.reset();
+   context.run();
+}
 
 // =================================================================================================
 

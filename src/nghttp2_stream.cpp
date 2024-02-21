@@ -42,6 +42,11 @@ boost::url_view NGHttp2Reader::url() const
    return {stream->url};
 }
 
+std::optional<size_t> NGHttp2Reader::content_length() const noexcept
+{
+   return stream->content_length;
+}
+
 void NGHttp2Reader::async_read_some(ReadSomeHandler&& handler)
 {
    assert(stream);
@@ -70,15 +75,22 @@ const asio::any_io_executor& NGHttp2Writer::executor() const
    return stream->executor();
 }
 
+void NGHttp2Writer::content_length(std::optional<size_t> content_length)
+{
+   m_content_length = content_length;
+}
+
 void NGHttp2Writer::write_head(unsigned int status_code, Fields headers)
 {
    assert(stream);
 
    auto nva = std::vector<nghttp2_nv>();
-   nva.reserve(2);
+   nva.reserve(3);
    std::string date = "Sat, 01 Apr 2023 09:33:09 GMT";
    nva.push_back(make_nv_ls(":status", fmt::format("{}", status_code)));
    nva.push_back(make_nv_ls("date", date));
+   if (m_content_length)
+      nva.push_back(make_nv_ls("content-length", fmt::format("{}", *m_content_length)));
 
    // TODO: headers
    std::ignore = headers;

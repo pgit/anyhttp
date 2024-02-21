@@ -1,7 +1,5 @@
 #pragma once
 #include "client.hpp"
-#include "session.hpp"
-#include "session_impl.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_completion_handler.hpp>
@@ -38,6 +36,7 @@ public:
    virtual ~Impl();
 
    virtual const asio::any_io_executor& executor() const = 0;
+   virtual std::optional<size_t> content_length() const noexcept = 0;
    virtual void async_read_some(ReadSomeHandler&& handler) = 0;
    virtual void detach() = 0;
 };

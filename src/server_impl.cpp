@@ -36,14 +36,36 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    spdlog::set_level(spdlog::level::debug);
    spdlog::info("Server: ctor");
    listen();
-   run();
+   // run();
 }
 
-Server::Impl::~Impl() { logi("Server: dtor"); }
+Server::Impl::~Impl()
+{
+   logi("Server: dtor");
+   assert(m_stopped);
+}
 
 // -------------------------------------------------------------------------------------------------
 
-void Server::Impl::run() { co_spawn(m_executor, listen_loop(), detached); }
+void Server::Impl::run()
+{
+   // co_spawn(m_executor, listen_loop(), detached);
+   // co_spawn(m_executor, listen_loop(), asio::consign(detached, shared_from_this()));
+   co_spawn(m_executor, listen_loop(),
+            [self = shared_from_this()](const std::exception_ptr& ex)
+            {
+               if (ex)
+                  logw("exception: {}", what(ex));
+               else
+                  logi("server run: done");
+            });
+}
+
+void Server::Impl::destroy()
+{
+   m_stopped = true;
+   m_acceptor.close();
+}
 
 awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 {

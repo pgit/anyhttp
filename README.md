@@ -9,3 +9,11 @@ None of those protocols are implemented from scratch. Instead, it is a wrapper a
 * nghttp2
 * nghttp3
 
+
+
+## Links
+
+For now, this section contains just a set of random links collected during delevopment.
+
+* [Beast Example using Type Erasure](https://www.boost.org/doc/libs/develop/boost/beast/http/message_generator.hpp)
+
