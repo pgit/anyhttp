@@ -215,7 +215,8 @@ awaitable<void> do_request(client::Client& client, boost::urls::url url)
 
 TEST_F(Echo, Client)
 {
-   client::Config config{.url = boost::urls::url("http://127.0.0.1/echo")};
+   client::Config config{.url = boost::urls::url("http://127.0.0.1/echo"),
+                         .protocol = anyhttp::Protocol::http11};
    config.url.set_port_number(server->local_endpoint().port());
    client::Client client(context.get_executor(), config);
    co_spawn(context, do_request(client, config.url),

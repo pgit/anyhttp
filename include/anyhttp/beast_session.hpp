@@ -22,46 +22,6 @@ namespace anyhttp::beast_impl
 
 // =================================================================================================
 
-template<bool IsServer>
-struct Stream;
-
-class BeastSession;
-class BeastReader : public server::Request::Impl, public client::Response::Impl
-{
-public:
-   explicit BeastReader(BeastSession& session);
-   ~BeastReader() override;
-   void detach() override;
-
-   boost::url_view url() const override;
-   std::optional<size_t> content_length() const noexcept override;
-   void async_read_some(server::Request::ReadSomeHandler&& handler) override;
-   const asio::any_io_executor& executor() const override;
-
-   Stream<false>* stream;
-   BeastSession* session;
-};
-
-// -------------------------------------------------------------------------------------------------
-
-class BeastWriter : public server::Response::Impl, public client::Request::Impl
-{
-public:
-   explicit BeastWriter(BeastSession& session);
-   ~BeastWriter() override;
-   void detach() override;
-
-   void content_length(std::optional<size_t> content_length) override;
-   void write_head(unsigned int status_code, Fields headers) override;
-   void async_write(WriteHandler&& handler, asio::const_buffer buffer) override;
-   void async_get_response(client::Request::GetResponseHandler&& handler) override;
-   const asio::any_io_executor& executor() const override;
-
-   BeastSession* session;
-};
-
-// =================================================================================================
-
 using stream = asio::as_tuple_t<asio::deferred_t>::as_default_on_t<asio::ip::tcp::socket>;
 
 class BeastSession : public ::anyhttp::Session::Impl
@@ -114,6 +74,11 @@ public:
    std::vector<uint8_t> m_data;
    decltype(dynamic_buffer(m_data)) m_buffer{m_data};
 
+#if 0
+   //
+   // There can only be a single active serializer and parser at a time. Although they are related
+   // to a specific request, we keep them at session level.
+   //
    std::vector<uint8_t> request_buffer;
    std::optional<http::request_parser<boost::beast::http::buffer_body>> request_parser;
    http::response<http::buffer_body> response;  
@@ -122,6 +87,7 @@ public:
    http::request<http::buffer_body> request; 
    http::request_serializer<http::buffer_body> request_serializer{request};
    http::response_parser<boost::beast::http::buffer_body> response_parser;
+#endif
 
 private:
    server::Server::Impl* m_server = nullptr;
@@ -130,8 +96,6 @@ private:
    std::string m_logPrefix;
 
    std::vector<uint8_t> m_send_buffer;
-
-   size_t m_requestCounter = 0;
 };
 
 // =================================================================================================

@@ -54,7 +54,7 @@ awaitable<void> do_request(Session& session, boost::urls::url url)
 
 awaitable<void> do_requests(any_io_executor executor, Session& session, boost::urls::url url)
 {
-   for (size_t i = 0; i < 100000 / 10 / 4; ++i)
+   for (size_t i = 0; i < 1; ++i)
       co_await do_request(session, url);
 }
 
@@ -62,7 +62,7 @@ awaitable<void> do_session(Client& client, boost::urls::url url)
 {
    auto session = co_await client.async_connect(deferred);
 
-   for (size_t i = 0; i < 10; ++i)
+   for (size_t i = 0; i < 1; ++i)
       co_spawn(client.executor(), do_requests(client.executor(), session, url), detached);
 }
 
