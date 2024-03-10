@@ -82,9 +82,34 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
       break;
    };
 
+   auto session = Session{impl};
+
+#if 1
+   co_spawn(executor, impl->do_client_session(std::move(data)),
+            [session = std::move(session)](const std::exception_ptr& ex)
+            {
+               if (ex)
+                  logw("exception: {}", what(ex));
+               else
+                  logi("client run: done");
+            });
+
+   //
+   // It's important to call this handler after spawning the session, because stream configuration
+   // happens in the beginning of do_client_session(), but calling the handler may result in a
+   // submit(), which must happen after that.
+   //
+   // FIXME: instead of executing a submit() directly, it should be queued and executed within
+   //        do_client_session(). This approach avoids the problem, too and also allows pipelining.
+   //
+   std::move(handler)(boost::system::error_code{}, session);
+   handler = nullptr;
+#else
+   co_await impl->do_client_session(std::move(data));
+
    std::move(handler)(boost::system::error_code{}, Session{impl});
    handler = nullptr;
-   co_await impl->do_client_session(std::move(data));
+#endif
 }
 
 void Client::Impl::async_connect(ConnectHandler&& handler)

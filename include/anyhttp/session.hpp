@@ -17,6 +17,7 @@ public:
    explicit Session(std::shared_ptr<Impl> impl);
    Session(Session&& other) noexcept;
    ~Session();
+   Session(const Session& other);
 
    client::Request submit(boost::urls::url url, Fields headers);
 

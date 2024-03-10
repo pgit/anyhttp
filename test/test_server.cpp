@@ -186,6 +186,7 @@ awaitable<void> send(client::Request& request, size_t bytes)
    buffer.resize(bytes);
    co_await request.async_write(asio::buffer(buffer), deferred);
    co_await request.async_write({}, deferred);
+   logi("send: done");
 }
 
 awaitable<size_t> receive(client::Request& request)
@@ -195,10 +196,16 @@ awaitable<size_t> receive(client::Request& request)
    for (;;)
    {
       auto buf = co_await response.async_read_some(deferred);
-      if (buf.empty())
+      if (!buf.empty())
+         logi("receive: {}", buf.size());
+      else
+      {
+         logi("receive: {}, EOF", buf.size());
          break;
+      }
       bytes += buf.size();
    }
+   logi("receive: done");
    co_return bytes;
 }
 
@@ -206,7 +213,7 @@ awaitable<void> do_request(client::Client& client, boost::urls::url url)
 {
    auto session = co_await client.async_connect(asio::deferred);
    auto request = session.submit(url, {});
-   size_t bytes = 1 * 1024 * 1024;
+   size_t bytes = 1; //  * 1024 * 1024;
    auto res = co_await (send(request, bytes) && receive(request));
    // assert(bytes == res);
 }
@@ -220,7 +227,11 @@ TEST_F(Echo, Client)
    config.url.set_port_number(server->local_endpoint().port());
    client::Client client(context.get_executor(), config);
    co_spawn(context, do_request(client, config.url),
-            [&](const std::exception_ptr&) { server.reset(); });
+            [&](const std::exception_ptr&)
+            {
+               logi("client finished, resetting server");
+               server.reset();
+            });
    context.run();
 }
 
@@ -228,7 +239,8 @@ TEST_F(Echo, Client)
 
 TEST_F(Echo, EatRequest)
 {
-   client::Config config{.url = boost::urls::url("http://127.0.0.1/eat_request")};
+   client::Config config{.url = boost::urls::url("http://127.0.0.1/eat_request"),
+                         .protocol = anyhttp::Protocol::http2};
    config.url.set_port_number(server->local_endpoint().port());
    client::Client client(context.get_executor(), config);
    co_spawn(context, do_request(client, config.url),

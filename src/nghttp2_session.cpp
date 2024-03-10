@@ -358,8 +358,7 @@ awaitable<void> NGHttp2Session::do_client_session(std::vector<uint8_t> data)
    if (rv < 0 || rv != data.size())
       throw std::runtime_error("nghttp2_session_mem_recv");
 
-   data.clear();
-   data.shrink_to_fit();
+   data.resize(0);
 
    //
    // send/receive loop
@@ -373,7 +372,7 @@ awaitable<void> NGHttp2Session::do_client_session(std::vector<uint8_t> data)
 
 client::Request NGHttp2Session::submit(boost::urls::url url, Fields headers)
 {
-   mlogd("submit: {}", url.buffer());
+   mlogi("submit: {}", url.buffer());
 
    std::ignore = headers;
 
@@ -501,7 +500,7 @@ awaitable<void> NGHttp2Session::send_loop(stream& stream)
             mlogd("send loop: session still wants to write");
          else if (nghttp2_session_want_read(session))
             mlogd("send loop: session still wants to read");
-         else
+          else
             break;
 
          mlogd("send loop: waiting...");

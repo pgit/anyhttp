@@ -15,7 +15,6 @@
 #include <boost/beast/http/buffer_body.hpp>
 
 using namespace boost::asio;
-namespace http = boost::beast::http;
 
 namespace anyhttp::beast_impl
 {
@@ -26,7 +25,7 @@ using stream = asio::as_tuple_t<asio::deferred_t>::as_default_on_t<asio::ip::tcp
 
 class BeastSession : public ::anyhttp::Session::Impl
 {
-   BeastSession(any_io_executor executor, ip::tcp::socket&& socket);
+   BeastSession(std::string_view logPrefix, any_io_executor executor, ip::tcp::socket&& socket);
 
 public:
    BeastSession(server::Server::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket);

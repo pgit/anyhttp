@@ -25,6 +25,15 @@ using namespace std::chrono_literals;
 
 using namespace boost::asio::experimental::awaitable_operators;
 
+awaitable<void> sayHello(Request& request, std::string_view hello)
+{
+   logd("sayHello: saying hello...");
+   co_await request.async_write(asio::buffer(hello), deferred);
+   logd("sayHello: saying hello... done, sending EOF...");
+   co_await request.async_write({}, deferred);
+   logd("sayHello: saying hello... done, sending EOF... done");
+}
+
 awaitable<void> send(Request& request, size_t bytes)
 {
    std::vector<uint8_t> buffer;
@@ -33,26 +42,44 @@ awaitable<void> send(Request& request, size_t bytes)
    co_await request.async_write({}, deferred);
 }
 
-awaitable<void> receive(Request& request, size_t bytes)
+awaitable<size_t> receive(Request& request)
 {
+   logd("receive: waiting for response...");
    auto response = co_await request.async_get_response(deferred);
-   while (bytes > 0)
+   logd("receive: waiting for response... done");
+   size_t total = 0;
+   for (;;)
    {
+      logd("receive: async_read_some...");
       auto buf = co_await response.async_read_some(deferred);
-      bytes -= buf.size();
+      logd("receive: async_read_some... done, read {} bytes", buf.size());
+      if (buf.empty())
+         break;
+      total += buf.size();
    }
-   co_await response.async_read_some(deferred);
+   logd("receive: done, total {} bytes", total);
+   co_return total;
 }
 
 awaitable<void> do_request(Session& session, boost::urls::url url)
 {
+   const std::string hello = "Hello, World!\r\n";
+#if 0
+   auto request = session.submit(url, {{"Content-Length", fmt::format("{}", hello.size())}});
+#else
    auto request = session.submit(url, {});
-
+#endif
+#if 0
    size_t bytes = 64 * 1024 - 1;
-   co_await (send(request, bytes) && receive(request, bytes));
+   auto result = co_await (send(request, bytes) && receive(request));
+   assert(bytes == result);
+#else
+   co_await (sayHello(request, hello) && receive(request));
+   logi("do_request: done");
+#endif
 }
 
-awaitable<void> do_requests(any_io_executor executor, Session& session, boost::urls::url url)
+awaitable<void> do_requests(any_io_executor executor, Session session, boost::urls::url url)
 {
    for (size_t i = 0; i < 1; ++i)
       co_await do_request(session, url);
@@ -62,8 +89,13 @@ awaitable<void> do_session(Client& client, boost::urls::url url)
 {
    auto session = co_await client.async_connect(deferred);
 
+#if 1
    for (size_t i = 0; i < 1; ++i)
+      co_await do_request(session, url);
+#else
+   for (size_t i = 0; i < 100; ++i)
       co_spawn(client.executor(), do_requests(client.executor(), session, url), detached);
+#endif
 }
 
 int main(int argc, char* argv[])
