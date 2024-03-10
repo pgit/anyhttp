@@ -1,4 +1,5 @@
 .cache
 .vscode
+report.xml
 build
 64kminus1
