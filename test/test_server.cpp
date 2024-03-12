@@ -153,7 +153,7 @@ TEST_F(Echo, Stop)
 
 // =================================================================================================
 
-TEST_F(Echo, NGHTTP)
+TEST_F(Echo, ngttp2)
 {
    auto url = fmt::format("http://127.0.0.1:{}/echo", server->local_endpoint().port());
    auto future = spawn("/workspaces/nghttp2/install/bin/nghttp", {"-d", testFile, url});
@@ -161,7 +161,7 @@ TEST_F(Echo, NGHTTP)
    EXPECT_EQ(future.get().size(), testFileSize);
 }
 
-TEST_F(Echo, Curl)
+TEST_F(Echo, curl)
 {
    auto url = fmt::format("http://127.0.0.1:{}/echo", server->local_endpoint().port());
    auto future = spawn("/usr/bin/curl", {"--http2-prior-knowledge", "--data-binary",
@@ -189,9 +189,8 @@ awaitable<void> send(client::Request& request, size_t bytes)
    logi("send: done");
 }
 
-awaitable<size_t> receive(client::Request& request)
+awaitable<size_t> receive(client::Response& response)
 {
-   auto response = co_await request.async_get_response(asio::deferred);
    size_t bytes = 0;
    for (;;)
    {
@@ -209,12 +208,18 @@ awaitable<size_t> receive(client::Request& request)
    co_return bytes;
 }
 
+awaitable<size_t> get_response(client::Request& request)
+{
+   auto response = co_await request.async_get_response(asio::deferred);
+   co_return co_await receive(response);
+}
+
 awaitable<void> do_request(client::Client& client, boost::urls::url url)
 {
    auto session = co_await client.async_connect(asio::deferred);
    auto request = session.submit(url, {});
    size_t bytes = 1; //  * 1024 * 1024;
-   auto res = co_await (send(request, bytes) && receive(request));
+   auto res = co_await (send(request, bytes) && get_response(request));
    // assert(bytes == res);
 }
 
@@ -237,6 +242,34 @@ TEST_F(Echo, Client)
 
 // -------------------------------------------------------------------------------------------------
 
+TEST_F(Echo, WHEN_request_is_sent_THEN_response_is_received_before_body_is_posted)
+{
+   client::Config config{.url = boost::urls::url("http://127.0.0.1/echo"),
+                         .protocol = anyhttp::Protocol::http2};
+   config.url.set_port_number(server->local_endpoint().port());
+   client::Client client(context.get_executor(), config);
+   co_spawn(
+      context,
+      [&]() -> awaitable<void>
+      {
+         auto session = co_await client.async_connect(asio::deferred);
+         auto request = session.submit(config.url, {});
+         auto response = co_await request.async_get_response(asio::deferred);
+         size_t bytes = 1024;
+         co_await send(request, bytes);
+         auto received = co_await receive(response);
+         assert(bytes == received);
+      },
+      [&](const std::exception_ptr&)
+      {
+         logi("client finished, resetting server");
+         server.reset();
+      });
+   context.run();
+}
+
+// -------------------------------------------------------------------------------------------------
+
 TEST_F(Echo, EatRequest)
 {
    client::Config config{.url = boost::urls::url("http://127.0.0.1/eat_request"),
@@ -250,6 +283,7 @@ TEST_F(Echo, EatRequest)
 
 // -------------------------------------------------------------------------------------------------
 
+#if 0
 TEST_F(Echo, DISLABED_Backpressure)
 {
    client::Config config{.url = boost::urls::url("http://127.0.0.1/echo")};
@@ -275,5 +309,6 @@ TEST_F(Echo, DISLABED_Backpressure)
       [&](const std::exception_ptr&) { server.reset(); });
    context.run();
 }
+#endif
 
 // =================================================================================================

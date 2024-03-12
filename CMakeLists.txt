@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.17)
 project(asio_anyhttp VERSION 0.0.1)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS On)
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
     add_compile_definitions(BOOST_ASIO_ENABLE_BUFFER_DEBUGGING)

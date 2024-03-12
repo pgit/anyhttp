@@ -125,10 +125,10 @@ public:
       mlogd("write_head:");
 
       message.body().data = nullptr;
-      if constexpr (!Message::is_request::value)
-         message.result(status_code);
-      else
+      if constexpr (Message::is_request::value)
          message.method(http::verb::get);
+      else
+         message.result(status_code);
 
       for (auto&& header : headers)
          message.set(header.first, header.second);
@@ -220,7 +220,6 @@ BeastSession::BeastSession(client::Client::Impl& parent, any_io_executor executo
    : BeastSession("\x1b[1;32mclient\x1b[0m", std::move(executor), std::move(socket))
 {
    m_client = &parent;
-   // create_client_session();
 }
 
 BeastSession::~BeastSession() { mlogd("session destroyed"); }
@@ -343,6 +342,17 @@ awaitable<void> BeastSession::do_client_session(std::vector<uint8_t> data)
    data.reserve(std::min(data.size(), 16 * 1024UL));
    auto buffer = boost::asio::dynamic_buffer(data);
    using namespace beast::http;
+
+   //
+   // Even in HTTP/1.1, where the current request and the current response's serializers take
+   // control over everything that is sent and received, we want to retain some control here,
+   // on session level.
+   //
+   // For example, for allowing submission of multiple requests, this is the place to take the
+   // next request from the submission queue and start writing it's headers.
+   //
+   // For pipelining support, we need to support reading into serializers of a response queue.
+   //
 
    co_return;
 

@@ -42,7 +42,7 @@ awaitable<void> send(Request& request, size_t bytes)
    co_await request.async_write({}, deferred);
 }
 
-awaitable<size_t> receive(Request& request)
+awaitable<size_t> get_response(Request& request)
 {
    logd("receive: waiting for response...");
    auto response = co_await request.async_get_response(deferred);
@@ -67,14 +67,14 @@ awaitable<void> do_request(Session& session, boost::urls::url url)
 #if 0
    auto request = session.submit(url, {{"Content-Length", fmt::format("{}", hello.size())}});
 #else
-   auto request = session.submit(url, {});
+   auto request = session.submit(url, {{"X-Custom-Header", "Value"}});
 #endif
 #if 0
    size_t bytes = 64 * 1024 - 1;
    auto result = co_await (send(request, bytes) && receive(request));
    assert(bytes == result);
 #else
-   co_await (sayHello(request, hello) && receive(request));
+   co_await (sayHello(request, hello) && get_response(request));
    logi("do_request: done");
 #endif
 }

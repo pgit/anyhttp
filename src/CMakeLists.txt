@@ -1,9 +1,6 @@
 cmake_minimum_required(VERSION 3.17)
 project(anyhttp VERSION 0.0.1)
 
-set(CMAKE_EXPORT_COMPILE_COMMANDS On)
-set(CMAKE_CXX_STANDARD 20)
-
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
 link_libraries(Threads::Threads)
