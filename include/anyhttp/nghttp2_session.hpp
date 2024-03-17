@@ -23,7 +23,7 @@ using stream = asio::as_tuple_t<asio::deferred_t>::as_default_on_t<asio::ip::tcp
 class NGHttp2Stream;
 class NGHttp2Session : public ::anyhttp::Session::Impl
 {
-   NGHttp2Session(any_io_executor executor, ip::tcp::socket&& socket);
+   NGHttp2Session(std::string_view log, any_io_executor executor, ip::tcp::socket&& socket);
 
 public:
    NGHttp2Session(server::Server::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket);

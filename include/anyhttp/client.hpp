@@ -24,6 +24,7 @@ namespace anyhttp::client
 
 struct Config
 {
+   // FIXME: the client does not connect to an URL, it connects to a host:port or endpoint
    boost::urls::url url{"http://localhost:8080"};
    Protocol protocol{Protocol::http2};
 };

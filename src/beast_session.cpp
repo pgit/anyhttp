@@ -142,6 +142,9 @@ public:
 
    void async_write(WriteHandler&& handler, asio::const_buffer buffer) override
    {
+      assert(!writing);
+      writing = true;
+
       if (buffer.size() == 0)
          mlogd("async_write: write EOF");
       else
@@ -154,9 +157,11 @@ public:
       http::async_write(stream, serializer,
                         [this, handler = std::move(handler)](boost::system::error_code ec,
                                                              size_t n) mutable { //
+                           // n is the number of bytes written to the stream
                            mlogd("async_write: n={} ({})", n, ec.message());
                            if (ec == beast::http::error::need_buffer)
                               ec = {};
+                           writing = false;
                            (std::move(handler))(ec);
                         });
    }
@@ -170,20 +175,23 @@ public:
          std::make_unique<BeastReader<client::Response::Impl, decltype(stream), decltype(buffer),
                                       http::response_parser<http::buffer_body>>>(*session, stream,
                                                                                  buffer);
-      auto& parser = reader->parser;
+      http::response_parser<http::buffer_body>& parser = reader->parser;
 
-      logd("");
       mlogd("waiting for response (size={} capacity={})", buffer.size(), buffer.capacity());
-      async_read_header(stream, buffer, parser,
-                        [reader = std::move(reader), handler = std::move(handler),
-                         this](boost::system::error_code ec, size_t len) mutable
-                        {
-                           if (!ec)
-                              mlogd("async_read_header: len={}", ec.message(), len);
-                           else
-                              mlogw("async_read_header: {} len={}", ec.message(), len);
-                           std::move(handler)(ec, client::Response(std::move(reader)));
-                        });
+      async_read_header(
+         stream, buffer, parser,
+         [reader = std::move(reader), handler = std::move(handler),
+          this](boost::system::error_code ec, size_t len) mutable
+         {
+            if (!ec)
+            {
+               http::response_parser<http::buffer_body>::value_type& msg = reader->parser.get();
+               mlogd("async_read_header: len={} {} {}", len, msg.result_int(), msg.reason());
+            }
+            else
+               mlogw("async_read_header: {} len={}", ec.message(), len);
+            std::move(handler)(ec, client::Response(std::move(reader)));
+         });
    }
 
    const asio::any_io_executor& executor() const override { return session->executor(); }
@@ -193,6 +201,7 @@ public:
    Stream& stream;
    Message message;
    Serializer serializer{message};
+   bool writing = false;
 
    client::Request::GetResponseHandler responseHandler;
 };
@@ -351,7 +360,8 @@ awaitable<void> BeastSession::do_client_session(std::vector<uint8_t> data)
    // For example, for allowing submission of multiple requests, this is the place to take the
    // next request from the submission queue and start writing it's headers.
    //
-   // For pipelining support, we need to support reading into serializers of a response queue.
+   // For pipelining support, we need to have a queue of pending responses and read into the
+   // serializer of the front element.
    //
 
    co_return;
@@ -378,13 +388,17 @@ client::Request BeastSession::submit(boost::urls::url url, Fields headers)
                                    http::request_serializer<http::buffer_body>>>(*this, m_stream);
    auto& request = writer->message;
 
-   request.base().target("/echo");
+   request.base().target(url.path());
    request.method(http::verb::post);
    request.set(http::field::user_agent, "anyhttp");
    for (auto&& header : headers)
       request.set(header.first, header.second);
    if (!request.has_content_length())
       request.chunked(true);
+
+   //
+   // TODO: make writer shared? put into queue
+   //
 
    return client::Request(std::move(writer));
 }

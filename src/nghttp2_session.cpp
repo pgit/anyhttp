@@ -244,9 +244,10 @@ static auto setup_callbacks()
 
 // =================================================================================================
 
-NGHttp2Session::NGHttp2Session(any_io_executor executor, ip::tcp::socket&& socket)
+NGHttp2Session::NGHttp2Session(std::string_view log, any_io_executor executor,
+                               ip::tcp::socket&& socket)
    : m_executor(std::move(executor)), m_socket(std::move(socket)),
-     m_logPrefix(fmt::format("{}", normalize(m_socket.remote_endpoint())))
+     m_logPrefix(fmt::format("{} {}", normalize(m_socket.remote_endpoint()), log))
 {
    mlogd("session created");
    m_send_buffer.resize(64 * 1024);
@@ -254,14 +255,14 @@ NGHttp2Session::NGHttp2Session(any_io_executor executor, ip::tcp::socket&& socke
 
 NGHttp2Session::NGHttp2Session(server::Server::Impl& parent, any_io_executor executor,
                                ip::tcp::socket&& socket)
-   : NGHttp2Session(std::move(executor), std::move(socket))
+   : NGHttp2Session("\x1b[1;31mserver\x1b[0m", std::move(executor), std::move(socket))
 {
    m_server = &parent;
 }
 
 NGHttp2Session::NGHttp2Session(client::Client::Impl& parent, any_io_executor executor,
                                ip::tcp::socket&& socket)
-   : NGHttp2Session(std::move(executor), std::move(socket))
+   : NGHttp2Session("\x1b[1;32mclient\x1b[0m", std::move(executor), std::move(socket))
 {
    m_client = &parent;
    create_client_session();
@@ -435,6 +436,9 @@ client::Request NGHttp2Session::submit(boost::urls::url url, Fields headers)
 
 // =================================================================================================
 
+#undef mlogd
+#define mlogd(...)
+
 //
 // Implementing the send loop as a coroutine does not make much sense, as it may run out
 // of work and then needs to wait on a channel to be activated again. Doing this with
@@ -500,7 +504,7 @@ awaitable<void> NGHttp2Session::send_loop(stream& stream)
             mlogd("send loop: session still wants to write");
          else if (nghttp2_session_want_read(session))
             mlogd("send loop: session still wants to read");
-          else
+         else
             break;
 
          mlogd("send loop: waiting...");

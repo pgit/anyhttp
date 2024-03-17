@@ -39,7 +39,7 @@ public:
    virtual ~Impl();
 
    virtual const asio::any_io_executor& executor() const = 0;
-   virtual void content_length(std::optional<size_t> content_length) = 0 ;
+   virtual void content_length(std::optional<size_t> content_length) = 0;
    virtual void write_head(unsigned int status_code, Fields fields) = 0;
    virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
    virtual void detach() = 0;

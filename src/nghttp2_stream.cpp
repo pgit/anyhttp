@@ -23,7 +23,11 @@ NGHttp2Reader::NGHttp2Reader(NGHttp2Stream& stream)
 NGHttp2Reader::~NGHttp2Reader()
 {
    if (stream)
+   {
       stream->request = nullptr;
+      // stream->delete_reader();
+      // stream->call_handler_loop();
+   }
 }
 
 void NGHttp2Reader::detach() { stream = nullptr; }
@@ -62,7 +66,11 @@ NGHttp2Writer::NGHttp2Writer(NGHttp2Stream& stream) : stream(&stream) { stream.r
 NGHttp2Writer::~NGHttp2Writer()
 {
    if (stream)
+   {
       stream->response = nullptr;
+      // stream->delete_writer();
+      // stream->call_handler_loop();
+   }
 }
 
 void NGHttp2Writer::detach() { stream = nullptr; }
@@ -405,6 +413,20 @@ void NGHttp2Stream::call_on_request()
 }
 
 const asio::any_io_executor& NGHttp2Stream::executor() const { return parent.executor(); }
+
+// =================================================================================================
+
+void NGHttp2Stream::delete_reader()
+{
+   // Issue RST_STREAM so that stream does not hang around.
+   nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_INTERNAL_ERROR);
+}
+
+void NGHttp2Stream::delete_writer()
+{
+   // Issue RST_STREAM so that stream does not hang around.
+   nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_INTERNAL_ERROR);
+}
 
 // =================================================================================================
 

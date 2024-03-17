@@ -220,6 +220,9 @@ public:
    server::Request::Impl* request = nullptr;
    server::Response::Impl* response = nullptr;
 
+   void delete_reader();
+   void delete_writer();
+
    const asio::any_io_executor& executor() const;
 
 public:
