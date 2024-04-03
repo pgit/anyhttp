@@ -1,12 +1,15 @@
 
 #include "anyhttp/beast_session.hpp"
 
+#include <boost/asio/associated_cancellation_slot.hpp>
+#include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/core/error.hpp>
+#include <boost/beast/core/stream_traits.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/http/basic_parser.hpp>
 #include <boost/beast/http/dynamic_body.hpp>
@@ -16,6 +19,7 @@
 #include <boost/beast/http/serializer.hpp>
 #include <boost/beast/http/write.hpp>
 #include <boost/beast/version.hpp>
+#include <boost/smart_ptr/make_shared_array.hpp>
 #include "anyhttp/server.hpp"
 
 using namespace std::chrono_literals;
@@ -39,6 +43,7 @@ public:
    inline BeastReader(BeastSession& session_, Stream& stream_, Buffer& buffer_)
       : session(&session_), stream(stream_), buffer(buffer_)
    {
+      parser.body_limit(std::numeric_limits<uint64_t>::max());
    }
 
    ~BeastReader() override {}
@@ -60,7 +65,7 @@ public:
 
       if (parser.is_done())
       {
-         (std::move(handler))(boost::system::error_code{}, std::vector<uint8_t>{});
+         std::move(handler)(boost::system::error_code{}, std::vector<uint8_t>{});
          return;
       }
 
@@ -101,44 +106,19 @@ public:
 
 // -------------------------------------------------------------------------------------------------
 
-template <typename Stream, typename Message, typename Serializer>
-class BeastWriter : public server::Response::Impl, public client::Request::Impl
+template <typename Parent, typename Stream, typename Serializer,
+          typename Message = std::remove_const_t<typename Serializer::value_type>>
+// requires boost::beast::is_async_write_stream<Stream>::value
+class WriterBase : public Parent
 {
 public:
-   inline BeastWriter(BeastSession& session_, Stream& stream_) : session(&session_), stream(stream_)
+   inline WriterBase(BeastSession& session_, Stream& stream_) : session(&session_), stream(stream_)
    {
    }
 
-   ~BeastWriter() override {}
+   const asio::any_io_executor& executor() const override { return session->executor(); }
+   inline auto logPrefix() const { return session->logPrefix(); }
    void detach() override { session = nullptr; }
-
-   void content_length(std::optional<size_t> content_length) override
-   {
-      if (content_length)
-         message.content_length(*content_length);
-      else
-         message.content_length(boost::none);
-   }
-
-   void write_head(unsigned int status_code, Fields headers) override
-   {
-      mlogd("write_head:");
-
-      message.body().data = nullptr;
-      if constexpr (Message::is_request::value)
-         message.method(http::verb::get);
-      else
-         message.result(status_code);
-
-      for (auto&& header : headers)
-         message.set(header.first, header.second);
-
-      if (!message.has_content_length())
-         message.chunked(true);
-
-      http::write_header(stream, serializer);
-      // async_write_header(m_stream, response_serializer, use_awaitable);
-   }
 
    void async_write(WriteHandler&& handler, asio::const_buffer buffer) override
    {
@@ -154,16 +134,100 @@ public:
       message.body().size = buffer.size();
       message.body().more = buffer.size() != 0;
 
-      http::async_write(stream, serializer,
-                        [this, handler = std::move(handler)](boost::system::error_code ec,
+      auto slot = asio::get_associated_cancellation_slot(handler);
+      auto cb = [this, handler = std::move(handler)](boost::system::error_code ec,
                                                              size_t n) mutable { //
                            // n is the number of bytes written to the stream
                            mlogd("async_write: n={} ({})", n, ec.message());
                            if (ec == beast::http::error::need_buffer)
                               ec = {};
                            writing = false;
-                           (std::move(handler))(ec);
-                        });
+                           std::move(handler)(ec);
+                        };
+      http::async_write(stream, serializer,
+                        asio::bind_cancellation_slot(slot, std::move(cb)));
+   }
+
+   BeastSession* session;
+   Stream& stream;
+   Message message;
+   Serializer serializer{message};
+   bool writing = false;
+};
+
+class ResponseWriter : public WriterBase<server::Response::Impl, boost::beast::tcp_stream,
+                                         http::response_serializer<http::buffer_body>>
+{
+public:
+   inline ResponseWriter(BeastSession& session_, boost::beast::tcp_stream& stream_) : WriterBase(session_, stream_)
+   {}
+
+   void content_length(std::optional<size_t> content_length) override
+   {
+      if (content_length)
+         message.content_length(*content_length);
+      else
+         message.content_length(boost::none);
+   }
+
+   void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
+   {
+      mlogd("async_submit:");
+
+      message.body().data = nullptr;
+      message.result(status_code);
+
+      for (auto&& header : headers)
+         message.set(header.first, header.second);
+
+      if (!message.has_content_length())
+         message.chunked(true);
+
+      //
+      // TODO: For bundling writing the header and body, we should just post the writing here,
+      //       giving an async_write the change to add a body to the message first.
+      //
+      // post(executor(), [this](){write);
+      async_write_header(
+         stream, serializer,
+         [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
+            std::move(handler)(ec);
+         });
+   }
+};
+
+class RequestWriter : public WriterBase<client::Request::Impl, boost::beast::tcp_stream,
+                                         http::request_serializer<http::buffer_body>>
+{
+public:
+   inline RequestWriter(BeastSession& session_, boost::beast::tcp_stream& stream_) : WriterBase(session_, stream_)
+   {}
+
+   ~RequestWriter() override {}
+
+   void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
+   {
+      mlogd("async_submit:");
+
+      message.body().data = nullptr;
+      message.method(http::verb::post);
+
+      for (auto&& header : headers)
+         message.set(header.first, header.second);
+
+      if (!message.has_content_length())
+         message.chunked(true);
+
+      //
+      // TODO: For bundling writing the header and body, we should just post the writing here,
+      //       giving an async_write the change to add a body to the message first.
+      //
+      // post(executor(), [this](){write);
+      async_write_header(
+         stream, serializer,
+         [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
+            std::move(handler)(ec);
+         });
    }
 
    void async_get_response(client::Request::GetResponseHandler&& handler) override
@@ -193,15 +257,6 @@ public:
             std::move(handler)(ec, client::Response(std::move(reader)));
          });
    }
-
-   const asio::any_io_executor& executor() const override { return session->executor(); }
-   inline auto logPrefix() const { return session->logPrefix(); }
-
-   BeastSession* session;
-   Stream& stream;
-   Message message;
-   Serializer serializer{message};
-   bool writing = false;
 
    client::Request::GetResponseHandler responseHandler;
 };
@@ -239,6 +294,11 @@ BeastSession::~BeastSession() { mlogd("session destroyed"); }
  * This function waits for headers of an incoming, new request and passes control to a registered
  * handler. After the request has been completed, abd if the connection can be kept open, it starts
  * waiting again.
+ *
+ * But that is only the simplified description: In reality, for pipelining support, the server
+ * session may still be writing the response of a previous request when a new one arrives. The
+ * queues of request and responses are processed independently of each other.
+ *
  */
 awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
 {
@@ -294,10 +354,7 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
       //
       // Prepare response.
       //
-      auto writer =
-         std::make_unique<BeastWriter<decltype(m_stream), http::response<http::buffer_body>,
-                                      http::response_serializer<http::buffer_body>>>(*this,
-                                                                                     m_stream);
+      auto writer = std::make_unique<ResponseWriter>(*this, m_stream);
       auto& response = writer->message;
       response.set(http::field::server, "anyhttp");
 
@@ -307,13 +364,25 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
       // Call user-provided request handler.
       //
       if (auto& handler = server().requestHandlerCoro())
-         co_await handler(std::move(request_wrapper), std::move(response_wrapper));
+      {
+         try
+         {
+            co_await handler(std::move(request_wrapper), std::move(response_wrapper));
+         }
+         catch (const boost::system::system_error& e)
+         {
+            mloge("exception in request handler: {}", e.code().message());
+            throw;
+         }
+      }
 
       //
       // FIXME: We need to wait for request and response
       //
       mlogd("request handler finished (size={} capacity={})", m_buffer.size(), m_buffer.capacity());
 
+      continue;
+      // FIXME: this is UB as request may be deleted already
       if (request.need_eof())
       {
          mlogd("request needs EOF, closing connection");
@@ -379,13 +448,11 @@ awaitable<void> BeastSession::do_client_session(std::vector<uint8_t> data)
 
 // -------------------------------------------------------------------------------------------------
 
-client::Request BeastSession::submit(boost::urls::url url, Fields headers)
+void BeastSession::async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers)
 {
    mlogd("submit: {}", url.buffer());
 
-   auto writer =
-      std::make_unique<BeastWriter<decltype(m_stream), http::request<http::buffer_body>,
-                                   http::request_serializer<http::buffer_body>>>(*this, m_stream);
+   auto writer = std::make_unique<RequestWriter>(*this, m_stream);
    auto& request = writer->message;
 
    request.base().target(url.path());
@@ -399,8 +466,13 @@ client::Request BeastSession::submit(boost::urls::url url, Fields headers)
    //
    // TODO: make writer shared? put into queue
    //
-
-   return client::Request(std::move(writer));
+   async_write_header(m_stream, writer->serializer,
+                      [handler = std::move(handler), writer = std::move(writer)](
+                         boost::system::error_code ec, size_t n) mutable { //
+                         std::move(handler)(boost::system::error_code{},
+                                            client::Request(std::move(writer)));
+                      });
+   ;
 }
 
 // =================================================================================================

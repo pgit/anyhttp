@@ -5,6 +5,8 @@
 
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
+#include <boost/system/detail/errc.hpp>
+#include <boost/system/errc.hpp>
 #include <boost/url/format.hpp>
 
 #include <charconv>
@@ -47,7 +49,8 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
    auto handler = static_cast<NGHttp2Session*>(user_data);
    auto namesv = make_string_view(name, namelen);
    auto valuesv = make_string_view(value, valuelen);
-   logd("[{}] on_header_callback: {}={}", handler->logPrefix(), namesv, valuesv);
+   logd("[{}.{}] on_header_callback: {}={}", handler->logPrefix(), frame->hd.stream_id, namesv,
+        valuesv);
 
    auto stream = handler->find_stream(frame->hd.stream_id);
    assert(stream);
@@ -95,7 +98,10 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
    auto handler = static_cast<NGHttp2Session*>(user_data);
    auto stream = handler->find_stream(frame->hd.stream_id);
 
-   logd("[{}] on_frame_recv_callback: id={}", handler->logPrefix(), frame->hd.stream_id);
+   if (frame->hd.stream_id)
+      logd("[{}.{}] on_frame_recv_callback:", handler->logPrefix(), frame->hd.stream_id);
+   else
+      logd("[{}] on_frame_recv_callback:", handler->logPrefix());
 
    switch (frame->hd.type)
    {
@@ -107,7 +113,8 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
          break;
       }
 
-      logd("[{}] on_frame_recv_callback: DATA, flags={}", handler->logPrefix(), frame->hd.flags);
+      logd("[{}.{}] on_frame_recv_callback: DATA, flags={}", handler->logPrefix(),
+           frame->hd.stream_id, frame->hd.flags);
       if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)
       {
          stream->call_on_data(session, frame->hd.stream_id, nullptr, 0);
@@ -149,12 +156,12 @@ int on_data_chunk_recv_callback(nghttp2_session* session, uint8_t flags, int32_t
 
    if (!stream)
    {
-      logw("[{}] on_data_chunk_recv_callback: DATA, but no stream found (id={})",
-           handler->logPrefix(), stream_id);
+      logw("[{}.{}] on_data_chunk_recv_callback: DATA, but no stream found (id={})",
+           handler->logPrefix(), stream_id, stream_id);
       return 0;
    }
 
-   logd("[{}] on_frame_recv_callback: DATA, len={}", handler->logPrefix(), len);
+   logd("[{}.{}] on_frame_recv_callback: DATA, len={}", handler->logPrefix(), stream_id, len);
    stream->call_on_data(session, stream_id, data, len);
    handler->start_write(); // might re-open windows
 
@@ -167,7 +174,10 @@ int on_frame_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
    std::ignore = frame;
 
    auto handler = static_cast<NGHttp2Session*>(user_data);
-   logd("[{}] on_frame_send_callback:", handler->logPrefix());
+   if (frame->hd.stream_id)
+      logd("[{}.{}] on_frame_send_callback:", handler->logPrefix(), frame->hd.stream_id);
+   else
+      logd("[{}] on_frame_send_callback:", handler->logPrefix());
    return 0;
 }
 
@@ -371,7 +381,7 @@ awaitable<void> NGHttp2Session::do_client_session(std::vector<uint8_t> data)
 
 // -------------------------------------------------------------------------------------------------
 
-client::Request NGHttp2Session::submit(boost::urls::url url, Fields headers)
+void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers)
 {
    mlogi("submit: {}", url.buffer());
 
@@ -425,19 +435,20 @@ client::Request NGHttp2Session::submit(boost::urls::url url, Fields headers)
    if (id < 0)
    {
       mloge("submit: nghttp2_submit_request: ERROR: {}", id);
-      return client::Request{nullptr}; // FIXME: std::expect? exception?
+      using namespace boost::system;
+      std::move(handler)(errc::make_error_code(errc::invalid_argument), client::Request{nullptr});
    }
+
    logd("submit: stream={}", id);
-
    m_streams.emplace(id, stream);
-
-   return client::Request{std::make_unique<NGHttp2Writer>(*stream)};
+   std::move(handler)(boost::system::error_code{},
+                      client::Request{std::make_unique<NGHttp2Writer>(*stream)});
 }
 
 // =================================================================================================
 
 #undef mlogd
-#define mlogd(...)
+#define mlogd(...) // too noisy
 
 //
 // Implementing the send loop as a coroutine does not make much sense, as it may run out
@@ -494,7 +505,7 @@ awaitable<void> NGHttp2Session::send_loop(stream& stream)
       }
 
       //
-      // Wait for signal to start writing again.
+      // If there was nothing to send, wait for signal to start again.
       //
       else if (nread == 0)
       {
@@ -505,7 +516,7 @@ awaitable<void> NGHttp2Session::send_loop(stream& stream)
          else if (nghttp2_session_want_read(session))
             mlogd("send loop: session still wants to read");
          else
-            break;
+            break; // nghttp2 doesn't want to send or receive any more, so we are done
 
          mlogd("send loop: waiting...");
          co_await async_wait_send(deferred);

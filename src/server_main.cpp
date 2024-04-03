@@ -45,7 +45,7 @@ int main()
       {
          if (request.content_length())
             response.content_length(request.content_length().value());
-         response.write_head(200, {});
+         co_await response.async_submit(200, {}, deferred);
          try
          {
             for (;;)

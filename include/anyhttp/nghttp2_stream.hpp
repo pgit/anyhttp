@@ -25,12 +25,12 @@ class NGHttp2Reader : public server::Request::Impl, public client::Response::Imp
 public:
    explicit NGHttp2Reader(NGHttp2Stream& stream);
    ~NGHttp2Reader() override;
-   void detach() override;
 
+   const asio::any_io_executor& executor() const override;
    boost::url_view url() const override;
    std::optional<size_t> content_length() const noexcept override;
    void async_read_some(server::Request::ReadSomeHandler&& handler) override;
-   const asio::any_io_executor& executor() const override;
+   void detach() override;
 
    NGHttp2Stream* stream;
 };
@@ -42,13 +42,13 @@ class NGHttp2Writer : public server::Response::Impl, public client::Request::Imp
 public:
    explicit NGHttp2Writer(NGHttp2Stream& stream);
    ~NGHttp2Writer() override;
-   void detach() override;
 
+   const asio::any_io_executor& executor() const override;
    void content_length(std::optional<size_t> content_length) override;
-   void write_head(unsigned int status_code, Fields headers) override;
+   void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override;
    void async_write(WriteHandler&& handler, asio::const_buffer buffer) override;
    void async_get_response(client::Request::GetResponseHandler&& handler) override;
-   const asio::any_io_executor& executor() const override;
+   void detach() override;
 
    NGHttp2Stream* stream;
    nghttp2_data_provider prd;

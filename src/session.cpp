@@ -11,9 +11,9 @@ Session::Session(Session&&) noexcept = default;
 Session::Session(const Session&) = default;
 Session::~Session() = default;
 
-client::Request Session::submit(boost::urls::url url, Fields headers)
+void Session::async_submit_any(SubmitHandler&& handler, boost::urls::url url, Fields headers)
 {
-   return m_impl->submit(std::move(url), std::move(headers));
+   m_impl->async_submit(std::move(handler), url, std::move(headers));
 }
 
 // =================================================================================================

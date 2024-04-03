@@ -34,7 +34,8 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   client::Request submit(boost::urls::url url, Fields headers) override;
+   void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) override;
+   
    awaitable<void> do_server_session(std::vector<uint8_t> data) override;
    awaitable<void> do_client_session(std::vector<uint8_t> data) override;
    void cancel() override

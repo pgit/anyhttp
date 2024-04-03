@@ -30,6 +30,7 @@ using WriteHandler = asio::any_completion_handler<Write>;
 // =================================================================================================
 
 // Create nghttp2_nv from string literal |name| and std::string |value|.
+// FIXME: don't use this, it is dangerous (dangling string reference)
 template <size_t N>
 nghttp2_nv make_nv_ls(const char (&name)[N], const std::string& value)
 {

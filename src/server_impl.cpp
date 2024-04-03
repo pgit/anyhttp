@@ -34,7 +34,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
 #if !defined(NDEBUG)
-   spdlog::set_level(spdlog::level::info);
+   spdlog::set_level(spdlog::level::debug);
 #else
    spdlog::set_level(spdlog::level::info);
 #endif
@@ -59,7 +59,7 @@ void Server::Impl::run()
             [self = shared_from_this()](const std::exception_ptr& ex)
             {
                if (ex)
-                  logw("exception: {}", what(ex));
+                  logw("server run: {}", what(ex));
                else
                   logi("server run: done");
             });
@@ -76,6 +76,13 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    logi("[{}] new connection", normalize(socket.remote_endpoint()));
    auto executor = co_await boost::asio::this_coro::executor;
 
+   /*
+   boost::asio::socket_base::send_buffer_size option(8192);
+   socket.set_option(option);
+   boost::asio::socket_base::receive_buffer_size option2(8192);
+   socket.set_option(option2);
+   */
+   
    //
    // detect HTTP2 client preface, fallback to HTTP/1.1 if not found
    //
@@ -141,7 +148,7 @@ awaitable<void> Server::Impl::listen_loop()
          [](const std::exception_ptr& ex)
          {
             if (ex)
-               logw("exception: {}", what(ex));
+               logw("listen_loop: {}", what(ex));
          });
    }
 }

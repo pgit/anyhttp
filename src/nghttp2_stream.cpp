@@ -88,17 +88,23 @@ void NGHttp2Writer::content_length(std::optional<size_t> content_length)
    m_content_length = content_length;
 }
 
-void NGHttp2Writer::write_head(unsigned int status_code, Fields headers)
+void NGHttp2Writer::async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers)
 {
    assert(stream);
 
    auto nva = std::vector<nghttp2_nv>();
    nva.reserve(3);
+
+   std::string status_code_str = fmt::format("{}", status_code);
+   nva.push_back(make_nv_ls(":status", status_code_str));
    std::string date = "Sat, 01 Apr 2023 09:33:09 GMT";
-   nva.push_back(make_nv_ls(":status", fmt::format("{}", status_code)));
    nva.push_back(make_nv_ls("date", date));
+   std::string length_str;
    if (m_content_length)
-      nva.push_back(make_nv_ls("content-length", fmt::format("{}", *m_content_length)));
+   {
+      length_str = fmt::format("{}", *m_content_length);
+      nva.push_back(make_nv_ls("content-length", length_str));
+   }
 
    // TODO: headers
    std::ignore = headers;
@@ -113,6 +119,7 @@ void NGHttp2Writer::write_head(unsigned int status_code, Fields headers)
    };
 
    nghttp2_submit_response(stream->parent.session, stream->id, nva.data(), nva.size(), &prd);
+   std::move(handler)(boost::system::error_code{});
 }
 
 void NGHttp2Writer::async_write(WriteHandler&& handler, asio::const_buffer buffer)

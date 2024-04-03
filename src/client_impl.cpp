@@ -35,7 +35,7 @@ Response::Impl::~Impl() = default;
 Client::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
-   spdlog::set_level(spdlog::level::info);
+   spdlog::set_level(spdlog::level::debug);
    spdlog::info("Client: ctor");
 }
 
@@ -65,6 +65,13 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
 
    logi("connected to {} ({})", socket.remote_endpoint(), ec.message());
 
+   /*
+   boost::asio::socket_base::send_buffer_size option(8192);
+   socket.set_option(option);
+   boost::asio::socket_base::receive_buffer_size option2(8192);
+   socket.set_option(option2);
+   */
+   
    //
    // detect HTTP2 client preface, abort connection if not found
    //
@@ -89,7 +96,7 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
             [session = std::move(session)](const std::exception_ptr& ex)
             {
                if (ex)
-                  logw("exception: {}", what(ex));
+                  logw("client run: {}", what(ex));
                else
                   logi("client run: done");
             });

@@ -33,9 +33,9 @@ void Response::content_length(std::optional<size_t> content_length)
    m_impl->content_length(content_length);
 }
 
-void Response::write_head(unsigned int status_code, Fields headers)
+void Response::async_submit_any(WriteHandler&& handler, unsigned int status_code, Fields headers)
 {
-   m_impl->write_head(status_code, std::move(headers));
+   m_impl->async_submit(std::move(handler), status_code, std::move(headers));
 }
 
 void Response::async_write_any(WriteHandler&& handler, asio::const_buffer buffer)

@@ -25,13 +25,13 @@ using namespace std::chrono_literals;
 
 using namespace boost::asio::experimental::awaitable_operators;
 
-awaitable<void> sayHello(Request& request, std::string_view hello)
+awaitable<void> send(Request& request, std::string_view hello)
 {
-   logd("sayHello: saying hello...");
+   logd("send: sending string of {} bytes...", hello.size());
    co_await request.async_write(asio::buffer(hello), deferred);
-   logd("sayHello: saying hello... done, sending EOF...");
+   logd("send: sending string of {} bytes... done, sending EOF...", hello.size());
    co_await request.async_write({}, deferred);
-   logd("sayHello: saying hello... done, sending EOF... done");
+   logd("send: sending string of {} bytes... done, sending EOF... done", hello.size());
 }
 
 awaitable<void> send(Request& request, size_t bytes)
@@ -65,16 +65,16 @@ awaitable<void> do_request(Session& session, boost::urls::url url)
 {
    const std::string hello = "Hello, World!\r\n";
 #if 0
-   auto request = session.submit(url, {{"Content-Length", fmt::format("{}", hello.size())}});
+   auto request = co_await session.async_submit(url, {{"Content-Length", fmt::format("{}", hello.size())}}, deferred);
 #else
-   auto request = session.submit(url, {{"X-Custom-Header", "Value"}});
+   auto request = co_await session.async_submit(url, {{"X-Custom-Header", "Value"}}, deferred);
 #endif
 #if 0
    size_t bytes = 64 * 1024 - 1;
    auto result = co_await (send(request, bytes) && receive(request));
    assert(bytes == result);
 #else
-   co_await (sayHello(request, hello) && get_response(request));
+   co_await (send(request, hello) && get_response(request));
    logi("do_request: done");
 #endif
 }

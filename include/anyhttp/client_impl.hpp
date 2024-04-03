@@ -21,10 +21,11 @@ public:
    virtual ~Impl();
 
    virtual const asio::any_io_executor& executor() const = 0;
-   virtual void write_head(unsigned int status_code, Fields headers) = 0;
+   virtual void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) = 0;
    virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
    virtual void async_get_response(client::Request::GetResponseHandler&& handler) = 0;
    virtual void detach() = 0;
+
 };
 
 // -------------------------------------------------------------------------------------------------

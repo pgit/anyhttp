@@ -6,7 +6,15 @@ set(CMAKE_CXX_STANDARD 23)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
     add_compile_definitions(BOOST_ASIO_ENABLE_BUFFER_DEBUGGING)
+    
+    # ASIO handler tracking output (very noisy)
     # add_compile_definitions(BOOST_ASIO_ENABLE_HANDLER_TRACKING)
+    
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
+    
+    # add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    # add_link_options(-fsanitize=address)
 endif()
 
 # --------------------------------------------------------------------------------------------------

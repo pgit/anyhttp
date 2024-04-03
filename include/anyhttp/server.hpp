@@ -67,9 +67,19 @@ public:
 
    const asio::any_io_executor& executor() const;
    void content_length(std::optional<size_t> content_length);
-   void write_head(unsigned int status_code, Fields headers);
 
 public:
+   template <boost::asio::completion_token_for<Write> CompletionToken>
+   auto async_submit(unsigned int status_code, Fields headers, CompletionToken&& token)
+   {
+      return boost::asio::async_initiate<CompletionToken, Write>(
+         [&](asio::completion_handler_for<Write> auto handler, unsigned int status_code,
+             Fields headers) { //
+            async_submit_any(std::move(handler), status_code, headers);
+         },
+         token, status_code, headers);
+   }
+
    template <boost::asio::completion_token_for<Write> CompletionToken>
    auto async_write(asio::const_buffer buffer, CompletionToken&& token)
    {
@@ -81,6 +91,7 @@ public:
    }
 
 private:
+   void async_submit_any(WriteHandler&& handler, unsigned int status_code, Fields headers);
    void async_write_any(WriteHandler&& handler, asio::const_buffer buffer);
 
    std::unique_ptr<Impl> m_impl;
