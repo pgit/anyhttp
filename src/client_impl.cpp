@@ -107,7 +107,7 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    // submit(), which must happen after that.
    //
    // FIXME: instead of executing a submit() directly, it should be queued and executed within
-   //        do_client_session(). This approach avoids the problem, too and also allows pipelining.
+   //        do_client_session(). This approach also avoids the problem, and allows pipelining, too.
    //
    std::move(handler)(boost::system::error_code{}, session);
    handler = nullptr;

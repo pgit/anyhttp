@@ -192,6 +192,15 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
 
    auto stream = handler->close_stream(stream_id);
    assert(stream);
+
+   if (stream->responseHandler)
+   {
+      using namespace boost::system;
+      std::move(stream->responseHandler)(errc::make_error_code(errc::io_error), // FIXME:
+                                         client::Response{nullptr});
+      stream->responseHandler = nullptr;
+   }
+
    // post(stream->executor(), [stream]() {});
    return 0;
 }

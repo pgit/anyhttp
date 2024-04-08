@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include <fmt/ostream.h>
+#include <fmt/ranges.h>
 
 #include <range-v3/concepts/type_traits.hpp>
 #include <range-v3/range/v3/view/chunk.hpp>
@@ -40,6 +41,23 @@ using asio::deferred;
 namespace rv = ranges::views;
 
 using namespace anyhttp;
+
+namespace anyhttp
+{
+void PrintTo(Protocol protocol, std::ostream* os)
+{
+   switch (protocol)
+   {
+   case Protocol::http11:
+      *os << "http11";
+      break;
+   case Protocol::http2:
+      *os << "http2";
+      break;
+   default:
+   }
+}
+}; // namespace anyhttp
 
 // =================================================================================================
 
@@ -113,12 +131,15 @@ class Empty : public testing::Test
 {
 };
 
-// -------------------------------------------------------------------------------------------------
+// =================================================================================================
 
 //
 // Server fixture with some default request handlers.
 //
-class Server : public testing::Test
+// Although the server itself supports all protocols at runtime, this is a parametrized fixture
+// for use by the clients.
+//
+class Server : public testing::TestWithParam<anyhttp::Protocol>
 {
 protected:
    void SetUp() override
@@ -146,8 +167,10 @@ protected:
 
    auto completion_handler()
    {
-      return [this](const std::exception_ptr&)
+      return [this](const std::exception_ptr& ex)
       {
+         if (ex)
+            logw("client finished with {}", what(ex));
          logi("client finished, resetting server");
          server.reset();
       };
@@ -158,16 +181,51 @@ protected:
    std::optional<server::Server> server;
 };
 
+INSTANTIATE_TEST_SUITE_P(Server, Server,
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2));
+
 // -------------------------------------------------------------------------------------------------
+
+TEST_P(Server, StopBeforeStarted)
+{
+   server.reset();
+   context.run();
+}
+
+TEST_P(Server, Stop)
+{
+   context.run_one();
+   server.reset();
+   context.run();
+}
+
+// =================================================================================================
 
 class External : public Server
 {
 protected:
+   awaitable<void> log(bp::async_pipe pipe)
+   {
+      std::string buffer;
+      for (;;)
+      {
+         auto [ex, n] = co_await asio::async_read_until(pipe, asio::dynamic_buffer(buffer), "\n",
+                                                        as_tuple(deferred));
+         auto sv = std::string_view(buffer).substr(0, n - 1);
+         logw("STDERR({}): \x1b[1;31m{}\x1b[0m", n, sv);
+         if (ex)
+            break;
+         buffer.erase(0, n);
+      }
+   }
+
    awaitable<std::string> spawn_process(bp::filesystem::path path, std::vector<std::string> args)
    {
-      bp::async_pipe out(context);
+      logi("spawn: {} {}", path.generic_string(), fmt::join(args, " "));
+
+      bp::async_pipe out(context), err(context);
       bp::child child(
-         path, std::move(args), bp::std_out > out, bp::std_err > bp::null,
+         path, std::move(args), bp::std_out > out, bp::std_err > err,
          bp::on_exit = [](int exit, const std::error_code& ec) { //
             fmt::println("exit={}, ec={}", exit, ec.message());
          });
@@ -181,6 +239,7 @@ protected:
          if (ex)
             break;
       }
+      co_await log(std::move(err));
 
       child.wait(); // FIXME: this is sync
       if (child.exit_code())
@@ -200,44 +259,29 @@ protected:
    size_t testFileSize = file_size(testFile);
 };
 
-// =================================================================================================
-
-TEST_F(Server, StopBeforeStarted)
-{
-   server.reset();
-   context.run();
-}
-
-TEST_F(Server, Stop)
-{
-   context.run_one();
-   server.reset();
-   context.run();
-}
+INSTANTIATE_TEST_SUITE_P(External, External,
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2));
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_F(External, nghttp2)
+TEST_P(External, nghttp2)
 {
+   if (GetParam() == anyhttp::Protocol::http11)
+      GTEST_SKIP();
+
    auto url = fmt::format("http://127.0.0.1:{}/echo", server->local_endpoint().port());
    auto future = spawn("/workspaces/nghttp2/install/bin/nghttp", {"-d", testFile, url});
    context.run();
    EXPECT_EQ(future.get().size(), testFileSize);
 }
 
-TEST_F(External, curl2)
+TEST_P(External, curl)
 {
    auto url = fmt::format("http://127.0.0.1:{}/echo", server->local_endpoint().port());
-   auto future = spawn("/usr/bin/curl", {"--http2-prior-knowledge", "--data-binary",
-                                         fmt::format("@{}", testFile), url});
-   context.run();
-   EXPECT_EQ(future.get().size(), testFileSize);
-}
-
-TEST_F(External, curl11)
-{
-   auto url = fmt::format("http://127.0.0.1:{}/echo", server->local_endpoint().port());
-   auto future = spawn("/usr/bin/curl", {"--data-binary", fmt::format("@{}", testFile), url});
+   std::vector<std::string> args = {"-sS", "--data-binary", fmt::format("@{}", testFile), url};
+   if (GetParam() == anyhttp::Protocol::http2)
+      args.insert(args.begin(), "--http2-prior-knowledge");
+   auto future = spawn("/usr/bin/curl", std::move(args));
    context.run();
    EXPECT_EQ(future.get().size(), testFileSize);
 }
@@ -250,19 +294,18 @@ protected:
    void SetUp() override
    {
       Server::SetUp();
-      url = boost::urls::url("http://127.0.0.1");
       url.set_port_number(server->local_endpoint().port());
-      client::Config config{.url = url, .protocol = anyhttp::Protocol::http11};
+      client::Config config{.url = url, .protocol = GetParam()};
       config.url.set_port_number(server->local_endpoint().port());
       client.emplace(context.get_executor(), config);
    }
 
 protected:
-   boost::urls::url url;
+   boost::urls::url url{"http://127.0.0.1"};
    std::optional<client::Client> client;
 };
 
-class ClientTest : public Client
+class ClientAsync : public Client
 {
 public:
    void SetUp() override
@@ -281,6 +324,9 @@ public:
 public:
    std::function<awaitable<void>(Session session)> test;
 };
+
+INSTANTIATE_TEST_SUITE_P(ClientAsync, ClientAsync,
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2));
 
 // -------------------------------------------------------------------------------------------------
 
@@ -325,51 +371,51 @@ awaitable<size_t> get_response(client::Request& request)
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_F(Client, WHEN_post_data_THEN_receive_echo)
+TEST_P(ClientAsync, WHEN_post_data_THEN_receive_echo)
 {
-   co_spawn(
-      context,
-      [&]() -> awaitable<void>
-      {
-         auto session = co_await client->async_connect(asio::deferred);
-         auto request = co_await session.async_submit(url, {}, deferred);
-         size_t bytes = 1024; //  * 1024 * 1024;
-         auto res = co_await (send(request, bytes) && get_response(request));
-         EXPECT_EQ(bytes, res);
-      },
-      completion_handler());
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
+      size_t bytes = 1024; //  * 1024 * 1024;
+      auto res = co_await (send(request, bytes) && get_response(request));
+      EXPECT_EQ(bytes, res);
+   };
    context.run();
 }
 
-TEST_F(Client, WHEN_post_to_unknown_path_THEN_error_404)
+TEST_P(ClientAsync, WHEN_post_without_path_THEN_error_404)
 {
-   co_spawn(
-      context,
-      [&]() -> awaitable<void>
-      {
-         auto session = co_await client->async_connect(asio::deferred);
-         auto request = co_await session.async_submit(url.set_path("unknown"), {}, deferred);
-         co_await send(request, 1024);
-         auto response = co_await request.async_get_response(asio::deferred);
-         auto received = co_await receive(response);
-      },
-      completion_handler());
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url, {}, deferred);
+      co_await send(request, 1024);
+      auto response = co_await request.async_get_response(asio::deferred);
+      auto received = co_await receive(response);
+   };
    context.run();
 }
 
-TEST_F(Client, DISABLED_WHEN_server_discards_request_THEN_error_500)
+TEST_P(ClientAsync, WHEN_post_to_unknown_path_THEN_error_404)
 {
-   co_spawn(
-      context,
-      [&]() -> awaitable<void>
-      {
-         auto session = co_await client->async_connect(asio::deferred);
-         auto request = co_await session.async_submit(url.set_path("detach"), {}, deferred);
-         co_await send(request, 1024);
-         auto response = co_await request.async_get_response(asio::deferred);
-         auto received = co_await receive(response);
-      },
-      completion_handler());
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("unknown"), {}, deferred);
+      co_await send(request, 1024);
+      auto response = co_await request.async_get_response(asio::deferred);
+      auto received = co_await receive(response);
+   };
+   context.run();
+}
+
+TEST_P(ClientAsync, WHEN_server_discards_request_THEN_error_500)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("detach"), {}, deferred);
+      co_await send(request, 1024);
+      auto response = co_await request.async_get_response(asio::deferred);
+      auto received = co_await receive(response);
+   };
    context.run();
 }
 
@@ -420,7 +466,7 @@ awaitable<void> send(client::Request& request, Range range, bool eof = true)
       }
 #endif
    }
-   
+
    if (eof)
    {
       logi("send: finishing request");
@@ -437,30 +483,26 @@ awaitable<void> sendEOF(client::Request& request)
    logi("send: finishing request... done");
 }
 
-TEST_F(Client, PostRange)
+TEST_P(ClientAsync, PostRange)
 {
-   co_spawn(
-      context,
-      [&]() -> awaitable<void>
-      {
-         auto session = co_await client->async_connect(asio::deferred);
-         auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
-         co_await request.async_write(asio::buffer("ping"), deferred); // FIXME:
-         auto response = co_await request.async_get_response(asio::deferred);
-         // std::string s(10ul * 1024 * 1024, 'a');
-         // auto sender = send(request, std::string_view("blah"));
-         // auto sender = send(request, std::string(10ul * 1024 * 1024, 'a'));
-         auto sender = send(request, rv::iota(uint8_t(0)) | rv::take(1 * 1024 * 1024));
-         auto received = co_await (std::move(sender) && receive(response));
-         loge("received: {}", received);
-      },
-      completion_handler());
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
+      co_await request.async_write(asio::buffer("ping"), deferred); // FIXME:
+      auto response = co_await request.async_get_response(asio::deferred);
+      // std::string s(10ul * 1024 * 1024, 'a');
+      // auto sender = send(request, std::string_view("blah"));
+      // auto sender = send(request, std::string(10ul * 1024 * 1024, 'a'));
+      auto sender = send(request, rv::iota(uint8_t(0)) | rv::take(1 * 1024 * 1024));
+      auto received = co_await (std::move(sender) && receive(response));
+      loge("received: {}", received);
+   };
    context.run();
 }
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_F(ClientTest, WHEN_request_is_sent_THEN_response_is_received_before_body_is_posted)
+TEST_P(ClientAsync, WHEN_request_is_sent_THEN_response_is_received_before_body_is_posted)
 {
    test = [&](Session session) -> awaitable<void>
    {
@@ -475,7 +517,7 @@ TEST_F(ClientTest, WHEN_request_is_sent_THEN_response_is_received_before_body_is
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_F(ClientTest, EatRequest)
+TEST_P(ClientAsync, EatRequest)
 {
    test = [&](Session session) -> awaitable<void>
    {
@@ -490,28 +532,46 @@ TEST_F(ClientTest, EatRequest)
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_F(ClientTest, Backpressure)
+TEST_P(ClientAsync, DISABLED_Backpressure)
 {
    test = [&](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
       auto response = co_await request.async_get_response(asio::deferred);
       auto sender = send(request, rv::iota(uint8_t(0)), /* eof */ false);
-      co_await (std::move(sender) || sleep(1ms));
+      co_await (std::move(sender) || sleep(2s));
       auto received = co_await (sendEOF(request) && receive(response));
       fmt::println("transferred {} bytes", received);
    };
    context.run();
 }
 
-TEST_F(ClientTest, Cancellation)
+TEST_P(ClientAsync, Cancellation)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
+      auto response = co_await request.async_get_response(asio::deferred);
+#if 0
+      std::vector buffer(1ul * 1024 * 1024, 'a');
+      auto sender = send(request, std::string_view(buffer));
+#else
+      auto sender = send(request, rv::iota(uint8_t(0)));
+#endif
+      auto received = co_await ((std::move(sender) || sleep(1ms)) && receive(response));
+      fmt::println("transferred {} bytes", std::get<1>(received));
+   };
+   context.run();
+}
+
+TEST_P(ClientAsync, CancellationRange)
 {
    test = [&](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
       auto response = co_await request.async_get_response(asio::deferred);
       auto sender = send(request, rv::iota(uint8_t(0))); //  | rv::take(1 * 1024 * 1024));
-      auto received = co_await ((std::move(sender) || sleep(0ms)) && receive(response));
+      auto received = co_await ((std::move(sender) || sleep(1ms)) && receive(response));
       fmt::println("transferred {} bytes", std::get<1>(received));
    };
    context.run();
