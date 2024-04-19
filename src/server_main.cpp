@@ -19,6 +19,82 @@ using namespace boost::asio;
 using namespace anyhttp;
 using namespace anyhttp::server;
 
+awaitable<void> sleep(auto duration)
+{
+   asio::steady_timer timer(co_await asio::this_coro::executor);
+   timer.expires_from_now(duration);
+   try
+   {
+      co_await timer.async_wait(deferred);
+      logi("sleep: done");
+   }
+   catch (const boost::system::system_error& ec)
+   {
+      loge("sleep: {}", ec.what());
+   }
+}
+
+awaitable<void> echo(server::Request request, server::Response response)
+{
+   if (request.content_length())
+      response.content_length(request.content_length().value());
+
+   co_await response.async_submit(200, {}, deferred);
+   for (;;)
+   {
+      auto buffer = co_await request.async_read_some(deferred);
+      co_await response.async_write(asio::buffer(buffer), deferred);
+      if (buffer.empty())
+         co_return;
+   }
+}
+
+awaitable<void> echo_old(Request request, Response response)
+{
+   if (request.content_length())
+      response.content_length(request.content_length().value());
+   co_await response.async_submit(200, {}, deferred);
+   try
+   {
+      for (;;)
+      {
+         logd("async_read_some...");
+         auto buffer = co_await request.async_read_some(deferred);
+         logd("async_read_some... done, read {} bytes", buffer.size());
+
+#if 0
+         auto timer = steady_timer(request.executor());
+         timer.expires_after(1ms);
+         logd("sleep...");
+         co_await timer.async_wait(deferred);
+         logd("sleep... done");
+#endif
+
+         logd("async_write...");
+         co_await response.async_write(asio::buffer(buffer), deferred);
+
+         if (!buffer.empty())
+            logd("async_write... done, wrote {} bytes", buffer.size());
+         else
+         {
+            logd("async_write... done, wrote {} bytes, finished", buffer.size());
+            break;
+         }
+      }
+   }
+   catch (std::exception& ex)
+   {
+      logw("exception: {}", ex.what());
+   }
+   co_return;
+}
+
+awaitable<void> not_found(server::Request request, server::Response response)
+{
+   co_await response.async_submit(404, {}, deferred);
+   co_await response.async_write({}, deferred);
+}
+
 int main()
 {
    io_context pool;
@@ -30,66 +106,30 @@ int main()
    io_context context;
    auto server = std::make_optional<Server>(context.get_executor(), Config{.port = 8080});
 
-#if 0
+#if 1
    signal_set signals(context, SIGINT, SIGTERM);
    signals.async_wait(
       [&](auto, auto)
       {
+         fmt::println(" INTERRUPTED");
          logw("interrupt");
          server.reset();
       });
 #endif
 
    server->setRequestHandlerCoro(
-      [&](Request request, Response response) -> awaitable<void>
+      [](server::Request request, server::Response response) -> awaitable<void>
       {
-         if (request.content_length())
-            response.content_length(request.content_length().value());
-         co_await response.async_submit(200, {}, deferred);
-         try
-         {
-            for (;;)
-            {
-               logd("async_read_some...");
-               auto buffer = co_await request.async_read_some(deferred);
-               logd("async_read_some... done, read {} bytes", buffer.size());
-            // logi("{}", buffer.size());
-#if 0
-               auto timer = steady_timer(request.executor());
-               timer.expires_after(1ms);
-               logd("sleep...");
-               co_await timer.async_wait(deferred);
-               logd("sleep... done");
-#endif
-#if 0
-               if (buffer.empty())
-               {
-                  // logi("hello from context ({})", std::this_thread::get_id());
-                  co_await asio::post(bind_executor(pool, asio::deferred));
-                  // std::this_thread::sleep_for(1ms); // simulate work in thread pool
-                  // logi("hello from pool ({})", std::this_thread::get_id());
-                  co_await asio::post(bind_executor(context, asio::deferred));
-               }
-#endif
-
-               logd("async_write...");
-               co_await response.async_write(asio::buffer(buffer), deferred);
-
-               if (!buffer.empty())
-                  logd("async_write... done, wrote {} bytes", buffer.size());
-               else
-               {
-                  logd("async_write... done, wrote {} bytes, finished", buffer.size());
-                  break;
-               }
-            }
-         }
-         catch (std::exception& ex)
-         {
-            logw("exception: {}", ex.what());
-         }
-         co_return;
+         if (request.url().path() == "/echo")
+            return echo(std::move(request), std::move(response));
+         else if (request.url().path() == "/echo_old")
+            return echo_old(std::move(request), std::move(response));
+         else if (request.url().path() == "/typewriter")
+            return echo_old(std::move(request), std::move(response));
+         else
+            return not_found(std::move(request), std::move(response));
       });
+
    context.run();
 
    work.reset();

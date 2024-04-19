@@ -1,7 +1,7 @@
 #include "anyhttp/client.hpp"
+#include "anyhttp/request_handlers.hpp"
 #include "anyhttp/server.hpp"
 #include "anyhttp/session.hpp"
-#include "range/v3/range/concepts.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/as_tuple.hpp>
@@ -20,10 +20,7 @@
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
 
-#include <range-v3/concepts/type_traits.hpp>
-#include <range-v3/range/v3/view/chunk.hpp>
 #include <range-v3/range/v3/view/iota.hpp>
-#include <range-v3/range/v3/view/repeat_n.hpp>
 #include <range-v3/range/v3/view/take.hpp>
 
 using namespace std::chrono_literals;
@@ -61,72 +58,6 @@ void PrintTo(Protocol protocol, std::ostream* os)
 
 // =================================================================================================
 
-awaitable<void> sleep(auto duration)
-{
-   asio::steady_timer timer(co_await asio::this_coro::executor);
-   timer.expires_from_now(duration);
-   try
-   {
-      co_await timer.async_wait(deferred);
-      logi("sleep: done");
-   }
-   catch (const boost::system::system_error& ec)
-   {
-      loge("sleep: {}", ec.what());
-   }
-}
-
-// -------------------------------------------------------------------------------------------------
-
-awaitable<void> echo(server::Request request, server::Response response)
-{
-   co_await response.async_submit(200, {}, deferred);
-   for (;;)
-   {
-      auto buffer = co_await request.async_read_some(deferred);
-      if (buffer.empty())
-         co_await sleep(100ms);
-      co_await response.async_write(asio::buffer(buffer), deferred);
-      if (buffer.empty())
-         co_return;
-   }
-}
-
-awaitable<void> not_found(server::Request request, server::Response response)
-{
-   co_await response.async_submit(404, {}, deferred);
-   co_await response.async_write({}, deferred);
-}
-
-awaitable<void> eat_request(server::Request request, server::Response response)
-{
-   co_await response.async_submit(200, {}, deferred);
-   co_await response.async_write({}, deferred);
-   for (;;)
-   {
-      auto buffer = co_await request.async_read_some(deferred);
-      if (buffer.empty())
-         break;
-   }
-   co_await sleep(100ms);
-}
-
-awaitable<void> delayed(server::Request request, server::Response response)
-{
-   asio::steady_timer timer(co_await asio::this_coro::executor);
-   timer.expires_from_now(100ms);
-   co_await eat_request(std::move(request), std::move(response));
-}
-
-awaitable<void> detach(server::Request request, server::Response response)
-{
-   asio::steady_timer timer(co_await asio::this_coro::executor);
-   timer.expires_from_now(100ms);
-   co_await eat_request(std::move(request), std::move(response));
-}
-
-// =================================================================================================
-
 class Empty : public testing::Test
 {
 };
@@ -147,7 +78,7 @@ protected:
       auto config = server::Config{.port = 0};
       server.emplace(context.get_executor(), config);
       server->setRequestHandlerCoro(
-         [](server::Request request, server::Response response) -> awaitable<void>
+         [this](server::Request request, server::Response response) -> awaitable<void>
          {
             if (request.url().path() == "/echo")
                return echo(std::move(request), std::move(response));
@@ -159,6 +90,8 @@ protected:
                co_spawn(request.executor(), detach(std::move(request), std::move(response)),
                         [&](const std::exception_ptr&)
                         { logi("client finished, resetting server"); });
+            else if (request.url().path() == "/custom")
+               return handler(std::move(request), std::move(response));
             else
                return not_found(std::move(request), std::move(response));
             return []() mutable -> awaitable<void> { co_return; }();
@@ -179,6 +112,7 @@ protected:
 protected:
    boost::asio::io_context context;
    std::optional<server::Server> server;
+   std::function<awaitable<void>(server::Request request, server::Response response)> handler;
 };
 
 INSTANTIATE_TEST_SUITE_P(Server, Server,
@@ -330,54 +264,13 @@ INSTANTIATE_TEST_SUITE_P(ClientAsync, ClientAsync,
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> send(client::Request& request, size_t bytes)
-{
-   std::vector<uint8_t> buffer;
-   buffer.resize(bytes);
-   try
-   {
-      co_await request.async_write(asio::buffer(buffer), deferred);
-      logi("send: done, wrote {} bytes", bytes);
-   }
-   catch (const boost::system::system_error& ec)
-   {
-      loge("send: {}", ec.what());
-   }
-   co_await request.async_write({}, deferred);
-}
-
-awaitable<size_t> receive(client::Response& response)
-{
-   size_t bytes = 0;
-   for (;;)
-   {
-      auto buf = co_await response.async_read_some(deferred);
-      if (buf.empty())
-         break;
-
-      logd("receive: {}", buf.size());
-      bytes += buf.size();
-   }
-
-   logi("receive: EOF after reading {} bytes", bytes);
-   co_return bytes;
-}
-
-awaitable<size_t> get_response(client::Request& request)
-{
-   auto response = co_await request.async_get_response(asio::deferred);
-   co_return co_await receive(response);
-}
-
-// -------------------------------------------------------------------------------------------------
-
 TEST_P(ClientAsync, WHEN_post_data_THEN_receive_echo)
 {
    test = [&](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
       size_t bytes = 1024; //  * 1024 * 1024;
-      auto res = co_await (send(request, bytes) && get_response(request));
+      auto res = co_await (send(request, bytes) && read_response(request));
       EXPECT_EQ(bytes, res);
    };
    context.run();
@@ -419,69 +312,48 @@ TEST_P(ClientAsync, WHEN_server_discards_request_THEN_error_500)
    context.run();
 }
 
+TEST_P(ClientAsync, Custom)
+{
+   handler = [&](server::Request request, server::Response response) -> awaitable<void>
+   {
+      co_await response.async_submit(200, {}, deferred);
+      for (;;)
+      {
+         auto buffer = co_await request.async_read_some(deferred);
+         co_await response.async_write(asio::buffer(buffer), deferred);
+         if (buffer.empty())
+            co_return;
+      }
+   };
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("custom"), {}, deferred);
+      size_t bytes = 1024;
+      auto res = co_await (send(request, bytes) && read_response(request));
+      EXPECT_EQ(bytes, res);
+   };
+   context.run();
+}
+
+TEST_P(ClientAsync, IgnoreRequestAndResponse)
+{
+   handler = [&](server::Request request, server::Response response) -> awaitable<void>
+   {
+      co_await response.async_submit(200, {}, deferred);
+      // co_await request.async_read_some(deferred);
+      co_await response.async_write({}, deferred);
+      co_await sleep(10ms);
+      co_return;
+   };
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("custom"), {}, deferred);
+      auto res = co_await (send(request, 0) && read_response(request));
+   };
+   context.run();
+}
+
 // -------------------------------------------------------------------------------------------------
-
-template <typename Range>
-   requires ranges::contiguous_range<Range> && ranges::borrowed_range<Range>
-awaitable<void> send(client::Request& request, Range range)
-{
-   co_await request.async_write(asio::buffer(range.data(), range.size()), deferred);
-   co_await request.async_write({}, deferred);
-   logi("send: done");
-}
-
-template <typename Range>
-   requires /* ranges::sized_range<Range> && */ ranges::borrowed_range<Range> &&
-            (!ranges::contiguous_range<Range>)
-awaitable<void> send(client::Request& request, Range range, bool eof = true)
-{
-   size_t bytes = 0;
-#if 1
-   std::array<uint8_t, 1460> buffer;
-#else
-   std::vector<uint8_t> buffer;
-   buffer.resize(1460);
-#endif
-   for (auto chunk : range | rv::chunk(buffer.size()))
-   {
-      auto end = std::ranges::copy(chunk, buffer.data()).out;
-      bytes += end - buffer.data();
-#if 0
-      auto result = co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()),
-                                                 as_tuple(deferred));
-      if (auto ec = std::get<0>(result))
-      {
-         loge("send: (range) {}", ec.what());
-         break;
-      }
-#else
-      try
-      {
-         co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()), deferred);
-      }
-      catch (const boost::system::system_error& ec)
-      {
-         loge("send: (range) {}", ec.what());
-         break;
-      }
-#endif
-   }
-
-   if (eof)
-   {
-      logi("send: finishing request");
-      co_await this_coro::reset_cancellation_state();
-      co_await request.async_write({}, deferred);
-      logi("send: done afer writing {} bytes", bytes);
-   }
-}
-
-awaitable<void> sendEOF(client::Request& request)
-{
-   logi("send: finishing request...");
-   co_await request.async_write({}, deferred);
-   logi("send: finishing request... done");
-}
 
 TEST_P(ClientAsync, PostRange)
 {
@@ -570,7 +442,7 @@ TEST_P(ClientAsync, CancellationRange)
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
       auto response = co_await request.async_get_response(asio::deferred);
-      auto sender = send(request, rv::iota(uint8_t(0))); //  | rv::take(1 * 1024 * 1024));
+      auto sender = send(request, rv::iota(uint8_t(0)));
       auto received = co_await ((std::move(sender) || sleep(1ms)) && receive(response));
       fmt::println("transferred {} bytes", std::get<1>(received));
    };

@@ -68,7 +68,7 @@ NGHttp2Writer::~NGHttp2Writer()
    if (stream)
    {
       stream->response = nullptr;
-      // stream->delete_writer();
+      stream->delete_writer();
       // stream->call_handler_loop();
    }
 }
@@ -169,10 +169,10 @@ void NGHttp2Stream::call_handler_loop()
 
       logd("[{}] read_callback: calling handler with {} bytes...", logPrefix, buffer_length);
       std::move(handler)(boost::system::error_code{}, std::move(buffer));
+      logd("[{}] read_callback: calling handler with {} bytes... done", logPrefix, buffer_length);
       if (m_read_handler)
          logd("[{}] read_callback: READ HANDLER RESPAWNED!!!! ({} pending)", logPrefix,
               m_pending_read_buffers.size());
-      logd("[{}] read_callback: calling handler with {} bytes... done", logPrefix, buffer_length);
 
       //
       // To apply back pressure, the stream is consumed after the handler is invoked.
@@ -425,14 +425,18 @@ const asio::any_io_executor& NGHttp2Stream::executor() const { return parent.exe
 
 void NGHttp2Stream::delete_reader()
 {
+   logd("[{}] delete_reader", logPrefix);
    // Issue RST_STREAM so that stream does not hang around.
    nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_INTERNAL_ERROR);
+   parent.start_write();
 }
 
 void NGHttp2Stream::delete_writer()
 {
+   logd("[{}] delete_writer", logPrefix);
    // Issue RST_STREAM so that stream does not hang around.
    nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_INTERNAL_ERROR);
+   parent.start_write();
 }
 
 // =================================================================================================
