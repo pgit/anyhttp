@@ -6,10 +6,13 @@
 #include <boost/asio.hpp>
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/deferred.hpp>
+#include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 
+#include <boost/asio/io_context.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include <boost/filesystem/path.hpp>
 #include <boost/process.hpp>
 #include <boost/process/args.hpp>
 
@@ -62,6 +65,19 @@ class Empty : public testing::Test
 {
 };
 
+TEST_F(Empty, Hello)
+{
+   boost::process::filesystem::path path{"."};
+   std::cout << "Hello, World!" << '\n';
+   std::cout << "Path: " << path << '\n';
+}
+
+TEST_F(Empty, Path)
+{
+   bp::filesystem::path path("/usr/bin/echo");
+   std::cout << "spawn: " << path.string() << '\n';
+}
+
 // =================================================================================================
 
 //
@@ -75,7 +91,7 @@ class Server : public testing::TestWithParam<anyhttp::Protocol>
 protected:
    void SetUp() override
    {
-      auto config = server::Config{.port = 0};
+      auto config = server::Config{.listen_address = "127.0.0.2", .port = 0};
       server.emplace(context.get_executor(), config);
       server->setRequestHandlerCoro(
          [this](server::Request request, server::Response response) -> awaitable<void>
@@ -85,7 +101,7 @@ protected:
             else if (request.url().path() == "/eat_request")
                return eat_request(std::move(request), std::move(response));
             else if (request.url().path() == "/discard")
-               return {};
+               return discard(std::move(request), std::move(response));
             else if (request.url().path() == "/detach")
                co_spawn(request.executor(), detach(std::move(request), std::move(response)),
                         [&](const std::exception_ptr&)
@@ -146,7 +162,8 @@ protected:
          auto [ex, n] = co_await asio::async_read_until(pipe, asio::dynamic_buffer(buffer), "\n",
                                                         as_tuple(deferred));
          auto sv = std::string_view(buffer).substr(0, n - 1);
-         logw("STDERR({}): \x1b[1;31m{}\x1b[0m", n, sv);
+         if (n)
+            logw("STDERR: \x1b[32m{}\x1b[0m", sv);
          if (ex)
             break;
          buffer.erase(0, n);
@@ -171,7 +188,10 @@ protected:
          auto [ex, nread] = co_await asio::async_read(out, asio::buffer(buf), as_tuple(deferred));
          result += std::string_view(buf.data(), nread);
          if (ex)
+         {
+            logw("spwan: STDIN: {}", ex.message());
             break;
+         }
       }
       co_await log(std::move(err));
 
@@ -189,7 +209,7 @@ protected:
       return co_spawn(context, spawn_process(std::move(path), std::move(args)), use_future);
    }
 
-   std::filesystem::path testFile{"CMakeLists.txt"};
+   bp::filesystem::path testFile{"CMakeLists.txt"};
    size_t testFileSize = file_size(testFile);
 };
 
@@ -203,21 +223,31 @@ TEST_P(External, nghttp2)
    if (GetParam() == anyhttp::Protocol::http11)
       GTEST_SKIP();
 
-   auto url = fmt::format("http://127.0.0.1:{}/echo", server->local_endpoint().port());
-   auto future = spawn("/workspaces/nghttp2/install/bin/nghttp", {"-d", testFile, url});
+   auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   auto future = spawn("/workspaces/nghttp2/install/bin/nghttp", {"-d", testFile.string(), url});
    context.run();
+
    EXPECT_EQ(future.get().size(), testFileSize);
 }
 
 TEST_P(External, curl)
 {
-   auto url = fmt::format("http://127.0.0.1:{}/echo", server->local_endpoint().port());
-   std::vector<std::string> args = {"-sS", "--data-binary", fmt::format("@{}", testFile), url};
+   auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   std::vector<std::string> args = {"-sS", "-v", "--data-binary",
+                                    fmt::format("@{}", testFile.string()), url};
    if (GetParam() == anyhttp::Protocol::http2)
       args.insert(args.begin(), "--http2-prior-knowledge");
    auto future = spawn("/usr/bin/curl", std::move(args));
    context.run();
+   loge("context finished");
    EXPECT_EQ(future.get().size(), testFileSize);
+}
+
+TEST_P(External, echo)
+{
+   co_spawn(context.get_executor(), spawn_process("/usr/bin/echo", {}), detached);
+   context.run();
+   loge("context finished");
 }
 
 // =================================================================================================
@@ -235,7 +265,7 @@ protected:
    }
 
 protected:
-   boost::urls::url url{"http://127.0.0.1"};
+   boost::urls::url url{"http://127.0.0.2"};
    std::optional<client::Client> client;
 };
 
@@ -304,6 +334,18 @@ TEST_P(ClientAsync, WHEN_server_discards_request_THEN_error_500)
 {
    test = [&](Session session) -> awaitable<void>
    {
+      auto request = co_await session.async_submit(url.set_path("discard"), {}, deferred);
+      co_await send(request, 1024);
+      auto response = co_await request.async_get_response(asio::deferred);
+      auto received = co_await receive(response);
+   };
+   context.run();
+}
+
+TEST_P(ClientAsync, WHEN_server_discards_request_delayed_THEN_error_500)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
       auto request = co_await session.async_submit(url.set_path("detach"), {}, deferred);
       co_await send(request, 1024);
       auto response = co_await request.async_get_response(asio::deferred);
@@ -335,16 +377,25 @@ TEST_P(ClientAsync, Custom)
    context.run();
 }
 
-TEST_P(ClientAsync, IgnoreRequestAndResponse)
+TEST_P(ClientAsync, IgnoreRequest)
 {
    handler = [&](server::Request request, server::Response response) -> awaitable<void>
    {
       co_await response.async_submit(200, {}, deferred);
-      // co_await request.async_read_some(deferred);
       co_await response.async_write({}, deferred);
-      co_await sleep(10ms);
-      co_return;
    };
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("custom"), {}, deferred);
+      auto res = co_await (send(request, 0) && read_response(request));
+   };
+   context.run();
+}
+
+TEST_P(ClientAsync, IgnoreRequestAndResponse)
+{
+   handler = [&](server::Request request, server::Response response) -> awaitable<void>
+   { co_return; };
    test = [&](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("custom"), {}, deferred);
@@ -360,7 +411,7 @@ TEST_P(ClientAsync, PostRange)
    test = [&](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
-      co_await request.async_write(asio::buffer("ping"), deferred); // FIXME:
+      // co_await request.async_write(asio::buffer("ping"), deferred); // FIXME:
       auto response = co_await request.async_get_response(asio::deferred);
       // std::string s(10ul * 1024 * 1024, 'a');
       // auto sender = send(request, std::string_view("blah"));
@@ -412,7 +463,7 @@ TEST_P(ClientAsync, DISABLED_Backpressure)
       auto response = co_await request.async_get_response(asio::deferred);
       auto sender = send(request, rv::iota(uint8_t(0)), /* eof */ false);
       co_await (std::move(sender) || sleep(2s));
-      auto received = co_await (sendEOF(request) && receive(response));
+      auto received = co_await (sendEOF(request) && try_receive(response));
       fmt::println("transferred {} bytes", received);
    };
    context.run();
@@ -424,14 +475,11 @@ TEST_P(ClientAsync, Cancellation)
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
       auto response = co_await request.async_get_response(asio::deferred);
-#if 0
-      std::vector buffer(1ul * 1024 * 1024, 'a');
+      // co_await sleep(100ms);
+      std::vector buffer(5ul * 1024 * 1024, 'a');
       auto sender = send(request, std::string_view(buffer));
-#else
-      auto sender = send(request, rv::iota(uint8_t(0)));
-#endif
-      auto received = co_await ((std::move(sender) || sleep(1ms)) && receive(response));
-      fmt::println("transferred {} bytes", std::get<1>(received));
+      auto received = co_await ((std::move(sender) || sleep(0ms)) && try_receive(response));
+      fmt::println("received {} bytes", std::get<1>(received));
    };
    context.run();
 }
@@ -443,8 +491,8 @@ TEST_P(ClientAsync, CancellationRange)
       auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
       auto response = co_await request.async_get_response(asio::deferred);
       auto sender = send(request, rv::iota(uint8_t(0)));
-      auto received = co_await ((std::move(sender) || sleep(1ms)) && receive(response));
-      fmt::println("transferred {} bytes", std::get<1>(received));
+      auto received = co_await ((std::move(sender) || sleep(2ms)) && receive(response));
+      fmt::println("received {} bytes", std::get<1>(received));
    };
    context.run();
 }

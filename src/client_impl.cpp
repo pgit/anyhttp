@@ -25,17 +25,22 @@ namespace anyhttp::client
 
 // =================================================================================================
 
-Request::Impl::Impl() noexcept = default;
-Request::Impl::~Impl() = default;
-Response::Impl::Impl() noexcept = default;
-Response::Impl::~Impl() = default;
+Request::Impl::Impl() noexcept { logd("\x1b[1;34mClient::Request: ctor\x1b[0m"); }
+Request::Impl::~Impl() { logd("\x1b[34mClient::Request: dtor\x1b[0m"); }
+
+Response::Impl::Impl() noexcept { logd("\x1b[1;34mClient::Response: ctor\x1b[0m"); }
+Response::Impl::~Impl() { logd("\x1b[34mClient::Response: dtor\x1b[0m"); }
 
 // =================================================================================================
 
 Client::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
+#if !defined(NDEBUG)
    spdlog::set_level(spdlog::level::debug);
+#else
+   spdlog::set_level(spdlog::level::info);
+#endif
    spdlog::info("Client: ctor");
 }
 
@@ -54,29 +59,32 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
 
    auto [ec, endpoints] = co_await resolver.async_resolve(host, port, flags, as_tuple(deferred));
    for (auto&& elem : endpoints)
-      logi("Client: {}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
-
-   // if (endpoints.empty())
-   //   co_return;
+      ; // logd("Client: {}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
 
    ip::tcp::socket socket(executor);
    ip::tcp::endpoint endpoint;
    std::tie(ec, endpoint) = co_await asio::async_connect(socket, endpoints, as_tuple(deferred));
 
-   logi("connected to {} ({})", socket.remote_endpoint(), ec.message());
+   logi("Client: connected to {} ({})", socket.remote_endpoint(), ec.message());
 
-   /*
-   boost::asio::socket_base::send_buffer_size option(8192);
-   socket.set_option(option);
-   boost::asio::socket_base::receive_buffer_size option2(8192);
-   socket.set_option(option2);
-   */
-   
+   using sb = boost::asio::socket_base;
+   sb::send_buffer_size send_buffer_size;
+   sb::receive_buffer_size receive_buffer_size;
+   socket.get_option(send_buffer_size);
+   socket.get_option(receive_buffer_size);
+   logd("Client: socket buffer sizes: send={} receive={}", send_buffer_size.value(),
+        receive_buffer_size.value());
+#if 0
+   socket.set_option(sb::send_buffer_size(8192));
+   socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
+#endif
+
    //
    // detect HTTP2 client preface, abort connection if not found
    //
    std::vector<uint8_t> data;
-   auto buffer = boost::asio::dynamic_buffer(data);
+   // data.reserve(std::max(data.size(), 16 * 1024UL));
+   // auto buffer = boost::asio::dynamic_buffer(data);
 
    std::shared_ptr<Session::Impl> impl;
    switch (config().protocol)

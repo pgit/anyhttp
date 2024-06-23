@@ -15,7 +15,7 @@ enum class Protocol
    http2
 };
 
-}
+} // namespace anyhttp
 
 namespace anyhttp::client
 {
@@ -94,6 +94,26 @@ public:
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
          [&](asio::completion_handler_for<Write> auto handler, asio::const_buffer buffer) { //
+#if 0
+            //
+            // https://stackoverflow.com/questions/76004637/asio-awaitable-operator-dont-return-when-timer-expires
+            //
+            auto cs = asio::get_associated_cancellation_slot(handler);
+            auto work = make_work_guard(asio::get_associated_executor(handler));
+            cs.assign(
+               [work](asio::cancellation_type type) mutable
+               {
+                  using ct = asio::cancellation_type;
+                  if (ct::none != (type & ct::terminal))
+                     loge("cancellation_type terminal");
+                  if (ct::none != (type & ct::partial))
+                     loge("cancellation_type partial");
+                  if (ct::none != (type & ct::total))
+                     loge("cancellation_type total");
+
+                  work.reset();
+               });
+#endif
             async_write_any(std::move(handler), buffer);
          },
          token, buffer);

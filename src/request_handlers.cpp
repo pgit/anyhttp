@@ -35,10 +35,11 @@ awaitable<void> echo(server::Request request, server::Response response)
    }
 }
 
-awaitable<void> echo_old(Request request, Response response)
+awaitable<void> echo_debug(Request request, Response response)
 {
    if (request.content_length())
       response.content_length(request.content_length().value());
+
    co_await response.async_submit(200, {}, deferred);
    try
    {
@@ -85,11 +86,24 @@ awaitable<void> eat_request(server::Request request, server::Response response)
 {
    co_await response.async_submit(200, {}, deferred);
    co_await response.async_write({}, deferred);
-   for (;;)
+
+   size_t count = 0;
+   try
    {
-      auto buffer = co_await request.async_read_some(deferred);
-      if (buffer.empty())
-         break;
+      for (;;)
+      {
+         auto buffer = co_await request.async_read_some(deferred);
+         if (buffer.empty())
+            break;
+
+         count += buffer.size();
+      }
+      logi("eat_request: ate {} bytes", count);
+   }
+   catch (const boost::system::system_error& e)
+   {
+      logi("eat_request: ate {} bytes, then caught exception: {}", count, e.code().message());
+      throw;
    }
 
    co_await anyhttp::sleep(100ms);
@@ -106,11 +120,14 @@ awaitable<void> detach(server::Request request, server::Response response)
 {
    asio::steady_timer timer(co_await asio::this_coro::executor);
    timer.expires_from_now(100ms);
-   co_await eat_request(std::move(request), std::move(response));
+   // co_await eat_request(std::move(request), std::move(response));
 }
+
+awaitable<void> discard(server::Request request, server::Response response) { co_return; }
 
 // =================================================================================================
 
+/// Allocate an array of the given size and send it. Prefer generator ranges instead.
 awaitable<void> send(client::Request& request, size_t bytes)
 {
    if (bytes == 0)
@@ -139,9 +156,35 @@ awaitable<size_t> receive(client::Response& response)
       if (buf.empty())
          break;
 
-      logd("receive: {}", buf.size());
       bytes += buf.size();
+      logd("receive: {}, total {}", buf.size(), bytes);
    }
+
+   logi("receive: EOF after reading {} bytes", bytes);
+   co_return bytes;
+}
+
+awaitable<size_t> try_receive(client::Response& response)
+{
+   size_t bytes = 0;
+   try
+   {
+      for (;;)
+      {
+         auto buf = co_await response.async_read_some(deferred);
+         if (buf.empty())
+            break;
+
+         bytes += buf.size();
+         logd("receive: {}, total {}", buf.size(), bytes);
+      }
+   }
+   catch (const boost::system::system_error& ec)
+   {
+      loge("receive: {}", ec.code().message());
+   }
+
+   co_await sleep(100ms);
 
    logi("receive: EOF after reading {} bytes", bytes);
    co_return bytes;

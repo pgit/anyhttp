@@ -2,6 +2,7 @@
 #include "anyhttp/nghttp2_stream.hpp"
 #include "anyhttp/nghttp2_session.hpp"
 
+#include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 
@@ -140,7 +141,7 @@ void NGHttp2Writer::async_get_response(client::Request::GetResponseHandler&& han
 NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int id_)
    : parent(parent), id(id_), logPrefix(fmt::format("{}.{}", parent.logPrefix(), id_))
 {
-   logd("[{}] Stream: ctor", logPrefix);
+   logd("[{}] \x1b[1;33mStream: ctor\x1b[0m", logPrefix);
 }
 
 void NGHttp2Stream::call_handler_loop()
@@ -201,7 +202,7 @@ void NGHttp2Stream::call_on_data(nghttp2_session* session, int32_t id_, const ui
 
 NGHttp2Stream::~NGHttp2Stream()
 {
-   logd("[{}] Stream: dtor", logPrefix);
+   logd("[{}] \x1b[33mStream: dtor\x1b[0m", logPrefix);
    if (request)
       request->detach();
    if (response)
@@ -226,6 +227,7 @@ void NGHttp2Stream::resume()
    }
 }
 
+/*
 void NGHttp2Stream::async_write(WriteHandler&& handler, asio::const_buffer buffer)
 {
    assert(!sendHandler);
@@ -239,6 +241,7 @@ void NGHttp2Stream::async_write(WriteHandler&& handler, asio::const_buffer buffe
       parent.start_write();
    }
 }
+*/
 
 void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& handler)
 {
@@ -276,7 +279,7 @@ ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data
       sendBuffer += copied;
       if (sendBuffer.size() == 0)
       {
-         logd("[{}] write callback: running handler...", logPrefix);
+         logd("[{}] write callback: running handler...", logPrefix);         
          std::move(sendHandler)(boost::system::error_code{});
          logd("[{}] write callback: running handler... done", logPrefix);
          if (sendHandler)
@@ -395,7 +398,7 @@ void NGHttp2Stream::call_on_request()
    logd("[{}] call_on_request: {}", logPrefix, url.buffer());
 
    //
-   // An incomming new request should be put into a queue of the server session. From there,
+   // An incoming new request should be put into a queue of the server session. From there,
    // new requests can then be retrieved asynchronously by the user.
    //
    // Setup of request and response should happen before that, too.
@@ -415,7 +418,7 @@ void NGHttp2Stream::call_on_request()
       parent.server().requestHandler()(std::move(request), std::move(response));
    else
       co_spawn(executor(), do_request(), detached);
-      // assert(false); // no requesthandler set
+      // assert(false); // no request hhandler set
 #endif
 }
 

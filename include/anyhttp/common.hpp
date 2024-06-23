@@ -4,6 +4,7 @@
 #include <boost/asio/ip/tcp.hpp>
 
 #include <boost/core/detail/string_view.hpp>
+#include <boost/system/system_error.hpp>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 
@@ -120,6 +121,10 @@ inline std::string what(const std::exception_ptr& ptr)
    try
    {
       std::rethrow_exception(ptr);
+   }
+   catch (boost::system::system_error& ex)
+   {
+      result = fmt::format("exception: {}", ex.code().message());
    }
    catch (std::exception& ex)
    {

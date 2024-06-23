@@ -19,19 +19,19 @@ public:
    class Impl;
    explicit Session(std::shared_ptr<Impl> impl);
    Session(Session&& other) noexcept;
-   ~Session();
    Session(const Session& other);
+   ~Session();
 
 public:
    /**
     * Submits a new request.
     *
     * Submitting a request means initiating the sending of the request method, path and any headers.
-    * It does not mean that all or even any of those are actually transmitted immediatelly. The same
+    * It does not mean that all or even any of those are actually transmitted immediately. The same
     * is true if you start an asynchronous write operation on the request object. The request may
     * just be queued for later transmission.
     *
-    * Use \ref Request::async_get_response() to wait for the response.
+    * Use \ref Request::async_get_response() on the request to wait for the response.
     */
    template <boost::asio::completion_token_for<Submit> CompletionToken>
    auto async_submit(boost::urls::url url, Fields headers, CompletionToken&& token)
@@ -43,6 +43,8 @@ public:
          },
          token, url, headers);
    }
+
+   void cancel();
 
 private:
    void async_submit_any(SubmitHandler&& handler, boost::urls::url url, Fields headers);

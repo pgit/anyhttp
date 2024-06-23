@@ -23,10 +23,11 @@ namespace anyhttp::server
 
 // =================================================================================================
 
-Request::Impl::Impl() noexcept = default;
-Request::Impl::~Impl() = default;
-Response::Impl::Impl() noexcept = default;
-Response::Impl::~Impl() = default;
+Request::Impl::Impl() noexcept { logd("\x1b[1;35mServer::Request: ctor\x1b[0m"); }
+Request::Impl::~Impl() { logd("\x1b[35mServer::Request: dtor\x1b[0m"); }
+
+Response::Impl::Impl() noexcept { logd("\x1b[1;35mServer::Response: ctor\x1b[0m"); }
+Response::Impl::~Impl() { logd("\x1b[35mServer::Response: dtor\x1b[0m"); }
 
 // =================================================================================================
 
@@ -76,13 +77,18 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    logi("[{}] new connection", normalize(socket.remote_endpoint()));
    auto executor = co_await boost::asio::this_coro::executor;
 
-   /*
-   boost::asio::socket_base::send_buffer_size option(8192);
-   socket.set_option(option);
-   boost::asio::socket_base::receive_buffer_size option2(8192);
-   socket.set_option(option2);
-   */
-   
+   using sb = boost::asio::socket_base;
+   sb::send_buffer_size send_buffer_size;
+   sb::receive_buffer_size receive_buffer_size;
+   socket.get_option(send_buffer_size);
+   socket.get_option(receive_buffer_size);
+   logd("[{}] socket buffer sizes: send={} receive={}", normalize(socket.remote_endpoint()),
+        send_buffer_size.value(), receive_buffer_size.value());
+#if 0
+   socket.set_option(sb::send_buffer_size(8192));
+   socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
+#endif
+
    //
    // detect HTTP2 client preface, fallback to HTTP/1.1 if not found
    //

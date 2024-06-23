@@ -34,14 +34,6 @@ awaitable<void> send(Request& request, std::string_view hello)
    logd("send: sending string of {} bytes... done, sending EOF... done", hello.size());
 }
 
-awaitable<void> send(Request& request, size_t bytes)
-{
-   std::vector<uint8_t> buffer;
-   buffer.resize(64 * 1024 - 1);
-   co_await request.async_write(asio::buffer(buffer), deferred);
-   co_await request.async_write({}, deferred);
-}
-
 awaitable<size_t> read_response(Request& request)
 {
    logd("receive: waiting for response...");
@@ -81,7 +73,7 @@ awaitable<void> do_request(Session& session, boost::urls::url url)
 
 awaitable<void> do_requests(any_io_executor executor, Session session, boost::urls::url url)
 {
-   for (size_t i = 0; i < 1; ++i)
+   for (size_t i = 0; i < 833; ++i)
       co_await do_request(session, url);
 }
 
@@ -90,10 +82,10 @@ awaitable<void> do_session(Client& client, boost::urls::url url)
    auto session = co_await client.async_connect(deferred);
 
 #if 1
-   for (size_t i = 0; i < 1; ++i)
+   for (size_t i = 0; i < 833; ++i)
       co_await do_request(session, url);
 #else
-   for (size_t i = 0; i < 100; ++i)
+   for (size_t i = 0; i < 3; ++i)
       co_spawn(client.executor(), do_requests(client.executor(), session, url), detached);
 #endif
 }
@@ -107,10 +99,10 @@ int main(int argc, char* argv[])
    }
 
    io_context context;
-   Config config{.url = boost::urls::url(argv[1]), .protocol = Protocol::http11};
+   Config config{.url = boost::urls::url(argv[1]), .protocol = Protocol::http2};
    Client client(context.get_executor(), config);
 
-   for (size_t i = 0; i < 1; ++i)
+   for (size_t i = 0; i < 4; ++i)
       co_spawn(context, do_session(client, config.url), detached);
 
    context.run();

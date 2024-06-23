@@ -4,7 +4,7 @@
 FROM docker.io/psedoc/cpp-devcontainer:bookworm
 
 #
-# GDB libc++ pretty printer (works for string, but not for map with llvm-17)
+# GDB libc++ pretty printer (works for string, but not for map with llvm-18)
 #
 ARG USERNAME=vscode
 RUN cd /home/${USERNAME} && \

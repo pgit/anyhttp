@@ -3,9 +3,11 @@
 #include "anyhttp/client.hpp"
 #include "anyhttp/server.hpp"
 
+#include <boost/asio/as_tuple.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/deferred.hpp>
 
+#include <chrono>
 #include <fmt/ostream.h>
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/chunk.hpp>
@@ -39,21 +41,35 @@ boost::asio::awaitable<void> eat_request(server::Request request, server::Respon
 
 boost::asio::awaitable<void> delayed(server::Request request, server::Response response);
 boost::asio::awaitable<void> detach(server::Request request, server::Response response);
+boost::asio::awaitable<void> discard(server::Request request, server::Response response);
 
 // =================================================================================================
 
 boost::asio::awaitable<void> send(client::Request& request, size_t bytes);
 boost::asio::awaitable<size_t> receive(client::Response& response);
+boost::asio::awaitable<size_t> try_receive(client::Response& response);
 boost::asio::awaitable<size_t> read_response(client::Request& request);
 boost::asio::awaitable<void> sendEOF(client::Request& request);
 
 // =================================================================================================
 
 template <typename Range>
-   requires ranges::contiguous_range<Range> && ranges::borrowed_range<Range>
+   requires ranges::borrowed_range<Range> && ranges::contiguous_range<Range>
 boost::asio::awaitable<void> send(client::Request& request, Range range)
 {
-   co_await request.async_write(asio::buffer(range.data(), range.size()), boost::asio::deferred);
+#if 1
+   try
+   {
+      co_await request.async_write(asio::buffer(range.data(), range.size()), asio::deferred);
+   }
+   catch (const boost::system::system_error& ec)
+   {
+      loge("send: (contiguous range) {}", ec.code().message());
+   }
+   co_await asio::this_coro::reset_cancellation_state();
+#else
+   co_await request.async_write(asio::buffer(range.data(), range.size()), asio::deferred);
+#endif
    co_await request.async_write({}, asio::deferred);
    logi("send: done");
 }
@@ -71,7 +87,7 @@ boost::asio::awaitable<void> send(client::Request& request, Range range, bool eo
       bytes += end - buffer.data();
 #if 0
       auto result = co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()),
-                                                 as_tuple(deferred));
+                                                 asio::as_tuple(asio::deferred));
       if (auto ec = std::get<0>(result))
       {
          loge("send: (range) {}", ec.what());
@@ -85,7 +101,7 @@ boost::asio::awaitable<void> send(client::Request& request, Range range, bool eo
       }
       catch (const boost::system::system_error& ec)
       {
-         loge("send: (range) {}", ec.what());
+         loge("send: (range) {}", ec.code().message());
          break;
       }
 #endif

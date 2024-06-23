@@ -20,6 +20,9 @@
 #include <boost/beast/http/write.hpp>
 #include <boost/beast/version.hpp>
 #include <boost/smart_ptr/make_shared_array.hpp>
+#include <boost/system/detail/errc.hpp>
+#include <boost/system/detail/error_code.hpp>
+#include <boost/system/detail/generic_category.hpp>
 #include "anyhttp/server.hpp"
 
 using namespace std::chrono_literals;
@@ -70,29 +73,30 @@ public:
       }
 
       std::vector<uint8_t> body_buffer;
-      body_buffer.resize(1460);
+      // body_buffer.resize(1460);
+      body_buffer.resize(64 * 1024);
       parser.get().body().data = body_buffer.data();
       parser.get().body().size = body_buffer.size();
-      boost::beast::http::async_read_some(
-         stream, buffer, parser,
-         [this, body_buffer = std::move(body_buffer),
-          handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
-         {
-            auto& body = parser.get().body();
-            size_t payload = body_buffer.size() - body.size;
-            mlogd("async_read_some: n={} (body={}) ({}) is_done={} size={} capacity={}", n, payload,
-                  ec.message(), parser.is_done(), buffer.size(), buffer.capacity());
-            if (ec == beast::http::error::need_buffer)
-               ec = {}; // FIXME: maybe we should keep 'need_buffer' to avoid extra empty round trip
+      auto cb = [this, body_buffer = std::move(body_buffer),
+                 handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
+      {
+         auto& body = parser.get().body();
+         size_t payload = body_buffer.size() - body.size;
+         mlogd("async_read_some: n={} (body={}) ({}) is_done={} size={} capacity={}", n, payload,
+               ec.message(), parser.is_done(), buffer.size(), buffer.capacity());
+         if (ec == beast::http::error::need_buffer)
+            ec = {}; // FIXME: maybe we should keep 'need_buffer' to avoid extra empty round trip
 
-            if (!ec && payload == 0)
-               async_read_some(std::move(handler));
-            else
-            {
-               body_buffer.resize(payload);
-               (std::move(handler))(ec, std::move(body_buffer));
-            }
-         });
+         if (!ec && payload == 0)
+            async_read_some(std::move(handler));
+         else
+         {
+            body_buffer.resize(payload);
+            (std::move(handler))(ec, std::move(body_buffer));
+         }
+      };
+
+      boost::beast::http::async_read_some(stream, buffer, parser, std::move(cb));
    }
 
    const asio::any_io_executor& executor() const override { return session->executor(); }
@@ -106,6 +110,9 @@ public:
 
 // -------------------------------------------------------------------------------------------------
 
+/**
+ * Common implementation of server::Response and client::Request writer.
+ */
 template <typename Parent, typename Stream, typename Serializer,
           typename Message = std::remove_const_t<typename Serializer::value_type>>
 // requires boost::beast::is_async_write_stream<Stream>::value
@@ -120,32 +127,73 @@ public:
    inline auto logPrefix() const { return session->logPrefix(); }
    void detach() override { session = nullptr; }
 
+   void async_submit(const Fields& headers)
+   {
+      message.body().data = nullptr;
+
+      for (auto&& header : headers)
+         message.set(header.first, header.second);
+
+      if (!message.has_content_length())
+         message.chunked(true);
+
+      mlogi("async_submit: chunked={} has_content_length={} length={}", message.chunked(),
+            message.has_content_length(), message.payload_size().value_or(0));
+   }
+
    void async_write(WriteHandler&& handler, asio::const_buffer buffer) override
    {
+      if (cancelled)
+      {
+         mloge("async_write: already canceled");
+         using namespace boost::system;
+         std::move(handler)(errc::make_error_code(errc::operation_canceled));
+         return;
+      }
+
       assert(!writing);
       writing = true;
 
       if (buffer.size() == 0)
          mlogd("async_write: write EOF");
       else
-         mlogd("async_write: {} bytes", buffer.size());
+         mlogd("async_write: {} bytes (chunked={} content_length={})", buffer.size(),
+               message.chunked(), message.has_content_length());
 
       message.body().data = const_cast<void*>(buffer.data()); // FIXME: do we really have to cast?
       message.body().size = buffer.size();
       message.body().more = buffer.size() != 0;
 
+      // http::response<http::buffer_body> res;
+      // res.clear();
+
+      // http::response_serializer<http::buffer_body> s;
+      // s.consume(10);
+
       auto slot = asio::get_associated_cancellation_slot(handler);
       auto cb = [this, handler = std::move(handler)](boost::system::error_code ec,
-                                                             size_t n) mutable { //
-                           // n is the number of bytes written to the stream
-                           mlogd("async_write: n={} ({})", n, ec.message());
-                           if (ec == beast::http::error::need_buffer)
-                              ec = {};
-                           writing = false;
-                           std::move(handler)(ec);
-                        };
-      http::async_write(stream, serializer,
-                        asio::bind_cancellation_slot(slot, std::move(cb)));
+                                                     size_t n) mutable { //
+         // n is the number of bytes written to the stream
+         mlogd("async_write: n={} ({}) done=({}/{})", n, ec.message(), serializer.is_header_done(),
+               serializer.is_done());
+         if (ec == beast::http::error::need_buffer)
+            ec = {};
+         else if (ec == boost::system::errc::operation_canceled)
+         {
+            mlogw("async_write: canceled, closing stream");
+            cancelled = true;
+            session->m_stream.socket().shutdown(boost::asio::socket_base::shutdown_send);
+         }
+         writing = false;
+         std::move(handler)(ec);
+      };
+
+      //
+      // With 'chunked' transfer encoding, the serializer will automatically emit a chunk as
+      // large as possible. This means that, like the 'Cancellation' testcase, if the user writes
+      // a single large buffer, cancellation can not be done gracefully at chunk boundary.
+      //
+      http::async_write(stream, serializer, asio::bind_cancellation_slot(slot, std::move(cb)));
    }
 
    BeastSession* session;
@@ -153,14 +201,17 @@ public:
    Message message;
    Serializer serializer{message};
    bool writing = false;
+   bool cancelled = false;
 };
 
 class ResponseWriter : public WriterBase<server::Response::Impl, boost::beast::tcp_stream,
                                          http::response_serializer<http::buffer_body>>
 {
 public:
-   inline ResponseWriter(BeastSession& session_, boost::beast::tcp_stream& stream_) : WriterBase(session_, stream_)
-   {}
+   inline ResponseWriter(BeastSession& session_, boost::beast::tcp_stream& stream_)
+      : WriterBase(session_, stream_)
+   {
+   }
 
    void content_length(std::optional<size_t> content_length) override
    {
@@ -172,16 +223,8 @@ public:
 
    void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
    {
-      mlogd("async_submit:");
-
-      message.body().data = nullptr;
+      WriterBase::async_submit(headers);
       message.result(status_code);
-
-      for (auto&& header : headers)
-         message.set(header.first, header.second);
-
-      if (!message.has_content_length())
-         message.chunked(true);
 
       //
       // TODO: For bundling writing the header and body, we should just post the writing here,
@@ -197,30 +240,24 @@ public:
 };
 
 class RequestWriter : public WriterBase<client::Request::Impl, boost::beast::tcp_stream,
-                                         http::request_serializer<http::buffer_body>>
+                                        http::request_serializer<http::buffer_body>>
 {
 public:
-   inline RequestWriter(BeastSession& session_, boost::beast::tcp_stream& stream_) : WriterBase(session_, stream_)
-   {}
+   inline RequestWriter(BeastSession& session_, boost::beast::tcp_stream& stream_)
+      : WriterBase(session_, stream_)
+   {
+   }
 
    ~RequestWriter() override {}
 
    void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
    {
-      mlogd("async_submit:");
-
-      message.body().data = nullptr;
+      WriterBase::async_submit(headers);
       message.method(http::verb::post);
-
-      for (auto&& header : headers)
-         message.set(header.first, header.second);
-
-      if (!message.has_content_length())
-         message.chunked(true);
 
       //
       // TODO: For bundling writing the header and body, we should just post the writing here,
-      //       giving an async_write the change to add a body to the message first.
+      //       giving an async_write the chance to add a body to the message first.
       //
       // post(executor(), [this](){write);
       async_write_header(
@@ -269,7 +306,6 @@ BeastSession::BeastSession(std::string_view log, asio::any_io_executor executor,
      m_logPrefix(fmt::format("{} {}", normalize(m_stream.socket().remote_endpoint()), log))
 {
    mlogd("session created");
-   m_send_buffer.resize(64 * 1024);
 }
 
 BeastSession::BeastSession(server::Server::Impl& parent, any_io_executor executor,
@@ -300,9 +336,12 @@ BeastSession::~BeastSession() { mlogd("session destroyed"); }
  * queues of request and responses are processed independently of each other.
  *
  */
-awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
+awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data_)
 {
-   mlogd("do_server_session, {} bytes in buffer", data.size());
+   m_bufferStorage = std::move(data_);
+   m_bufferStorage.reserve(16 * 1024);
+
+   mlogd("do_server_session, {} bytes in buffer", m_bufferStorage.size());
    m_stream.socket().set_option(asio::ip::tcp::no_delay(true));
 
    // Set the timeout. TODO: don't rely on beast timeouts
@@ -310,14 +349,6 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
 
    bool close = false;
    beast::error_code ec;
-
-   // This buffer is required to persist across reads
-   // auto buffer = beast::flat_buffer();
-   // asio::buffer_copy(buffer, asio::buffer(data));
-   // data.reserve(std::min(data.size(), 16 * 1024UL));
-   // auto buffer = boost::asio::dynamic_buffer(data);
-   m_data = std::move(data);
-   // m_data.reserve(std::max(data.size(), 16 * 1024UL));
 
    size_t requestCounter = 0;
    for (;;)
@@ -334,6 +365,8 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
       if (!ec)
          mlogd("async_read_header: len={} size={} capacity={} ec={}", len, m_buffer.size(),
                m_buffer.capacity(), ec.message());
+      else if (ec == http::error::end_of_stream)
+         mlogd("async_read_header: end of stream");
       else
          mlogw("async_read_header: len={} size={} capacity={} ec={}", len, m_buffer.size(),
                m_buffer.capacity(), ec.message());
@@ -406,20 +439,16 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> BeastSession::do_client_session(std::vector<uint8_t> data)
+awaitable<void> BeastSession::do_client_session(std::vector<uint8_t> data_)
 {
-   mlogd("do_client_session");
+   m_bufferStorage = std::move(data_);
+   m_bufferStorage.reserve(16 * 1024);
+
+   mlogd("do_client_session, {} bytes in buffer", m_bufferStorage.size());
    m_stream.socket().set_option(asio::ip::tcp::no_delay(true));
 
    // Set the timeout.
    m_stream.expires_after(std::chrono::seconds(30));
-
-   // This buffer is required to persist across reads
-   // auto buffer = beast::flat_buffer();
-   // asio::buffer_copy(buffer, asio::buffer(data));
-   data.reserve(std::min(data.size(), 16 * 1024UL));
-   auto buffer = boost::asio::dynamic_buffer(data);
-   using namespace beast::http;
 
    //
    // Even in HTTP/1.1, where the current request and the current response's serializers take
@@ -433,6 +462,10 @@ awaitable<void> BeastSession::do_client_session(std::vector<uint8_t> data)
    // serializer of the front element.
    //
 
+   //
+   // TODO: There should be something that keeps the session alive. We are just waiting for
+   //       the client to make a request here right now...
+   //
    co_return;
 
    //

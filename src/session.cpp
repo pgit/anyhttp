@@ -16,6 +16,11 @@ void Session::async_submit_any(SubmitHandler&& handler, boost::urls::url url, Fi
    m_impl->async_submit(std::move(handler), url, std::move(headers));
 }
 
+void Session::cancel()
+{
+   m_impl->cancel();
+}
+
 // =================================================================================================
 
 } // namespace anyhttp

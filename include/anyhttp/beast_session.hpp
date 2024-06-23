@@ -71,8 +71,8 @@ public:
 public:
    boost::urls::url url;
    boost::beast::tcp_stream m_stream;
-   std::vector<uint8_t> m_data;
-   decltype(dynamic_buffer(m_data)) m_buffer{m_data};
+   std::vector<uint8_t> m_bufferStorage;
+   decltype(dynamic_buffer(m_bufferStorage)) m_buffer{m_bufferStorage};
 
 #if 0
    //
@@ -94,8 +94,6 @@ private:
    client::Client::Impl* m_client = nullptr;
    asio::any_io_executor m_executor;
    std::string m_logPrefix;
-
-   std::vector<uint8_t> m_send_buffer;
 };
 
 // =================================================================================================

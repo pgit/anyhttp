@@ -7,7 +7,10 @@
 #include "nghttp2/nghttp2.h"
 
 #include <boost/asio.hpp>
+#include <boost/asio/cancellation_signal.hpp>
+#include <boost/asio/cancellation_type.hpp>
 #include <boost/asio/error.hpp>
+#include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <boost/system/detail/system_category.hpp>
 #include <boost/url/url.hpp>
@@ -72,6 +75,7 @@ public:
 
    asio::const_buffer sendBuffer;
    WriteHandler sendHandler;
+   asio::cancellation_slot slot;
    bool is_deferred = false;
 
    client::Request::GetResponseHandler responseHandler;
@@ -177,6 +181,23 @@ public:
          sendBuffer = buffer;
 #if 1
          sendHandler = std::move(handler);
+         // slot = sendHandler.get_cancellation_slot();
+         slot = asio::get_associated_cancellation_slot(sendHandler);
+         if (slot.is_connected() && !slot.has_handler())
+         {
+            slot.assign(
+               [this](asio::cancellation_type_t ct)
+               {
+                  logw("[{}] async_write: cancelled ({})", logPrefix, int(ct));
+
+                  if (sendHandler)
+                  {
+                     using namespace boost::system;
+                     auto handler = std::move(sendHandler);
+                     std::move(handler)(errc::make_error_code(errc::operation_canceled));
+                  }
+               });
+         }
 #else
          auto work = boost::asio::make_work_guard(handler);
 
@@ -206,7 +227,7 @@ public:
 
    void resume();
 
-   void async_write(WriteHandler&& handler, asio::const_buffer buffer);
+   // void async_write(WriteHandler&& handler, asio::const_buffer buffer);
    void async_get_response(client::Request::GetResponseHandler&& handler);
 
    // ==============================================================================================

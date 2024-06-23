@@ -49,46 +49,6 @@ awaitable<void> echo(server::Request request, server::Response response)
    }
 }
 
-awaitable<void> echo_old(Request request, Response response)
-{
-   if (request.content_length())
-      response.content_length(request.content_length().value());
-   co_await response.async_submit(200, {}, deferred);
-   try
-   {
-      for (;;)
-      {
-         logd("async_read_some...");
-         auto buffer = co_await request.async_read_some(deferred);
-         logd("async_read_some... done, read {} bytes", buffer.size());
-
-#if 0
-         auto timer = steady_timer(request.executor());
-         timer.expires_after(1ms);
-         logd("sleep...");
-         co_await timer.async_wait(deferred);
-         logd("sleep... done");
-#endif
-
-         logd("async_write...");
-         co_await response.async_write(asio::buffer(buffer), deferred);
-
-         if (!buffer.empty())
-            logd("async_write... done, wrote {} bytes", buffer.size());
-         else
-         {
-            logd("async_write... done, wrote {} bytes, finished", buffer.size());
-            break;
-         }
-      }
-   }
-   catch (std::exception& ex)
-   {
-      logw("exception: {}", ex.what());
-   }
-   co_return;
-}
-
 awaitable<void> not_found(server::Request request, server::Response response)
 {
    co_await response.async_submit(404, {}, deferred);
@@ -122,10 +82,6 @@ int main()
       {
          if (request.url().path() == "/echo")
             return echo(std::move(request), std::move(response));
-         else if (request.url().path() == "/echo_old")
-            return echo_old(std::move(request), std::move(response));
-         else if (request.url().path() == "/typewriter")
-            return echo_old(std::move(request), std::move(response));
          else
             return not_found(std::move(request), std::move(response));
       });

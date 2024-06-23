@@ -187,10 +187,10 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
    std::ignore = session;
    std::ignore = error_code;
 
-   auto handler = static_cast<NGHttp2Session*>(user_data);
-   logd("[{}.{}] on_stream_close_callback:", handler->logPrefix(), stream_id);
+   auto sessionWrapper = static_cast<NGHttp2Session*>(user_data);
+   logd("[{}.{}] on_stream_close_callback:", sessionWrapper->logPrefix(), stream_id);
 
-   auto stream = handler->close_stream(stream_id);
+   auto stream = sessionWrapper->close_stream(stream_id);
    assert(stream);
 
    if (stream->responseHandler)
@@ -199,6 +199,13 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
       std::move(stream->responseHandler)(errc::make_error_code(errc::io_error), // FIXME:
                                          client::Response{nullptr});
       stream->responseHandler = nullptr;
+   }
+
+   if (stream->sendHandler)
+   {
+      using namespace boost::system;
+      std::move(stream->sendHandler)(errc::make_error_code(errc::operation_canceled));
+      stream->sendHandler = nullptr;
    }
 
    post(stream->executor(), [stream]() {});
@@ -274,14 +281,14 @@ NGHttp2Session::NGHttp2Session(std::string_view log, any_io_executor executor,
 
 NGHttp2Session::NGHttp2Session(server::Server::Impl& parent, any_io_executor executor,
                                ip::tcp::socket&& socket)
-   : NGHttp2Session("\x1b[1;31mserver\x1b[0m", std::move(executor), std::move(socket))
+   : NGHttp2Session("\x1b[1;31m""server""\x1b[0m", std::move(executor), std::move(socket))
 {
    m_server = &parent;
 }
 
 NGHttp2Session::NGHttp2Session(client::Client::Impl& parent, any_io_executor executor,
                                ip::tcp::socket&& socket)
-   : NGHttp2Session("\x1b[1;32mclient\x1b[0m", std::move(executor), std::move(socket))
+   : NGHttp2Session("\x1b[1;32m""client""\x1b[0m", std::move(executor), std::move(socket))
 {
    m_client = &parent;
    create_client_session();
