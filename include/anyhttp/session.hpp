@@ -19,7 +19,7 @@ public:
    class Impl;
    explicit Session(std::shared_ptr<Impl> impl);
    Session(Session&& other) noexcept;
-   Session(const Session& other);
+   Session& operator=(Session&& other) noexcept;
    ~Session();
 
 public:
@@ -44,12 +44,10 @@ public:
          token, url, headers);
    }
 
-   void cancel();
-
 private:
    void async_submit_any(SubmitHandler&& handler, boost::urls::url url, Fields headers);
 
-   const std::shared_ptr<Impl> m_impl;
+   std::shared_ptr<Impl> m_impl;
 };
 
 // =================================================================================================

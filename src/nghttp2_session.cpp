@@ -281,14 +281,20 @@ NGHttp2Session::NGHttp2Session(std::string_view log, any_io_executor executor,
 
 NGHttp2Session::NGHttp2Session(server::Server::Impl& parent, any_io_executor executor,
                                ip::tcp::socket&& socket)
-   : NGHttp2Session("\x1b[1;31m""server""\x1b[0m", std::move(executor), std::move(socket))
+   : NGHttp2Session("\x1b[1;31m"
+                    "server"
+                    "\x1b[0m",
+                    std::move(executor), std::move(socket))
 {
    m_server = &parent;
 }
 
 NGHttp2Session::NGHttp2Session(client::Client::Impl& parent, any_io_executor executor,
                                ip::tcp::socket&& socket)
-   : NGHttp2Session("\x1b[1;32m""client""\x1b[0m", std::move(executor), std::move(socket))
+   : NGHttp2Session("\x1b[1;32m"
+                    "client"
+                    "\x1b[0m",
+                    std::move(executor), std::move(socket))
 {
    m_client = &parent;
    create_client_session();
@@ -296,10 +302,18 @@ NGHttp2Session::NGHttp2Session(client::Client::Impl& parent, any_io_executor exe
 
 NGHttp2Session::~NGHttp2Session()
 {
+   // mlogi("dtor");
    m_streams.clear();
    mlogd("streams deleted");
    nghttp2_session_del(session);
    mlogd("session destroyed");
+}
+
+void NGHttp2Session::destroy()
+{
+   boost::system::error_code ec;
+   std::ignore = m_socket.shutdown(boost::asio::socket_base::shutdown_both, ec);
+   logw("[{}] shutdown: {}", m_logPrefix, ec.message());
 }
 
 // =================================================================================================
@@ -546,8 +560,8 @@ awaitable<void> NGHttp2Session::send_loop(stream& stream)
 // -------------------------------------------------------------------------------------------------
 
 //
-// The read loop is better suited for implementation as a coroutine, as it does not need to wait
-// on re-activation by the user.
+// The read loop is better suited for implementation as a coroutine than the write loop,
+// because it does not need to wait on re-activation by the user.
 //
 awaitable<void> NGHttp2Session::recv_loop(stream& stream)
 {

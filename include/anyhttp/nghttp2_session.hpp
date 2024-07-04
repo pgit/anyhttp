@@ -5,6 +5,7 @@
 #include "server_impl.hpp"
 #include "session_impl.hpp"
 
+#include <boost/beast/core/flat_buffer.hpp>
 #include <map>
 
 #include <boost/asio.hpp>
@@ -29,7 +30,8 @@ public:
    NGHttp2Session(server::Server::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket);
    NGHttp2Session(client::Client::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket);
    ~NGHttp2Session() override;
-
+   void destroy() override;
+   
    void create_client_session();
 
    // ----------------------------------------------------------------------------------------------
@@ -38,12 +40,6 @@ public:
 
    awaitable<void> do_server_session(std::vector<uint8_t> data) override;
    awaitable<void> do_client_session(std::vector<uint8_t> data) override;
-   void cancel() override
-   {
-      boost::system::error_code ec;
-      std::ignore = m_socket.shutdown(boost::asio::socket_base::shutdown_both, ec);
-      logw("[{}] shutdown: {}", m_logPrefix, ec.message());
-   }
 
    // ----------------------------------------------------------------------------------------------
 
@@ -103,7 +99,12 @@ public:
          m_streams.erase(it);
       }
 
-      if (m_streams.empty() && m_client)
+      //
+      // FIXME: We can't just terminate the session after the last request -- what if the user wants
+      //        to do another one? Shutting down a session has to be (somewhat) explicit. Try to
+      //        tie this to the lifetime of the user-facing 'Session' object...
+      //
+      if (m_client && m_streams.empty())
       {
          logi("[{}] last stream closed, terminating session...", m_logPrefix);
          nghttp2_session_terminate_session(session, NGHTTP2_STREAM_CLOSED);

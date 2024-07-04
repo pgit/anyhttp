@@ -9,6 +9,8 @@
 #include <boost/asio.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ssl/context.hpp>
+#include <boost/asio/ssl/stream.hpp>
 
 #include <boost/beast/core/flat_buffer.hpp>
 
@@ -77,6 +79,9 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    logi("[{}] new connection", normalize(socket.remote_endpoint()));
    auto executor = co_await boost::asio::this_coro::executor;
 
+   //
+   // Playing with socket buffer sizes... Doesn't seem to do any good.
+   //
    using sb = boost::asio::socket_base;
    sb::send_buffer_size send_buffer_size;
    sb::receive_buffer_size receive_buffer_size;
@@ -89,21 +94,40 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 #endif
 
+   const auto prefix = normalize(socket.remote_endpoint());
+
    //
-   // detect HTTP2 client preface, fallback to HTTP/1.1 if not found
+   // try to detect TLS
    //
    std::vector<uint8_t> data;
    auto buffer = boost::asio::dynamic_buffer(data);
+
+   /*
+   boost::beast::tcp_stream stream(std::move(socket));
+   if (co_await boost::beast::async_detect_ssl(stream, buffer, use_awaitable))
+   {
+      logi("[{}] detected TLS client hello {} bytes in buffer", prefix, buffer.size());
+
+      asio::ssl::context ctx{asio::ssl::context::tlsv12};
+      asio::ssl::stream<asio::ip::tcp::socket> sslStream(stream.release_socket(), ctx);
+      auto bytes_used = co_await sslStream.async_handshake(asio::ssl::stream_base::server,
+                                                           buffer.data(), asio::use_awaitable);
+      buffer.consume(bytes_used);
+   }
+   */
+
+   //
+   // detect HTTP2 client preface, fallback to HTTP/1.1 if not found
+   //
    if (co_await async_detect_http2_client_preface(socket, buffer, deferred))
    {
-      logi("[{}] detected HTTP2 client preface, {} bytes in buffer",
-           normalize(socket.remote_endpoint()), buffer.size());
+      logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
       auto session = std::make_shared<nghttp2::NGHttp2Session>(*this, executor, std::move(socket));
       co_await session->do_server_session(std::move(data));
    }
    else
    {
-      logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", normalize(socket.remote_endpoint()));
+      logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", prefix);
       auto session = std::make_shared<beast_impl::BeastSession>(*this, executor, std::move(socket));
       co_await session->do_server_session(std::move(data));
    }

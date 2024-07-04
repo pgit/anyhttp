@@ -15,7 +15,7 @@ namespace asio = boost::asio;
 namespace detail
 {
 template <class ConstBufferSequence>
-boost::tribool is_http2_client_preface(ConstBufferSequence const& buffers)
+boost::tribool is_http2_client_preface(const ConstBufferSequence& buffers)
 {
    // Make sure buffers meets the requirements
    static_assert(asio::is_const_buffer_sequence<ConstBufferSequence>::value,

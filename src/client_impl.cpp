@@ -67,6 +67,9 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
 
    logi("Client: connected to {} ({})", socket.remote_endpoint(), ec.message());
 
+   //
+   // Playing with socket buffer sizes... Doesn't seem to do any good.
+   //
    using sb = boost::asio::socket_base;
    sb::send_buffer_size send_buffer_size;
    sb::receive_buffer_size receive_buffer_size;
@@ -80,12 +83,10 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
 #endif
 
    //
-   // detect HTTP2 client preface, abort connection if not found
+   // Select implementation, currently by configuration only.
+   // With TLS and ALPN, HTTP protocol negotiation can be automatic as well.
    //
    std::vector<uint8_t> data;
-   // data.reserve(std::max(data.size(), 16 * 1024UL));
-   // auto buffer = boost::asio::dynamic_buffer(data);
-
    std::shared_ptr<Session::Impl> impl;
    switch (config().protocol)
    {
@@ -97,11 +98,16 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
       break;
    };
 
-   auto session = Session{impl};
-
-#if 1
+   //
+   // FIXME: Do we really need to "run" a session here? For nghttp2, yes. For beast, not so much,
+   //        as there is no communication outside the current request right now, but that may
+   //        still come with pipelining.
+   //
+   //        We do need a user interface to stop sessions, though. This should be the deleted
+   //        of the user-facing "Session" object. So we should use only the "impl" internally.
+   //
    co_spawn(executor, impl->do_client_session(std::move(data)),
-            [session = std::move(session)](const std::exception_ptr& ex)
+            [impl](const std::exception_ptr& ex)
             {
                if (ex)
                   logw("client run: {}", what(ex));
@@ -115,16 +121,9 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    // submit(), which must happen after that.
    //
    // FIXME: instead of executing a submit() directly, it should be queued and executed within
-   //        do_client_session(). This approach also avoids the problem, and allows pipelining, too.
+   //        do_client_session(). This approach avoids the problem, and allows pipelining, too.
    //
-   std::move(handler)(boost::system::error_code{}, session);
-   handler = nullptr;
-#else
-   co_await impl->do_client_session(std::move(data));
-
-   std::move(handler)(boost::system::error_code{}, Session{impl});
-   handler = nullptr;
-#endif
+   std::move(handler)(boost::system::error_code{}, Session{std::move(impl)});   
 }
 
 void Client::Impl::async_connect(ConnectHandler&& handler)

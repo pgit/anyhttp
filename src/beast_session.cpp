@@ -137,7 +137,7 @@ public:
       if (!message.has_content_length())
          message.chunked(true);
 
-      mlogi("async_submit: chunked={} has_content_length={} length={}", message.chunked(),
+      mlogd("async_submit: chunked={} has_content_length={} length={}", message.chunked(),
             message.has_content_length(), message.payload_size().value_or(0));
    }
 
@@ -310,19 +310,26 @@ BeastSession::BeastSession(std::string_view log, asio::any_io_executor executor,
 
 BeastSession::BeastSession(server::Server::Impl& parent, any_io_executor executor,
                            ip::tcp::socket&& socket)
-   : BeastSession("\x1b[1;31mserver\x1b[0m", std::move(executor), std::move(socket))
+   : BeastSession("\x1b[1;31m""server""\x1b[0m", std::move(executor), std::move(socket))
 {
    m_server = &parent;
 }
 
 BeastSession::BeastSession(client::Client::Impl& parent, any_io_executor executor,
                            ip::tcp::socket&& socket)
-   : BeastSession("\x1b[1;32mclient\x1b[0m", std::move(executor), std::move(socket))
+   : BeastSession("\x1b[1;32m""client""\x1b[0m", std::move(executor), std::move(socket))
 {
    m_client = &parent;
 }
 
-BeastSession::~BeastSession() { mlogd("session destroyed"); }
+BeastSession::~BeastSession() { mlogd("session deleted"); }
+
+void BeastSession::destroy()
+{
+   boost::system::error_code ec;
+   std::ignore = m_stream.socket().shutdown(boost::asio::socket_base::shutdown_both, ec);
+   logi("[{}] shutdown: {}", m_logPrefix, ec.message());
+}
 
 // =================================================================================================
 
@@ -336,9 +343,9 @@ BeastSession::~BeastSession() { mlogd("session destroyed"); }
  * queues of request and responses are processed independently of each other.
  *
  */
-awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data_)
+awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
 {
-   m_bufferStorage = std::move(data_);
+   m_bufferStorage = std::move(data);
    m_bufferStorage.reserve(16 * 1024);
 
    mlogd("do_server_session, {} bytes in buffer", m_bufferStorage.size());

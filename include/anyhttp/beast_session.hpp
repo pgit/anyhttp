@@ -31,6 +31,7 @@ public:
    BeastSession(server::Server::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket);
    BeastSession(client::Client::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket);
    ~BeastSession() override;
+   void destroy() override;
 
    // ----------------------------------------------------------------------------------------------
 
@@ -38,12 +39,6 @@ public:
    
    awaitable<void> do_server_session(std::vector<uint8_t> data) override;
    awaitable<void> do_client_session(std::vector<uint8_t> data) override;
-   void cancel() override
-   {
-      boost::system::error_code ec;
-      std::ignore = m_stream.socket().shutdown(boost::asio::socket_base::shutdown_both, ec);
-      logw("[{}] shutdown: {}", m_logPrefix, ec.message());
-   }
 
    // ----------------------------------------------------------------------------------------------
 
