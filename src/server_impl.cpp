@@ -96,48 +96,53 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 
    const auto prefix = normalize(socket.remote_endpoint());
 
+   auto buffer = boost::beast::flat_buffer();
+
    //
    // try to detect TLS
    //
-   std::vector<uint8_t> data;
-   auto buffer = boost::asio::dynamic_buffer(data);
-
-   /*
    boost::beast::tcp_stream stream(std::move(socket));
    if (co_await boost::beast::async_detect_ssl(stream, buffer, use_awaitable))
    {
-      logi("[{}] detected TLS client hello {} bytes in buffer", prefix, buffer.size());
+      logi("[{}] detected TLS client hello, {} bytes in buffer", prefix, buffer.size());
 
-      asio::ssl::context ctx{asio::ssl::context::tlsv12};
+      asio::ssl::context ctx{asio::ssl::context::tlsv13};
+      ctx.use_certificate_chain_file("etc/darkbase-chain.pem");
+      ctx.use_private_key_file("etc/darkbase-key.pem", asio::ssl::context::pem);
       asio::ssl::stream<asio::ip::tcp::socket> sslStream(stream.release_socket(), ctx);
-      auto bytes_used = co_await sslStream.async_handshake(asio::ssl::stream_base::server,
-                                                           buffer.data(), asio::use_awaitable);
+      auto [ec, bytes_used] = co_await sslStream.async_handshake(
+         asio::ssl::stream_base::server, buffer.data(), as_tuple(asio::deferred));
+      if (ec)
+      {
+         loge("[{}] {}", prefix, ec.what());
+         co_return;
+      }
       buffer.consume(bytes_used);
    }
-   */
+   socket = stream.release_socket(); // return socket for now
 
    //
    // detect HTTP2 client preface, fallback to HTTP/1.1 if not found
    //
+   std::shared_ptr<Session::Impl> session;
    if (co_await async_detect_http2_client_preface(socket, buffer, deferred))
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
-      auto session = std::make_shared<nghttp2::NGHttp2Session>(*this, executor, std::move(socket));
-      co_await session->do_server_session(std::move(data));
+      session = std::make_shared<nghttp2::NGHttp2Session>(*this, executor, std::move(socket));
    }
    else
    {
       logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", prefix);
-      auto session = std::make_shared<beast_impl::BeastSession>(*this, executor, std::move(socket));
-      co_await session->do_server_session(std::move(data));
+      session = std::make_shared<beast_impl::BeastSession>(*this, executor, std::move(socket));
    }
+
+   co_await session->do_server_session(std::move(buffer));
 }
 
 // -------------------------------------------------------------------------------------------------
 
 void Server::Impl::listen()
 {
-   // tcp::acceptor acceptor(executor());
    auto& acceptor = m_acceptor;
 
    boost::system::error_code ec;
@@ -173,12 +178,16 @@ awaitable<void> Server::Impl::listen_loop()
          break;
       }
 
+      auto ep = normalize(socket.remote_endpoint());
       co_spawn(
-         executor, [&]() { return handleConnection(std::move(socket)); },
-         [](const std::exception_ptr& ex)
+         executor,
+         [this, socket = std::move(socket)]() mutable { //
+            return handleConnection(std::move(socket));
+         },
+         [ep](const std::exception_ptr& ex)
          {
             if (ex)
-               logw("listen_loop: {}", what(ex));
+               logw("{} {}", ep, what(ex));
          });
    }
 }

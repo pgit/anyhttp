@@ -38,10 +38,12 @@ public:
 
    void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) override;
 
-   awaitable<void> do_server_session(std::vector<uint8_t> data) override;
-   awaitable<void> do_client_session(std::vector<uint8_t> data) override;
+   awaitable<void> do_server_session(Buffer&& data) override;
+   awaitable<void> do_client_session(Buffer&& data) override;
 
    // ----------------------------------------------------------------------------------------------
+
+   void handle_buffer_contents();
 
    awaitable<void> send_loop(stream& stream);
    awaitable<void> recv_loop(stream& stream);
@@ -130,6 +132,7 @@ public:
 public:
    nghttp2_session* session = nullptr;
    stream m_socket;
+   Buffer m_buffer;
 
 private:
    server::Server::Impl* m_server = nullptr;

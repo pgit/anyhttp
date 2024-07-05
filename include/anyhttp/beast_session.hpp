@@ -37,8 +37,8 @@ public:
 
    void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) override;
    
-   awaitable<void> do_server_session(std::vector<uint8_t> data) override;
-   awaitable<void> do_client_session(std::vector<uint8_t> data) override;
+   awaitable<void> do_server_session(Buffer&& data) override;
+   awaitable<void> do_client_session(Buffer&& data) override;
 
    // ----------------------------------------------------------------------------------------------
 
@@ -66,23 +66,7 @@ public:
 public:
    boost::urls::url url;
    boost::beast::tcp_stream m_stream;
-   std::vector<uint8_t> m_bufferStorage;
-   decltype(dynamic_buffer(m_bufferStorage)) m_buffer{m_bufferStorage};
-
-#if 0
-   //
-   // There can only be a single active serializer and parser at a time. Although they are related
-   // to a specific request, we keep them at session level.
-   //
-   std::vector<uint8_t> request_buffer;
-   std::optional<http::request_parser<boost::beast::http::buffer_body>> request_parser;
-   http::response<http::buffer_body> response;  
-   std::optional<http::response_serializer<http::buffer_body>> response_serializer{response};
-   
-   http::request<http::buffer_body> request; 
-   http::request_serializer<http::buffer_body> request_serializer{request};
-   http::response_parser<boost::beast::http::buffer_body> response_parser;
-#endif
+   Buffer m_buffer;
 
 private:
    server::Server::Impl* m_server = nullptr;

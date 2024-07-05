@@ -86,7 +86,6 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    // Select implementation, currently by configuration only.
    // With TLS and ALPN, HTTP protocol negotiation can be automatic as well.
    //
-   std::vector<uint8_t> data;
    std::shared_ptr<Session::Impl> impl;
    switch (config().protocol)
    {
@@ -106,7 +105,7 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    //        We do need a user interface to stop sessions, though. This should be the deleted
    //        of the user-facing "Session" object. So we should use only the "impl" internally.
    //
-   co_spawn(executor, impl->do_client_session(std::move(data)),
+   co_spawn(executor, impl->do_client_session(Buffer{}),
             [impl](const std::exception_ptr& ex)
             {
                if (ex)

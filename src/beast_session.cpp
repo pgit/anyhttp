@@ -343,12 +343,11 @@ void BeastSession::destroy()
  * queues of request and responses are processed independently of each other.
  *
  */
-awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
+awaitable<void> BeastSession::do_server_session(Buffer&& buffer)
 {
-   m_bufferStorage = std::move(data);
-   m_bufferStorage.reserve(16 * 1024);
+   m_buffer = std::move(buffer);
 
-   mlogd("do_server_session, {} bytes in buffer", m_bufferStorage.size());
+   mlogd("do_server_session, {} bytes in buffer", m_buffer.size());
    m_stream.socket().set_option(asio::ip::tcp::no_delay(true));
 
    // Set the timeout. TODO: don't rely on beast timeouts
@@ -446,12 +445,11 @@ awaitable<void> BeastSession::do_server_session(std::vector<uint8_t> data)
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> BeastSession::do_client_session(std::vector<uint8_t> data_)
+awaitable<void> BeastSession::do_client_session(Buffer&& buffer)
 {
-   m_bufferStorage = std::move(data_);
-   m_bufferStorage.reserve(16 * 1024);
+   m_buffer = std::move(buffer);
 
-   mlogd("do_client_session, {} bytes in buffer", m_bufferStorage.size());
+   mlogd("do_client_session, {} bytes in buffer", m_buffer.size());
    m_stream.socket().set_option(asio::ip::tcp::no_delay(true));
 
    // Set the timeout.

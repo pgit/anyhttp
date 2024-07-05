@@ -318,8 +318,9 @@ void NGHttp2Session::destroy()
 
 // =================================================================================================
 
-awaitable<void> NGHttp2Session::do_server_session(std::vector<uint8_t> data)
+awaitable<void> NGHttp2Session::do_server_session(Buffer&& buffer)
 {
+   m_buffer = std::move(buffer);
    m_socket.set_option(ip::tcp::no_delay(true));
    auto callbacks = setup_callbacks();
 
@@ -343,12 +344,7 @@ awaitable<void> NGHttp2Session::do_server_session(std::vector<uint8_t> data)
    // Let NGHTTP2 parse what we have received so far.
    // This must happen after submitting the server settings.
    //
-   ssize_t rv = nghttp2_session_mem_recv(session, data.data(), data.size());
-   if (rv < 0 || rv != data.size())
-      throw std::runtime_error("nghttp2_session_mem_recv");
-
-   data.clear();
-   data.shrink_to_fit();
+   handle_buffer_contents();
 
    //
    // send/receive loop
@@ -389,17 +385,15 @@ void NGHttp2Session::create_client_session()
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
 }
 
-awaitable<void> NGHttp2Session::do_client_session(std::vector<uint8_t> data)
+awaitable<void> NGHttp2Session::do_client_session(Buffer&& buffer)
 {
+   m_buffer = std::move(buffer);
+
    //
    // Let NGHTTP2 parse what we have received so far.
    // This must happen after submitting the server settings.
    //
-   ssize_t rv = nghttp2_session_mem_recv(session, data.data(), data.size());
-   if (rv < 0 || rv != data.size())
-      throw std::runtime_error("nghttp2_session_mem_recv");
-
-   data.resize(0);
+   handle_buffer_contents();
 
    //
    // send/receive loop
@@ -485,12 +479,19 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
 // of work and then needs to wait on a channel to be activated again. Doing this with
 // a normal, callback-based completion handler is probably easier.
 //
+// This function calls nghttp2_session_mem_send() and collects the retrieved data in a send buffer,
+// until either the buffer is full or no more data is returned. Then, the buffered data is written
+// to the stream.
+//
 awaitable<void> NGHttp2Session::send_loop(stream& stream)
 {
-   std::array<uint8_t, 64 * 1024> buffer;
-   uint8_t *const p0 = buffer.data(), *const p1 = p0 + buffer.size(), *p = p0;
+   Buffer buffer;
+   buffer.reserve(1 * 1024);
    for (;;)
    {
+      //
+      // Retrieve a chunk of data from NGHTTP2, to be sent.
+      //
       const uint8_t* data; // data is valid until next call, so we don't need to copy it
 
       mlogd("send loop: nghttp2_session_mem_send...");
@@ -504,24 +505,22 @@ awaitable<void> NGHttp2Session::send_loop(stream& stream)
       }
 
       //
-      // If the new chunk still fits into the buffer, copy and send later.
+      // If the new chunk still fits into the buffer, accumulate and send later.
       //
-      if (nread && p + nread <= p1)
+      if (nread && nread <= (buffer.capacity() - buffer.size()))
       {
-         auto copied =
-            asio::buffer_copy(asio::mutable_buffer(p, p1 - p), asio::buffer(data, nread));
+         auto copied = asio::buffer_copy(buffer.prepare(nread), asio::buffer(data, nread));
          assert(nread == copied);
-         p += nread;
-         mlogd("send loop: buffered {} more bytes, total {}", nread, p - p0);
+         buffer.commit(nread);
+         mlogd("send loop: buffered {} more bytes, total {}", nread, buffer.data().size());
       }
 
       //
       // Is there anything to send in the buffer and/or the newly received chunk?
       //
-      else if (const auto to_write = p - p0 + nread; to_write > 0)
+      else if (const auto to_write = buffer.size() + nread; to_write > 0)
       {
-         const std::array<asio::const_buffer, 2> seq{asio::buffer(p0, p - p0),
-                                                     asio::buffer(data, nread)};
+         const std::array<asio::const_buffer, 2> seq{buffer.data(), asio::buffer(data, nread)};
          mlogd("send loop: writing {} bytes...", to_write);
          auto [ec, written] = co_await asio::async_write(stream, seq);
          if (ec)
@@ -531,7 +530,7 @@ awaitable<void> NGHttp2Session::send_loop(stream& stream)
          }
          mlogd("send loop: writing {} bytes... done, wrote {}", to_write, written);
          assert(to_write == written);
-         p = p0;
+         buffer.consume(written);
       }
 
       //
@@ -559,17 +558,33 @@ awaitable<void> NGHttp2Session::send_loop(stream& stream)
 
 // -------------------------------------------------------------------------------------------------
 
+void NGHttp2Session::handle_buffer_contents()
+{
+   mlogd("");
+   mlogd("read: nghttp2_session_mem_recv... ({} bytes)", m_buffer.size());
+   auto data = m_buffer.data();
+   ssize_t rv = nghttp2_session_mem_recv(session, static_cast<uint8_t*>(data.data()), data.size());
+   mlogd("read: nghttp2_session_mem_recv... done ({})", rv);
+
+   if (rv < 0)
+      throw std::runtime_error("nghttp2_session_mem_recv");
+
+   assert(rv == data.size());
+   m_buffer.consume(rv);
+}
+
 //
 // The read loop is better suited for implementation as a coroutine than the write loop,
 // because it does not need to wait on re-activation by the user.
 //
 awaitable<void> NGHttp2Session::recv_loop(stream& stream)
 {
+   m_buffer.reserve(64 * 1024);
    std::string reason("done");
-   std::array<uint8_t, 64 * 1024> buffer;
    while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
    {
-      auto [ec, n] = co_await stream.async_read_some(asio::buffer(buffer));
+      auto free = m_buffer.capacity() - m_buffer.size();
+      auto [ec, n] = co_await stream.async_read_some(m_buffer.prepare(free));
       if (ec)
       {
          mlogd("read: {}, terminating session", ec.message());
@@ -577,14 +592,9 @@ awaitable<void> NGHttp2Session::recv_loop(stream& stream)
          nghttp2_session_terminate_session(session, NGHTTP2_STREAM_CLOSED);
          break;
       }
+      m_buffer.commit(n);
 
-      mlogd("");
-      mlogd("read: nghttp2_session_mem_recv... ({} bytes)", n);
-      const auto rv = nghttp2_session_mem_recv(session, buffer.data(), n);
-      mlogd("read: nghttp2_session_mem_recv... done");
-
-      if (rv < 0)
-         throw std::runtime_error("nghttp2_session_mem_recv");
+      handle_buffer_contents();
 
       start_write();
    }

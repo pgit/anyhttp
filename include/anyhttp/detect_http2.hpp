@@ -1,10 +1,12 @@
 #pragma once
 #include <boost/asio.hpp>
 #include <boost/asio/experimental/co_composed.hpp>
+#include <boost/beast/core/detect_ssl.hpp>
 #include <boost/beast/core/stream_traits.hpp>
 #include <boost/logic/tribool.hpp>
 
 #include <cstring>
+#include <iostream>
 
 namespace anyhttp::server
 {
@@ -34,6 +36,9 @@ boost::tribool is_http2_client_preface(const ConstBufferSequence& buffers)
 
    return true;
 }
+
+using boost::beast::detail::is_tls_client_hello;
+
 } // namespace detail
 
 // =================================================================================================
@@ -74,7 +79,6 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
                      co_return {{}, static_cast<bool>(result)};
 
                   auto prepared = buffer.prepare(1460);
-                  // auto prepared = buffer.prepare(16 * 1024 + 116);
                   size_t n = co_await stream.async_read_some(prepared, deferred);
                   buffer.commit(n);
                }
@@ -87,6 +91,8 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
          stream),
       token, std::ref(stream), std::ref(buffer));
 }
+
+
 
 // =================================================================================================
 
