@@ -28,13 +28,31 @@ RUN cd /home/${USERNAME} && \
 
 
 #
+# custom curl that does not suffer from https://github.com/curl/curl/issues/10634
+#
+# FIXME: There is also an older curl in /usr that is required by git and llvm. But we can't easily
+#        replace that...
+#
+RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
+    apt-get -y install libnghttp2-dev libnghttp3-dev && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/curl/curl.git && \
+    cd curl && autoreconf -fi && \
+    ./configure --with-openssl --without-libpsl --with-nghttp2 --prefix /usr/local && \
+    make -j 20 && make install && \
+    cd .. && rm -rf curl
+
+#
 # spdlog
 #
 # https://github.com/gabime/spdlog
 #
 RUN git clone https://github.com/gabime/spdlog.git && \
     cd spdlog && mkdir build && cd build && \
-    cmake .. && make -j && make install
+    cmake .. && make -j && make install && \
+    cd ../.. && rm -rf spdlog
 
 #
 # enable persistent bash history in container
