@@ -1,10 +1,13 @@
 
 #include "anyhttp/nghttp2_session.hpp"
-#include "anyhttp/client_impl.hpp"
+#include "anyhttp/client.hpp"
 #include "anyhttp/nghttp2_stream.hpp"
 
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
+#include <boost/asio/ssl/stream.hpp>
+#include <boost/beast/core/static_buffer.hpp>
+#include <boost/beast/core/tcp_stream.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
 #include <boost/url/format.hpp>
@@ -91,6 +94,41 @@ int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* fr
    return 0;
 }
 
+static std::string_view frameType(uint8_t type)
+{
+   switch (type)
+   {
+   case NGHTTP2_DATA:
+      return "DATA";
+   case NGHTTP2_HEADERS:
+      return "HEADERS";
+   case NGHTTP2_PRIORITY:
+      return "PRIORITY";
+   case NGHTTP2_RST_STREAM:
+      return "RST_STREAMS";
+   case NGHTTP2_SETTINGS:
+      return "SETTINGS";
+   case NGHTTP2_PUSH_PROMISE:
+      return "PUSH_PROMISE";
+   case NGHTTP2_PING:
+      return "PING";
+   case NGHTTP2_GOAWAY:
+      return "GOAWAY";
+   case NGHTTP2_WINDOW_UPDATE:
+      return "WINDOW_UPDATE";
+   case NGHTTP2_CONTINUATION:
+      return "CONTINU";
+   case NGHTTP2_ALTSVC:
+      return "ALTSVC";
+   case NGHTTP2_ORIGIN:
+      return "ORIGIN";
+   case NGHTTP2_PRIORITY_UPDATE:
+      return "PRIOIRTY_UPDATE";
+   default:
+      return "UNKNOWN";
+   }
+}
+
 int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
 {
    std::ignore = session;
@@ -99,9 +137,10 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
    auto stream = handler->find_stream(frame->hd.stream_id);
 
    if (frame->hd.stream_id)
-      logd("[{}.{}] on_frame_recv_callback:", handler->logPrefix(), frame->hd.stream_id);
+      logd("[{}.{}] on_frame_recv_callback: {}", handler->logPrefix(), frame->hd.stream_id,
+           frameType(frame->hd.type));
    else
-      logd("[{}] on_frame_recv_callback:", handler->logPrefix());
+      logd("[{}] on_frame_recv_callback: {}", handler->logPrefix(), frameType(frame->hd.type));
 
    switch (frame->hd.type)
    {
@@ -173,11 +212,18 @@ int on_frame_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
    std::ignore = session;
    std::ignore = frame;
 
+   auto type = frameType(frame->hd.type);
+
    auto handler = static_cast<NGHttp2Session*>(user_data);
    if (frame->hd.stream_id)
-      logd("[{}.{}] on_frame_send_callback:", handler->logPrefix(), frame->hd.stream_id);
+      logd("[{}.{}] on_frame_send_callback: {}", handler->logPrefix(), frame->hd.stream_id,
+           frameType(frame->hd.type));
    else
-      logd("[{}] on_frame_send_callback:", handler->logPrefix());
+      logd("[{}] on_frame_send_callback: {}", handler->logPrefix(), frameType(frame->hd.type));
+   
+   if (frame->hd.type == NGHTTP2_GOAWAY)
+      logw("[{}] on_frame_send_callback: {}", handler->logPrefix(), frameType(frame->hd.type));
+   
    return 0;
 }
 
@@ -270,31 +316,20 @@ static auto setup_callbacks()
 
 // =================================================================================================
 
-NGHttp2Session::NGHttp2Session(std::string_view log, any_io_executor executor,
-                               ip::tcp::socket&& socket)
-   : m_executor(std::move(executor)), m_socket(std::move(socket)),
-     m_logPrefix(fmt::format("{} {}", normalize(m_socket.remote_endpoint()), log))
+NGHttp2Session::NGHttp2Session(std::string_view prefix, any_io_executor executor)
+   : m_executor(std::move(executor)), m_logPrefix(prefix)
 {
    mlogd("session created");
-   m_send_buffer.resize(64 * 1024);
 }
 
-NGHttp2Session::NGHttp2Session(server::Server::Impl& parent, any_io_executor executor,
-                               ip::tcp::socket&& socket)
-   : NGHttp2Session("\x1b[1;31m"
-                    "server"
-                    "\x1b[0m",
-                    std::move(executor), std::move(socket))
+NGHttp2Session::NGHttp2Session(server::Server::Impl& parent, any_io_executor executor)
+   : NGHttp2Session("\x1b[1;31mserver\x1b[0m", std::move(executor))
 {
    m_server = &parent;
 }
 
-NGHttp2Session::NGHttp2Session(client::Client::Impl& parent, any_io_executor executor,
-                               ip::tcp::socket&& socket)
-   : NGHttp2Session("\x1b[1;32m"
-                    "client"
-                    "\x1b[0m",
-                    std::move(executor), std::move(socket))
+NGHttp2Session::NGHttp2Session(client::Client::Impl& parent, any_io_executor executor)
+   : NGHttp2Session("\x1b[1;32mclient\x1b[0m", std::move(executor))
 {
    m_client = &parent;
    create_client_session();
@@ -302,18 +337,10 @@ NGHttp2Session::NGHttp2Session(client::Client::Impl& parent, any_io_executor exe
 
 NGHttp2Session::~NGHttp2Session()
 {
-   // mlogi("dtor");
    m_streams.clear();
    mlogd("streams deleted");
    nghttp2_session_del(session);
    mlogd("session destroyed");
-}
-
-void NGHttp2Session::destroy()
-{
-   boost::system::error_code ec;
-   std::ignore = m_socket.shutdown(boost::asio::socket_base::shutdown_both, ec);
-   logw("[{}] shutdown: {}", m_logPrefix, ec.message());
 }
 
 // =================================================================================================
@@ -321,14 +348,14 @@ void NGHttp2Session::destroy()
 awaitable<void> NGHttp2Session::do_server_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
-   m_socket.set_option(ip::tcp::no_delay(true));
+   // m_socket.set_option(ip::tcp::no_delay(true));
    auto callbacks = setup_callbacks();
 
    //
    // disable automatic WINDOW update as we are sending window updates ourselves
    // https://github.com/nghttp2/nghttp2/issues/446
    //
-   // pynghttp2 does also disable "HTTP messaging semantics", but we don't do
+   // pynghttp2 does also disable "HTTP messaging semantics", but we don't
    //
    auto options = nghttp2_option_new();
    // nghttp2_option_set_no_http_messaging(options.get(), 1);
@@ -349,7 +376,7 @@ awaitable<void> NGHttp2Session::do_server_session(Buffer&& buffer)
    //
    // send/receive loop
    //
-   co_await (send_loop(m_socket) && recv_loop(m_socket));
+   co_await (send_loop() && recv_loop());
 
    mlogd("server session done");
 }
@@ -358,7 +385,7 @@ awaitable<void> NGHttp2Session::do_server_session(Buffer&& buffer)
 
 void NGHttp2Session::create_client_session()
 {
-   m_socket.set_option(ip::tcp::no_delay(true));
+   // m_socket.set_option(ip::tcp::no_delay(true));
    auto callbacks = setup_callbacks();
 
    //
@@ -398,7 +425,7 @@ awaitable<void> NGHttp2Session::do_client_session(Buffer&& buffer)
    //
    // send/receive loop
    //
-   co_await (send_loop(m_socket) && recv_loop(m_socket));
+   co_await (send_loop() && recv_loop());
 
    mlogd("client session done");
 }
@@ -481,12 +508,13 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
 //
 // This function calls nghttp2_session_mem_send() and collects the retrieved data in a send buffer,
 // until either the buffer is full or no more data is returned. Then, the buffered data is written
-// to the stream.
+// to the stream. Finally, if still no more data is returned, it waits for a signal to resume.
 //
-awaitable<void> NGHttp2Session::send_loop(stream& stream)
+template <typename Stream>
+awaitable<void> NGHTttp2SessionImpl<Stream>::send_loop()
 {
    Buffer buffer;
-   buffer.reserve(1 * 1024);
+   buffer.reserve(1460);
    for (;;)
    {
       //
@@ -500,12 +528,12 @@ awaitable<void> NGHttp2Session::send_loop(stream& stream)
       if (nread < 0)
       {
          logw("send loop: closing stream and throwing");
-         stream.close(); // will also cancel the read loop
+         m_stream.lowest_layer().close(); // will also cancel the read loop
          throw std::runtime_error("nghttp2_session_mem_send");
       }
 
       //
-      // If the new chunk still fits into the buffer, accumulate and send later.
+      // If the new chunk fits into the buffer, accumulate and send later.
       //
       if (nread && nread <= (buffer.capacity() - buffer.size()))
       {
@@ -517,12 +545,14 @@ awaitable<void> NGHttp2Session::send_loop(stream& stream)
 
       //
       // Is there anything to send in the buffer and/or the newly received chunk?
+      // If yes, combine both into a buffer sequence and pass it to async_write().
+      // Afterwards, go back up and ask NGHTTP2 if there is more data to send.
       //
       else if (const auto to_write = buffer.size() + nread; to_write > 0)
       {
          const std::array<asio::const_buffer, 2> seq{buffer.data(), asio::buffer(data, nread)};
          mlogd("send loop: writing {} bytes...", to_write);
-         auto [ec, written] = co_await asio::async_write(stream, seq);
+         auto [ec, written] = co_await asio::async_write(m_stream, seq, as_tuple(deferred));
          if (ec)
          {
             mloge("send loop: error writing {} bytes: {}", to_write, ec.message());
@@ -534,7 +564,7 @@ awaitable<void> NGHttp2Session::send_loop(stream& stream)
       }
 
       //
-      // If there was nothing to send, wait for signal to start again.
+      // Finally, if there is really nothing to send any more, wait for a signal to start again.
       //
       else if (nread == 0)
       {
@@ -567,7 +597,12 @@ void NGHttp2Session::handle_buffer_contents()
    mlogd("read: nghttp2_session_mem_recv... done ({})", rv);
 
    if (rv < 0)
-      throw std::runtime_error("nghttp2_session_mem_recv");
+   {
+      mloge("nghttp2_session_mem_recv: {}", nghttp2_strerror(rv));
+      nghttp2_session_terminate_session(session, NGHTTP2_STREAM_CLOSED);
+      // throw std::runtime_error("nghttp2_session_mem_recv");
+      return;
+   }
 
    assert(rv == data.size());
    m_buffer.consume(rv);
@@ -577,14 +612,16 @@ void NGHttp2Session::handle_buffer_contents()
 // The read loop is better suited for implementation as a coroutine than the write loop,
 // because it does not need to wait on re-activation by the user.
 //
-awaitable<void> NGHttp2Session::recv_loop(stream& stream)
+template <typename Stream>
+awaitable<void> NGHTttp2SessionImpl<Stream>::recv_loop()
 {
    m_buffer.reserve(64 * 1024);
+
    std::string reason("done");
    while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
    {
       auto free = m_buffer.capacity() - m_buffer.size();
-      auto [ec, n] = co_await stream.async_read_some(m_buffer.prepare(free));
+      auto [ec, n] = co_await m_stream.async_read_some(m_buffer.prepare(free), as_tuple(deferred));
       if (ec)
       {
          mlogd("read: {}, terminating session", ec.message());
@@ -595,14 +632,22 @@ awaitable<void> NGHttp2Session::recv_loop(stream& stream)
       m_buffer.commit(n);
 
       handle_buffer_contents();
-
       start_write();
    }
 
+   mlogi("recv loop: {}", reason);
+   if (reason == "done")
+      nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
    start_write();
    mlogi("recv loop: {}, served {} requests", reason, m_requestCounter);
 }
 
 // =================================================================================================
+
+template awaitable<void> NGHTttp2SessionImpl<asio::ip::tcp::socket>::recv_loop();
+template awaitable<void> NGHTttp2SessionImpl<asio::ip::tcp::socket>::send_loop();
+
+template awaitable<void> NGHTttp2SessionImpl<asio::ssl::stream<asio::ip::tcp::socket>>::recv_loop();
+template awaitable<void> NGHTttp2SessionImpl<asio::ssl::stream<asio::ip::tcp::socket>>::send_loop();
 
 } // namespace anyhttp::nghttp2

@@ -42,7 +42,6 @@ template <typename Parent, typename Stream, typename Buffer, typename Parser>
 class BeastReader : public Parent
 {
 public:
-   // explicit BeastReader(BeastSession& session) {}
    inline BeastReader(BeastSession& session_, Stream& stream_, Buffer& buffer_)
       : session(&session_), stream(stream_), buffer(buffer_)
    {
@@ -115,7 +114,7 @@ public:
  */
 template <typename Parent, typename Stream, typename Serializer,
           typename Message = std::remove_const_t<typename Serializer::value_type>>
-// requires boost::beast::is_async_write_stream<Stream>::value
+requires boost::beast::is_async_write_stream<Stream>::value
 class WriterBase : public Parent
 {
 public:
@@ -204,6 +203,9 @@ public:
    bool cancelled = false;
 };
 
+// -------------------------------------------------------------------------------------------------
+
+// template<class Stream>
 class ResponseWriter : public WriterBase<server::Response::Impl, boost::beast::tcp_stream,
                                          http::response_serializer<http::buffer_body>>
 {
@@ -351,7 +353,8 @@ awaitable<void> BeastSession::do_server_session(Buffer&& buffer)
    m_stream.socket().set_option(asio::ip::tcp::no_delay(true));
 
    // Set the timeout. TODO: don't rely on beast timeouts
-   m_stream.expires_after(std::chrono::seconds(30));
+   // m_stream.expires_after(std::chrono::seconds(30));
+   m_stream.expires_never();
 
    bool close = false;
    beast::error_code ec;
@@ -460,8 +463,8 @@ awaitable<void> BeastSession::do_client_session(Buffer&& buffer)
    // control over everything that is sent and received, we want to retain some control here,
    // on session level.
    //
-   // For example, for allowing submission of multiple requests, this is the place to take the
-   // next request from the submission queue and start writing it's headers.
+   // For example, for allowing submission of multiple requests, this would be the place to take
+   // text next request out of the submission queue and start writing it's headers.
    //
    // For pipelining support, we need to have a queue of pending responses and read into the
    // serializer of the front element.

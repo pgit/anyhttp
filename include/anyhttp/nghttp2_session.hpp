@@ -5,10 +5,13 @@
 #include "server_impl.hpp"
 #include "session_impl.hpp"
 
+#include <boost/asio/buffer.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
+#include <boost/beast/core/stream_traits.hpp>
 #include <map>
 
 #include <boost/asio.hpp>
+#include <span>
 
 #include "nghttp2/nghttp2.h"
 
@@ -19,19 +22,18 @@ using namespace boost::asio;
 namespace anyhttp::nghttp2
 {
 
-using stream = asio::as_tuple_t<asio::deferred_t>::as_default_on_t<asio::ip::tcp::socket>;
-
 class NGHttp2Stream;
 class NGHttp2Session : public ::anyhttp::Session::Impl
 {
-   NGHttp2Session(std::string_view log, any_io_executor executor, ip::tcp::socket&& socket);
+   NGHttp2Session(std::string_view logPrefix, any_io_executor executor);
+
+protected:
+   NGHttp2Session(server::Server::Impl& parent, any_io_executor executor);
+   NGHttp2Session(client::Client::Impl& parent, any_io_executor executor);
 
 public:
-   NGHttp2Session(server::Server::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket);
-   NGHttp2Session(client::Client::Impl& parent, any_io_executor executor, ip::tcp::socket&& socket);
    ~NGHttp2Session() override;
-   void destroy() override;
-   
+
    void create_client_session();
 
    // ----------------------------------------------------------------------------------------------
@@ -43,10 +45,16 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   void handle_buffer_contents();
+   virtual awaitable<void> send_loop() = 0;
+   virtual awaitable<void> recv_loop() = 0;
 
-   awaitable<void> send_loop(stream& stream);
-   awaitable<void> recv_loop(stream& stream);
+   // ----------------------------------------------------------------------------------------------
+
+   /**
+    * Helper function to pass data from #m_buffer to nghttp2.
+    * The buffer will be empty when this function returns. Terminates the session on error.
+    */
+   void handle_buffer_contents();
 
    server::Server::Impl& server()
    {
@@ -64,8 +72,10 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
+   // If set, the send loop has run out of data to send and is waiting for re-activation.
    asio::any_completion_handler<void()> m_send_handler;
 
+   // Wait to be resumed via `start_write()`, called from within `send_loop()`.
    template <asio::completion_token_for<void()> CompletionToken>
    auto async_wait_send(CompletionToken&& token)
    {
@@ -77,6 +87,8 @@ public:
          },
          token);
    }
+
+   // ----------------------------------------------------------------------------------------------
 
    void create_stream(int stream_id)
    {
@@ -109,7 +121,7 @@ public:
       if (m_client && m_streams.empty())
       {
          logi("[{}] last stream closed, terminating session...", m_logPrefix);
-         nghttp2_session_terminate_session(session, NGHTTP2_STREAM_CLOSED);
+         nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
       }
 
       return stream;
@@ -121,9 +133,9 @@ public:
       {
          decltype(m_send_handler) handler;
          m_send_handler.swap(handler);
-         logd("[{}] start_write: calling handler...", m_logPrefix);
+         logd("[{}] start_write: signalling write loop...", m_logPrefix);
          std::move(handler)();
-         logd("[{}] start_write: calling handler... done", m_logPrefix);
+         logd("[{}] start_write: signalling write loop... done", m_logPrefix);
       }
    }
 
@@ -131,19 +143,48 @@ public:
 
 public:
    nghttp2_session* session = nullptr;
-   stream m_socket;
    Buffer m_buffer;
 
-private:
+protected:
    server::Server::Impl* m_server = nullptr;
    client::Client::Impl* m_client = nullptr;
    asio::any_io_executor m_executor;
    std::string m_logPrefix;
-
-   std::vector<uint8_t> m_send_buffer;
    std::map<int, std::shared_ptr<NGHttp2Stream>> m_streams;
-
    size_t m_requestCounter = 0;
+};
+
+// -------------------------------------------------------------------------------------------------
+
+template <typename Stream>
+class NGHTttp2SessionImpl : public NGHttp2Session
+{
+public:
+   NGHTttp2SessionImpl(server::Server::Impl& parent, any_io_executor executor, Stream&& stream)
+      : NGHttp2Session(parent, executor), m_stream(std::move(stream))
+   {
+   }
+
+   NGHTttp2SessionImpl(client::Client::Impl& parent, any_io_executor executor, Stream&& stream)
+      : NGHttp2Session(parent, executor), m_stream(std::move(stream))
+   {
+   }
+
+   void destroy() override
+   {
+      boost::system::error_code ec;
+      // std::ignore = m_stream.socket().shutdown(boost::asio::socket_base::shutdown_both, ec);
+      // std::ignore = m_stream.shutdown(boost::asio::socket_base::shutdown_both, ec);
+      std:: ignore = m_stream.lowest_layer().shutdown(boost::asio::socket_base::shutdown_both, ec);
+      logw("[{}] shutdown: {}", m_logPrefix, ec.message());
+   }
+
+   awaitable<void> send_loop() override;
+   awaitable<void> recv_loop() override;
+
+private:
+   // asio::as_tuple_t<asio::deferred_t>::as_default_on_t<Stream> m_stream;
+   Stream m_stream;
 };
 
 // =================================================================================================

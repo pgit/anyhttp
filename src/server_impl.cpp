@@ -79,6 +79,8 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    logi("[{}] new connection", normalize(socket.remote_endpoint()));
    auto executor = co_await boost::asio::this_coro::executor;
 
+   socket.set_option(ip::tcp::no_delay(true));
+
    //
    // Playing with socket buffer sizes... Doesn't seem to do any good.
    //
@@ -101,34 +103,41 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    //
    // try to detect TLS
    //
-   boost::beast::tcp_stream stream(std::move(socket));
-   if (co_await boost::beast::async_detect_ssl(stream, buffer, use_awaitable))
+#if 1
+   std::shared_ptr<Session::Impl> session;
+   std::optional<asio::ssl::stream<asio::ip::tcp::socket>> sslStream;
+   if (co_await async_detect_ssl_awaitable(socket, buffer, deferred))
    {
       logi("[{}] detected TLS client hello, {} bytes in buffer", prefix, buffer.size());
 
       asio::ssl::context ctx{asio::ssl::context::tlsv13};
       ctx.use_certificate_chain_file("etc/darkbase-chain.pem");
       ctx.use_private_key_file("etc/darkbase-key.pem", asio::ssl::context::pem);
-      asio::ssl::stream<asio::ip::tcp::socket> sslStream(stream.release_socket(), ctx);
-      auto [ec, bytes_used] = co_await sslStream.async_handshake(
-         asio::ssl::stream_base::server, buffer.data(), as_tuple(asio::deferred));
-      if (ec)
-      {
-         loge("[{}] {}", prefix, ec.what());
-         co_return;
-      }
-      buffer.consume(bytes_used);
+      sslStream.emplace(std::move(socket), ctx);
+      auto n = co_await sslStream->async_handshake(asio::ssl::stream_base::server, buffer.data(),
+                                                   asio::deferred);
+      buffer.consume(n);
+      session =
+         std::make_shared<nghttp2::NGHTttp2SessionImpl<asio::ssl::stream<asio::ip::tcp::socket>>>(
+            *this, executor, std::move(*sslStream));
    }
-   socket = stream.release_socket(); // return socket for now
+#endif
 
    //
    // detect HTTP2 client preface, fallback to HTTP/1.1 if not found
    //
-   std::shared_ptr<Session::Impl> session;
-   if (co_await async_detect_http2_client_preface(socket, buffer, deferred))
+   if (session)
+      ;
+   else if (co_await async_detect_http2_client_preface(socket, buffer, deferred))
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
-      session = std::make_shared<nghttp2::NGHttp2Session>(*this, executor, std::move(socket));
+#if 0
+      session = std::make_shared<nghttp2::NGHTttp2SessionImpl<boost::beast::tcp_stream>>(
+         *this, executor, std::move(stream));
+#else
+      session = std::make_shared<nghttp2::NGHTttp2SessionImpl<asio::ip::tcp::socket>>(
+         *this, executor, std::move(socket));
+#endif
    }
    else
    {

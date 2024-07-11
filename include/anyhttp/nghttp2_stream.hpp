@@ -23,7 +23,9 @@ namespace anyhttp::nghttp2
 // =================================================================================================
 
 class NGHttp2Stream;
-class NGHttp2Reader : public server::Request::Impl, public client::Response::Impl
+
+template <typename Base>
+class NGHttp2Reader : public Base // server::Request::Impl, public client::Response::Impl
 {
 public:
    explicit NGHttp2Reader(NGHttp2Stream& stream);
@@ -49,7 +51,8 @@ public:
    const asio::any_io_executor& executor() const override;
    void content_length(std::optional<size_t> content_length) override;
    void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override;
-   void async_write(WriteHandler&& handler, asio::const_buffer buffer) override;
+   void async_write(WriteHandler&& handler, asio
+   ::const_buffer buffer) override;
    void async_get_response(client::Request::GetResponseHandler&& handler) override;
    void detach() override;
 
@@ -77,6 +80,7 @@ public:
    WriteHandler sendHandler;
    asio::cancellation_slot slot;
    bool is_deferred = false;
+   bool is_writer_done = false;
 
    client::Request::GetResponseHandler responseHandler;
    bool has_response = false;
@@ -179,9 +183,8 @@ public:
          logd("[{}] async_write: buffer={} is_deferred={}", logPrefix, buffer.size(), is_deferred);
 
          sendBuffer = buffer;
-#if 1
          sendHandler = std::move(handler);
-         // slot = sendHandler.get_cancellation_slot();
+
          slot = asio::get_associated_cancellation_slot(sendHandler);
          if (slot.is_connected() && !slot.has_handler())
          {
@@ -198,27 +201,7 @@ public:
                   }
                });
          }
-#else
-         auto work = boost::asio::make_work_guard(handler);
 
-         sendHandler = [handler = std::move(handler), work = std::move(work),
-                        logPrefix = logPrefix](boost::system::error_code ec) mutable
-         {
-            auto alloc = boost::asio::get_associated_allocator(
-               handler, boost::asio::recycling_allocator<void>());
-
-            logd("[{}] async_write: dispatching...", logPrefix);
-            boost::asio::dispatch(
-               work.get_executor(),
-               boost::asio::bind_allocator(
-                  alloc, [handler = std::move(handler), ec, logPrefix = logPrefix]() mutable { //
-                     logd("[{}] async_write: running dispatched handler...", logPrefix);
-                     std::move(handler)(ec);
-                     logd("[{}] async_write: running dispatched handler... done", logPrefix);
-                  }));
-            logd("[{}] async_write: dispatching... done", logPrefix);
-         };
-#endif
          resume();
       };
 

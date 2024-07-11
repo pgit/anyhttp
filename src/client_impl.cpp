@@ -10,6 +10,7 @@
 #include <boost/asio/steady_timer.hpp>
 
 #include <boost/beast/core/flat_buffer.hpp>
+#include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/http/message.hpp>
 
 #include <spdlog/logger.h>
@@ -93,7 +94,14 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
       impl = std::make_shared<beast_impl::BeastSession>(*this, executor, std::move(socket));
       break;
    case Protocol::http2:
-      impl = std::make_shared<nghttp2::NGHttp2Session>(*this, executor, std::move(socket));
+#if 0
+      auto stream = boost::beast::tcp_stream{std::move(socket)};
+      impl = std::make_shared<nghttp2::NGHTttp2SessionImpl<boost::beast::tcp_stream>>(
+         *this, executor, std::move(stream));
+#else
+      impl = std::make_shared<nghttp2::NGHTttp2SessionImpl<asio::ip::tcp::socket>>(
+         *this, executor, std::move(socket));
+#endif
       break;
    };
 
@@ -122,7 +130,7 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    // FIXME: instead of executing a submit() directly, it should be queued and executed within
    //        do_client_session(). This approach avoids the problem, and allows pipelining, too.
    //
-   std::move(handler)(boost::system::error_code{}, Session{std::move(impl)});   
+   std::move(handler)(boost::system::error_code{}, Session{std::move(impl)});
 }
 
 void Client::Impl::async_connect(ConnectHandler&& handler)

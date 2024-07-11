@@ -161,39 +161,52 @@ protected:
       {
          auto [ex, n] = co_await asio::async_read_until(pipe, asio::dynamic_buffer(buffer), "\n",
                                                         as_tuple(deferred));
+         
          auto sv = std::string_view(buffer).substr(0, n - 1);
          if (n)
+         {
             logw("STDERR: \x1b[32m{}\x1b[0m", sv);
+            buffer.erase(0, n);
+         }
+         
          if (ex)
             break;
-         buffer.erase(0, n);
       }
+
+      if (!buffer.empty())
+         logw("STDERR: \x1b[32m{}\x1b[0m", buffer);
+   }
+
+   awaitable<std::string> consume(bp::async_pipe pipe)
+   {
+      std::string result;
+      std::vector<char> buf(1460);
+      for (;;)
+      {
+         auto [ex, nread] = co_await asio::async_read(pipe, asio::buffer(buf), as_tuple(deferred));
+         result += std::string_view(buf.data(), nread);
+         if (nread)
+            logi("STDOUT: {} bytes", nread);
+         if (ex)
+            break;
+      }
+      co_return result;
    }
 
    awaitable<std::string> spawn_process(bp::filesystem::path path, std::vector<std::string> args)
    {
       logi("spawn: {} {}", path.generic_string(), fmt::join(args, " "));
 
+      auto env = bp::environment();
+      env["LD_LIBRARY_PATH"] = "/usr/local/lib";      
       bp::async_pipe out(context), err(context);
       bp::child child(
-         path, std::move(args), bp::std_out > out, bp::std_err > err,
+         path, env, std::move(args), bp::std_out > out, bp::std_err > err,
          bp::on_exit = [](int exit, const std::error_code& ec) { //
             fmt::println("exit={}, ec={}", exit, ec.message());
          });
 
-      std::string result;
-      std::vector<char> buf(4096);
-      for (;;)
-      {
-         auto [ex, nread] = co_await asio::async_read(out, asio::buffer(buf), as_tuple(deferred));
-         result += std::string_view(buf.data(), nread);
-         if (ex)
-         {
-            logw("spwan: STDIN: {}", ex.message());
-            break;
-         }
-      }
-      co_await log(std::move(err));
+      auto result = co_await (log(std::move(err)) && consume(std::move(out)));
 
       child.wait(); // FIXME: this is sync
       if (child.exit_code())
@@ -201,6 +214,7 @@ protected:
       else
          logi("exit_code={}", child.exit_code());
       server.reset();
+
       co_return result;
    }
 
@@ -237,10 +251,25 @@ TEST_P(External, curl)
                                     fmt::format("@{}", testFile.string()), url};
    if (GetParam() == anyhttp::Protocol::http2)
       args.insert(args.begin(), "--http2-prior-knowledge");
+
    auto future = spawn("/usr/bin/curl", std::move(args));
    context.run();
-   loge("context finished");
    EXPECT_EQ(future.get().size(), testFileSize);
+}
+
+TEST_P(External, curl2)
+{
+   auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   std::vector<std::string> args = {
+      "-sS", "-v", "--data-binary", fmt::format("@{}", testFile.string()), url, url};
+
+   if (GetParam() == anyhttp::Protocol::http2)
+      args.insert(args.begin(), "--http2-prior-knowledge");
+
+   // https://github.com/curl/curl/issues/10634 --> use custom built curl
+   auto future = spawn("/usr/local/bin/curl", std::move(args));
+   context.run();
+   EXPECT_EQ(future.get().size(), testFileSize * 2);
 }
 
 TEST_P(External, echo)

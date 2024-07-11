@@ -8,6 +8,8 @@
 
 #include <nghttp2/nghttp2.h>
 
+#include <type_traits>
+
 using namespace boost::asio::experimental::awaitable_operators;
 
 namespace anyhttp::nghttp2
@@ -15,13 +17,15 @@ namespace anyhttp::nghttp2
 
 // =================================================================================================
 
-NGHttp2Reader::NGHttp2Reader(NGHttp2Stream& stream)
-   : server::Request::Impl(), client::Response::Impl(), stream(&stream)
+template <typename Base>
+NGHttp2Reader<Base>::NGHttp2Reader(NGHttp2Stream& stream) : Base(), stream(&stream)
 {
-   stream.request = this;
+   if constexpr (std::is_same_v<Base, server::Request::Impl>)
+      stream.request = this;
 }
 
-NGHttp2Reader::~NGHttp2Reader()
+template <typename Base>
+NGHttp2Reader<Base>::~NGHttp2Reader()
 {
    if (stream)
    {
@@ -31,28 +35,37 @@ NGHttp2Reader::~NGHttp2Reader()
    }
 }
 
-void NGHttp2Reader::detach() { stream = nullptr; }
+template <typename Base>
+void NGHttp2Reader<Base>::detach()
+{
+   stream = nullptr;
+}
 
 // -------------------------------------------------------------------------------------------------
 
-const asio::any_io_executor& NGHttp2Reader::executor() const
+template <typename Base>
+const asio::any_io_executor& NGHttp2Reader<Base>::executor() const
 {
    assert(stream);
    return stream->executor();
 }
 
-boost::url_view NGHttp2Reader::url() const
+template <typename Base>
+boost::url_view NGHttp2Reader<Base>::url() const
 {
    assert(stream);
    return {stream->url};
 }
 
-std::optional<size_t> NGHttp2Reader::content_length() const noexcept
+template <typename Base>
+std::optional<size_t> NGHttp2Reader<Base>::content_length() const noexcept
 {
+   assert(stream);
    return stream->content_length;
 }
 
-void NGHttp2Reader::async_read_some(ReadSomeHandler&& handler)
+template <typename Base>
+void NGHttp2Reader<Base>::async_read_some(ReadSomeHandler&& handler)
 {
    assert(stream);
    assert(!stream->m_read_handler);
@@ -218,30 +231,14 @@ void NGHttp2Stream::resume()
       logd("[{}] async_write: resuming session ({})", logPrefix, sendBuffer.size());
 
       //
-      // It is important to reset this before resuming, because this may result in another
-      // call to the read callback below.
+      // It is important to reset the deferred state before resuming, because this may result in
+      // another call to the read callback.
       //
       is_deferred = false;
       nghttp2_session_resume_data(parent.session, id);
       parent.start_write();
    }
 }
-
-/*
-void NGHttp2Stream::async_write(WriteHandler&& handler, asio::const_buffer buffer)
-{
-   assert(!sendHandler);
-   sendHandler = std::move(handler);
-   sendBuffer = buffer;
-
-   if (is_deferred)
-   {
-      is_deferred = false;
-      nghttp2_session_resume_data(parent.session, id);
-      parent.start_write();
-   }
-}
-*/
 
 void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& handler)
 {
@@ -257,6 +254,7 @@ ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data
 {
    logd("[{}] write callback (buffer size={} bytes)", logPrefix, length);
    assert(!is_deferred);
+   assert(!is_writer_done);
 
    if (!sendHandler)
    {
@@ -279,7 +277,7 @@ ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data
       sendBuffer += copied;
       if (sendBuffer.size() == 0)
       {
-         logd("[{}] write callback: running handler...", logPrefix);         
+         logd("[{}] write callback: running handler...", logPrefix);
          std::move(sendHandler)(boost::system::error_code{});
          logd("[{}] write callback: running handler... done", logPrefix);
          if (sendHandler)
@@ -291,6 +289,7 @@ ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data
    else
    {
       logd("[{}] write callback: EOF", logPrefix);
+      is_writer_done = true;
       std::move(sendHandler)(boost::system::error_code{});
       *data_flags |= NGHTTP2_DATA_FLAG_EOF;
    }
@@ -382,7 +381,7 @@ void NGHttp2Stream::call_on_response()
 
    if (responseHandler)
    {
-      auto impl = client::Response{std::make_unique<NGHttp2Reader>(*this)};
+      auto impl = client::Response{std::make_unique<NGHttp2Reader<client::Response::Impl>>(*this)};
       std::move(responseHandler)(boost::system::error_code{}, std::move(impl));
       responseHandler = nullptr;
    }
@@ -409,7 +408,7 @@ void NGHttp2Stream::call_on_request()
 #if 0
       co_spawn(executor(), do_request(), detached);
 #else
-   server::Request request(std::make_unique<NGHttp2Reader>(*this));
+   server::Request request(std::make_unique<NGHttp2Reader<server::Request::Impl>>(*this));
    server::Response response(std::make_unique<NGHttp2Writer>(*this));
 
    if (auto& handler = parent.server().requestHandlerCoro())
@@ -430,16 +429,25 @@ void NGHttp2Stream::delete_reader()
 {
    logd("[{}] delete_reader", logPrefix);
    // Issue RST_STREAM so that stream does not hang around.
-   nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_INTERNAL_ERROR);
-   parent.start_write();
+   // nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_INTERNAL_ERROR);
+   // parent.start_write();
 }
 
 void NGHttp2Stream::delete_writer()
 {
    logd("[{}] delete_writer", logPrefix);
    // Issue RST_STREAM so that stream does not hang around.
-   nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_INTERNAL_ERROR);
-   parent.start_write();
+
+   //
+   // If the writer is deleted before it has delivered all data, we have to close the stream
+   // so that it does not hang around
+   //
+   if (!is_writer_done)
+   {
+      logw("[{}] delete_writer: not done yet, submitting RST with INTERNAL_ERROR ", logPrefix);
+      nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
+      parent.start_write();
+   }
 }
 
 // =================================================================================================

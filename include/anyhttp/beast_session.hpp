@@ -21,8 +21,6 @@ namespace anyhttp::beast_impl
 
 // =================================================================================================
 
-using stream = asio::as_tuple_t<asio::deferred_t>::as_default_on_t<asio::ip::tcp::socket>;
-
 class BeastSession : public ::anyhttp::Session::Impl
 {
    BeastSession(std::string_view logPrefix, any_io_executor executor, ip::tcp::socket&& socket);
