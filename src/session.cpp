@@ -27,14 +27,14 @@ public:
 
 Session::Session(std::shared_ptr<Session::Impl> impl) : m_impl(std::move(impl))
 {
-   logi("Session::ctor: use_count={}", m_impl.use_count());
+   logd("Session::ctor: use_count={}", m_impl.use_count());
 }
 
 // -------------------------------------------------------------------------------------------------
 
 Session::Session(Session&& other) noexcept : m_impl(std::move(other.m_impl))
 {
-   logi("Session::move: use_count={}", m_impl.use_count());
+   logd("Session::move: use_count={}", m_impl.use_count());
 }
 
 Session& Session::operator=(Session&& other) noexcept
@@ -43,7 +43,7 @@ Session& Session::operator=(Session&& other) noexcept
    {
       m_impl = std::move(other.m_impl);
    }
-   logi("Session::move: use_count={}", m_impl.use_count());
+   logd("Session::move: use_count={}", m_impl.use_count());
    return *this;
 }
 
@@ -55,7 +55,7 @@ Session::~Session()
    {
       m_impl->destroy();
       m_impl.reset();
-      logi("Session::dtor: use_count={}", m_impl.use_count());
+      logd("Session::dtor: use_count={}", m_impl.use_count());
    }
 }
 

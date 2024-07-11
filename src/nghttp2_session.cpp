@@ -221,9 +221,6 @@ int on_frame_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
    else
       logd("[{}] on_frame_send_callback: {}", handler->logPrefix(), frameType(frame->hd.type));
    
-   if (frame->hd.type == NGHTTP2_GOAWAY)
-      logw("[{}] on_frame_send_callback: {}", handler->logPrefix(), frameType(frame->hd.type));
-   
    return 0;
 }
 

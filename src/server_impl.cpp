@@ -14,6 +14,8 @@
 
 #include <boost/beast/core/flat_buffer.hpp>
 
+#include <boost/system/detail/errc.hpp>
+#include <boost/system/detail/error_code.hpp>
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
 
@@ -74,6 +76,36 @@ void Server::Impl::destroy()
    m_acceptor.close();
 }
 
+// =================================================================================================
+
+//
+// https://nghttp2.org/documentation/tutorial-server.html
+//
+static unsigned char next_proto_list[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+
+unsigned int next_proto_list_len = sizeof(next_proto_list);
+static int next_proto_cb(SSL* s, const unsigned char** data, unsigned int* len, void* arg)
+{
+   *data = next_proto_list;
+   *len = (unsigned int)next_proto_list_len;
+   return SSL_TLSEXT_ERR_OK;
+}
+
+static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned char* outlen,
+                                const unsigned char* in, unsigned int inlen, void* arg)
+{
+   int rv = nghttp2_select_next_protocol((unsigned char**)out, outlen, in, inlen);
+   if (rv != 1)
+   {
+      return SSL_TLSEXT_ERR_NOACK;
+   }
+   std::cout << "alpn_select_proto_cb: selected #" << rv << std::endl;
+
+   return SSL_TLSEXT_ERR_OK;
+}
+
+// -------------------------------------------------------------------------------------------------
+
 awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 {
    logi("[{}] new connection", normalize(socket.remote_endpoint()));
@@ -111,15 +143,34 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       logi("[{}] detected TLS client hello, {} bytes in buffer", prefix, buffer.size());
 
       asio::ssl::context ctx{asio::ssl::context::tlsv13};
+      SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, NULL);
+      SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, NULL);
       ctx.use_certificate_chain_file("etc/darkbase-chain.pem");
       ctx.use_private_key_file("etc/darkbase-key.pem", asio::ssl::context::pem);
+
       sslStream.emplace(std::move(socket), ctx);
       auto n = co_await sslStream->async_handshake(asio::ssl::stream_base::server, buffer.data(),
                                                    asio::deferred);
       buffer.consume(n);
-      session =
-         std::make_shared<nghttp2::NGHTttp2SessionImpl<asio::ssl::stream<asio::ip::tcp::socket>>>(
+
+      std::string_view alpn = std::invoke(
+         [&]() -> std::string_view
+         {
+            const unsigned char* data;
+            unsigned int len;
+            SSL_get0_alpn_selected(sslStream->native_handle(), &data, &len);
+            if (data)
+               return std::string_view(reinterpret_cast<const char*>(data), len);
+            else
+               return {};
+         });
+
+      if (alpn == "h2")
+         session = std::make_shared<
+            nghttp2::NGHTttp2SessionImpl<asio::ssl::stream<asio::ip::tcp::socket>>>(
             *this, executor, std::move(*sslStream));
+      else if (alpn == "http/1.1")
+         ;
    }
 #endif
 
@@ -181,7 +232,12 @@ awaitable<void> Server::Impl::listen_loop()
    for (;;)
    {
       auto [ec, socket] = co_await m_acceptor.async_accept(as_tuple(deferred));
-      if (ec)
+      if (ec == boost::system::errc::operation_canceled)
+      {
+         logi("accept: {}", ec.message());
+         break;
+      }
+      else if (ec)
       {
          logw("accept: {}", ec.message());
          break;

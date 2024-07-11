@@ -86,6 +86,9 @@ boost::asio::awaitable<void> send(client::Request& request, Range range, bool eo
       auto end = std::ranges::copy(chunk, buffer.data()).out;
       bytes += end - buffer.data();
 #if 0
+      //
+      // FIXME: With as_tuple<>, this testcase fails, sporadically.
+      //
       auto result = co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()),
                                                  asio::as_tuple(asio::deferred));
       if (auto ec = std::get<0>(result))

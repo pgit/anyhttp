@@ -161,14 +161,14 @@ protected:
       {
          auto [ex, n] = co_await asio::async_read_until(pipe, asio::dynamic_buffer(buffer), "\n",
                                                         as_tuple(deferred));
-         
+
          auto sv = std::string_view(buffer).substr(0, n - 1);
          if (n)
          {
             logw("STDERR: \x1b[32m{}\x1b[0m", sv);
             buffer.erase(0, n);
          }
-         
+
          if (ex)
             break;
       }
@@ -198,7 +198,7 @@ protected:
       logi("spawn: {} {}", path.generic_string(), fmt::join(args, " "));
 
       auto env = bp::environment();
-      env["LD_LIBRARY_PATH"] = "/usr/local/lib";      
+      env["LD_LIBRARY_PATH"] = "/usr/local/lib";
       bp::async_pipe out(context), err(context);
       bp::child child(
          path, env, std::move(args), bp::std_out > out, bp::std_err > err,
@@ -235,7 +235,7 @@ INSTANTIATE_TEST_SUITE_P(External, External,
 TEST_P(External, nghttp2)
 {
    if (GetParam() == anyhttp::Protocol::http11)
-      GTEST_SKIP();
+      GTEST_SKIP(); // no --nghttp2-prior-knowledge for 'nghttp', re-enable when ALPN works
 
    auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    auto future = spawn("/workspaces/nghttp2/install/bin/nghttp", {"-d", testFile.string(), url});
@@ -249,6 +249,7 @@ TEST_P(External, curl)
    auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    std::vector<std::string> args = {"-sS", "-v", "--data-binary",
                                     fmt::format("@{}", testFile.string()), url};
+
    if (GetParam() == anyhttp::Protocol::http2)
       args.insert(args.begin(), "--http2-prior-knowledge");
 
@@ -257,7 +258,23 @@ TEST_P(External, curl)
    EXPECT_EQ(future.get().size(), testFileSize);
 }
 
-TEST_P(External, curl2)
+TEST_P(External, curl_https)
+{
+   auto url = fmt::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
+   std::vector<std::string> args = {
+      "-sS", "-v", "-k", "--data-binary", fmt::format("@{}", testFile.string()), url};
+   
+   if (GetParam() == anyhttp::Protocol::http2)
+      args.insert(args.begin(), "--http2");
+   else
+      args.insert(args.begin(), "--http1.1");  // not implemented, yet
+
+   auto future = spawn("/usr/bin/curl", std::move(args));
+   context.run();
+   EXPECT_EQ(future.get().size(), testFileSize);
+}
+
+TEST_P(External, curl_multiple)
 {
    auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    std::vector<std::string> args = {
@@ -271,6 +288,24 @@ TEST_P(External, curl2)
    context.run();
    EXPECT_EQ(future.get().size(), testFileSize * 2);
 }
+
+TEST_P(External, curl_multiple_https)
+{
+   auto url = fmt::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
+   std::vector<std::string> args = {
+      "-sS", "-v", "-k", "--data-binary", fmt::format("@{}", testFile.string()), url, url};
+
+   if (GetParam() == anyhttp::Protocol::http2)
+      args.insert(args.begin(), "--http2");
+   else
+      args.insert(args.begin(), "--http1.1");
+
+   auto future = spawn("/usr/bin/curl", std::move(args));
+   context.run();
+   EXPECT_EQ(future.get().size(), testFileSize * 2);
+}
+
+// -------------------------------------------------------------------------------------------------
 
 TEST_P(External, echo)
 {

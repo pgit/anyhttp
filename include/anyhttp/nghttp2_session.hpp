@@ -176,7 +176,7 @@ public:
       // std::ignore = m_stream.socket().shutdown(boost::asio::socket_base::shutdown_both, ec);
       // std::ignore = m_stream.shutdown(boost::asio::socket_base::shutdown_both, ec);
       std:: ignore = m_stream.lowest_layer().shutdown(boost::asio::socket_base::shutdown_both, ec);
-      logw("[{}] shutdown: {}", m_logPrefix, ec.message());
+      logi("[{}] shutdown: {}", m_logPrefix, ec.message());
    }
 
    awaitable<void> send_loop() override;
