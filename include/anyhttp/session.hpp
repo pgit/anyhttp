@@ -11,7 +11,7 @@ namespace anyhttp
 // =================================================================================================
 
 using Submit = void(boost::system::error_code, client::Request);
-using SubmitHandler = asio::any_completion_handler<Submit>;
+using SubmitHandler = boost::asio::any_completion_handler<Submit>;
 
 class Session
 {

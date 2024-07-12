@@ -22,6 +22,8 @@ using namespace boost::asio;
 namespace anyhttp::nghttp2
 {
 
+// =================================================================================================
+
 class NGHttp2Stream;
 class NGHttp2Session : public ::anyhttp::Session::Impl
 {
@@ -51,7 +53,7 @@ public:
    // ----------------------------------------------------------------------------------------------
 
    /**
-    * Helper function to pass data from #m_buffer to nghttp2.
+    * Helper function to pass data from #m_buffer to nghttp2, invokedby recv_loop().
     * The buffer will be empty when this function returns. Terminates the session on error.
     */
    void handle_buffer_contents();
@@ -148,7 +150,7 @@ public:
 protected:
    server::Server::Impl* m_server = nullptr;
    client::Client::Impl* m_client = nullptr;
-   asio::any_io_executor m_executor;
+   boost::asio::any_io_executor m_executor;
    std::string m_logPrefix;
    std::map<int, std::shared_ptr<NGHttp2Stream>> m_streams;
    size_t m_requestCounter = 0;
@@ -170,14 +172,7 @@ public:
    {
    }
 
-   void destroy() override
-   {
-      boost::system::error_code ec;
-      // std::ignore = m_stream.socket().shutdown(boost::asio::socket_base::shutdown_both, ec);
-      // std::ignore = m_stream.shutdown(boost::asio::socket_base::shutdown_both, ec);
-      std:: ignore = m_stream.lowest_layer().shutdown(boost::asio::socket_base::shutdown_both, ec);
-      logi("[{}] shutdown: {}", m_logPrefix, ec.message());
-   }
+   void destroy() override;
 
    awaitable<void> send_loop() override;
    awaitable<void> recv_loop() override;

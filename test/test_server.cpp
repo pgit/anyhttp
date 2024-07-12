@@ -244,11 +244,12 @@ TEST_P(External, nghttp2)
    EXPECT_EQ(future.get().size(), testFileSize);
 }
 
+using Args = std::vector<std::string>;
+
 TEST_P(External, curl)
 {
    auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   std::vector<std::string> args = {"-sS", "-v", "--data-binary",
-                                    fmt::format("@{}", testFile.string()), url};
+   Args args = {"-sS", "-v", "--data-binary", fmt::format("@{}", testFile.string()), url};
 
    if (GetParam() == anyhttp::Protocol::http2)
       args.insert(args.begin(), "--http2-prior-knowledge");
@@ -261,13 +262,12 @@ TEST_P(External, curl)
 TEST_P(External, curl_https)
 {
    auto url = fmt::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   std::vector<std::string> args = {
-      "-sS", "-v", "-k", "--data-binary", fmt::format("@{}", testFile.string()), url};
-   
+   Args args = {"-sS", "-v", "-k", "--data-binary", fmt::format("@{}", testFile.string()), url};
+
    if (GetParam() == anyhttp::Protocol::http2)
       args.insert(args.begin(), "--http2");
    else
-      args.insert(args.begin(), "--http1.1");  // not implemented, yet
+      args.insert(args.begin(), "--http1.1"); // not implemented, yet
 
    auto future = spawn("/usr/bin/curl", std::move(args));
    context.run();
@@ -277,8 +277,7 @@ TEST_P(External, curl_https)
 TEST_P(External, curl_multiple)
 {
    auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   std::vector<std::string> args = {
-      "-sS", "-v", "--data-binary", fmt::format("@{}", testFile.string()), url, url};
+   Args args = {"-sS", "-v", "--data-binary", fmt::format("@{}", testFile.string()), url, url};
 
    if (GetParam() == anyhttp::Protocol::http2)
       args.insert(args.begin(), "--http2-prior-knowledge");
@@ -292,8 +291,8 @@ TEST_P(External, curl_multiple)
 TEST_P(External, curl_multiple_https)
 {
    auto url = fmt::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   std::vector<std::string> args = {
-      "-sS", "-v", "-k", "--data-binary", fmt::format("@{}", testFile.string()), url, url};
+   Args args = {"-sS", "-v", "-k", "--data-binary", fmt::format("@{}", testFile.string()),
+                url,   url};
 
    if (GetParam() == anyhttp::Protocol::http2)
       args.insert(args.begin(), "--http2");

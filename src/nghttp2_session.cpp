@@ -3,6 +3,7 @@
 #include "anyhttp/client.hpp"
 #include "anyhttp/nghttp2_stream.hpp"
 
+#include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ssl/stream.hpp>
@@ -220,7 +221,7 @@ int on_frame_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
            frameType(frame->hd.type));
    else
       logd("[{}] on_frame_send_callback: {}", handler->logPrefix(), frameType(frame->hd.type));
-   
+
    return 0;
 }
 
@@ -493,98 +494,6 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
                       client::Request{std::make_unique<NGHttp2Writer>(*stream)});
 }
 
-// =================================================================================================
-
-#undef mlogd
-#define mlogd(...) // too noisy
-
-//
-// Implementing the send loop as a coroutine does not make much sense, as it may run out
-// of work and then needs to wait on a channel to be activated again. Doing this with
-// a normal, callback-based completion handler is probably easier.
-//
-// This function calls nghttp2_session_mem_send() and collects the retrieved data in a send buffer,
-// until either the buffer is full or no more data is returned. Then, the buffered data is written
-// to the stream. Finally, if still no more data is returned, it waits for a signal to resume.
-//
-template <typename Stream>
-awaitable<void> NGHTttp2SessionImpl<Stream>::send_loop()
-{
-   Buffer buffer;
-   buffer.reserve(1460);
-   for (;;)
-   {
-      //
-      // Retrieve a chunk of data from NGHTTP2, to be sent.
-      //
-      const uint8_t* data; // data is valid until next call, so we don't need to copy it
-
-      mlogd("send loop: nghttp2_session_mem_send...");
-      const auto nread = nghttp2_session_mem_send(session, &data);
-      mlogd("send loop: nghttp2_session_mem_send... {} bytes", nread);
-      if (nread < 0)
-      {
-         logw("send loop: closing stream and throwing");
-         m_stream.lowest_layer().close(); // will also cancel the read loop
-         throw std::runtime_error("nghttp2_session_mem_send");
-      }
-
-      //
-      // If the new chunk fits into the buffer, accumulate and send later.
-      //
-      if (nread && nread <= (buffer.capacity() - buffer.size()))
-      {
-         auto copied = asio::buffer_copy(buffer.prepare(nread), asio::buffer(data, nread));
-         assert(nread == copied);
-         buffer.commit(nread);
-         mlogd("send loop: buffered {} more bytes, total {}", nread, buffer.data().size());
-      }
-
-      //
-      // Is there anything to send in the buffer and/or the newly received chunk?
-      // If yes, combine both into a buffer sequence and pass it to async_write().
-      // Afterwards, go back up and ask NGHTTP2 if there is more data to send.
-      //
-      else if (const auto to_write = buffer.size() + nread; to_write > 0)
-      {
-         const std::array<asio::const_buffer, 2> seq{buffer.data(), asio::buffer(data, nread)};
-         mlogd("send loop: writing {} bytes...", to_write);
-         auto [ec, written] = co_await asio::async_write(m_stream, seq, as_tuple(deferred));
-         if (ec)
-         {
-            mloge("send loop: error writing {} bytes: {}", to_write, ec.message());
-            break;
-         }
-         mlogd("send loop: writing {} bytes... done, wrote {}", to_write, written);
-         assert(to_write == written);
-         buffer.consume(written);
-      }
-
-      //
-      // Finally, if there is really nothing to send any more, wait for a signal to start again.
-      //
-      else if (nread == 0)
-      {
-         if (nghttp2_session_want_write(session) && nghttp2_session_want_read(session))
-            mlogd("send loop: session still wants to read and write");
-         else if (nghttp2_session_want_write(session))
-            mlogd("send loop: session still wants to write");
-         else if (nghttp2_session_want_read(session))
-            mlogd("send loop: session still wants to read");
-         else
-            break; // nghttp2 doesn't want to send or receive any more, so we are done
-
-         mlogd("send loop: waiting...");
-         co_await async_wait_send(deferred);
-         mlogd("send loop: waiting... done");
-      }
-   }
-
-   mlogd("send loop: done");
-}
-
-// -------------------------------------------------------------------------------------------------
-
 void NGHttp2Session::handle_buffer_contents()
 {
    mlogd("");
@@ -605,46 +514,6 @@ void NGHttp2Session::handle_buffer_contents()
    m_buffer.consume(rv);
 }
 
-//
-// The read loop is better suited for implementation as a coroutine than the write loop,
-// because it does not need to wait on re-activation by the user.
-//
-template <typename Stream>
-awaitable<void> NGHTttp2SessionImpl<Stream>::recv_loop()
-{
-   m_buffer.reserve(64 * 1024);
-
-   std::string reason("done");
-   while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
-   {
-      auto free = m_buffer.capacity() - m_buffer.size();
-      auto [ec, n] = co_await m_stream.async_read_some(m_buffer.prepare(free), as_tuple(deferred));
-      if (ec)
-      {
-         mlogd("read: {}, terminating session", ec.message());
-         reason = ec.message();
-         nghttp2_session_terminate_session(session, NGHTTP2_STREAM_CLOSED);
-         break;
-      }
-      m_buffer.commit(n);
-
-      handle_buffer_contents();
-      start_write();
-   }
-
-   mlogi("recv loop: {}", reason);
-   if (reason == "done")
-      nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
-   start_write();
-   mlogi("recv loop: {}, served {} requests", reason, m_requestCounter);
-}
-
 // =================================================================================================
-
-template awaitable<void> NGHTttp2SessionImpl<asio::ip::tcp::socket>::recv_loop();
-template awaitable<void> NGHTttp2SessionImpl<asio::ip::tcp::socket>::send_loop();
-
-template awaitable<void> NGHTttp2SessionImpl<asio::ssl::stream<asio::ip::tcp::socket>>::recv_loop();
-template awaitable<void> NGHTttp2SessionImpl<asio::ssl::stream<asio::ip::tcp::socket>>::send_loop();
 
 } // namespace anyhttp::nghttp2

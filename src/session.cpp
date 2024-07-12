@@ -1,6 +1,8 @@
 #include "anyhttp/session.hpp"
 #include "anyhttp/session_impl.hpp"
 
+using namespace boost::asio;
+
 namespace anyhttp
 {
 

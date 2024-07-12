@@ -4,6 +4,7 @@
 #include "anyhttp/detect_http2.hpp"
 
 #include "anyhttp/beast_session.hpp"
+#include "anyhttp/detail/nghttp2_session_details.hpp"
 #include "anyhttp/nghttp2_session.hpp"
 
 #include <boost/asio.hpp>
@@ -43,9 +44,8 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
 #else
    spdlog::set_level(spdlog::level::info);
 #endif
-   spdlog::info("Server: ctor");
+   logi("Server: ctor");
    listen();
-   // run();
 }
 
 Server::Impl::~Impl()
@@ -95,13 +95,16 @@ static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned ch
                                 const unsigned char* in, unsigned int inlen, void* arg)
 {
    int rv = nghttp2_select_next_protocol((unsigned char**)out, outlen, in, inlen);
-   if (rv != 1)
+   switch (rv)
    {
+   case 0:
+      return SSL_TLSEXT_ERR_OK; // http/1.1
+   case 1:
+      return SSL_TLSEXT_ERR_OK; // h2
+   case -1:
+   default:
       return SSL_TLSEXT_ERR_NOACK;
    }
-   std::cout << "alpn_select_proto_cb: selected #" << rv << std::endl;
-
-   return SSL_TLSEXT_ERR_OK;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -184,7 +187,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
 #if 0
       session = std::make_shared<nghttp2::NGHTttp2SessionImpl<boost::beast::tcp_stream>>(
-         *this, executor, std::move(stream));
+         *this, executor, boost::beast::tcp_stream(std::move(socket)));
 #else
       session = std::make_shared<nghttp2::NGHTttp2SessionImpl<asio::ip::tcp::socket>>(
          *this, executor, std::move(socket));
