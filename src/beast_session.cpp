@@ -10,6 +10,7 @@
 #include <boost/beast/core.hpp>
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/core/stream_traits.hpp>
+#include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/http/basic_parser.hpp>
 #include <boost/beast/http/dynamic_body.hpp>
@@ -114,7 +115,7 @@ public:
  */
 template <typename Parent, typename Stream, typename Serializer,
           typename Message = std::remove_const_t<typename Serializer::value_type>>
-requires boost::beast::is_async_write_stream<Stream>::value
+   requires boost::beast::is_async_write_stream<Stream>::value
 class WriterBase : public Parent
 {
 public:
@@ -181,7 +182,7 @@ public:
          {
             mlogw("async_write: canceled, closing stream");
             cancelled = true;
-            session->m_stream.socket().shutdown(boost::asio::socket_base::shutdown_send);
+            stream.socket().shutdown(boost::asio::socket_base::shutdown_send);
          }
          writing = false;
          std::move(handler)(ec);
@@ -205,28 +206,28 @@ public:
 
 // -------------------------------------------------------------------------------------------------
 
-// template<class Stream>
-class ResponseWriter : public WriterBase<server::Response::Impl, boost::beast::tcp_stream,
-                                         http::response_serializer<http::buffer_body>>
+template <typename Stream>
+class ResponseWriter
+   : public WriterBase<server::Response::Impl, Stream, http::response_serializer<http::buffer_body>>
 {
+   using super =
+      WriterBase<server::Response::Impl, Stream, http::response_serializer<http::buffer_body>>;
+
 public:
-   inline ResponseWriter(BeastSession& session_, boost::beast::tcp_stream& stream_)
-      : WriterBase(session_, stream_)
-   {
-   }
+   inline ResponseWriter(BeastSession& session_, Stream& stream_) : super(session_, stream_) {}
 
    void content_length(std::optional<size_t> content_length) override
    {
       if (content_length)
-         message.content_length(*content_length);
+         super::message.content_length(*content_length);
       else
-         message.content_length(boost::none);
+         super::message.content_length(boost::none);
    }
 
    void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
    {
-      WriterBase::async_submit(headers);
-      message.result(status_code);
+      super::async_submit(headers);
+      super::message.result(status_code);
 
       //
       // TODO: For bundling writing the header and body, we should just post the writing here,
@@ -234,19 +235,30 @@ public:
       //
       // post(executor(), [this](){write);
       async_write_header(
-         stream, serializer,
+         super::stream, super::serializer,
          [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
             std::move(handler)(ec);
          });
    }
 };
 
-class RequestWriter : public WriterBase<client::Request::Impl, boost::beast::tcp_stream,
-                                        http::request_serializer<http::buffer_body>>
+template <typename Stream>
+class RequestWriter
+   : public WriterBase<client::Request::Impl, Stream, http::request_serializer<http::buffer_body>>
 {
+   using super =
+      WriterBase<client::Request::Impl, Stream, http::request_serializer<http::buffer_body>>;
+
+public:
+   using super::logPrefix;
+   using super::stream;
+   using super::message;
+   using super::session;
+   using super::serializer;
+
 public:
    inline RequestWriter(BeastSession& session_, boost::beast::tcp_stream& stream_)
-      : WriterBase(session_, stream_)
+      : super(session_, stream_)
    {
    }
 
@@ -254,7 +266,7 @@ public:
 
    void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
    {
-      WriterBase::async_submit(headers);
+      super::async_submit(headers);
       message.method(http::verb::post);
 
       //
@@ -272,7 +284,7 @@ public:
    void async_get_response(client::Request::GetResponseHandler&& handler) override
    {
       auto& buffer = session->m_buffer;
-      auto& stream = session->m_stream;
+      // auto& stream = session->m_stream;
 
       auto reader =
          std::make_unique<BeastReader<client::Response::Impl, decltype(stream), decltype(buffer),
@@ -302,31 +314,31 @@ public:
 
 // =================================================================================================
 
-BeastSession::BeastSession(std::string_view log, asio::any_io_executor executor,
-                           asio::ip::tcp::socket&& socket)
-   : m_executor(std::move(executor)), m_stream(std::move(socket)),
-     m_logPrefix(fmt::format("{} {}", normalize(m_stream.socket().remote_endpoint()), log))
+BeastSession::BeastSession(std::string_view prefix, asio::any_io_executor executor)
+   : m_executor(std::move(executor)),
+     m_logPrefix(prefix)
 {
    mlogd("session created");
 }
 
-BeastSession::BeastSession(server::Server::Impl& parent, any_io_executor executor,
-                           ip::tcp::socket&& socket)
-   : BeastSession("\x1b[1;31m""server""\x1b[0m", std::move(executor), std::move(socket))
+BeastSession::BeastSession(server::Server::Impl& parent, any_io_executor executor)
+   : BeastSession("\x1b[1;31mserver\x1b[0m",
+                  std::move(executor))
 {
    m_server = &parent;
 }
 
-BeastSession::BeastSession(client::Client::Impl& parent, any_io_executor executor,
-                           ip::tcp::socket&& socket)
-   : BeastSession("\x1b[1;32m""client""\x1b[0m", std::move(executor), std::move(socket))
+BeastSession::BeastSession(client::Client::Impl& parent, any_io_executor executor)
+   : BeastSession("\x1b[1;32mclient\x1b[0m",
+                  std::move(executor))
 {
    m_client = &parent;
 }
 
 BeastSession::~BeastSession() { mlogd("session deleted"); }
 
-void BeastSession::destroy()
+template<typename Stream>
+void BeastSessionImpl<Stream>::destroy()
 {
    boost::system::error_code ec;
    std::ignore = m_stream.socket().shutdown(boost::asio::socket_base::shutdown_both, ec);
@@ -345,7 +357,8 @@ void BeastSession::destroy()
  * queues of request and responses are processed independently of each other.
  *
  */
-awaitable<void> BeastSession::do_server_session(Buffer&& buffer)
+template<typename Stream>
+awaitable<void> BeastSessionImpl<Stream>::do_server_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
 
@@ -396,7 +409,7 @@ awaitable<void> BeastSession::do_server_session(Buffer&& buffer)
       //
       // Prepare response.
       //
-      auto writer = std::make_unique<ResponseWriter>(*this, m_stream);
+      auto writer = std::make_unique<ResponseWriter<Stream>>(*this, m_stream);
       auto& response = writer->message;
       response.set(http::field::server, "anyhttp");
 
@@ -448,7 +461,8 @@ awaitable<void> BeastSession::do_server_session(Buffer&& buffer)
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> BeastSession::do_client_session(Buffer&& buffer)
+template<typename Stream>
+awaitable<void> BeastSessionImpl<Stream>::do_client_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
 
@@ -489,11 +503,12 @@ awaitable<void> BeastSession::do_client_session(Buffer&& buffer)
 
 // -------------------------------------------------------------------------------------------------
 
-void BeastSession::async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers)
+template <typename Stream>
+void BeastSessionImpl<Stream>::async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers)
 {
    mlogd("submit: {}", url.buffer());
 
-   auto writer = std::make_unique<RequestWriter>(*this, m_stream);
+   auto writer = std::make_unique<RequestWriter<Stream>>(*this, m_stream);
    auto& request = writer->message;
 
    request.base().target(url.path());
@@ -517,5 +532,7 @@ void BeastSession::async_submit(SubmitHandler&& handler, boost::urls::url url, F
 }
 
 // =================================================================================================
+
+template class BeastSessionImpl<boost::beast::tcp_stream>;
 
 } // namespace anyhttp::beast_impl

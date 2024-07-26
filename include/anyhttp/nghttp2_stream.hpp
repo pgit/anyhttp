@@ -51,8 +51,7 @@ public:
    const asio::any_io_executor& executor() const override;
    void content_length(std::optional<size_t> content_length) override;
    void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override;
-   void async_write(WriteHandler&& handler, asio
-   ::const_buffer buffer) override;
+   void async_write(WriteHandler&& handler, asio::const_buffer buffer) override;
    void async_get_response(client::Request::GetResponseHandler&& handler) override;
    void detach() override;
 

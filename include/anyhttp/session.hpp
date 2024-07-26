@@ -39,7 +39,7 @@ public:
       return boost::asio::async_initiate<CompletionToken, Submit>(
          [&](asio::completion_handler_for<Submit> auto handler, boost::urls::url url,
              Fields headers) { //
-            async_submit_any(std::move(handler), url, std::move(headers));
+            async_submit_any(std::move(handler), std::move(url), std::move(headers));
          },
          token, url, headers);
    }

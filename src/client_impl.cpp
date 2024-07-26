@@ -91,7 +91,8 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    switch (config().protocol)
    {
    case Protocol::http11:
-      impl = std::make_shared<beast_impl::BeastSession>(*this, executor, std::move(socket));
+      impl = std::make_shared<beast_impl::BeastSessionImpl<boost::beast::tcp_stream>>(
+         *this, executor, boost::beast::tcp_stream(std::move(socket)));
       break;
    case Protocol::http2:
 #if 0

@@ -5,13 +5,12 @@
 #include "server_impl.hpp"
 #include "session_impl.hpp"
 
+#include <boost/asio.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/core/stream_traits.hpp>
-#include <map>
 
-#include <boost/asio.hpp>
-#include <span>
+#include <map>
 
 #include "nghttp2/nghttp2.h"
 
@@ -71,8 +70,13 @@ public:
    }
 
    const auto& executor() const { return m_executor; }
+   const std::string& logPrefix() const { return m_logPrefix; }
 
    // ----------------------------------------------------------------------------------------------
+
+   //
+   // TODO: Investigate if we can use ASIO channels for this.
+   //
 
    // If set, the send loop has run out of data to send and is waiting for re-activation.
    asio::any_completion_handler<void()> m_send_handler;
@@ -92,56 +96,11 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   void create_stream(int stream_id)
-   {
-      m_streams.emplace(stream_id, std::make_shared<NGHttp2Stream>(*this, stream_id));
-      m_requestCounter++;
-   }
+   void create_stream(int stream_id);
+   NGHttp2Stream* find_stream(int32_t stream_id);
+   std::shared_ptr<NGHttp2Stream> close_stream(int32_t stream_id);
 
-   NGHttp2Stream* find_stream(int32_t stream_id)
-   {
-      if (auto it = m_streams.find(stream_id); it != std::end(m_streams))
-         return it->second.get();
-      else
-         return nullptr;
-   }
-
-   auto close_stream(int32_t stream_id)
-   {
-      std::shared_ptr<NGHttp2Stream> stream;
-      if (auto it = m_streams.find(stream_id); it != std::end(m_streams))
-      {
-         stream = it->second;
-         m_streams.erase(it);
-      }
-
-      //
-      // FIXME: We can't just terminate the session after the last request -- what if the user wants
-      //        to do another one? Shutting down a session has to be (somewhat) explicit. Try to
-      //        tie this to the lifetime of the user-facing 'Session' object...
-      //
-      if (m_client && m_streams.empty())
-      {
-         logi("[{}] last stream closed, terminating session...", m_logPrefix);
-         nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
-      }
-
-      return stream;
-   }
-
-   void start_write()
-   {
-      if (m_send_handler)
-      {
-         decltype(m_send_handler) handler;
-         m_send_handler.swap(handler);
-         logd("[{}] start_write: signalling write loop...", m_logPrefix);
-         std::move(handler)();
-         logd("[{}] start_write: signalling write loop... done", m_logPrefix);
-      }
-   }
-
-   const std::string& logPrefix() const { return m_logPrefix; }
+   void start_write();
 
 public:
    nghttp2_session* session = nullptr;

@@ -159,12 +159,12 @@ protected:
       std::string buffer;
       for (;;)
       {
-         auto [ex, n] = co_await asio::async_read_until(pipe, asio::dynamic_buffer(buffer), "\n",
+         auto [ex, n] = co_await asio::async_read_until(pipe, asio::dynamic_buffer(buffer), '\n',
                                                         as_tuple(deferred));
 
-         auto sv = std::string_view(buffer).substr(0, n - 1);
          if (n)
          {
+            auto sv = std::string_view(buffer).substr(0, n - 1);
             logw("STDERR: \x1b[32m{}\x1b[0m", sv);
             buffer.erase(0, n);
          }
@@ -541,7 +541,7 @@ TEST_P(ClientAsync, Cancellation)
       // co_await sleep(100ms);
       std::vector buffer(5ul * 1024 * 1024, 'a');
       auto sender = send(request, std::string_view(buffer));
-      auto received = co_await ((std::move(sender) || sleep(0ms)) && try_receive(response));
+      auto received = co_await ((std::move(sender) || sleep(1ms)) && try_receive(response));
       fmt::println("received {} bytes", std::get<1>(received));
    };
    context.run();

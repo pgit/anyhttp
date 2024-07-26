@@ -36,7 +36,7 @@ Session::Session(std::shared_ptr<Session::Impl> impl) : m_impl(std::move(impl))
 
 Session::Session(Session&& other) noexcept : m_impl(std::move(other.m_impl))
 {
-   logd("Session::move: use_count={}", m_impl.use_count());
+   // logd("Session::move: use_count={}", m_impl.use_count());
 }
 
 Session& Session::operator=(Session&& other) noexcept

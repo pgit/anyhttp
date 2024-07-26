@@ -196,7 +196,8 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    else
    {
       logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", prefix);
-      session = std::make_shared<beast_impl::BeastSession>(*this, executor, std::move(socket));
+      session = std::make_shared<beast_impl::BeastSessionImpl<boost::beast::tcp_stream>>(
+         *this, executor, boost::beast::tcp_stream(std::move(socket)));
    }
 
    co_await session->do_server_session(std::move(buffer));

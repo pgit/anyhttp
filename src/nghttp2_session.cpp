@@ -516,4 +516,55 @@ void NGHttp2Session::handle_buffer_contents()
 
 // =================================================================================================
 
+void NGHttp2Session::create_stream(int stream_id)
+{
+   m_streams.emplace(stream_id, std::make_shared<NGHttp2Stream>(*this, stream_id));
+   m_requestCounter++;
+}
+
+NGHttp2Stream* NGHttp2Session::find_stream(int32_t stream_id)
+{
+   if (auto it = m_streams.find(stream_id); it != std::end(m_streams))
+      return it->second.get();
+   else
+      return nullptr;
+}
+
+std::shared_ptr<NGHttp2Stream> NGHttp2Session::close_stream(int32_t stream_id)
+{
+   std::shared_ptr<NGHttp2Stream> stream;
+   if (auto it = m_streams.find(stream_id); it != std::end(m_streams))
+   {
+      stream = it->second;
+      m_streams.erase(it);
+   }
+
+   //
+   // FIXME: We can't just terminate the session after the last request -- what if the user wants
+   //        to do another one? Shutting down a session has to be (somewhat) explicit. Try to
+   //        tie this to the lifetime of the user-facing 'Session' object...
+   //
+   if (m_client && m_streams.empty())
+   {
+      logi("[{}] last stream closed, terminating session...", m_logPrefix);
+      nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
+   }
+
+   return stream;
+}
+
+void NGHttp2Session::start_write()
+{
+   if (m_send_handler)
+   {
+      decltype(m_send_handler) handler;
+      m_send_handler.swap(handler);
+      logd("[{}] start_write: signalling write loop...", m_logPrefix);
+      std::move(handler)();
+      logd("[{}] start_write: signalling write loop... done", m_logPrefix);
+   }
+}
+
+// =================================================================================================
+
 } // namespace anyhttp::nghttp2

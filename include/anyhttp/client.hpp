@@ -42,8 +42,6 @@ public:
    const asio::any_io_executor& executor() const;
 
 public:
-   void write_head(unsigned int status_code, Fields headers);
-
    template <boost::asio::completion_token_for<ReadSome> CompletionToken>
    auto async_read_some(CompletionToken&& token)
    {

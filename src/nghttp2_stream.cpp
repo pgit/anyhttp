@@ -123,6 +123,7 @@ void NGHttp2Writer::async_submit(WriteHandler&& handler, unsigned int status_cod
    // TODO: headers
    std::ignore = headers;
 
+   // TODO: If we already know that there is no body, don't set a producer.
    prd.source.ptr = stream;
    prd.read_callback = [](nghttp2_session*, int32_t, uint8_t* buf, size_t length,
                           uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t
@@ -436,7 +437,6 @@ void NGHttp2Stream::delete_reader()
 void NGHttp2Stream::delete_writer()
 {
    logd("[{}] delete_writer", logPrefix);
-   // Issue RST_STREAM so that stream does not hang around.
 
    //
    // If the writer is deleted before it has delivered all data, we have to close the stream
@@ -444,7 +444,7 @@ void NGHttp2Stream::delete_writer()
    //
    if (!is_writer_done)
    {
-      logw("[{}] delete_writer: not done yet, submitting RST with INTERNAL_ERROR ", logPrefix);
+      logw("[{}] delete_writer: not done yet, submitting RST with STREAM_CLOSED", logPrefix);
       nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
       parent.start_write();
    }
