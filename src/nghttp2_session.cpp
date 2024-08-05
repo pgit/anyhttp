@@ -1,5 +1,6 @@
 
 #include "anyhttp/nghttp2_session.hpp"
+#include "anyhttp/detail/nghttp2_session_details.hpp"
 #include "anyhttp/client.hpp"
 #include "anyhttp/nghttp2_stream.hpp"
 
@@ -258,22 +259,7 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
 
 // =================================================================================================
 
-template <class T>
-using nghttp2_unique_ptr = std::unique_ptr<T, void (*)(T*)>;
-
-#define NGHTTP2_NEW(X)                                                                             \
-   static nghttp2_unique_ptr<nghttp2_##X> nghttp2_##X##_new()                                      \
-   {                                                                                               \
-      nghttp2_##X* ptr;                                                                            \
-      if (nghttp2_##X##_new(&ptr))                                                                 \
-         throw std::runtime_error("nghttp2_" #X "_new");                                           \
-      return {ptr, nghttp2_##X##_del};                                                             \
-   }
-
-NGHTTP2_NEW(session_callbacks)
-NGHTTP2_NEW(option)
-
-static auto setup_callbacks()
+nghttp2_unique_ptr<nghttp2_session_callbacks> NGHttp2Session::setup_callbacks()
 {
    //
    // setup nghttp2 callbacks
@@ -320,19 +306,6 @@ NGHttp2Session::NGHttp2Session(std::string_view prefix, any_io_executor executor
    mlogd("session created");
 }
 
-NGHttp2Session::NGHttp2Session(server::Server::Impl& parent, any_io_executor executor)
-   : NGHttp2Session("\x1b[1;31mserver\x1b[0m", std::move(executor))
-{
-   m_server = &parent;
-}
-
-NGHttp2Session::NGHttp2Session(client::Client::Impl& parent, any_io_executor executor)
-   : NGHttp2Session("\x1b[1;32mclient\x1b[0m", std::move(executor))
-{
-   m_client = &parent;
-   create_client_session();
-}
-
 NGHttp2Session::~NGHttp2Session()
 {
    m_streams.clear();
@@ -342,93 +315,6 @@ NGHttp2Session::~NGHttp2Session()
 }
 
 // =================================================================================================
-
-awaitable<void> NGHttp2Session::do_server_session(Buffer&& buffer)
-{
-   m_buffer = std::move(buffer);
-   // m_socket.set_option(ip::tcp::no_delay(true));
-   auto callbacks = setup_callbacks();
-
-   //
-   // disable automatic WINDOW update as we are sending window updates ourselves
-   // https://github.com/nghttp2/nghttp2/issues/446
-   //
-   // pynghttp2 does also disable "HTTP messaging semantics", but we don't
-   //
-   auto options = nghttp2_option_new();
-   // nghttp2_option_set_no_http_messaging(options.get(), 1);
-   nghttp2_option_set_no_auto_window_update(options.get(), 1);
-
-   if (auto rv = nghttp2_session_server_new2(&session, callbacks.get(), this, options.get()))
-      throw std::runtime_error("nghttp2_session_server_new");
-
-   nghttp2_settings_entry ent{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100};
-   nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, &ent, 1);
-
-   //
-   // Let NGHTTP2 parse what we have received so far.
-   // This must happen after submitting the server settings.
-   //
-   handle_buffer_contents();
-
-   //
-   // send/receive loop
-   //
-   co_await (send_loop() && recv_loop());
-
-   mlogd("server session done");
-}
-
-// -------------------------------------------------------------------------------------------------
-
-void NGHttp2Session::create_client_session()
-{
-   // m_socket.set_option(ip::tcp::no_delay(true));
-   auto callbacks = setup_callbacks();
-
-   //
-   // disable automatic WINDOW update as we are sending window updates ourselves
-   // https://github.com/nghttp2/nghttp2/issues/446
-   //
-   // pynghttp2 does also disable "HTTP messaging semantics", but we don't do
-   //
-   auto options = nghttp2_option_new();
-   // nghttp2_option_set_no_http_messaging(options.get(), 1);
-   nghttp2_option_set_no_auto_window_update(options.get(), 1);
-
-   if (auto rv = nghttp2_session_client_new2(&session, callbacks.get(), this, options.get()))
-      throw std::runtime_error("nghttp2_session_client_new");
-
-   nghttp2_settings_entry ent{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100};
-   nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, &ent, 1);
-
-   // const uint32_t window_size = 256 * 1024 * 1024;
-   const uint32_t window_size = 1024 * 1024;
-   std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
-   nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
-   nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
-}
-
-awaitable<void> NGHttp2Session::do_client_session(Buffer&& buffer)
-{
-   m_buffer = std::move(buffer);
-
-   //
-   // Let NGHTTP2 parse what we have received so far.
-   // This must happen after submitting the server settings.
-   //
-   handle_buffer_contents();
-
-   //
-   // send/receive loop
-   //
-   co_await (send_loop() && recv_loop());
-
-   mlogd("client session done");
-}
-
-// -------------------------------------------------------------------------------------------------
 
 void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers)
 {
@@ -535,7 +421,7 @@ std::shared_ptr<NGHttp2Stream> NGHttp2Session::close_stream(int32_t stream_id)
    std::shared_ptr<NGHttp2Stream> stream;
    if (auto it = m_streams.find(stream_id); it != std::end(m_streams))
    {
-      stream = it->second;
+      stream = std::move(it->second);
       m_streams.erase(it);
    }
 
@@ -544,7 +430,9 @@ std::shared_ptr<NGHttp2Stream> NGHttp2Session::close_stream(int32_t stream_id)
    //        to do another one? Shutting down a session has to be (somewhat) explicit. Try to
    //        tie this to the lifetime of the user-facing 'Session' object...
    //
-   if (m_client && m_streams.empty())
+   // FIXME: Use virtual function instead of dynamic cast for the client-specific code.
+   //
+   if (auto client = dynamic_cast<ClientReference*>(this) && m_streams.empty())
    {
       logi("[{}] last stream closed, terminating session...", m_logPrefix);
       nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);

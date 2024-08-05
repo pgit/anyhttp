@@ -19,6 +19,7 @@
 #include <boost/beast/http/parser.hpp>
 #include <boost/beast/http/serializer.hpp>
 #include <boost/beast/http/write.hpp>
+#include <boost/beast/ssl/ssl_stream.hpp>
 #include <boost/beast/version.hpp>
 #include <boost/smart_ptr/make_shared_array.hpp>
 #include <boost/system/detail/errc.hpp>
@@ -37,13 +38,21 @@ namespace anyhttp::beast_impl
 
 // =================================================================================================
 
-class BeastSession;
+using namespace asio;
+using namespace boost::beast;
+using socket = asio::ip::tcp::socket;
+
+inline auto& get_socket(socket& socket) { return socket; }
+inline auto& get_socket(tcp_stream& stream) { return stream.socket(); }
+inline auto& get_socket(ssl::stream<socket>& stream) { return stream.lowest_layer(); }
+
+// =================================================================================================
 
 template <typename Parent, typename Stream, typename Buffer, typename Parser>
 class BeastReader : public Parent
 {
 public:
-   inline BeastReader(BeastSession& session_, Stream& stream_, Buffer& buffer_)
+   inline BeastReader(BeastSession<Stream>& session_, Stream& stream_, Buffer& buffer_)
       : session(&session_), stream(stream_), buffer(buffer_)
    {
       parser.body_limit(std::numeric_limits<uint64_t>::max());
@@ -52,7 +61,7 @@ public:
    ~BeastReader() override {}
    void detach() override { session = nullptr; }
 
-   boost::url_view url() const override { return session->url; }
+   boost::url_view url() const override { return m_url; }
    std::optional<size_t> content_length() const noexcept override
    {
       if (parser.content_length())
@@ -102,10 +111,11 @@ public:
    const asio::any_io_executor& executor() const override { return session->executor(); }
    inline auto logPrefix() const { return session->logPrefix(); }
 
-   BeastSession* session;
+   BeastSession<Stream>* session;
    Stream& stream;
    Buffer& buffer;
    Parser parser;
+   boost::url m_url;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -119,27 +129,17 @@ template <typename Parent, typename Stream, typename Serializer,
 class WriterBase : public Parent
 {
 public:
-   inline WriterBase(BeastSession& session_, Stream& stream_) : session(&session_), stream(stream_)
+   inline WriterBase(BeastSession<Stream>& session_, Stream& stream_) : session(&session_), stream(stream_)
    {
    }
+
+   inline auto logPrefix() const { return session->logPrefix(); }
+
+   // ----------------------------------------------------------------------------------------------
 
    const asio::any_io_executor& executor() const override { return session->executor(); }
-   inline auto logPrefix() const { return session->logPrefix(); }
+
    void detach() override { session = nullptr; }
-
-   void async_submit(const Fields& headers)
-   {
-      message.body().data = nullptr;
-
-      for (auto&& header : headers)
-         message.set(header.first, header.second);
-
-      if (!message.has_content_length())
-         message.chunked(true);
-
-      mlogd("async_submit: chunked={} has_content_length={} length={}", message.chunked(),
-            message.has_content_length(), message.payload_size().value_or(0));
-   }
 
    void async_write(WriteHandler&& handler, asio::const_buffer buffer) override
    {
@@ -182,7 +182,7 @@ public:
          {
             mlogw("async_write: canceled, closing stream");
             cancelled = true;
-            stream.socket().shutdown(boost::asio::socket_base::shutdown_send);
+            get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send);
          }
          writing = false;
          std::move(handler)(ec);
@@ -196,7 +196,28 @@ public:
       http::async_write(stream, serializer, asio::bind_cancellation_slot(slot, std::move(cb)));
    }
 
-   BeastSession* session;
+   // ----------------------------------------------------------------------------------------------
+
+   /**
+    * Common submit functionality for both server response and client request.
+    */
+   void submit_headers(const Fields& headers)
+   {
+      message.body().data = nullptr;
+
+      for (auto&& header : headers)
+         message.set(header.first, header.second);
+
+      if (!message.has_content_length())
+         message.chunked(true);
+
+      mlogd("async_submit: chunked={} has_content_length={} length={}", message.chunked(),
+            message.has_content_length(), message.payload_size().value_or(0));
+   }
+
+   // ----------------------------------------------------------------------------------------------
+
+   BeastSession<Stream>* session;
    Stream& stream;
    Message message;
    Serializer serializer{message};
@@ -214,7 +235,7 @@ class ResponseWriter
       WriterBase<server::Response::Impl, Stream, http::response_serializer<http::buffer_body>>;
 
 public:
-   inline ResponseWriter(BeastSession& session_, Stream& stream_) : super(session_, stream_) {}
+   inline ResponseWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_) {}
 
    void content_length(std::optional<size_t> content_length) override
    {
@@ -226,7 +247,7 @@ public:
 
    void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
    {
-      super::async_submit(headers);
+      super::submit_headers(headers);
       super::message.result(status_code);
 
       //
@@ -251,14 +272,13 @@ class RequestWriter
 
 public:
    using super::logPrefix;
-   using super::stream;
    using super::message;
-   using super::session;
    using super::serializer;
+   using super::session;
+   using super::stream;
 
 public:
-   inline RequestWriter(BeastSession& session_, boost::beast::tcp_stream& stream_)
-      : super(session_, stream_)
+   inline RequestWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_)
    {
    }
 
@@ -266,14 +286,13 @@ public:
 
    void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
    {
-      super::async_submit(headers);
+      super::submit_headers(headers);
       message.method(http::verb::post);
 
       //
       // TODO: For bundling writing the header and body, we should just post the writing here,
       //       giving an async_write the chance to add a body to the message first.
       //
-      // post(executor(), [this](){write);
       async_write_header(
          stream, serializer,
          [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
@@ -287,7 +306,7 @@ public:
       // auto& stream = session->m_stream;
 
       auto reader =
-         std::make_unique<BeastReader<client::Response::Impl, decltype(stream), decltype(buffer),
+         std::make_unique<BeastReader<client::Response::Impl, std::decay_t<decltype(stream)>, decltype(buffer),
                                       http::response_parser<http::buffer_body>>>(*session, stream,
                                                                                  buffer);
       http::response_parser<http::buffer_body>& parser = reader->parser;
@@ -314,34 +333,39 @@ public:
 
 // =================================================================================================
 
-BeastSession::BeastSession(std::string_view prefix, asio::any_io_executor executor)
-   : m_executor(std::move(executor)),
-     m_logPrefix(prefix)
+template <typename Stream>
+BeastSession<Stream>::BeastSession(std::string_view prefix, asio::any_io_executor executor,
+                                   Stream&& stream)
+   : m_executor(std::move(executor)), m_logPrefix(prefix), m_stream(std::move(stream))
 {
    mlogd("session created");
 }
 
-BeastSession::BeastSession(server::Server::Impl& parent, any_io_executor executor)
-   : BeastSession("\x1b[1;31mserver\x1b[0m",
-                  std::move(executor))
+template <typename Stream>
+BeastSession<Stream>::~BeastSession()
 {
-   m_server = &parent;
+   mlogd("session deleted");
 }
 
-BeastSession::BeastSession(client::Client::Impl& parent, any_io_executor executor)
-   : BeastSession("\x1b[1;32mclient\x1b[0m",
-                  std::move(executor))
+template <typename Stream>
+ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_executor executor,
+                                     Stream&& stream)
+   : ServerSessionBase(parent), super("\x1b[1;31mserver\x1b[0m", executor, std::move(stream))
 {
-   m_client = &parent;
 }
 
-BeastSession::~BeastSession() { mlogd("session deleted"); }
+template <typename Stream>
+ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_executor executor,
+                                     Stream&& stream)
+   : ClientSessionBase(parent), super("\x1b[1;31mclient\x1b[0m", executor, std::move(stream))
+{
+}
 
-template<typename Stream>
-void BeastSessionImpl<Stream>::destroy()
+template <typename Stream>
+void BeastSession<Stream>::destroy()
 {
    boost::system::error_code ec;
-   std::ignore = m_stream.socket().shutdown(boost::asio::socket_base::shutdown_both, ec);
+   std::ignore = get_socket(m_stream).shutdown(boost::asio::socket_base::shutdown_both, ec);
    logi("[{}] shutdown: {}", m_logPrefix, ec.message());
 }
 
@@ -357,17 +381,17 @@ void BeastSessionImpl<Stream>::destroy()
  * queues of request and responses are processed independently of each other.
  *
  */
-template<typename Stream>
-awaitable<void> BeastSessionImpl<Stream>::do_server_session(Buffer&& buffer)
+template <typename Stream>
+awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
 
    mlogd("do_server_session, {} bytes in buffer", m_buffer.size());
-   m_stream.socket().set_option(asio::ip::tcp::no_delay(true));
+   get_socket(m_stream).set_option(asio::ip::tcp::no_delay(true));
 
    // Set the timeout. TODO: don't rely on beast timeouts
    // m_stream.expires_after(std::chrono::seconds(30));
-   m_stream.expires_never();
+   // m_stream.expires_never();
 
    bool close = false;
    beast::error_code ec;
@@ -401,8 +425,8 @@ awaitable<void> BeastSessionImpl<Stream>::do_server_session(Buffer&& buffer)
       for (auto& header : request)
          mlogd("  {}: {}", header.name_string(), header.value());
 
-      url.clear();
-      url.set_path(request.target());
+      reader->m_url.clear();
+      reader->m_url.set_path(request.target());
 
       server::Request request_wrapper(std::move(reader));
 
@@ -453,16 +477,17 @@ awaitable<void> BeastSessionImpl<Stream>::do_server_session(Buffer&& buffer)
 
    mlogi("closing stream, served {} requests", requestCounter);
 
-   m_stream.close();
-   std::ignore = m_stream.socket().shutdown(asio::ip::tcp::socket::shutdown_send, ec);
+   // FIXME: close() before shutdown()?!
+   get_socket(m_stream).close();
+   std::ignore = get_socket(m_stream).shutdown(asio::ip::tcp::socket::shutdown_send, ec);
 
    mlogd("session done");
 }
 
 // -------------------------------------------------------------------------------------------------
 
-template<typename Stream>
-awaitable<void> BeastSessionImpl<Stream>::do_client_session(Buffer&& buffer)
+template <typename Stream>
+awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
 
@@ -504,7 +529,15 @@ awaitable<void> BeastSessionImpl<Stream>::do_client_session(Buffer&& buffer)
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-void BeastSessionImpl<Stream>::async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers)
+void ServerSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::url url,
+                                         Fields headers)
+{
+   assert(false);
+}
+
+template <typename Stream>
+void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::url url,
+                                         Fields headers)
 {
    mlogd("submit: {}", url.buffer());
 
@@ -533,6 +566,8 @@ void BeastSessionImpl<Stream>::async_submit(SubmitHandler&& handler, boost::urls
 
 // =================================================================================================
 
-template class BeastSessionImpl<boost::beast::tcp_stream>;
+template class ClientSession<boost::beast::tcp_stream>;
+template class ServerSession<boost::beast::tcp_stream>;
+template class ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>;
 
 } // namespace anyhttp::beast_impl

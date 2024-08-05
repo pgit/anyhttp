@@ -12,6 +12,7 @@
 #include <boost/url/format.hpp>
 
 #include <nghttp2/nghttp2.h>
+
 #include <string>
 
 using namespace boost::asio::experimental::awaitable_operators;
@@ -21,7 +22,7 @@ namespace anyhttp::nghttp2
 
 // =================================================================================================
 
-using namespace asio;
+using namespace boost::asio;
 using namespace boost::beast;
 using socket = asio::ip::tcp::socket;
 
@@ -29,11 +30,13 @@ inline auto& get_socket(socket& socket) { return socket; }
 inline auto& get_socket(tcp_stream& stream) { return stream.socket(); }
 inline auto& get_socket(ssl::stream<socket>& stream) { return stream.lowest_layer(); }
 
+// =================================================================================================
+
 template <typename Stream>
-void NGHTttp2SessionImpl<Stream>::destroy()
+void NGHttp2SessionImpl<Stream>::destroy()
 {
    boost::system::error_code ec;
-   std::ignore = get_socket(m_stream).shutdown(boost::asio::socket_base::shutdown_both, ec);
+   std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
    logi("[{}] shutdown: {}", m_logPrefix, ec.message());
 }
 
@@ -55,7 +58,7 @@ void NGHTttp2SessionImpl<Stream>::destroy()
 // to the stream. Finally, if still no more data is returned, it waits for a signal to resume.
 //
 template <typename Stream>
-awaitable<void> NGHTttp2SessionImpl<Stream>::send_loop()
+awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
 {
    Buffer buffer;
    buffer.reserve(1460);
@@ -104,11 +107,11 @@ awaitable<void> NGHTttp2SessionImpl<Stream>::send_loop()
          }
          mylogd("send loop: writing {} bytes... done, wrote {}", to_write, written);
          assert(to_write == written);
-         buffer.consume(written);
+         buffer.clear(); // consume(written);
       }
 
       //
-      // Finally, if there is really nothing to send any more, wait for a signal to start again.
+      // Finally, if there is really nothing to send any more, wait to be started again.
       //
       else if (nread == 0)
       {
@@ -137,7 +140,7 @@ awaitable<void> NGHTttp2SessionImpl<Stream>::send_loop()
 // because it does not need to wait on re-activation by the user.
 //
 template <typename Stream>
-awaitable<void> NGHTttp2SessionImpl<Stream>::recv_loop()
+awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
 {
    m_buffer.reserve(64 * 1024);
 
@@ -164,6 +167,108 @@ awaitable<void> NGHTttp2SessionImpl<Stream>::recv_loop()
 
    start_write();
    mlogi("recv loop: {}, served {} requests", reason, m_requestCounter);
+}
+
+// =================================================================================================
+
+template <typename Stream>
+ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_executor executor,
+                                     Stream&& stream)
+   : ServerReference(parent), super("\x1b[1;31mserver\x1b[0m", executor, std::move(stream))
+{
+}
+
+// -------------------------------------------------------------------------------------------------
+
+template <typename Stream>
+awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
+{
+   m_buffer = std::move(buffer);
+   // get_socket(super::m_socket).set_option(ip::tcp::no_delay(true));
+   auto callbacks = super::setup_callbacks();
+
+   //
+   // disable automatic WINDOW update as we are sending window updates ourselves
+   // https://github.com/nghttp2/nghttp2/issues/446
+   //
+   // pynghttp2 does also disable "HTTP messaging semantics", but we don't
+   //
+   auto options = nghttp2_option_new();
+   // nghttp2_option_set_no_http_messaging(options.get(), 1);
+   nghttp2_option_set_no_auto_window_update(options.get(), 1);
+
+   if (auto rv = nghttp2_session_server_new2(&session, callbacks.get(), this, options.get()))
+      throw std::runtime_error("nghttp2_session_server_new");
+
+   nghttp2_settings_entry ent{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100};
+   nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, &ent, 1);
+
+   //
+   // Let NGHTTP2 parse what we have received so far.
+   // This must happen after submitting the server settings.
+   //
+   handle_buffer_contents();
+
+   //
+   // send/receive loop
+   //
+   co_await (send_loop() && recv_loop());
+
+   mlogd("server session done");
+}
+
+// =================================================================================================
+
+template <typename Stream>
+ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_executor executor,
+                                     Stream&& stream)
+   : ClientReference(parent), super("\x1b[1;31mclient\x1b[0m", executor, std::move(stream))
+{
+}
+
+// -------------------------------------------------------------------------------------------------
+
+template <typename Stream>
+awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
+{
+   m_buffer = std::move(buffer);
+   // get_socket(super::m_socket).set_option(ip::tcp::no_delay(true));
+   auto callbacks = super::setup_callbacks();
+
+   //
+   // disable automatic WINDOW update as we are sending window updates ourselves
+   // https://github.com/nghttp2/nghttp2/issues/446
+   //
+   // pynghttp2 does also disable "HTTP messaging semantics", but we don't do
+   //
+   auto options = nghttp2_option_new();
+   // nghttp2_option_set_no_http_messaging(options.get(), 1);
+   nghttp2_option_set_no_auto_window_update(options.get(), 1);
+
+   if (auto rv = nghttp2_session_client_new2(&session, callbacks.get(), this, options.get()))
+      throw std::runtime_error("nghttp2_session_client_new");
+
+   nghttp2_settings_entry ent{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100};
+   nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, &ent, 1);
+
+   // const uint32_t window_size = 256 * 1024 * 1024;
+   const uint32_t window_size = 1024 * 1024;
+   std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
+                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
+   nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
+   nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
+
+   //
+   // Let NGHTTP2 parse what we have received so far.
+   //
+   handle_buffer_contents();
+
+   //
+   // send/receive loop
+   //
+   co_await (send_loop() && recv_loop());
+
+   mlogd("client session done");
 }
 
 // =================================================================================================

@@ -14,6 +14,7 @@
 #include <boost/asio/ssl/stream.hpp>
 
 #include <boost/beast/core/flat_buffer.hpp>
+#include <boost/beast/ssl/ssl_stream.hpp>
 
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
@@ -156,24 +157,27 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
                                                    asio::deferred);
       buffer.consume(n);
 
-      std::string_view alpn = std::invoke(
-         [&]() -> std::string_view
-         {
-            const unsigned char* data;
-            unsigned int len;
-            SSL_get0_alpn_selected(sslStream->native_handle(), &data, &len);
-            if (data)
-               return std::string_view(reinterpret_cast<const char*>(data), len);
-            else
-               return {};
-         });
+      std::string_view alpn;
+      {
+         const unsigned char* data;
+         unsigned int len;
+         SSL_get0_alpn_selected(sslStream->native_handle(), &data, &len);
+         if (data)
+            alpn = std::string_view(reinterpret_cast<const char*>(data), len);
+      }
 
       if (alpn == "h2")
-         session = std::make_shared<
-            nghttp2::NGHTttp2SessionImpl<asio::ssl::stream<asio::ip::tcp::socket>>>(
-            *this, executor, std::move(*sslStream));
+         session =
+            std::make_shared<nghttp2::ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>> //
+            (*this, executor, std::move(*sslStream));
       else if (alpn == "http/1.1")
+#if 1
+         session =
+            std::make_shared<beast_impl::ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>> //
+            (*this, executor, std::move(*sslStream));
+#else
          ;
+#endif
    }
 #endif
 
@@ -186,21 +190,21 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
 #if 0
-      session = std::make_shared<nghttp2::NGHTttp2SessionImpl<boost::beast::tcp_stream>>(
-         *this, executor, boost::beast::tcp_stream(std::move(socket)));
+      session = std::make_shared<nghttp2::ServerSession<boost::beast::tcp_stream>> //
+         (*this, executor, boost::beast::tcp_stream(std::move(socket)));
 #else
-      session = std::make_shared<nghttp2::NGHTttp2SessionImpl<asio::ip::tcp::socket>>(
-         *this, executor, std::move(socket));
+      session = std::make_shared<nghttp2::ServerSession<asio::ip::tcp::socket>> //
+         (*this, executor, std::move(socket));
 #endif
    }
    else
    {
       logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", prefix);
-      session = std::make_shared<beast_impl::BeastSessionImpl<boost::beast::tcp_stream>>(
-         *this, executor, boost::beast::tcp_stream(std::move(socket)));
+      session = std::make_shared<beast_impl::ServerSession<boost::beast::tcp_stream>> //
+         (*this, executor, boost::beast::tcp_stream(std::move(socket)));
    }
 
-   co_await session->do_server_session(std::move(buffer));
+   co_await session->do_session(std::move(buffer));
 }
 
 // -------------------------------------------------------------------------------------------------

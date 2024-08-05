@@ -2,6 +2,8 @@
 #include "anyhttp/beast_session.hpp"
 #include "anyhttp/nghttp2_session.hpp"
 
+#include "anyhttp/detail/nghttp2_session_details.hpp"
+
 #include <boost/asio.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
@@ -91,17 +93,17 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    switch (config().protocol)
    {
    case Protocol::http11:
-      impl = std::make_shared<beast_impl::BeastSessionImpl<boost::beast::tcp_stream>>(
+      impl = std::make_shared<beast_impl::ClientSession<boost::beast::tcp_stream>>(
          *this, executor, boost::beast::tcp_stream(std::move(socket)));
       break;
    case Protocol::http2:
 #if 0
       auto stream = boost::beast::tcp_stream{std::move(socket)};
-      impl = std::make_shared<nghttp2::NGHTttp2SessionImpl<boost::beast::tcp_stream>>(
-         *this, executor, std::move(stream));
+      impl = std::make_shared<nghttp2::ClientSession<boost::beast::tcp_stream>> //
+         (*this, executor, std::move(stream));
 #else
-      impl = std::make_shared<nghttp2::NGHTttp2SessionImpl<asio::ip::tcp::socket>>(
-         *this, executor, std::move(socket));
+      impl = std::make_shared<nghttp2::ClientSession<asio::ip::tcp::socket>> //
+         (*this, executor, std::move(socket));
 #endif
       break;
    };
@@ -114,7 +116,7 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    //        We do need a user interface to stop sessions, though. This should be the deleted
    //        of the user-facing "Session" object. So we should use only the "impl" internally.
    //
-   co_spawn(executor, impl->do_client_session(Buffer{}),
+   co_spawn(executor, impl->do_session(Buffer{}),
             [impl](const std::exception_ptr& ex)
             {
                if (ex)

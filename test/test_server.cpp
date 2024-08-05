@@ -96,6 +96,7 @@ protected:
       server->setRequestHandlerCoro(
          [this](server::Request request, server::Response response) -> awaitable<void>
          {
+            logi("{}", request.url().path());
             if (request.url().path() == "/echo")
                return echo(std::move(request), std::move(response));
             else if (request.url().path() == "/eat_request")

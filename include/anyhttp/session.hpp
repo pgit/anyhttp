@@ -32,6 +32,10 @@ public:
     * just be queued for later transmission.
     *
     * Use \ref Request::async_get_response() on the request to wait for the response.
+    *
+    * TODO: There is only a single Session class for both server and client. This even might make
+    *       sense for HTTP/2, where the server can also (sort of) submit a push promise to the
+    *       client. But in general, it may be better to separate both interfaces.
     */
    template <boost::asio::completion_token_for<Submit> CompletionToken>
    auto async_submit(boost::urls::url url, Fields headers, CompletionToken&& token)
@@ -47,6 +51,7 @@ public:
 private:
    void async_submit_any(SubmitHandler&& handler, boost::urls::url url, Fields headers);
 
+   /// FIXME: For the user-facing interface, we don't want shared semantics by default.
    std::shared_ptr<Impl> m_impl;
 };
 

@@ -10,9 +10,9 @@
 
 #include <boost/asio/buffer.hpp>
 #include <boost/beast/core.hpp>
+#include <boost/beast/http/buffer_body.hpp>
 #include <boost/beast/http/parser.hpp>
 #include <boost/beast/http/serializer.hpp>
-#include <boost/beast/http/buffer_body.hpp>
 
 using namespace boost::asio;
 
@@ -21,22 +21,17 @@ namespace anyhttp::beast_impl
 
 // =================================================================================================
 
+template <typename Stream>
 class BeastSession : public ::anyhttp::Session::Impl
 {
-   BeastSession(std::string_view logPrefix, any_io_executor executor);
+protected:
+   BeastSession(std::string_view logPrefix, any_io_executor executor, Stream&& stream);
 
 public:
-   BeastSession(server::Server::Impl& parent, any_io_executor executor);
-   BeastSession(client::Client::Impl& parent, any_io_executor executor);
    ~BeastSession() override;
-   // void destroy() override;
 
-   // ----------------------------------------------------------------------------------------------
-
-   // void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) override;
-   
-   // awaitable<void> do_server_session(Buffer&& data) override;
-   // awaitable<void> do_client_session(Buffer&& data) override;
+   const std::string& logPrefix() const { return m_logPrefix; }
+   const auto& executor() const { return m_executor; }
 
    // ----------------------------------------------------------------------------------------------
 
@@ -45,11 +40,81 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
+   void destroy() override;
+
+   // ----------------------------------------------------------------------------------------------
+
+public:
+   std::string m_logPrefix;
+   asio::any_io_executor m_executor;
+   Stream m_stream;
+   Buffer m_buffer;
+};
+
+// =================================================================================================
+
+class ServerSessionBase
+{
+public:
+   inline ServerSessionBase(server::Server::Impl& parent) : m_server(&parent) {}
    server::Server::Impl& server()
    {
       assert(m_server);
       return *m_server;
    }
+
+private:
+   server::Server::Impl* m_server = nullptr;
+};
+
+template <typename Stream>
+class ServerSession : public ServerSessionBase, public BeastSession<Stream>
+{
+   using super = BeastSession<Stream>;
+
+   // FIXME: maybe use CRTP or something similar to avoid this?
+   using super::logPrefix;
+   using super::m_buffer;
+   using super::m_stream;
+
+public:
+   ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
+
+   void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) override;
+   awaitable<void> do_session(Buffer&& data) override;
+};
+
+// -------------------------------------------------------------------------------------------------
+
+class ClientSessionBase
+{
+public:
+   inline ClientSessionBase(client::Client::Impl& parent) : m_client(&parent) {}
+   client::Client::Impl& client()
+   {
+      assert(m_client);
+      return *m_client;
+   }
+
+private:
+   client::Client::Impl* m_client = nullptr;
+};
+
+template <typename Stream>
+class ClientSession : public ClientSessionBase, public BeastSession<Stream>
+{
+   using super = BeastSession<Stream>;
+
+   // FIXME: maybe use CRTP or something similar to avoid this?
+   using super::logPrefix;
+   using super::m_buffer;
+   using super::m_stream;
+
+public:
+   ClientSession(client::Client::Impl& parent, any_io_executor executor, Stream&& stream);
+
+   void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) override;
+   awaitable<void> do_session(Buffer&& data) override;
 
    client::Client::Impl& client()
    {
@@ -57,45 +122,8 @@ public:
       return *m_client;
    }
 
-   const auto& executor() const { return m_executor; }
-   const std::string& logPrefix() const { return m_logPrefix; }
-
-public:
-   boost::urls::url url;
-   Buffer m_buffer;
-
-   server::Server::Impl* m_server = nullptr;
-   client::Client::Impl* m_client = nullptr;
-   asio::any_io_executor m_executor;
-   std::string m_logPrefix;
-};
-
-// -------------------------------------------------------------------------------------------------
-
-template <typename Stream>
-class BeastSessionImpl : public BeastSession
-{
-public:
-   BeastSessionImpl(server::Server::Impl& parent, any_io_executor executor, Stream&& stream)
-      : BeastSession(parent, executor), m_stream(std::move(stream))
-   {
-   }
-
-   BeastSessionImpl(client::Client::Impl& parent, any_io_executor executor, Stream&& stream)
-      : BeastSession(parent, executor), m_stream(std::move(stream))
-   {
-   }
-
-   void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) override;
-
-   awaitable<void> do_server_session(Buffer&& data) override;
-   awaitable<void> do_client_session(Buffer&& data) override;
-
-   void destroy() override;
-
 private:
-   // asio::as_tuple_t<asio::deferred_t>::as_default_on_t<Stream> m_stream;
-   Stream m_stream;
+   client::Client::Impl* m_client = nullptr;
 };
 
 // =================================================================================================

@@ -29,10 +29,7 @@ add_link_options(-stdlib=libc++ -lstdc++fs)
 # find boost
 # https://github.com/madmongo1/blog-december-2020/blob/master/CMakeLists.txt
 #
-find_package(Boost COMPONENTS system thread atomic coroutine url filesystem REQUIRED)
-if (Boost_VERSION VERSION_LESS 1.78)
-    message(FATAL_ERROR "Boost 1.78 or higher required")
-endif ()
+find_package(Boost 1.78 COMPONENTS system thread atomic coroutine url filesystem REQUIRED)
 find_package(OpenSSL COMPONENTS)
 find_package(Threads)
 

@@ -412,10 +412,11 @@ void NGHttp2Stream::call_on_request()
    server::Request request(std::make_unique<NGHttp2Reader<server::Request::Impl>>(*this));
    server::Response response(std::make_unique<NGHttp2Writer>(*this));
 
-   if (auto& handler = parent.server().requestHandlerCoro())
+   auto& server = dynamic_cast<ServerReference&>(parent).server();
+   if (auto& handler = server.requestHandlerCoro())
       co_spawn(executor(), handler(std::move(request), std::move(response)), detached);
-   else if (auto& handler = parent.server().requestHandler())
-      parent.server().requestHandler()(std::move(request), std::move(response));
+   else if (auto& handler = server.requestHandler())
+      server.requestHandler()(std::move(request), std::move(response));
    else
       co_spawn(executor(), do_request(), detached);
       // assert(false); // no request hhandler set
