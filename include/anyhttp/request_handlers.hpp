@@ -7,12 +7,13 @@
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/deferred.hpp>
 
-#include <chrono>
 #include <fmt/ostream.h>
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/chunk.hpp>
 #include <range/v3/view/iota.hpp>
 #include <range/v3/view/transform.hpp>
+
+using namespace std::chrono_literals;
 
 namespace anyhttp
 {
@@ -35,6 +36,11 @@ boost::asio::awaitable<void> sleep(T duration)
    }
 }
 
+inline boost::asio::awaitable<void> yield()
+{
+   co_await post(co_await asio::this_coro::executor, asio::deferred);
+}
+
 boost::asio::awaitable<void> echo(server::Request request, server::Response response);
 boost::asio::awaitable<void> not_found(server::Request request, server::Response response);
 boost::asio::awaitable<void> eat_request(server::Request request, server::Response response);
@@ -48,6 +54,8 @@ boost::asio::awaitable<void> discard(server::Request request, server::Response r
 boost::asio::awaitable<void> send(client::Request& request, size_t bytes);
 boost::asio::awaitable<size_t> receive(client::Response& response);
 boost::asio::awaitable<size_t> try_receive(client::Response& response);
+boost::asio::awaitable<size_t> try_receive(client::Response& response,
+                                           boost::system::error_code& ec);
 boost::asio::awaitable<size_t> read_response(client::Request& request);
 boost::asio::awaitable<void> sendEOF(client::Request& request);
 
@@ -57,6 +65,7 @@ template <typename Range>
    requires ranges::borrowed_range<Range> && ranges::contiguous_range<Range>
 boost::asio::awaitable<void> send(client::Request& request, Range range)
 {
+   logi("send: (continous range)...");
 #if 1
    try
    {
@@ -64,20 +73,20 @@ boost::asio::awaitable<void> send(client::Request& request, Range range)
    }
    catch (const boost::system::system_error& ec)
    {
-      loge("send: (contiguous range) {}", ec.code().message());
+      loge("send: (contiguous range)... {}", ec.code().message());
+      throw;
    }
-   co_await asio::this_coro::reset_cancellation_state();
 #else
    co_await request.async_write(asio::buffer(range.data(), range.size()), asio::deferred);
 #endif
-   co_await request.async_write({}, asio::deferred);
-   logi("send: done");
+   logi("send: (continous range)... done");
 }
 
 template <typename Range>
    requires ranges::borrowed_range<Range> && (!ranges::contiguous_range<Range>)
-boost::asio::awaitable<void> send(client::Request& request, Range range, bool eof = true)
+boost::asio::awaitable<void> send(client::Request& request, Range range)
 {
+   logi("send:");
    size_t bytes = 0;
    // std::array<uint8_t, 1460> buffer;
    std::array<uint8_t, 16 * 1024> buffer;
@@ -104,19 +113,30 @@ boost::asio::awaitable<void> send(client::Request& request, Range range, bool eo
       }
       catch (const boost::system::system_error& ec)
       {
-         loge("send: (range) {}", ec.code().message());
+         loge("send: (range) {}, sent {} bytes", ec.code().message(), bytes);
          break;
       }
 #endif
    }
+   logi("send: (range) sent {} bytes", bytes);
+}
 
-   if (eof)
+// -------------------------------------------------------------------------------------------------
+
+template <typename Range>
+boost::asio::awaitable<void> sendAndForceEOF(client::Request& request, Range range)
+{
+   try
    {
-      logi("send: finishing request");
-      co_await asio::this_coro::reset_cancellation_state();
-      co_await request.async_write({}, asio::deferred);
-      logi("send: done afer writing {} bytes", bytes);
+      co_await send(request, range);
    }
+   catch (const boost::system::system_error& ec)
+   {
+      loge("sendAndForceEOF: {}", ec.code().message());
+   }
+
+   co_await asio::this_coro::reset_cancellation_state();
+   co_await sendEOF(request);
 }
 
 // =================================================================================================

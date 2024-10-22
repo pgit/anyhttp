@@ -175,36 +175,38 @@ public:
    template <boost::asio::completion_token_for<Write> CompletionToken>
    auto async_write(asio::const_buffer buffer, CompletionToken&& token)
    {
-      auto init = [&](asio::completion_handler_for<Write> auto handler, asio::const_buffer buffer)
-      {
-         assert(!sendHandler);
-
-         logd("[{}] async_write: buffer={} is_deferred={}", logPrefix, buffer.size(), is_deferred);
-
-         sendBuffer = buffer;
-         sendHandler = std::move(handler);
-
-         slot = asio::get_associated_cancellation_slot(sendHandler);
-         if (slot.is_connected() && !slot.has_handler())
+      return boost::asio::async_initiate<CompletionToken, Write>(
+         [&](asio::completion_handler_for<Write> auto handler, asio::const_buffer buffer)
          {
-            slot.assign(
-               [this](asio::cancellation_type_t ct)
-               {
-                  logw("[{}] async_write: cancelled ({})", logPrefix, int(ct));
+            assert(!sendHandler);
 
-                  if (sendHandler)
+            logd("[{}] async_write: buffer={} is_deferred={}", //
+                 logPrefix, buffer.size(), is_deferred);
+
+            sendBuffer = buffer;
+            sendHandler = std::move(handler);
+
+            slot = asio::get_associated_cancellation_slot(sendHandler);
+            if (slot.is_connected() && !slot.has_handler())
+            {
+               slot.assign(
+                  [this](asio::cancellation_type_t ct)
                   {
-                     using namespace boost::system;
-                     auto handler = std::move(sendHandler);
-                     std::move(handler)(errc::make_error_code(errc::operation_canceled));
-                  }
-               });
-         }
+                     logw("[{}] async_write: cancelled ({})", logPrefix, int(ct));
+                     // delete_writer();
 
-         resume();
-      };
+                     if (sendHandler)
+                     {
+                        using namespace boost::system;
+                        auto handler = std::move(sendHandler);
+                        std::move(handler)(errc::make_error_code(errc::operation_canceled));
+                     }
+                  });
+            }
 
-      return boost::asio::async_initiate<CompletionToken, Write>(init, token, buffer);
+            resume();
+         },
+         token, buffer);
    }
 
    void resume();

@@ -5,6 +5,7 @@
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
+#include <boost/system/detail/error_code.hpp>
 #include <fmt/ostream.h>
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/iota.hpp>
@@ -166,6 +167,13 @@ awaitable<size_t> receive(client::Response& response)
 
 awaitable<size_t> try_receive(client::Response& response)
 {
+   boost::system::error_code ec;
+   co_return co_await try_receive(response, ec);
+}
+
+awaitable<size_t> try_receive(client::Response& response, boost::system::error_code& ec)
+{
+   ec = {};
    size_t bytes = 0;
    try
    {
@@ -179,12 +187,14 @@ awaitable<size_t> try_receive(client::Response& response)
          logd("receive: {}, total {}", buf.size(), bytes);
       }
    }
-   catch (const boost::system::system_error& ec)
+   catch (const boost::system::system_error& ex)
    {
-      loge("receive: {}", ec.code().message());
+      ec = ex.code();
+      loge("receive: {} after reading {} bytes", ex.code().message(), bytes);
+      co_return bytes;
    }
 
-   co_await sleep(100ms);
+   // co_await sleep(100ms);
 
    logi("receive: EOF after reading {} bytes", bytes);
    co_return bytes;

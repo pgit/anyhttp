@@ -1,5 +1,6 @@
 #pragma once
 #include "server.hpp"
+#include "session.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_completion_handler.hpp>
@@ -28,6 +29,7 @@ public:
    virtual std::optional<size_t> content_length() const noexcept = 0;
    virtual void async_read_some(ReadSomeHandler&& handler) = 0;
    virtual void detach() = 0;
+   virtual void destroy(std::unique_ptr<Impl>&& self) { self.reset(); }
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -43,6 +45,7 @@ public:
    virtual void async_submit(WriteHandler&& handler, unsigned int status_code, Fields fields) = 0;
    virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
    virtual void detach() = 0;
+   virtual void destroy(std::unique_ptr<Impl>&& self) { self.reset(); }
 };
 
 // =================================================================================================
@@ -70,14 +73,16 @@ public:
    const RequestHandler& requestHandler() const { return m_requestHandler; }
    const RequestHandlerCoro& requestHandlerCoro() const { return m_requestHandlerCoro; }
 
-   void run();
+   void run(); // FIXME: rename to spawn or async_run
    void destroy();
 
 private:
    Config m_config;
    boost::asio::any_io_executor m_executor;
    asio::ip::tcp::acceptor m_acceptor;
-   std::set<std::shared_ptr<Session>> m_sessions;
+   // std::unordered_map<asio::ip::tcp::endpoint, asio::ip::tcp::socket> m_sockets;
+   // std::set<std::shared_ptr<Session>> m_sessions;
+   std::set<std::shared_ptr<Session::Impl>> m_sessions;
    RequestHandler m_requestHandler;
    RequestHandlerCoro m_requestHandlerCoro;
    bool m_stopped = false;

@@ -15,6 +15,12 @@ enum class Protocol
    http2
 };
 
+std::string to_string(Protocol protocol);
+inline std::ostream& operator<<(std::ostream& str, Protocol protocol)
+{
+   return str << to_string(protocol);
+}
+
 } // namespace anyhttp
 
 namespace anyhttp::client
@@ -39,7 +45,7 @@ public:
    Response(Response&& other) noexcept;
    ~Response();
 
-   const asio::any_io_executor& executor() const;
+   // const asio::any_io_executor& executor() const;
 
 public:
    template <boost::asio::completion_token_for<ReadSome> CompletionToken>
@@ -99,7 +105,7 @@ public:
             auto cs = asio::get_associated_cancellation_slot(handler);
             auto work = make_work_guard(asio::get_associated_executor(handler));
             cs.assign(
-               [work](asio::cancellation_type type) mutable
+               [work = std::move(work)](asio::cancellation_type type) mutable
                {
                   using ct = asio::cancellation_type;
                   if (ct::none != (type & ct::terminal))
@@ -114,7 +120,7 @@ public:
 #endif
             async_write_any(std::move(handler), buffer);
          },
-         token, buffer);
+         std::forward<CompletionToken>(token), buffer);
    }
 
 private:

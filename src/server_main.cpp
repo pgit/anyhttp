@@ -5,14 +5,16 @@
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
+#include <boost/asio/strand.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
 #include <fmt/ostream.h>
-#include <range/v3/range/conversion.hpp>
-#include <range/v3/view/iota.hpp>
-#include <range/v3/view/transform.hpp>
 
-namespace rv = ranges::views;
+#include <ranges>
+
+
+namespace ranges = std::ranges;
+namespace rv = std::ranges::views;
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
@@ -59,12 +61,15 @@ int main()
 {
    io_context pool;
    auto work = make_work_guard(pool);
-   auto threads = rv::ints(0, 8) |
+   auto threads = rv::iota(0) | rv::take(8) |
                   rv::transform([&](int) { return std::thread([&] { pool.run(); }); }) |
-                  ranges::to<std::vector>;
+                  ranges::to<std::vector>();
 
    io_context context;
-   auto server = std::make_optional<Server>(context.get_executor(), Config{.port = 8080});
+   auto executor = context.get_executor();
+   // auto executor = pool.get_executor();
+   // auto executor = boost::asio::make_strand(pool);
+   auto server = std::make_optional<Server>(executor, Config{.port = 8080});
 
 #if 1
    signal_set signals(context, SIGINT, SIGTERM);

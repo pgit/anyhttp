@@ -58,7 +58,13 @@ public:
       parser.body_limit(std::numeric_limits<uint64_t>::max());
    }
 
-   ~BeastReader() override {}
+   void destroy(std::unique_ptr<Parent>&& self) override { this->self = std::move(self); }
+
+   ~BeastReader() override
+   {
+      logw("BeastReader: dtor");
+      assert(!reading);
+   }
    void detach() override { session = nullptr; }
 
    boost::url_view url() const override { return m_url; }
@@ -72,8 +78,12 @@ public:
 
    void async_read_some(server::Request::ReadSomeHandler&& handler) override
    {
+      buffer.reserve(64 * 1024);
       mlogd("async_read_some: is_done={} size={} capacity={}", parser.is_done(), buffer.size(),
             buffer.capacity());
+
+      assert(!reading);
+      reading = true;
 
       if (parser.is_done())
       {
@@ -89,6 +99,15 @@ public:
       auto cb = [this, body_buffer = std::move(body_buffer),
                  handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
       {
+         reading = false;
+         if (self)
+         {
+            (std::move(handler))(errc::make_error_code(errc::operation_canceled),
+                                 std::vector<std::uint8_t>{});
+            self.reset();
+            return;
+         }
+
          auto& body = parser.get().body();
          size_t payload = body_buffer.size() - body.size;
          mlogd("async_read_some: n={} (body={}) ({}) is_done={} size={} capacity={}", n, payload,
@@ -116,6 +135,8 @@ public:
    Buffer& buffer;
    Parser parser;
    boost::url m_url;
+   bool reading = false;
+   std::unique_ptr<Parent> self;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -129,8 +150,17 @@ template <typename Parent, typename Stream, typename Serializer,
 class WriterBase : public Parent
 {
 public:
-   inline WriterBase(BeastSession<Stream>& session_, Stream& stream_) : session(&session_), stream(stream_)
+   inline WriterBase(BeastSession<Stream>& session_, Stream& stream_)
+      : session(&session_), stream(stream_)
    {
+   }
+
+   void destroy(std::unique_ptr<Parent>&& self) override { this->self = std::move(self); }
+
+   ~WriterBase() override
+   {
+      logw("WriterBase: dtor");
+      assert(!writing);
    }
 
    inline auto logPrefix() const { return session->logPrefix(); }
@@ -162,29 +192,39 @@ public:
 
       message.body().data = const_cast<void*>(buffer.data()); // FIXME: do we really have to cast?
       message.body().size = buffer.size();
-      message.body().more = buffer.size() != 0;
+      message.body().more = buffer.size() != 0; // empty buffer --> EOF
 
       // http::response<http::buffer_body> res;
       // res.clear();
 
-      // http::response_serializer<http::buffer_body> s;
-      // s.consume(10);
+      // Message m;
+      // http::response_serializer<http::buffer_body> s{m};
+      // s.get().chunked();
 
       auto slot = asio::get_associated_cancellation_slot(handler);
-      auto cb = [this, handler = std::move(handler)](boost::system::error_code ec,
+      auto cb = [this, total = buffer.size(), handler = std::move(handler)](boost::system::error_code ec,
                                                      size_t n) mutable { //
          // n is the number of bytes written to the stream
-         mlogd("async_write: n={} ({}) done=({}/{})", n, ec.message(), serializer.is_header_done(),
-               serializer.is_done());
+         mlogd("async_write: n={} ({}) done={} (body {})", n, ec.message(), 
+               serializer.is_done(), serializer.get().body().data);
+
+         writing = false;
+         if (self)
+         {
+            (std::move(handler))(errc::make_error_code(errc::operation_canceled));
+            self.reset();
+            return;
+         }
+
          if (ec == beast::http::error::need_buffer)
             ec = {};
          else if (ec == boost::system::errc::operation_canceled)
          {
-            mlogw("async_write: canceled, closing stream");
+            mlogw("async_write: canceled after writing {} of {} bytes", n, total);
             cancelled = true;
+            mlogw("async_write: canceled, closing stream");
             get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send);
          }
-         writing = false;
          std::move(handler)(ec);
       };
 
@@ -223,6 +263,7 @@ public:
    Serializer serializer{message};
    bool writing = false;
    bool cancelled = false;
+   std::unique_ptr<Parent> self;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -235,7 +276,9 @@ class ResponseWriter
       WriterBase<server::Response::Impl, Stream, http::response_serializer<http::buffer_body>>;
 
 public:
-   inline ResponseWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_) {}
+   inline ResponseWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_)
+   {
+   }
 
    void content_length(std::optional<size_t> content_length) override
    {
@@ -282,7 +325,7 @@ public:
    {
    }
 
-   ~RequestWriter() override {}
+   ~RequestWriter() override { logw("RequestWriter: dtor"); }
 
    void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
    {
@@ -306,9 +349,9 @@ public:
       // auto& stream = session->m_stream;
 
       auto reader =
-         std::make_unique<BeastReader<client::Response::Impl, std::decay_t<decltype(stream)>, decltype(buffer),
-                                      http::response_parser<http::buffer_body>>>(*session, stream,
-                                                                                 buffer);
+         std::make_unique<BeastReader<client::Response::Impl, std::decay_t<decltype(stream)>,
+                                      decltype(buffer), http::response_parser<http::buffer_body>>>(
+            *session, stream, buffer);
       http::response_parser<http::buffer_body>& parser = reader->parser;
 
       mlogd("waiting for response (size={} capacity={})", buffer.size(), buffer.capacity());
@@ -357,7 +400,7 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_execut
 template <typename Stream>
 ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_executor executor,
                                      Stream&& stream)
-   : ClientSessionBase(parent), super("\x1b[1;31mclient\x1b[0m", executor, std::move(stream))
+   : ClientSessionBase(parent), super("\x1b[1;32mclient\x1b[0m", executor, std::move(stream))
 {
 }
 
@@ -365,8 +408,8 @@ template <typename Stream>
 void BeastSession<Stream>::destroy()
 {
    boost::system::error_code ec;
-   std::ignore = get_socket(m_stream).shutdown(boost::asio::socket_base::shutdown_both, ec);
-   logi("[{}] shutdown: {}", m_logPrefix, ec.message());
+   std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
+   logwi(ec, "[{}] destroy: shutdown: {}", m_logPrefix, ec.message());
 }
 
 // =================================================================================================
@@ -387,10 +430,10 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    m_buffer = std::move(buffer);
 
    mlogd("do_server_session, {} bytes in buffer", m_buffer.size());
-   get_socket(m_stream).set_option(asio::ip::tcp::no_delay(true));
+   // get_socket(m_stream).set_option(asio::ip::tcp::no_delay(true));
 
    // Set the timeout. TODO: don't rely on beast timeouts
-   // m_stream.expires_after(std::chrono::seconds(30));
+   // m_stream.expires_after(std::chrono::seconds(5));
    // m_stream.expires_never();
 
    bool close = false;
@@ -451,6 +494,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          catch (const boost::system::system_error& e)
          {
             mloge("exception in request handler: {}", e.code().message());
+            get_socket(m_stream).shutdown(socket_base::shutdown_both);
             throw;
          }
       }
@@ -492,7 +536,7 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    m_buffer = std::move(buffer);
 
    mlogd("do_client_session, {} bytes in buffer", m_buffer.size());
-   m_stream.socket().set_option(asio::ip::tcp::no_delay(true));
+   // get_socket(m_stream).set_option(asio::ip::tcp::no_delay(true));
 
    // Set the timeout.
    m_stream.expires_after(std::chrono::seconds(30));

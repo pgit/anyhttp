@@ -1,7 +1,7 @@
 
 #include "anyhttp/nghttp2_session.hpp"
-#include "anyhttp/detail/nghttp2_session_details.hpp"
 #include "anyhttp/client.hpp"
+#include "anyhttp/detail/nghttp2_session_details.hpp"
 #include "anyhttp/nghttp2_stream.hpp"
 
 #include <boost/asio/basic_stream_socket.hpp>
@@ -182,6 +182,11 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
       handler->start_write();
       break;
    }
+
+   case NGHTTP2_WINDOW_UPDATE:
+      logd("[{}.{}] on_frame_recv_callback: WINDOW_UPDATE, increment={}", handler->logPrefix(),
+           frame->hd.stream_id, frame->window_update.window_size_increment);
+      break;
    }
 
    return 0;

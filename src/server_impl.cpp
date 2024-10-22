@@ -29,11 +29,19 @@ namespace anyhttp::server
 
 // =================================================================================================
 
+#if 0
 Request::Impl::Impl() noexcept { logd("\x1b[1;35mServer::Request: ctor\x1b[0m"); }
 Request::Impl::~Impl() { logd("\x1b[35mServer::Request: dtor\x1b[0m"); }
 
 Response::Impl::Impl() noexcept { logd("\x1b[1;35mServer::Response: ctor\x1b[0m"); }
 Response::Impl::~Impl() { logd("\x1b[35mServer::Response: dtor\x1b[0m"); }
+#else
+Request::Impl::Impl() noexcept = default;
+Request::Impl::~Impl() = default;
+
+Response::Impl::Impl() noexcept = default;
+Response::Impl::~Impl() = default;
+#endif
 
 // =================================================================================================
 
@@ -59,7 +67,6 @@ Server::Impl::~Impl()
 
 void Server::Impl::run()
 {
-   // co_spawn(m_executor, listen_loop(), detached);
    // co_spawn(m_executor, listen_loop(), asio::consign(detached, shared_from_this()));
    co_spawn(m_executor, listen_loop(),
             [self = shared_from_this()](const std::exception_ptr& ex)
@@ -73,8 +80,9 @@ void Server::Impl::run()
 
 void Server::Impl::destroy()
 {
+   logi("Server: destroy");
    m_stopped = true;
-   m_acceptor.close();
+   m_acceptor.close(); // breaks listen_loop()
 }
 
 // =================================================================================================
@@ -157,6 +165,9 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
                                                    asio::deferred);
       buffer.consume(n);
 
+      //
+      // ALPN
+      //
       std::string_view alpn;
       {
          const unsigned char* data;
@@ -171,13 +182,9 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
             std::make_shared<nghttp2::ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>> //
             (*this, executor, std::move(*sslStream));
       else if (alpn == "http/1.1")
-#if 1
          session =
             std::make_shared<beast_impl::ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>> //
             (*this, executor, std::move(*sslStream));
-#else
-         ;
-#endif
    }
 #endif
 
@@ -185,7 +192,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    // detect HTTP2 client preface, fallback to HTTP/1.1 if not found
    //
    if (session)
-      ;
+      ; // SSL session, see above
    else if (co_await async_detect_http2_client_preface(socket, buffer, deferred))
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
@@ -204,7 +211,11 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
          (*this, executor, boost::beast::tcp_stream(std::move(socket)));
    }
 
+   m_sessions.emplace(session);
+
    co_await session->do_session(std::move(buffer));
+
+   logi("[{}] session finished", prefix);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -233,10 +244,21 @@ void Server::Impl::listen()
 
 // -------------------------------------------------------------------------------------------------
 
+/**
+ * Typically, a listen loop "spawns" a new thread of execution for each connection it accepts.
+ * Doing that in a "detached" fassion violates the principles of structured concurrency, as we
+ * don't have a clear way of cancelling those threads.
+ *
+ * To solve this, we always use spawn with a callback and use that to wait for pending tasks.
+ *
+ * https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p3149r5.html#listener-loop-in-an-http-server
+ *
+ */
 awaitable<void> Server::Impl::listen_loop()
 {
    auto executor = co_await boost::asio::this_coro::executor;
 
+   size_t sessionCounter = 0;
    for (;;)
    {
       auto [ec, socket] = co_await m_acceptor.async_accept(as_tuple(deferred));
@@ -252,17 +274,41 @@ awaitable<void> Server::Impl::listen_loop()
       }
 
       auto ep = normalize(socket.remote_endpoint());
+
+      //
+      // Without something like a "nursery" or "async_scope", spwaning a tasks detaches it from
+      // the owning class without any means to join it.
+      //
+      ++sessionCounter;
       co_spawn(
+         // boost::asio::make_strand(executor),
          executor,
-         [this, socket = std::move(socket)]() mutable { //
+         [&]() mutable { //
             return handleConnection(std::move(socket));
          },
-         [ep](const std::exception_ptr& ex)
+         [&](const std::exception_ptr& ex) mutable
          {
-            if (ex)
+            --sessionCounter;
+            if (ex)            
                logw("{} {}", ep, what(ex));
+            else
+               logi("{} session finished, {} sessions left", ep, sessionCounter);
          });
    }
+
+   const auto waitingFor = sessionCounter;
+   logi("listen loop terminated, waiting for {} sessions...", waitingFor);
+
+   while (sessionCounter)
+   {
+      for (auto& session : m_sessions)
+         session->destroy();
+
+      m_sessions.clear();
+      co_await post(executor, asio::deferred);
+   }
+
+   logi("listen loop terminated, waiting for {} sessions... done", waitingFor);
 }
 
 // =================================================================================================

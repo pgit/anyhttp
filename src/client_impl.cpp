@@ -28,11 +28,19 @@ namespace anyhttp::client
 
 // =================================================================================================
 
+#if 0
 Request::Impl::Impl() noexcept { logd("\x1b[1;34mClient::Request: ctor\x1b[0m"); }
 Request::Impl::~Impl() { logd("\x1b[34mClient::Request: dtor\x1b[0m"); }
 
 Response::Impl::Impl() noexcept { logd("\x1b[1;34mClient::Response: ctor\x1b[0m"); }
 Response::Impl::~Impl() { logd("\x1b[34mClient::Response: dtor\x1b[0m"); }
+#else
+Request::Impl::Impl() noexcept = default;
+Request::Impl::~Impl() = default;
+
+Response::Impl::Impl() noexcept = default;
+Response::Impl::~Impl() = default;
+#endif
 
 // =================================================================================================
 
@@ -80,9 +88,9 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    socket.get_option(receive_buffer_size);
    logd("Client: socket buffer sizes: send={} receive={}", send_buffer_size.value(),
         receive_buffer_size.value());
-#if 0
-   socket.set_option(sb::send_buffer_size(8192));
-   socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
+#if 1
+   // socket.set_option(sb::send_buffer_size(8192));
+   // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 #endif
 
    //

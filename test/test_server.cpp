@@ -12,10 +12,14 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include <boost/beast/core/error.hpp>
+#include <boost/beast/http/error.hpp>
 #include <boost/filesystem/path.hpp>
 #include <boost/process.hpp>
 #include <boost/process/args.hpp>
 
+#include <boost/system/detail/errc.hpp>
+#include <boost/system/detail/error_code.hpp>
 #include <boost/url/url.hpp>
 
 #include <gtest/gtest.h>
@@ -42,22 +46,10 @@ namespace rv = ranges::views;
 
 using namespace anyhttp;
 
-namespace anyhttp
+std::string NameGenerator(const testing::TestParamInfo<anyhttp::Protocol>& info)
 {
-void PrintTo(Protocol protocol, std::ostream* os)
-{
-   switch (protocol)
-   {
-   case Protocol::http11:
-      *os << "http11";
-      break;
-   case Protocol::http2:
-      *os << "http2";
-      break;
-   default:
-   }
-}
-}; // namespace anyhttp
+   return to_string(info.param);
+};
 
 // =================================================================================================
 
@@ -104,14 +96,15 @@ protected:
             else if (request.url().path() == "/discard")
                return discard(std::move(request), std::move(response));
             else if (request.url().path() == "/detach")
+            {
                co_spawn(request.executor(), detach(std::move(request), std::move(response)),
-                        [&](const std::exception_ptr&)
-                        { logi("client finished, resetting server"); });
+                        [&](const std::exception_ptr&) { logi("client finished"); });
+               return []() mutable -> awaitable<void> { co_return; }();
+            }
             else if (request.url().path() == "/custom")
                return handler(std::move(request), std::move(response));
             else
                return not_found(std::move(request), std::move(response));
-            return []() mutable -> awaitable<void> { co_return; }();
          });
    }
 
@@ -133,7 +126,8 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(Server, Server,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2));
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2),
+                         NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
 
@@ -199,7 +193,9 @@ protected:
       logi("spawn: {} {}", path.generic_string(), fmt::join(args, " "));
 
       auto env = bp::environment();
-      env["LD_LIBRARY_PATH"] = "/usr/local/lib";
+      // env["LD_LIBRARY_PATH"] = "/usr/local/lib";
+      // env["LD_LIBRARY_PATH"] = "/workspaces/nghttp2/install/lib";
+      env["LD_LIBRARY_PATH"] = "/workspaces/nghttp2/install/lib:/usr/local/lib";
       bp::async_pipe out(context), err(context);
       bp::child child(
          path, env, std::move(args), bp::std_out > out, bp::std_err > err,
@@ -229,7 +225,8 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(External, External,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2));
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2),
+                         NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
 
@@ -354,7 +351,8 @@ public:
 };
 
 INSTANTIATE_TEST_SUITE_P(ClientAsync, ClientAsync,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2));
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2),
+                         NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
 
@@ -480,7 +478,7 @@ TEST_P(ClientAsync, PostRange)
       // std::string s(10ul * 1024 * 1024, 'a');
       // auto sender = send(request, std::string_view("blah"));
       // auto sender = send(request, std::string(10ul * 1024 * 1024, 'a'));
-      auto sender = send(request, rv::iota(uint8_t(0)) | rv::take(1 * 1024 * 1024));
+      auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1 * 1024 * 1024));
       auto received = co_await (std::move(sender) && receive(response));
       loge("received: {}", received);
    };
@@ -525,7 +523,7 @@ TEST_P(ClientAsync, DISABLED_Backpressure)
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
       auto response = co_await request.async_get_response(asio::deferred);
-      auto sender = send(request, rv::iota(uint8_t(0)), /* eof */ false);
+      auto sender = send(request, rv::iota(uint8_t(0)));
       co_await (std::move(sender) || sleep(2s));
       auto received = co_await (sendEOF(request) && try_receive(response));
       fmt::println("transferred {} bytes", received);
@@ -533,30 +531,129 @@ TEST_P(ClientAsync, DISABLED_Backpressure)
    context.run();
 }
 
-TEST_P(ClientAsync, Cancellation)
+//
+// Cancellation of a large buffer with Content-Length.
+//
+// Any short write of a body with known content length should result in a 'partial message' error.
+//
+TEST_P(ClientAsync, CancellationContentLength)
 {
    test = [&](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
+      const size_t length = 5ul * 1024 * 1024;
+      auto request = co_await session.async_submit(
+         url.set_path("echo"), {{"Content-Length", std::to_string(length)}}, deferred);
       auto response = co_await request.async_get_response(asio::deferred);
-      // co_await sleep(100ms);
-      std::vector buffer(5ul * 1024 * 1024, 'a');
-      auto sender = send(request, std::string_view(buffer));
-      auto received = co_await ((std::move(sender) || sleep(1ms)) && try_receive(response));
-      fmt::println("received {} bytes", std::get<1>(received));
+      std::vector<char> buffer(length);
+      auto sender = sendAndForceEOF(request, std::string_view(buffer));
+
+      boost::system::error_code ec;
+      auto received = co_await ((std::move(sender) || yield()) && try_receive(response, ec));
+      fmt::println("received {} bytes ({})", std::get<1>(received), ec.message());
+      EXPECT_LT(std::get<1>(received), length);
+      EXPECT_EQ(ec, boost::beast::http::error::partial_message);
    };
    context.run();
 }
 
+//
+// Cancellation of sending a single, large buffer without Content-Length.
+//
+// HTTP/1.1: As always when not providing Content-Length, the data is chunked. When sending data
+//           as a single, large buffer, this will result in a single, large chunk of same size.
+//           If sending that chunk is cancelled, there is no way to recover. The receiver will
+//           close the connection in this situation.
+//
+// HTTP/2: Cancelling a large buffer without Content-Length will look to the server just like a
+//         small buffer. No error is raised.
+//
+TEST_P(ClientAsync, Cancellation)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
+      const size_t length = 5ul * 1024 * 1024;
+      auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
+      auto response = co_await request.async_get_response(asio::deferred);
+      std::vector<char> buffer(length, 'a');
+      auto sender = sendAndForceEOF(request, std::string_view(buffer));
+
+      boost::system::error_code ec;
+      auto received = co_await ((std::move(sender) || yield()) && try_receive(response, ec));
+      fmt::println("received {} bytes ({})", std::get<1>(received), ec.message());
+      EXPECT_GT(std::get<1>(received), 0);
+      if (GetParam() == anyhttp::Protocol::http2)
+         EXPECT_EQ(ec, boost::system::errc::success);
+      else
+         EXPECT_EQ(ec, boost::beast::http::error::partial_message);
+   };
+   context.run();
+}
+
+//
+// Cancellation of sending a large amount of data that is split into many smaller chunks.
+//
+// This should work with any protocol, without error.
+//
 TEST_P(ClientAsync, CancellationRange)
 {
    test = [&](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
       auto response = co_await request.async_get_response(asio::deferred);
-      auto sender = send(request, rv::iota(uint8_t(0)));
-      auto received = co_await ((std::move(sender) || sleep(2ms)) && receive(response));
+      auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)));
+
+      boost::system::error_code ec;
+      auto received = co_await ((std::move(sender) || yield()) && try_receive(response, ec));
       fmt::println("received {} bytes", std::get<1>(received));
+      EXPECT_GT(std::get<1>(received), 0);
+      EXPECT_EQ(ec, boost::system::errc::success);
+   };
+   context.run();
+}
+
+// =================================================================================================
+
+TEST_P(ClientAsync, ResetServerDuringRequest)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
+      auto response = co_await request.async_get_response(asio::deferred);
+
+      co_spawn(context, send(request, rv::iota(uint8_t(0))), detached);
+
+      std::println("----------------------------------------------------------------------");
+      server.reset();
+
+      for (size_t i = 0; i < 10; ++i)
+      {
+         std::println("--- {} ----------------------------------------------------------------", i);
+         co_await yield();
+      }
+
+      // auto received = co_await receive(response);
+      // loge("received: {}", received);
+   };
+   context.run();
+}
+
+TEST_P(ClientAsync, SpawnAndForget)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
+      {
+         auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
+         auto response = co_await request.async_get_response(asio::deferred);
+
+         co_spawn(context, send(request, rv::iota(uint8_t(0))), detached);
+         std::println("-----------------------------------------------------------------------");
+      }
+
+      for (size_t i = 0; i < 100; ++i)
+      {
+         std::println("--- {} ----------------------------------------------------------------", i);
+         co_await yield();
+      }
    };
    context.run();
 }

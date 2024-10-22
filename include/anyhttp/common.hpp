@@ -104,13 +104,13 @@ struct fmt::formatter<boost::core::string_view> : ostream_formatter
 
 // https://github.com/fmtlib/fmt/issues/2865
 template <>
-struct fmt::formatter<std::filesystem::path>: formatter<std::string_view>
+struct fmt::formatter<std::filesystem::path> : formatter<std::string_view>
 {
-    template <typename FormatContext>
-    auto format(const std::filesystem::path& path, FormatContext& ctx)
-    {
-        return formatter<std::string_view>::format(path.string(), ctx);
-    }
+   template <typename FormatContext>
+   auto format(const std::filesystem::path& path, FormatContext& ctx)
+   {
+      return formatter<std::string_view>::format(path.string(), ctx);
+   }
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -141,6 +141,15 @@ inline std::string what(const std::exception_ptr& ptr)
 #define logi(...) SPDLOG_INFO(__VA_ARGS__)
 #define logd(...) SPDLOG_DEBUG(__VA_ARGS__)
 #else
+#define logwi(ec, ...)                                                                             \
+   do                                                                                              \
+   {                                                                                               \
+      if (ec && spdlog::default_logger_raw()->should_log(spdlog::level::warn))                     \
+         spdlog::default_logger_raw()->warn(__VA_ARGS__);                                         \
+      else if (spdlog::default_logger_raw()->should_log(spdlog::level::info))                      \
+         spdlog::default_logger_raw()->info(__VA_ARGS__);                                          \
+   } while (false)
+
 #define loge(...)                                                                                  \
    do                                                                                              \
    {                                                                                               \

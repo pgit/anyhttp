@@ -1,20 +1,22 @@
-cmake_minimum_required(VERSION 3.17)
+cmake_minimum_required(VERSION 3.30)
 project(asio_anyhttp VERSION 0.0.1)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS On)
 set(CMAKE_CXX_STANDARD 23)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
-    add_compile_definitions(BOOST_ASIO_ENABLE_BUFFER_DEBUGGING)
+    # add_compile_definitions(BOOST_ASIO_ENABLE_BUFFER_DEBUGGING)
 
     # ASIO handler tracking output (very noisy)
     # add_compile_definitions(BOOST_ASIO_ENABLE_HANDLER_TRACKING)
     
-    # add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
-    # add_link_options(-fsanitize=thread)
+    # thread sanitizer
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
     
-    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
-    add_link_options(-fsanitize=address)
+    # address sanitizer
+    # add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    # add_link_options(-fsanitize=address)
 
     # include(CodeCoverage)
     # append_coverage_compiler_flags()
@@ -22,6 +24,9 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
 endif()
 add_compile_options(-stdlib=libc++)
 add_link_options(-stdlib=libc++ -lstdc++fs)
+
+# needed starting with clang 19
+add_compile_options(-Wno-deprecated-declarations)
 
 # --------------------------------------------------------------------------------------------------
 

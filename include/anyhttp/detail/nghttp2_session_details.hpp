@@ -37,7 +37,7 @@ void NGHttp2SessionImpl<Stream>::destroy()
 {
    boost::system::error_code ec;
    std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
-   logi("[{}] shutdown: {}", m_logPrefix, ec.message());
+   logwi(ec, "[{}] destroy: shutdown: {}", m_logPrefix, ec.message());
 }
 
 // =================================================================================================
@@ -99,6 +99,10 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
       {
          const std::array<asio::const_buffer, 2> seq{buffer.data(), asio::buffer(data, nread)};
          mylogd("send loop: writing {} bytes...", to_write);
+         if (!get_socket(m_stream).is_open())
+         {
+            mloge("send loop: SOCKET HAS BEEN CLOSED!!!!!!!!!!");
+         }
          auto [ec, written] = co_await asio::async_write(m_stream, seq, as_tuple(deferred));
          if (ec)
          {
@@ -222,7 +226,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 template <typename Stream>
 ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_executor executor,
                                      Stream&& stream)
-   : ClientReference(parent), super("\x1b[1;31mclient\x1b[0m", executor, std::move(stream))
+   : ClientReference(parent), super("\x1b[1;32mclient\x1b[0m", executor, std::move(stream))
 {
 }
 
