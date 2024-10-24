@@ -1,10 +1,14 @@
 
 #include "anyhttp/nghttp2_stream.hpp"
 #include "anyhttp/nghttp2_session.hpp"
+#include "anyhttp/request_handlers.hpp"
 
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
+#include <boost/beast/http/error.hpp>
+#include <boost/system/detail/error_code.hpp>
 
 #include <nghttp2/nghttp2.h>
 
@@ -107,21 +111,27 @@ void NGHttp2Writer::async_submit(WriteHandler&& handler, unsigned int status_cod
    assert(stream);
 
    auto nva = std::vector<nghttp2_nv>();
-   nva.reserve(3);
+   nva.reserve(3 + headers.size());
 
    std::string status_code_str = fmt::format("{}", status_code);
    nva.push_back(make_nv_ls(":status", status_code_str));
    std::string date = "Sat, 01 Apr 2023 09:33:09 GMT";
    nva.push_back(make_nv_ls("date", date));
+
+   for (auto&& item : headers)
+   {
+      if (boost::iequals(item.first, "content-length") || item.first.starts_with(':'))
+         logw("[{}] async_submit: invalid header '{}'", stream->logPrefix, item.first);
+
+      nva.push_back(make_nv_ls(item.first, item.second));
+   }
+
    std::string length_str;
    if (m_content_length)
    {
       length_str = fmt::format("{}", *m_content_length);
       nva.push_back(make_nv_ls("content-length", length_str));
    }
-
-   // TODO: headers
-   std::ignore = headers;
 
    // TODO: If we already know that there is no body, don't set a producer.
    prd.source.ptr = stream;
@@ -178,19 +188,41 @@ void NGHttp2Stream::call_handler_loop()
       m_pending_read_buffers.pop_front();
       auto buffer_length = buffer.size();
 
+      boost::system::error_code ec;
       assert(!is_reading_finished);
-      if (buffer_length == 0)
+      if (buffer_length)
+      {
+         bytesRead += buffer_length;
+         if (content_length && bytesRead > *content_length)
+         {
+            logw("[{}] read_callback: received {} bytes, more than content length of {}", //
+                 logPrefix, bytesRead, *content_length);
+            // reset stream?
+         }
+      }
+      else
+      {
          is_reading_finished = true;
+         if (content_length && *content_length != bytesRead)
+         {
+            logw("[{}] read_callback: EOF after {} bytes, less than content length of {}",
+                 logPrefix, bytesRead, *content_length);
+            ec = boost::beast::http::error::partial_message;
+         }
+      }
 
       logd("[{}] read_callback: calling handler with {} bytes...", logPrefix, buffer_length);
-      std::move(handler)(boost::system::error_code{}, std::move(buffer));
-      logd("[{}] read_callback: calling handler with {} bytes... done", logPrefix, buffer_length);
+      std::move(handler)(ec, std::move(buffer));
       if (m_read_handler)
-         logd("[{}] read_callback: READ HANDLER RESPAWNED!!!! ({} pending)", logPrefix,
-              m_pending_read_buffers.size());
+         logd("[{}] read_callback: calling handler with {} bytes... done,"
+              " RESPAWNED ({} buffers pending)",
+              logPrefix, buffer_length, m_pending_read_buffers.size());
+      else
+         logd("[{}] read_callback: calling handler with {} bytes... done", logPrefix,
+              buffer_length);
 
       //
-      // To apply back pressure, the stream is consumed after the handler is invoked.
+      // To apply back pressure, the stream is consumed only after the handler is invoked.
       //
       nghttp2_session_consume_stream(parent.session, id, buffer_length);
       parent.start_write();
@@ -279,10 +311,12 @@ ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data
       if (sendBuffer.size() == 0)
       {
          logd("[{}] write callback: running handler...", logPrefix);
-         std::move(sendHandler)(boost::system::error_code{});
-         logd("[{}] write callback: running handler... done", logPrefix);
+         auto handler = std::move(sendHandler);
+         std::move(handler)(boost::system::error_code{});
          if (sendHandler)
-            logd("[{}] write callback: SEND HANDLER RESPAWNED", logPrefix);
+            logd("[{}] write callback: running handler... done -- RESPAWNED", logPrefix);
+         else
+            logd("[{}] write callback: running handler... done", logPrefix);
       }
 
       logd("[{}] write callback: {} bytes left", logPrefix, sendBuffer.size());
@@ -296,84 +330,6 @@ ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data
    }
 
    return copied;
-}
-
-awaitable<void> NGHttp2Stream::do_request()
-{
-   logd("[{}] do_request", logPrefix);
-
-   //
-   // https://nghttp2.org/documentation/types.html#c.nghttp2_data_source_read_callback
-   //
-   // This callback is run by nghttp2 when it is ready to accept data to be sent.
-   //
-   nghttp2_data_provider prd;
-   prd.source.ptr = this;
-   prd.read_callback = [](nghttp2_session* session, int32_t stream_id, uint8_t* buf, size_t length,
-                          uint32_t* data_flags, nghttp2_data_source* source,
-                          void* user_data) -> ssize_t
-   {
-      std::ignore = session;
-      std::ignore = stream_id;
-      std::ignore = user_data;
-      std::ignore = source;
-
-      auto stream = static_cast<NGHttp2Stream*>(source->ptr);
-      assert(stream);
-      return stream->read_callback(buf, length, data_flags);
-   };
-
-   //
-   // Submit response, full headers and producer callback for the body.
-   //
-   auto nva = std::vector<nghttp2_nv>();
-   nva.reserve(2);
-   std::string status = "200";
-   std::string date = "Sat, 01 Apr 2023 09:33:09 GMT";
-   nva.push_back(make_nv_ls(":status", status));
-   nva.push_back(make_nv_ls("date", date));
-
-   //
-   // It is a little faster to just submit headers here and the response later, when there
-   // is some data to send. Otherwise, there is an extra DEFERRED round trip.
-   //
-   // auto rv = nghttp2_submit_response(parent.session, id, nva.data(), nva.size(), &prd);
-
-   //
-   // Async echo loop
-   //
-   size_t echoed = 0;
-   bool headersSent = false;
-   for (;;)
-   {
-
-      logd("[{}] CORO: async_read_some...", logPrefix);
-      auto [ec, buffer] = co_await async_read_some(as_tuple(deferred));
-      logd("[{}] CORO: async_read_some... done", logPrefix);
-
-      if (!headersSent)
-      {
-         logd("[{}] CORO: submitting response...", logPrefix);
-         nghttp2_submit_response(parent.session, id, nva.data(), nva.size(), &prd);
-         logd("[{}] CORO: submitting response... done", logPrefix);
-         headersSent = true;
-      }
-
-      auto len = buffer.size();
-      unhandled -= len;
-      echoed += len;
-
-      auto buffer_length = buffer.size();
-      logd("[{}] CORO: echoing {} bytes...", logPrefix, buffer_length);
-      co_await async_write(asio::buffer(buffer), deferred);
-      logd("[{}] CORO: echoing {} bytes... done", logPrefix, buffer_length);
-
-      if (len == 0)
-         break;
-   }
-
-   logd("[{}] CORO: echoed {} bytes total", logPrefix, echoed);
-   co_return;
 }
 
 void NGHttp2Stream::call_on_response()
@@ -406,9 +362,6 @@ void NGHttp2Stream::call_on_request()
    // TODO: Implement request queue. Until then, separate preparation of request/response from
    //       the actual handling.
    //
-#if 0
-      co_spawn(executor(), do_request(), detached);
-#else
    server::Request request(std::make_unique<NGHttp2Reader<server::Request::Impl>>(*this));
    server::Response response(std::make_unique<NGHttp2Writer>(*this));
 
@@ -418,9 +371,10 @@ void NGHttp2Stream::call_on_request()
    else if (auto& handler = server.requestHandler())
       server.requestHandler()(std::move(request), std::move(response));
    else
-      co_spawn(executor(), do_request(), detached);
-      // assert(false); // no request hhandler set
-#endif
+   {
+      loge("[{}] call_on_request: no request handler!", logPrefix);
+      co_spawn(executor(), not_found(std::move(request), std::move(response)), detached);
+   }
 }
 
 const asio::any_io_executor& NGHttp2Stream::executor() const { return parent.executor(); }

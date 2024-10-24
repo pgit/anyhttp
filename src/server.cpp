@@ -21,6 +21,8 @@ Request::~Request()
 
    auto& impl = *m_impl;
    impl.destroy(std::move(m_impl)); // give implementation a chance for cancellation
+   m_impl.reset(); // if destroy() didn't
+   assert(!m_impl);
 }
 
 boost::url_view Request::url() const
@@ -63,6 +65,8 @@ Response::~Response()
 
    auto& impl = *m_impl;
    impl.destroy(std::move(m_impl)); // give implementation a chance for cancellation
+   m_impl.reset(); // if destroy() didn't
+   assert(!m_impl);
 }
 
 void Response::content_length(std::optional<size_t> content_length)

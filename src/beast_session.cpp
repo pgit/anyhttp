@@ -25,6 +25,7 @@
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <boost/system/detail/generic_category.hpp>
+#include <boost/system/errc.hpp>
 #include "anyhttp/server.hpp"
 
 using namespace std::chrono_literals;
@@ -58,7 +59,11 @@ public:
       parser.body_limit(std::numeric_limits<uint64_t>::max());
    }
 
-   void destroy(std::unique_ptr<Parent>&& self) override { this->self = std::move(self); }
+   void destroy(std::unique_ptr<Parent>&& self) override
+   {
+      if (reading)
+         this->deleting = std::move(self);
+   }
 
    ~BeastReader() override
    {
@@ -100,11 +105,11 @@ public:
                  handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
       {
          reading = false;
-         if (self)
+         if (deleting)
          {
             (std::move(handler))(errc::make_error_code(errc::operation_canceled),
                                  std::vector<std::uint8_t>{});
-            self.reset();
+            deleting.reset();
             return;
          }
 
@@ -136,7 +141,7 @@ public:
    Parser parser;
    boost::url m_url;
    bool reading = false;
-   std::unique_ptr<Parent> self;
+   std::unique_ptr<Parent> deleting;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -155,7 +160,11 @@ public:
    {
    }
 
-   void destroy(std::unique_ptr<Parent>&& self) override { this->self = std::move(self); }
+   void destroy(std::unique_ptr<Parent>&& self) override
+   {
+      if (writing)
+         this->deleting = std::move(self);
+   }
 
    ~WriterBase() override
    {
@@ -202,17 +211,18 @@ public:
       // s.get().chunked();
 
       auto slot = asio::get_associated_cancellation_slot(handler);
-      auto cb = [this, total = buffer.size(), handler = std::move(handler)](boost::system::error_code ec,
-                                                     size_t n) mutable { //
+      auto cb = [this, expected = buffer.size(), handler = std::move(handler)] //
+         (boost::system::error_code ec, size_t n) mutable
+      {
          // n is the number of bytes written to the stream
-         mlogd("async_write: n={} ({}) done={} (body {})", n, ec.message(), 
-               serializer.is_done(), serializer.get().body().data);
+         mlogd("async_write: n={} ({}) done={} (body {})", n, ec.message(), serializer.is_done(),
+               serializer.get().body().data);
 
          writing = false;
-         if (self)
+         if (deleting)
          {
             (std::move(handler))(errc::make_error_code(errc::operation_canceled));
-            self.reset();
+            deleting.reset();
             return;
          }
 
@@ -220,11 +230,17 @@ public:
             ec = {};
          else if (ec == boost::system::errc::operation_canceled)
          {
-            mlogw("async_write: canceled after writing {} of {} bytes", n, total);
+            mlogw("async_write: canceled after writing {} of {} bytes", n, expected);
             cancelled = true;
             mlogw("async_write: canceled, closing stream");
             get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send);
          }
+         else if (!ec && n < expected)
+         {
+            mlogw("async_write: wrote {} bytes which is less than expected ({})", n, expected);
+            ec = boost::system::errc::make_error_code(boost::system::errc::message_size);
+         }
+
          std::move(handler)(ec);
       };
 
@@ -263,7 +279,7 @@ public:
    Serializer serializer{message};
    bool writing = false;
    bool cancelled = false;
-   std::unique_ptr<Parent> self;
+   std::unique_ptr<Parent> deleting;
 };
 
 // -------------------------------------------------------------------------------------------------

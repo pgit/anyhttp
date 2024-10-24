@@ -198,7 +198,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    // pynghttp2 does also disable "HTTP messaging semantics", but we don't
    //
    auto options = nghttp2_option_new();
-   // nghttp2_option_set_no_http_messaging(options.get(), 1);
+   nghttp2_option_set_no_http_messaging(options.get(), 1);
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
 
    if (auto rv = nghttp2_session_server_new2(&session, callbacks.get(), this, options.get()))
@@ -246,7 +246,7 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    // pynghttp2 does also disable "HTTP messaging semantics", but we don't do
    //
    auto options = nghttp2_option_new();
-   // nghttp2_option_set_no_http_messaging(options.get(), 1);
+   nghttp2_option_set_no_http_messaging(options.get(), 1);
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
 
    if (auto rv = nghttp2_session_client_new2(&session, callbacks.get(), this, options.get()))

@@ -39,6 +39,11 @@ nghttp2_nv make_nv_ls(const char (&name)[N], const std::string& value)
            NGHTTP2_NV_FLAG_NO_COPY_NAME};
 }
 
+inline nghttp2_nv make_nv_ls(const std::string& key, const std::string& value)
+{
+   return {(uint8_t*)key.c_str(), (uint8_t*)value.c_str(), key.size(), value.size(), 0};
+}
+
 template <class T>
 constexpr auto make_string_view(const T* data, size_t len)
 {

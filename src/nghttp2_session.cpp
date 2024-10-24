@@ -4,12 +4,14 @@
 #include "anyhttp/detail/nghttp2_session_details.hpp"
 #include "anyhttp/nghttp2_stream.hpp"
 
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/beast/core/static_buffer.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
+#include <boost/beast/http/error.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
 #include <boost/url/format.hpp>
@@ -29,7 +31,7 @@ int on_begin_headers_callback(nghttp2_session*, const nghttp2_frame* frame, void
 {
    auto handler = static_cast<NGHttp2Session*>(user_data);
 
-   logd("[{}] on_begin_header_callback:", handler->logPrefix());
+   logd("[{}] on_begin_header_callback:", handler->logPrefix(frame));
 
    if (frame->hd.type != NGHTTP2_HEADERS || frame->headers.cat != NGHTTP2_HCAT_REQUEST)
    {
@@ -48,14 +50,12 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
                        void* user_data)
 {
    std::ignore = session;
-   std::ignore = frame;
    std::ignore = flags;
 
    auto handler = static_cast<NGHttp2Session*>(user_data);
    auto namesv = make_string_view(name, namelen);
    auto valuesv = make_string_view(value, valuelen);
-   logd("[{}.{}] on_header_callback: {}={}", handler->logPrefix(), frame->hd.stream_id, namesv,
-        valuesv);
+   logd("[{}] on_header_callback: {}: {}", handler->logPrefix(frame), namesv, valuesv);
 
    auto stream = handler->find_stream(frame->hd.stream_id);
    assert(stream);
@@ -93,6 +93,35 @@ int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* fr
    nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
                              NGHTTP2_INTERNAL_ERROR);
 
+   return 0;
+}
+
+int on_error_callback(nghttp2_session* session, int lib_error_code, const char* msg, size_t len,
+                      void* user_data)
+{
+   auto handler = static_cast<NGHttp2Session*>(user_data);
+   loge("[{}] on_error_callback: {}", handler->logPrefix(), std::string_view(msg, len));
+   return 0;
+}
+
+static std::string_view to_string_view(nghttp2_vec vec)
+{
+   return std::string_view(reinterpret_cast<const char*>(vec.base), vec.len);
+}
+
+static std::string_view to_string_view(nghttp2_rcbuf* buf)
+{
+   return to_string_view(nghttp2_rcbuf_get_buf(buf));
+}
+
+int on_invalid_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
+                               nghttp2_rcbuf* name, nghttp2_rcbuf* value, uint8_t flags,
+                               void* user_data)
+{
+   auto handler = static_cast<NGHttp2Session*>(user_data);
+   auto nameBuf = nghttp2_rcbuf_get_buf(name);
+   loge("[{}] invalid_header_callback: {}: {}", //
+        handler->logPrefix(), to_string_view(name), to_string_view(value));
    return 0;
 }
 
@@ -138,12 +167,6 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
    auto handler = static_cast<NGHttp2Session*>(user_data);
    auto stream = handler->find_stream(frame->hd.stream_id);
 
-   if (frame->hd.stream_id)
-      logd("[{}.{}] on_frame_recv_callback: {}", handler->logPrefix(), frame->hd.stream_id,
-           frameType(frame->hd.type));
-   else
-      logd("[{}] on_frame_recv_callback: {}", handler->logPrefix(), frameType(frame->hd.type));
-
    switch (frame->hd.type)
    {
    case NGHTTP2_DATA:
@@ -154,8 +177,9 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
          break;
       }
 
-      logd("[{}.{}] on_frame_recv_callback: DATA, flags={}", handler->logPrefix(),
-           frame->hd.stream_id, frame->hd.flags);
+      logd("[{}] on_frame_recv_callback: DATA len={} flags={}", handler->logPrefix(frame),
+           frame->hd.length, frame->hd.flags);
+
       if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)
       {
          stream->call_on_data(session, frame->hd.stream_id, nullptr, 0);
@@ -184,8 +208,12 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
    }
 
    case NGHTTP2_WINDOW_UPDATE:
-      logd("[{}.{}] on_frame_recv_callback: WINDOW_UPDATE, increment={}", handler->logPrefix(),
-           frame->hd.stream_id, frame->window_update.window_size_increment);
+      logd("[{}] on_frame_recv_callback: WINDOW_UPDATE, increment={}", handler->logPrefix(frame),
+           frame->window_update.window_size_increment);
+      break;
+
+   default:
+      logd("[{}] on_frame_recv_callback: {}", handler->logPrefix(frame), frameType(frame->hd.type));
       break;
    }
 
@@ -207,7 +235,7 @@ int on_data_chunk_recv_callback(nghttp2_session* session, uint8_t flags, int32_t
       return 0;
    }
 
-   logd("[{}.{}] on_frame_recv_callback: DATA, len={}", handler->logPrefix(), stream_id, len);
+   logd("[{}.{}] on_data_chunk_recv_callback: DATA, len={}", handler->logPrefix(), stream_id, len);
    stream->call_on_data(session, stream_id, data, len);
    handler->start_write(); // might re-open windows
 
@@ -223,8 +251,8 @@ int on_frame_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
 
    auto handler = static_cast<NGHttp2Session*>(user_data);
    if (frame->hd.stream_id)
-      logd("[{}.{}] on_frame_send_callback: {}", handler->logPrefix(), frame->hd.stream_id,
-           frameType(frame->hd.type));
+      logd("[{}] on_frame_send_callback: {} length={} flags={}", handler->logPrefix(frame),
+           frameType(frame->hd.type), frame->hd.length, frame->hd.flags);
    else
       logd("[{}] on_frame_send_callback: {}", handler->logPrefix(), frameType(frame->hd.type));
 
@@ -238,10 +266,19 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
    std::ignore = error_code;
 
    auto sessionWrapper = static_cast<NGHttp2Session*>(user_data);
-   logd("[{}.{}] on_stream_close_callback:", sessionWrapper->logPrefix(), stream_id);
+   logd("[{}] on_stream_close_callback:", sessionWrapper->logPrefix(stream_id));
 
    auto stream = sessionWrapper->close_stream(stream_id);
    assert(stream);
+
+   stream->is_writer_done = true;
+   if (stream->m_read_handler)
+   {
+      logd("[{}] stream closed while reading, raising 'partial_message'",
+           sessionWrapper->logPrefix(stream_id));
+      auto handler = std::move(stream->m_read_handler);
+      std::move(handler)(boost::beast::http::error::partial_message, std::vector<uint8_t>{});
+   }
 
    if (stream->responseHandler)
    {
@@ -258,7 +295,7 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
       stream->sendHandler = nullptr;
    }
 
-   post(stream->executor(), [stream]() {});
+   post(stream->executor(), [stream]() { /* deferred delete */ });
    return 0;
 }
 
@@ -299,6 +336,8 @@ nghttp2_unique_ptr<nghttp2_session_callbacks> NGHttp2Session::setup_callbacks()
    nghttp2_session_callbacks_set_on_begin_headers_callback(callbacks, on_begin_headers_callback);
    nghttp2_session_callbacks_set_on_header_callback(callbacks, on_header_callback);
    nghttp2_session_callbacks_set_on_frame_not_send_callback(callbacks, on_frame_not_send_callback);
+   nghttp2_session_callbacks_set_error_callback2(callbacks, on_error_callback);
+   nghttp2_session_callbacks_set_on_invalid_header_callback2(callbacks, on_invalid_header_callback);
 
    return callbacks_unique;
 }
@@ -324,8 +363,6 @@ NGHttp2Session::~NGHttp2Session()
 void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers)
 {
    mlogi("submit: {}", url.buffer());
-
-   std::ignore = headers;
 
    auto stream = std::make_shared<NGHttp2Stream>(*this, 0);
    stream->url = url;
@@ -360,18 +397,28 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    std::string path(view->path());
    std::string authority(view->host_address());
    auto nva = std::vector<nghttp2_nv>();
-   nva.reserve(4);
+   nva.reserve(4 + headers.size());
    nva.push_back(make_nv_ls(":method", method));
    nva.push_back(make_nv_ls(":scheme", scheme));
    nva.push_back(make_nv_ls(":path", path));
    nva.push_back(make_nv_ls(":authority", authority));
-   for (auto nv : nva)
-      mlogd("submit: {}={}", std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen),
-            std::string_view(reinterpret_cast<const char*>(nv.value), nv.valuelen));
+
+   for (auto&& item : headers)
+   {
+      if (boost::iequals(item.first, "content-length") || item.first.starts_with(':'))
+         logw("[{}] async_submit: invalid header '{}'", stream->logPrefix, item.first);
+
+      nva.push_back(make_nv_ls(item.first, item.second));
+   }
 
    auto id = nghttp2_submit_request(session, nullptr, nva.data(), nva.size(), &prd, this);
    stream->id = id;
    stream->logPrefix = fmt::format("{}.{}", logPrefix(), id);
+
+   for (auto nv : nva)
+      mlogd("submit: {}: {}", std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen),
+            std::string_view(reinterpret_cast<const char*>(nv.value), nv.valuelen));
+
    if (id < 0)
    {
       mloge("submit: nghttp2_submit_request: ERROR: {}", id);
@@ -439,8 +486,10 @@ std::shared_ptr<NGHttp2Stream> NGHttp2Session::close_stream(int32_t stream_id)
    //
    if (auto client = dynamic_cast<ClientReference*>(this) && m_streams.empty())
    {
-      logi("[{}] last stream closed, terminating session...", m_logPrefix);
-      nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
+      // nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
+      logi("[{}] last stream closed, submitting GOAWAY...", m_logPrefix);
+      int32_t lastStreamId = 1;
+      nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, lastStreamId, NGHTTP2_NO_ERROR, nullptr, 0);
    }
 
    return stream;

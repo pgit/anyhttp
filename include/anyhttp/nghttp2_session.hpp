@@ -50,6 +50,19 @@ public:
 
    const auto& executor() const { return m_executor; }
    const std::string& logPrefix() const { return m_logPrefix; }
+   
+   std::string logPrefix(int stream_id) const
+   {
+      if (stream_id)
+         return fmt::format("{}.{}", logPrefix(), stream_id);
+      else
+         return logPrefix();
+   }
+   
+   inline std::string logPrefix(const nghttp2_frame* frame) const
+   {
+      return logPrefix(frame->hd.stream_id);
+   }
 
    // ----------------------------------------------------------------------------------------------
 

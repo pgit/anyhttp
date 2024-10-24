@@ -85,6 +85,8 @@ awaitable<void> not_found(server::Request request, server::Response response)
 
 awaitable<void> eat_request(server::Request request, server::Response response)
 {
+    logi("eat_request: going to eat {} bytes", request.content_length().value_or(-1));
+
    co_await response.async_submit(200, {}, deferred);
    co_await response.async_write({}, deferred);
 

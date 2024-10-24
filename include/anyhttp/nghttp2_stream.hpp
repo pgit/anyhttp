@@ -95,7 +95,7 @@ public:
 
    void call_handler_loop();
    void call_on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len);
-
+   
    // ==============================================================================================
 
    server::Request::ReadSomeHandler m_read_handler;
@@ -217,7 +217,6 @@ public:
    // ==============================================================================================
 
    ssize_t read_callback(uint8_t* buf, size_t length, uint32_t* data_flags);
-   asio::awaitable<void> do_request();
 
    void call_on_response();
    void call_on_request();

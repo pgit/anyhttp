@@ -210,18 +210,22 @@ protected:
          logw("exit_code={}", child.exit_code());
       else
          logi("exit_code={}", child.exit_code());
-      server.reset();
+      
+      if (--numSpawned <= 0)
+         server.reset();
 
       co_return result;
    }
 
    auto spawn(bp::filesystem::path path, std::vector<std::string> args)
    {
+      ++numSpawned;
       return co_spawn(context, spawn_process(std::move(path), std::move(args)), use_future);
    }
 
    bp::filesystem::path testFile{"CMakeLists.txt"};
    size_t testFileSize = file_size(testFile);
+   int numSpawned = 0;
 };
 
 INSTANTIATE_TEST_SUITE_P(External, External,
@@ -255,6 +259,28 @@ TEST_P(External, curl)
    auto future = spawn("/usr/bin/curl", std::move(args));
    context.run();
    EXPECT_EQ(future.get().size(), testFileSize);
+}
+
+TEST_P(External, curl_many)
+{
+   std::vector<std::future<std::string>> futures;
+   futures.reserve(150);
+   
+   for (size_t i = 0; i < futures.capacity(); ++i)
+   {
+      auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+      Args args = {"-sS", "-v", "--data-binary", fmt::format("@{}", testFile.string()), url};
+
+      if (GetParam() == anyhttp::Protocol::http2)
+         args.insert(args.begin(), "--http2-prior-knowledge");
+
+      futures.emplace_back(spawn("/usr/bin/curl", std::move(args)));
+   }
+   
+   context.run();
+   
+   for (auto& future : futures)
+      EXPECT_EQ(future.get().size(), testFileSize);
 }
 
 TEST_P(External, curl_https)
@@ -308,7 +334,6 @@ TEST_P(External, echo)
 {
    co_spawn(context.get_executor(), spawn_process("/usr/bin/echo", {}), detached);
    context.run();
-   loge("context finished");
 }
 
 // =================================================================================================
@@ -542,7 +567,7 @@ TEST_P(ClientAsync, CancellationContentLength)
    {
       const size_t length = 5ul * 1024 * 1024;
       auto request = co_await session.async_submit(
-         url.set_path("echo"), {{"Content-Length", std::to_string(length)}}, deferred);
+         url.set_path("echo"), {{"content-length", std::to_string(length)}}, deferred);
       auto response = co_await request.async_get_response(asio::deferred);
       std::vector<char> buffer(length);
       auto sender = sendAndForceEOF(request, std::string_view(buffer));
@@ -607,6 +632,22 @@ TEST_P(ClientAsync, CancellationRange)
       fmt::println("received {} bytes", std::get<1>(received));
       EXPECT_GT(std::get<1>(received), 0);
       EXPECT_EQ(ec, boost::system::errc::success);
+   };
+   context.run();
+}
+
+//
+// Send more than content length allows.
+//
+TEST_P(ClientAsync, SendMoreThanContentLength)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("eat_request"),
+                                                   {{"content-length", "1024"}}, deferred);
+      auto response = co_await request.async_get_response(asio::deferred);
+      co_await receive(response);
+      co_await send(request, rv::iota(uint8_t(0)) | rv::take(10 * 1024 + 1));
    };
    context.run();
 }
