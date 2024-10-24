@@ -69,7 +69,8 @@ public:
    ~BeastReader() override
    {
       logw("BeastReader: dtor");
-      // assert(!reading);
+      assert(!reading);
+      
    }
    void detach() override { session = nullptr; }
 
@@ -89,13 +90,15 @@ public:
             buffer.capacity());
 
       assert(!reading);
-      reading = true;
 
       if (parser.is_done())
       {
+         deleting.reset();
          std::move(handler)(boost::system::error_code{}, std::vector<uint8_t>{});
          return;
       }
+
+      reading = true;
 
       std::vector<uint8_t> body_buffer;
       // body_buffer.resize(1460);
