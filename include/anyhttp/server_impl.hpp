@@ -29,7 +29,7 @@ public:
    virtual std::optional<size_t> content_length() const noexcept = 0;
    virtual void async_read_some(ReadSomeHandler&& handler) = 0;
    virtual void detach() = 0;
-   virtual void destroy(std::unique_ptr<Impl>&& self) { self.reset(); }
+   virtual void destroy(std::unique_ptr<Impl> self) { /* delete self */ }
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -45,7 +45,7 @@ public:
    virtual void async_submit(WriteHandler&& handler, unsigned int status_code, Fields fields) = 0;
    virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
    virtual void detach() = 0;
-   virtual void destroy(std::unique_ptr<Impl>&& self) { self.reset(); }
+   virtual void destroy(std::unique_ptr<Impl> self) { /* delete self */ }
 };
 
 // =================================================================================================

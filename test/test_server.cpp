@@ -121,6 +121,7 @@ protected:
 
 protected:
    boost::asio::io_context context;
+   boost::asio::executor executor = context.get_executor();
    std::optional<server::Server> server;
    std::function<awaitable<void>(server::Request request, server::Response response)> handler;
 };

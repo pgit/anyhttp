@@ -38,10 +38,8 @@ Request::~Request()
       return;
 
    logd("\x1b[34mClient::Request: dtor\x1b[0m");
-   auto& impl = *m_impl;
-   impl.destroy(std::move(m_impl)); // give implementation a chance for cancellation
-   m_impl.reset(); // if destroy() didn't
-   assert(!m_impl);
+   auto impl = m_impl.get();
+   impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
 }
 
 void Request::async_write_any(WriteHandler&& handler, asio::const_buffer buffer)
@@ -85,10 +83,8 @@ Response::~Response()
       return;
 
    logd("\x1b[34mClient::Response: dtor\x1b[0m");
-   auto& impl = *m_impl;
-   impl.destroy(std::move(m_impl)); // give implementation a chance for cancellation
-   m_impl.reset(); // if destroy() didn't
-   assert(!m_impl);
+   auto impl = m_impl.get();
+   impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
 }
 
 void Response::async_read_some_any(ReadSomeHandler&& handler)

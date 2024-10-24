@@ -19,10 +19,8 @@ Request::~Request()
 
    logd("\x1b[35mServer::Request: dtor\x1b[0m");
 
-   auto& impl = *m_impl;
-   impl.destroy(std::move(m_impl)); // give implementation a chance for cancellation
-   m_impl.reset(); // if destroy() didn't
-   assert(!m_impl);
+   auto impl = m_impl.get();
+   impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
 }
 
 boost::url_view Request::url() const
@@ -63,10 +61,9 @@ Response::~Response()
 
    logd("\x1b[35mServer::Response: dtor\x1b[0m");
 
-   auto& impl = *m_impl;
-   impl.destroy(std::move(m_impl)); // give implementation a chance for cancellation
+   auto impl = m_impl.get();
+   impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
    m_impl.reset(); // if destroy() didn't
-   assert(!m_impl);
 }
 
 void Response::content_length(std::optional<size_t> content_length)

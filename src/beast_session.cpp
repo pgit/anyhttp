@@ -56,10 +56,11 @@ public:
    inline BeastReader(BeastSession<Stream>& session_, Stream& stream_, Buffer& buffer_)
       : session(&session_), stream(stream_), buffer(buffer_)
    {
+      logw("BeastReader: ctor");
       parser.body_limit(std::numeric_limits<uint64_t>::max());
    }
 
-   void destroy(std::unique_ptr<Parent>&& self) override
+   void destroy(std::unique_ptr<Parent> self) override
    {
       if (reading)
          this->deleting = std::move(self);
@@ -68,7 +69,7 @@ public:
    ~BeastReader() override
    {
       logw("BeastReader: dtor");
-      assert(!reading);
+      // assert(!reading);
    }
    void detach() override { session = nullptr; }
 
@@ -101,8 +102,8 @@ public:
       body_buffer.resize(64 * 1024);
       parser.get().body().data = body_buffer.data();
       parser.get().body().size = body_buffer.size();
-      auto cb = [this, body_buffer = std::move(body_buffer),
-                 handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
+      auto cb = [this, body_buffer = std::move(body_buffer), handler = std::move(handler)] //
+         (boost::system::error_code ec, size_t n) mutable
       {
          reading = false;
          if (deleting)
@@ -125,7 +126,7 @@ public:
          else
          {
             body_buffer.resize(payload);
-            (std::move(handler))(ec, std::move(body_buffer));
+            std::move(handler)(ec, std::move(body_buffer));
          }
       };
 
@@ -160,7 +161,7 @@ public:
    {
    }
 
-   void destroy(std::unique_ptr<Parent>&& self) override
+   void destroy(std::unique_ptr<Parent> self) override
    {
       if (writing)
          this->deleting = std::move(self);
