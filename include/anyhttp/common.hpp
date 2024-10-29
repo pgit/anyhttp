@@ -18,6 +18,18 @@ namespace anyhttp
 {
 namespace asio = boost::asio;
 
+enum class Protocol
+{
+   http11,
+   http2
+};
+
+std::string to_string(Protocol protocol);
+inline std::ostream& operator<<(std::ostream& str, Protocol protocol)
+{
+   return str << to_string(protocol);
+}
+
 // =================================================================================================
 
 using Fields = std::map<std::string, std::string>;
@@ -122,20 +134,23 @@ struct fmt::formatter<std::filesystem::path> : formatter<std::string_view>
 
 inline std::string what(const std::exception_ptr& ptr)
 {
-   std::string result;
-   try
+   if (!ptr)
+      return "success";
+   else
    {
-      std::rethrow_exception(ptr);
+      try
+      {
+         std::rethrow_exception(ptr);
+      }
+      catch (boost::system::system_error& ex)
+      {
+         return fmt::format("exception: {}", ex.code().message());
+      }
+      catch (std::exception& ex)
+      {
+         return fmt::format("exception: {}", ex.what());
+      }
    }
-   catch (boost::system::system_error& ex)
-   {
-      result = fmt::format("exception: {}", ex.code().message());
-   }
-   catch (std::exception& ex)
-   {
-      result = fmt::format("exception: {}", ex.what());
-   }
-   return result;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -150,7 +165,7 @@ inline std::string what(const std::exception_ptr& ptr)
    do                                                                                              \
    {                                                                                               \
       if (ec && spdlog::default_logger_raw()->should_log(spdlog::level::warn))                     \
-         spdlog::default_logger_raw()->warn(__VA_ARGS__);                                         \
+         spdlog::default_logger_raw()->warn(__VA_ARGS__);                                          \
       else if (spdlog::default_logger_raw()->should_log(spdlog::level::info))                      \
          spdlog::default_logger_raw()->info(__VA_ARGS__);                                          \
    } while (false)

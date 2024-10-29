@@ -5,6 +5,7 @@
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ssl/stream.hpp>
+#include <boost/asio/this_coro.hpp>
 #include <boost/beast/core/static_buffer.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
 #include <boost/system/detail/errc.hpp>
@@ -14,6 +15,7 @@
 #include <nghttp2/nghttp2.h>
 
 #include <string>
+#include <iostream>
 
 using namespace boost::asio::experimental::awaitable_operators;
 
@@ -42,8 +44,8 @@ void NGHttp2SessionImpl<Stream>::destroy()
 
 // =================================================================================================
 
-#define mylogd(...)
-// #define mylogd(...) mlogd(__VA_ARGS__) // too noisy, even for debug
+// #define mylogd(...)
+#define mylogd(...) mlogd(__VA_ARGS__) // too noisy, even for debug
 
 //
 // Implementing the send loop as a coroutine does not make much sense, as it may run out
@@ -59,15 +61,17 @@ void NGHttp2SessionImpl<Stream>::destroy()
 //
 template <typename Stream>
 awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
-{
+{   
    Buffer buffer;
    buffer.reserve(1460);
    for (;;)
    {
       //
-      // Retrieve a chunk of data from NGHTTP2, to be sent.
+      // Retrieve a chunk of data to be sent from NGHTTP2.
+      // The buffer is valid until next call nghttp2_session_mem_send, so we don't need to copy it.
+      // Unless, of course, we buffer it to -- which we may do to avoid many small writes.
       //
-      const uint8_t* data; // data is valid until next call, so we don't need to copy it
+      const uint8_t* data; 
 
       mylogd("send loop: nghttp2_session_mem_send...");
       const auto nread = nghttp2_session_mem_send(session, &data);
@@ -95,10 +99,10 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
       // If yes, combine both into a buffer sequence and pass it to async_write().
       // Afterwards, go back up and ask NGHTTP2 if there is more data to send.
       //
-      else if (const auto to_write = buffer.size() + nread; to_write > 0)
+      else if (const auto bytes_to_write = buffer.size() + nread; bytes_to_write > 0)
       {
          const std::array<asio::const_buffer, 2> seq{buffer.data(), asio::buffer(data, nread)};
-         mylogd("send loop: writing {} bytes...", to_write);
+         mylogd("send loop: writing {} bytes...", bytes_to_write);
          if (!get_socket(m_stream).is_open())
          {
             mloge("send loop: SOCKET HAS BEEN CLOSED!!!!!!!!!!");
@@ -106,11 +110,11 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
          auto [ec, written] = co_await asio::async_write(m_stream, seq, as_tuple(deferred));
          if (ec)
          {
-            mloge("send loop: error writing {} bytes: {}", to_write, ec.message());
+            mloge("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
             break;
          }
-         mylogd("send loop: writing {} bytes... done, wrote {}", to_write, written);
-         assert(to_write == written);
+         mylogd("send loop: writing {} bytes... done, wrote {}", bytes_to_write, written);
+         assert(bytes_to_write == written);
          buffer.clear(); // consume(written);
       }
 
@@ -243,7 +247,7 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    // disable automatic WINDOW update as we are sending window updates ourselves
    // https://github.com/nghttp2/nghttp2/issues/446
    //
-   // pynghttp2 does also disable "HTTP messaging semantics", but we don't do
+   // pynghttp2 does also disable "HTTP messaging semantics", but we don't
    //
    auto options = nghttp2_option_new();
    nghttp2_option_set_no_http_messaging(options.get(), 1);

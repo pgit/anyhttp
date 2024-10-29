@@ -3,11 +3,16 @@
 #include "anyhttp/client.hpp"
 #include "anyhttp/server.hpp"
 
+#include <expected>
+
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/deferred.hpp>
 
+#include <boost/system/detail/error_code.hpp>
+
 #include <fmt/ostream.h>
+
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/chunk.hpp>
 #include <range/v3/view/iota.hpp>
@@ -17,6 +22,8 @@ using namespace std::chrono_literals;
 
 namespace anyhttp
 {
+template <typename T>
+using expected = std::expected<T, boost::system::error_code>;
 
 // =================================================================================================
 
@@ -53,10 +60,11 @@ boost::asio::awaitable<void> discard(server::Request request, server::Response r
 
 boost::asio::awaitable<void> send(client::Request& request, size_t bytes);
 boost::asio::awaitable<size_t> receive(client::Response& response);
-boost::asio::awaitable<size_t> try_receive(client::Response& response);
+boost::asio::awaitable<expected<size_t>> try_receive(client::Response& response);
 boost::asio::awaitable<size_t> try_receive(client::Response& response,
                                            boost::system::error_code& ec);
 boost::asio::awaitable<size_t> read_response(client::Request& request);
+boost::asio::awaitable<expected<size_t>> try_read_response(client::Request& request);
 boost::asio::awaitable<void> sendEOF(client::Request& request);
 
 // =================================================================================================

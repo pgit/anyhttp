@@ -2,19 +2,24 @@
 #include "anyhttp/client.hpp"
 #include "anyhttp/server.hpp"
 
+#include <__expected/unexpect.h>
+#include <__expected/unexpected.h>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/use_awaitable.hpp>
-
 #include <boost/system/detail/error_code.hpp>
+
 #include <fmt/ostream.h>
+
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/iota.hpp>
 #include <range/v3/view/transform.hpp>
+#include <stdexcept>
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
 using namespace anyhttp;
 using namespace anyhttp::server;
+namespace rv = ranges::views;
 
 namespace anyhttp
 {
@@ -85,7 +90,7 @@ awaitable<void> not_found(server::Request request, server::Response response)
 
 awaitable<void> eat_request(server::Request request, server::Response response)
 {
-    logi("eat_request: going to eat {} bytes", request.content_length().value_or(-1));
+   logi("eat_request: going to eat {} bytes", request.content_length().value_or(-1));
 
    co_await response.async_submit(200, {}, deferred);
    co_await response.async_write({}, deferred);
@@ -130,24 +135,9 @@ awaitable<void> discard(server::Request request, server::Response response) { co
 
 // =================================================================================================
 
-/// Allocate an array of the given size and send it. Prefer generator ranges instead.
 awaitable<void> send(client::Request& request, size_t bytes)
 {
-   if (bytes == 0)
-      co_return co_await request.async_write({}, deferred);
-
-   std::vector<uint8_t> buffer;
-   buffer.resize(bytes);
-   try
-   {
-      co_await request.async_write(asio::buffer(buffer), deferred);
-      logi("send: done, wrote {} bytes", bytes);
-   }
-   catch (const boost::system::system_error& ec)
-   {
-      loge("send: {}", ec.what());
-   }
-   co_await request.async_write({}, deferred);
+   return sendAndForceEOF(request, rv::iota(0) | rv::take(bytes));
 }
 
 awaitable<size_t> receive(client::Response& response)
@@ -167,10 +157,13 @@ awaitable<size_t> receive(client::Response& response)
    co_return bytes;
 }
 
-awaitable<size_t> try_receive(client::Response& response)
+boost::asio::awaitable<expected<size_t>> try_receive(client::Response& response)
 {
    boost::system::error_code ec;
-   co_return co_await try_receive(response, ec);
+   size_t bytes = co_await try_receive(response, ec);
+   if (ec)
+      co_return std::unexpected{ec};
+   co_return bytes;
 }
 
 awaitable<size_t> try_receive(client::Response& response, boost::system::error_code& ec)
@@ -206,6 +199,19 @@ awaitable<size_t> read_response(client::Request& request)
 {
    auto response = co_await request.async_get_response(asio::deferred);
    co_return co_await receive(response);
+}
+
+awaitable<expected<size_t>> try_read_response(client::Request& request)
+{
+   try
+   {
+      auto response = co_await request.async_get_response(asio::deferred);
+      co_return co_await receive(response);
+   }
+   catch (const boost::system::system_error& ex)
+   {
+      co_return std::unexpected(ex.code());
+   }
 }
 
 awaitable<void> sendEOF(client::Request& request)

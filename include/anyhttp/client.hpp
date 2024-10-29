@@ -8,19 +8,6 @@
 namespace anyhttp
 {
 class Session;
-
-enum class Protocol
-{
-   http11,
-   http2
-};
-
-std::string to_string(Protocol protocol);
-inline std::ostream& operator<<(std::ostream& str, Protocol protocol)
-{
-   return str << to_string(protocol);
-}
-
 } // namespace anyhttp
 
 namespace anyhttp::client
@@ -97,7 +84,7 @@ public:
    auto async_write(asio::const_buffer buffer, CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
-         [&](asio::completion_handler_for<Write> auto handler, asio::const_buffer buffer) { //
+         [&](WriteHandler handler, asio::const_buffer buffer) { //
 #if 0
             //
             // https://stackoverflow.com/questions/76004637/asio-awaitable-operator-dont-return-when-timer-expires
@@ -153,8 +140,6 @@ public:
          },
          token);
    }
-
-   asio::ip::tcp::endpoint local_endpoint() const;
 
 private:
    void async_connect_any(ConnectHandler&& handler);

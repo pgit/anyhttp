@@ -1,8 +1,10 @@
 #pragma once
 #include "client.hpp"
+#include "session.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_completion_handler.hpp>
+#include <boost/asio/experimental/co_composed.hpp>
 
 namespace anyhttp
 {
@@ -52,18 +54,19 @@ public:
    explicit Impl(boost::asio::any_io_executor executor, Config config);
    ~Impl();
 
-   const Config& config() const { return m_config; }
    const boost::asio::any_io_executor& executor() const { return m_executor; }
 
-   asio::awaitable<void> connect(ConnectHandler handler);
-   void async_connect(ConnectHandler&& handler);
+   void async_connect(ConnectHandler handler);
 
-   asio::ip::tcp::endpoint local_endpoint() const { return m_acceptor.local_endpoint(); }
+private:
+   const Config& config() const { return m_config; }
+   
+   // void async_connect_impl(ConnectHandler&& token);
 
 private:
    Config m_config;
    boost::asio::any_io_executor m_executor;
-   asio::ip::tcp::acceptor m_acceptor;
+   std::optional<asio::ip::tcp::resolver> m_resolver;
 };
 
 // =================================================================================================

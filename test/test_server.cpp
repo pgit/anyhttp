@@ -12,6 +12,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include <boost/asio/use_future.hpp>
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/http/error.hpp>
 #include <boost/filesystem/path.hpp>
@@ -20,6 +21,7 @@
 
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
+#include <boost/system/system_error.hpp>
 #include <boost/url/url.hpp>
 
 #include <gtest/gtest.h>
@@ -72,6 +74,41 @@ TEST_F(Empty, Path)
 
 // =================================================================================================
 
+class ClientConnect : public testing::Test
+{};
+
+TEST_F(ClientConnect, DISABLED_ErrorResolve)
+{
+   boost::asio::io_context context;
+   client::Config config{.url = boost::urls::url("http://this-domain-does-not-exist:12345")};
+   client::Client client(context.get_executor(), config);
+   // TODO: test per-operation cancellation
+   // https://live.boost.org/doc/libs/1_86_0/doc/html/boost_asio/reference/co_composed.html
+   client.async_connect(
+      [&](boost::system::error_code ec, Session session)
+      {
+         loge("ERROR: {}", ec.message());
+         EXPECT_TRUE(ec);
+      });
+   context.run();
+}
+
+TEST_F(ClientConnect, ErrorNetworkUnreachable)
+{
+   boost::asio::io_context context;
+   client::Config config{.url = boost::urls::url("http://255.255.255.255:12345")};
+   client::Client client(context.get_executor(), config);
+   client.async_connect(
+      [&](boost::system::error_code ec, Session session)
+      {
+         loge("ERROR: {}", ec.message());
+         EXPECT_TRUE(ec);
+      });
+   context.run();
+}
+
+// =================================================================================================
+
 //
 // Server fixture with some default request handlers.
 //
@@ -108,15 +145,21 @@ protected:
          });
    }
 
-   auto completion_handler()
+   void run()
    {
-      return [this](const std::exception_ptr& ex)
-      {
-         if (ex)
-            logw("client finished with {}", what(ex));
-         logi("client finished, resetting server");
-         server.reset();
-      };
+#if 1
+      context.run();
+#else
+      const size_t extraThreads = 0;
+      auto threads = rv::iota(0) | rv::take(extraThreads) |
+                     rv::transform([&](int) { return std::thread([&] { context.run(); }); }) |
+                     ranges::to<std::vector>();
+
+      context.run();
+
+      for (auto& thread : threads)
+         thread.join();
+#endif
    }
 
 protected:
@@ -135,14 +178,14 @@ INSTANTIATE_TEST_SUITE_P(Server, Server,
 TEST_P(Server, StopBeforeStarted)
 {
    server.reset();
-   context.run();
+   run();
 }
 
 TEST_P(Server, Stop)
 {
    context.run_one();
    server.reset();
-   context.run();
+   run();
 }
 
 // =================================================================================================
@@ -211,7 +254,7 @@ protected:
          logw("exit_code={}", child.exit_code());
       else
          logi("exit_code={}", child.exit_code());
-      
+
       if (--numSpawned <= 0)
          server.reset();
 
@@ -242,7 +285,7 @@ TEST_P(External, nghttp2)
 
    auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    auto future = spawn("/workspaces/nghttp2/install/bin/nghttp", {"-d", testFile.string(), url});
-   context.run();
+   run();
 
    EXPECT_EQ(future.get().size(), testFileSize);
 }
@@ -258,7 +301,8 @@ TEST_P(External, curl)
       args.insert(args.begin(), "--http2-prior-knowledge");
 
    auto future = spawn("/usr/bin/curl", std::move(args));
-   context.run();
+   run();
+
    EXPECT_EQ(future.get().size(), testFileSize);
 }
 
@@ -266,7 +310,7 @@ TEST_P(External, curl_many)
 {
    std::vector<std::future<std::string>> futures;
    futures.reserve(150);
-   
+
    for (size_t i = 0; i < futures.capacity(); ++i)
    {
       auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
@@ -277,9 +321,9 @@ TEST_P(External, curl_many)
 
       futures.emplace_back(spawn("/usr/bin/curl", std::move(args)));
    }
-   
-   context.run();
-   
+
+   run();
+
    for (auto& future : futures)
       EXPECT_EQ(future.get().size(), testFileSize);
 }
@@ -295,7 +339,8 @@ TEST_P(External, curl_https)
       args.insert(args.begin(), "--http1.1"); // not implemented, yet
 
    auto future = spawn("/usr/bin/curl", std::move(args));
-   context.run();
+   run();
+
    EXPECT_EQ(future.get().size(), testFileSize);
 }
 
@@ -309,7 +354,8 @@ TEST_P(External, curl_multiple)
 
    // https://github.com/curl/curl/issues/10634 --> use custom built curl
    auto future = spawn("/usr/local/bin/curl", std::move(args));
-   context.run();
+   run();
+
    EXPECT_EQ(future.get().size(), testFileSize * 2);
 }
 
@@ -325,7 +371,8 @@ TEST_P(External, curl_multiple_https)
       args.insert(args.begin(), "--http1.1");
 
    auto future = spawn("/usr/bin/curl", std::move(args));
-   context.run();
+   run();
+
    EXPECT_EQ(future.get().size(), testFileSize * 2);
 }
 
@@ -334,7 +381,7 @@ TEST_P(External, curl_multiple_https)
 TEST_P(External, echo)
 {
    co_spawn(context.get_executor(), spawn_process("/usr/bin/echo", {}), detached);
-   context.run();
+   run();
 }
 
 // =================================================================================================
@@ -359,6 +406,18 @@ protected:
 class ClientAsync : public Client
 {
 public:
+   auto completion_handler()
+   {
+      return [this](const std::exception_ptr& ex)
+      {
+         if (ex)
+            logw("client finished with {}", what(ex));
+         logi("client finished, resetting server");
+         server.reset();
+         work.reset();
+      };
+   }
+
    void SetUp() override
    {
       Client::SetUp();
@@ -373,6 +432,7 @@ public:
    }
 
 public:
+   decltype(boost::asio::make_work_guard(context)) work = boost::asio::make_work_guard(context);
    std::function<awaitable<void>(Session session)> test;
 };
 
@@ -391,7 +451,7 @@ TEST_P(ClientAsync, WHEN_post_data_THEN_receive_echo)
       auto res = co_await (send(request, bytes) && read_response(request));
       EXPECT_EQ(bytes, res);
    };
-   context.run();
+   run();
 }
 
 TEST_P(ClientAsync, WHEN_post_without_path_THEN_error_404)
@@ -403,7 +463,7 @@ TEST_P(ClientAsync, WHEN_post_without_path_THEN_error_404)
       auto response = co_await request.async_get_response(asio::deferred);
       auto received = co_await receive(response);
    };
-   context.run();
+   run();
 }
 
 TEST_P(ClientAsync, WHEN_post_to_unknown_path_THEN_error_404)
@@ -415,7 +475,7 @@ TEST_P(ClientAsync, WHEN_post_to_unknown_path_THEN_error_404)
       auto response = co_await request.async_get_response(asio::deferred);
       auto received = co_await receive(response);
    };
-   context.run();
+   run();
 }
 
 TEST_P(ClientAsync, WHEN_server_discards_request_THEN_error_500)
@@ -427,7 +487,7 @@ TEST_P(ClientAsync, WHEN_server_discards_request_THEN_error_500)
       auto response = co_await request.async_get_response(asio::deferred);
       auto received = co_await receive(response);
    };
-   context.run();
+   run();
 }
 
 TEST_P(ClientAsync, WHEN_server_discards_request_delayed_THEN_error_500)
@@ -439,7 +499,7 @@ TEST_P(ClientAsync, WHEN_server_discards_request_delayed_THEN_error_500)
       auto response = co_await request.async_get_response(asio::deferred);
       auto received = co_await receive(response);
    };
-   context.run();
+   run();
 }
 
 TEST_P(ClientAsync, Custom)
@@ -462,7 +522,7 @@ TEST_P(ClientAsync, Custom)
       auto res = co_await (send(request, bytes) && read_response(request));
       EXPECT_EQ(bytes, res);
    };
-   context.run();
+   run();
 }
 
 TEST_P(ClientAsync, IgnoreRequest)
@@ -474,10 +534,11 @@ TEST_P(ClientAsync, IgnoreRequest)
    };
    test = [&](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url.set_path("custom"), {}, deferred);
+      auto request =
+         co_await session.async_submit(url.set_path("custom"), {{"content-length", "0"}}, deferred);
       auto res = co_await (send(request, 0) && read_response(request));
    };
-   context.run();
+   run();
 }
 
 TEST_P(ClientAsync, IgnoreRequestAndResponse)
@@ -487,9 +548,10 @@ TEST_P(ClientAsync, IgnoreRequestAndResponse)
    test = [&](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("custom"), {}, deferred);
-      auto res = co_await (send(request, 0) && read_response(request));
+      auto res = co_await (send(request, 0) && try_read_response(request));
+      std::cout << res.error().message() << std::endl;
    };
-   context.run();
+   run();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -508,7 +570,7 @@ TEST_P(ClientAsync, PostRange)
       auto received = co_await (std::move(sender) && receive(response));
       loge("received: {}", received);
    };
-   context.run();
+   run();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -523,7 +585,7 @@ TEST_P(ClientAsync, WHEN_request_is_sent_THEN_response_is_received_before_body_i
       co_await send(request, bytes);
       EXPECT_EQ(co_await receive(response), bytes);
    };
-   context.run();
+   run();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -538,7 +600,7 @@ TEST_P(ClientAsync, EatRequest)
       auto received = co_await receive(response);
       EXPECT_EQ(received, 0);
    };
-   context.run();
+   run();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -552,9 +614,9 @@ TEST_P(ClientAsync, DISABLED_Backpressure)
       auto sender = send(request, rv::iota(uint8_t(0)));
       co_await (std::move(sender) || sleep(2s));
       auto received = co_await (sendEOF(request) && try_receive(response));
-      fmt::println("transferred {} bytes", received);
+      fmt::println("transferred {} bytes", received.value_or(-1));
    };
-   context.run();
+   run();
 }
 
 //
@@ -579,7 +641,7 @@ TEST_P(ClientAsync, CancellationContentLength)
       EXPECT_LT(std::get<1>(received), length);
       EXPECT_EQ(ec, boost::beast::http::error::partial_message);
    };
-   context.run();
+   run();
 }
 
 //
@@ -612,7 +674,7 @@ TEST_P(ClientAsync, Cancellation)
       else
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
    };
-   context.run();
+   run();
 }
 
 //
@@ -634,7 +696,7 @@ TEST_P(ClientAsync, CancellationRange)
       EXPECT_GT(std::get<1>(received), 0);
       EXPECT_EQ(ec, boost::system::errc::success);
    };
-   context.run();
+   run();
 }
 
 //
@@ -650,7 +712,7 @@ TEST_P(ClientAsync, SendMoreThanContentLength)
       co_await receive(response);
       co_await send(request, rv::iota(uint8_t(0)) | rv::take(10 * 1024 + 1));
    };
-   context.run();
+   run();
 }
 
 // =================================================================================================
@@ -676,7 +738,7 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
       // auto received = co_await receive(response);
       // loge("received: {}", received);
    };
-   context.run();
+   run();
 }
 
 TEST_P(ClientAsync, SpawnAndForget)
@@ -697,7 +759,7 @@ TEST_P(ClientAsync, SpawnAndForget)
          co_await yield();
       }
    };
-   context.run();
+   run();
 }
 
 // =================================================================================================

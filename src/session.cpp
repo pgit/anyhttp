@@ -29,7 +29,7 @@ public:
 
 Session::Session(std::shared_ptr<Session::Impl> impl) : m_impl(std::move(impl))
 {
-   logd("Session::ctor: use_count={}", m_impl.use_count());
+   // logd("Session::ctor: use_count={}", m_impl.use_count());
 }
 
 // -------------------------------------------------------------------------------------------------

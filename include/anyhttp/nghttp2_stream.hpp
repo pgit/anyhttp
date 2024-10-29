@@ -172,11 +172,11 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   template <boost::asio::completion_token_for<Write> CompletionToken>
-   auto async_write(asio::const_buffer buffer, CompletionToken&& token)
+   // template <boost::asio::completion_token_for<Write> CompletionToken>
+   auto async_write(asio::const_buffer buffer, WriteHandler&& token)
    {
-      return boost::asio::async_initiate<CompletionToken, Write>(
-         [&](asio::completion_handler_for<Write> auto handler, asio::const_buffer buffer)
+      return boost::asio::async_initiate<WriteHandler, Write>(
+         [&](WriteHandler handler, asio::const_buffer buffer)
          {
             assert(!sendHandler);
 

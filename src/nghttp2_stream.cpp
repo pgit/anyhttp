@@ -248,11 +248,18 @@ void NGHttp2Stream::call_on_data(nghttp2_session* session, int32_t id_, const ui
 
 NGHttp2Stream::~NGHttp2Stream()
 {
-   logd("[{}] \x1b[33mStream: dtor\x1b[0m", logPrefix);
+   logd("[{}] \x1b[33mStream: dtor... \x1b[0m", logPrefix);
    if (request)
+   {
+      logd("Stream: dtor... detaching request", logPrefix);
       request->detach();
+   }
    if (response)
+   {
+      logd("Stream: dtor... detaching response", logPrefix);
       response->detach();
+   }
+   logd("[{}] \x1b[33mStream: dtor... done\x1b[0m", logPrefix);
 }
 
 // ==============================================================================================

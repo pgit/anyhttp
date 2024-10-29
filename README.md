@@ -11,7 +11,24 @@ None of those protocols are implemented from scratch. Instead, it is a wrapper a
 * nghttp2
 * nghttp3 - not done yet.
 
+## Synopsis
 
+```C++
+awaitable<void> echo(server::Request request, server::Response response)
+{
+   if (request.content_length())
+      response.content_length(request.content_length().value());
+
+   co_await response.async_submit(200, {}, deferred);
+   for (;;)
+   {
+      auto buffer = co_await request.async_read_some(deferred);
+      co_await response.async_write(asio::buffer(buffer), deferred);
+      if (buffer.empty())
+         co_return;
+   }
+}
+```
 
 ## Links
 

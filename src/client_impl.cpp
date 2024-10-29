@@ -6,15 +6,19 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/error.hpp>
+#include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ip/detail/endpoint.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/redirect_error.hpp>
 #include <boost/asio/steady_timer.hpp>
 
+#include <boost/asio/use_awaitable.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/http/message.hpp>
 
+#include <boost/system/system_error.hpp>
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
 
@@ -45,7 +49,7 @@ Response::Impl::~Impl() = default;
 // =================================================================================================
 
 Client::Impl::Impl(boost::asio::any_io_executor executor, Config config)
-   : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
+   : m_config(std::move(config)), m_executor(std::move(executor)), m_resolver(m_executor)
 {
 #if !defined(NDEBUG)
    spdlog::set_level(spdlog::level::debug);
@@ -59,22 +63,43 @@ Client::Impl::~Impl() { logi("Client: dtor"); }
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> Client::Impl::connect(ConnectHandler handler)
+void Client::Impl::async_connect(ConnectHandler handler)
 {
-   auto executor = co_await boost::asio::this_coro::executor;
+      return asio::async_initiate<ConnectHandler, Connect>(
+         asio::experimental::co_composed<Connect>(
+              [this](auto state, boost::asio::any_io_executor exnix) -> void
+            {
+   const auto ex = m_executor;
+   // auto ex = state.get_io_executor();  // FAILS to register work properly
+   // auto token = bind_executor(ex, as_tuple(deferred));  // not needed
+   constexpr auto token = as_tuple(deferred);
 
    std::string host = config().url.host_address();
    std::string port = config().url.port();
-   ip::tcp::resolver resolver(executor);
-   auto flags = resolver.numeric_service;
+   
+   logd("Client: resolving {}:{} ...", host, port);
+   auto flags = m_resolver->numeric_service;
+   auto [ec, endpoints] = co_await m_resolver->async_resolve(host, port, flags, token);
+   if (ec)
+   {
+      loge("Client: resolving {}:{}:", host, port, ec.message());
+      co_return {ec, Session(nullptr)};
+   }
 
-   auto [ec, endpoints] = co_await resolver.async_resolve(host, port, flags, as_tuple(deferred));
    for (auto&& elem : endpoints)
-      ; // logd("Client: {}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
+      logd("Client: {}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
 
-   ip::tcp::socket socket(executor);
+   // ip::tcp::socket socket(make_strand(executor));
+   // asio::deferred_t::as_default_on_t<ip::tcp::socket> socket(executor);
+   ip::tcp::socket socket(ex);
    ip::tcp::endpoint endpoint;
-   std::tie(ec, endpoint) = co_await asio::async_connect(socket, endpoints, as_tuple(deferred));
+   std::tie(ec, endpoint) = co_await asio::async_connect(socket, endpoints, token);
+
+   if (ec)
+   {
+      loge("Client: {}", ec.message());
+      co_return {ec, Session(nullptr)};
+   }
 
    logi("Client: connected to {} ({})", socket.remote_endpoint(), ec.message());
 
@@ -102,16 +127,16 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    {
    case Protocol::http11:
       impl = std::make_shared<beast_impl::ClientSession<boost::beast::tcp_stream>>(
-         *this, executor, boost::beast::tcp_stream(std::move(socket)));
+         *this, ex, boost::beast::tcp_stream(std::move(socket)));
       break;
    case Protocol::http2:
 #if 0
       auto stream = boost::beast::tcp_stream{std::move(socket)};
       impl = std::make_shared<nghttp2::ClientSession<boost::beast::tcp_stream>> //
-         (*this, executor, std::move(stream));
+         (*this, ex, std::move(stream));
 #else
       impl = std::make_shared<nghttp2::ClientSession<asio::ip::tcp::socket>> //
-         (*this, executor, std::move(socket));
+         (*this, ex, std::move(socket));
 #endif
       break;
    };
@@ -124,14 +149,16 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    //        We do need a user interface to stop sessions, though. This should be the deleted
    //        of the user-facing "Session" object. So we should use only the "impl" internally.
    //
-   co_spawn(executor, impl->do_session(Buffer{}),
-            [impl](const std::exception_ptr& ex)
+#if 1
+   co_spawn(ex, impl->do_session(Buffer{}),
+            [impl]  (const std::exception_ptr& ex)mutable
             {
                if (ex)
                   logw("client run: {}", what(ex));
                else
                   logi("client run: done");
             });
+#endif
 
    //
    // It's important to call this handler after spawning the session, because stream configuration
@@ -141,12 +168,10 @@ awaitable<void> Client::Impl::connect(ConnectHandler handler)
    // FIXME: instead of executing a submit() directly, it should be queued and executed within
    //        do_client_session(). This approach avoids the problem, and allows pipelining, too.
    //
-   std::move(handler)(boost::system::error_code{}, Session{std::move(impl)});
-}
-
-void Client::Impl::async_connect(ConnectHandler&& handler)
-{
-   co_spawn(m_executor, connect(std::move(handler)), detached);
+   // std::move(handler)(boost::system::error_code{}, Session{std::move(impl)});
+   co_return {boost::system::error_code{}, Session{std::move(impl)}};
+   
+   }), handler, m_executor);
 }
 
 // =================================================================================================

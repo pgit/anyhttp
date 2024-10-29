@@ -108,7 +108,6 @@ void Client::async_connect_any(ConnectHandler&& handler)
 }
 
 const asio::any_io_executor& Client::executor() const { return impl->executor(); }
-asio::ip::tcp::endpoint Client::local_endpoint() const { return impl->local_endpoint(); }
 
 // =================================================================================================
 

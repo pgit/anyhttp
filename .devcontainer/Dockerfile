@@ -55,6 +55,15 @@ RUN git clone https://github.com/gabime/spdlog.git && \
     cd ../.. && rm -rf spdlog
 
 #
+# gtest-parallel
+#
+RUN git clone https://github.com/google/gtest-parallel.git && \
+    cd /usr/local/bin && \
+    ln -s /gtest-parallel/gtest-parallel
+
+RUN echo "export LESS=RS" >/etc/profile.d/less.sh
+
+#
 # enable persistent bash history in container
 #
 # https://code.visualstudio.com/remote/advancedcontainers/persist-bash-history
