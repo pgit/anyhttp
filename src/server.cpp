@@ -41,12 +41,6 @@ void Request::async_read_some_any(ReadSomeHandler&& handler)
    m_impl->async_read_some(std::move(handler));
 }
 
-const asio::any_io_executor& Request::executor() const
-{
-   assert(m_impl);
-   return m_impl->executor();
-}
-
 // -------------------------------------------------------------------------------------------------
 
 Response::Response(std::unique_ptr<Response::Impl> impl) : m_impl(std::move(impl))
@@ -101,6 +95,8 @@ void Server::setRequestHandlerCoro(RequestHandlerCoro&& handler)
 {
    impl->setRequestHandler(std::move(handler));
 }
+
+const asio::any_io_executor& Server::executor() const { return impl->executor(); }
 
 asio::ip::tcp::endpoint Server::local_endpoint() const { return impl->local_endpoint(); }
 

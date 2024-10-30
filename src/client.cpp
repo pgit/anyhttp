@@ -42,7 +42,7 @@ Request::~Request()
    impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
 }
 
-void Request::async_write_any(WriteHandler&& handler, asio::const_buffer buffer)
+void Request::async_write_any(WriteHandler handler, asio::const_buffer buffer)
 {
    if (!m_impl)
    {

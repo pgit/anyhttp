@@ -59,16 +59,12 @@ awaitable<void> not_found(server::Request request, server::Response response)
 
 int main()
 {
-   io_context pool;
-   auto work = make_work_guard(pool);
-   auto threads = rv::iota(0) | rv::take(8) |
-                  rv::transform([&](int) { return std::thread([&] { pool.run(); }); }) |
-                  ranges::to<std::vector>();
-
    io_context context;
-   auto executor = context.get_executor();
+
+   // auto executor = context.get_executor();
    // auto executor = pool.get_executor();
    // auto executor = boost::asio::make_strand(pool);
+   auto executor = context.get_executor();
    auto server = std::make_optional<Server>(executor, Config{.port = 8080});
 
 #if 1
@@ -91,9 +87,11 @@ int main()
             return not_found(std::move(request), std::move(response));
       });
 
+   auto threads = rv::iota(0) | rv::take(19) |
+                  rv::transform([&](int) { return std::thread([&] { context.run(); }); }) |
+                  ranges::to<std::vector>();
    context.run();
 
-   work.reset();
    for (auto& thread : threads)
       thread.join();
 

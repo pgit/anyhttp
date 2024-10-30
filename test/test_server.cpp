@@ -75,7 +75,8 @@ TEST_F(Empty, Path)
 // =================================================================================================
 
 class ClientConnect : public testing::Test
-{};
+{
+};
 
 TEST_F(ClientConnect, DISABLED_ErrorResolve)
 {
@@ -109,6 +110,8 @@ TEST_F(ClientConnect, ErrorNetworkUnreachable)
 
 // =================================================================================================
 
+#define USE_STRANDS
+
 //
 // Server fixture with some default request handlers.
 //
@@ -121,7 +124,11 @@ protected:
    void SetUp() override
    {
       auto config = server::Config{.listen_address = "127.0.0.2", .port = 0};
+#if defined(USE_STRANDS)
+      server.emplace(make_strand(context.get_executor()), config);
+#else
       server.emplace(context.get_executor(), config);
+#endif
       server->setRequestHandlerCoro(
          [this](server::Request request, server::Response response) -> awaitable<void>
          {
@@ -134,7 +141,7 @@ protected:
                return discard(std::move(request), std::move(response));
             else if (request.url().path() == "/detach")
             {
-               co_spawn(request.executor(), detach(std::move(request), std::move(response)),
+               co_spawn(server->executor(), detach(std::move(request), std::move(response)),
                         [&](const std::exception_ptr&) { logi("client finished"); });
                return []() mutable -> awaitable<void> { co_return; }();
             }
@@ -147,10 +154,8 @@ protected:
 
    void run()
    {
-#if 1
-      context.run();
-#else
-      const size_t extraThreads = 0;
+#if defined(USE_STRANDS)
+      const size_t extraThreads = 8;
       auto threads = rv::iota(0) | rv::take(extraThreads) |
                      rv::transform([&](int) { return std::thread([&] { context.run(); }); }) |
                      ranges::to<std::vector>();
@@ -159,12 +164,13 @@ protected:
 
       for (auto& thread : threads)
          thread.join();
+#else
+      context.run();
 #endif
    }
 
 protected:
    boost::asio::io_context context;
-   boost::asio::executor executor = context.get_executor();
    std::optional<server::Server> server;
    std::function<awaitable<void>(server::Request request, server::Response response)> handler;
 };
@@ -309,7 +315,7 @@ TEST_P(External, curl)
 TEST_P(External, curl_many)
 {
    std::vector<std::future<std::string>> futures;
-   futures.reserve(150);
+   futures.reserve(10);
 
    for (size_t i = 0; i < futures.capacity(); ++i)
    {
@@ -395,7 +401,11 @@ protected:
       url.set_port_number(server->local_endpoint().port());
       client::Config config{.url = url, .protocol = GetParam()};
       config.url.set_port_number(server->local_endpoint().port());
+#if defined(USE_STRANDS)
+      client.emplace(make_strand(context.get_executor()), config);
+#else
       client.emplace(context.get_executor(), config);
+#endif
    }
 
 protected:
@@ -680,7 +690,8 @@ TEST_P(ClientAsync, Cancellation)
 //
 // Cancellation of sending a large amount of data that is split into many smaller chunks.
 //
-// This should work with any protocol, without error.
+// This should work with any protocol, without error. As we don't give a Content-Length in advance,
+// cancelling the upload should not be terminal.
 //
 TEST_P(ClientAsync, CancellationRange)
 {

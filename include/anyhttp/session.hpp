@@ -37,15 +37,14 @@ public:
     *       sense for HTTP/2, where the server can also (sort of) submit a push promise to the
     *       client. But in general, it may be better to separate both interfaces.
     */
-   template <boost::asio::completion_token_for<Submit> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Submit) CompletionToken>
    auto async_submit(boost::urls::url url, Fields headers, CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, Submit>(
-         [&](asio::completion_handler_for<Submit> auto handler, boost::urls::url url,
-             Fields headers) { //
+         [&](SubmitHandler handler, boost::urls::url url, Fields headers) { //
             async_submit_any(std::move(handler), std::move(url), std::move(headers));
          },
-         token, url, headers);
+         std::move(token), url, headers);
    }
 
 private:

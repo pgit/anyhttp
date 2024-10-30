@@ -1,5 +1,5 @@
-
 #include "anyhttp/beast_session.hpp"
+#include "anyhttp/server.hpp"
 
 #include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/bind_cancellation_slot.hpp>
@@ -21,18 +21,14 @@
 #include <boost/beast/http/write.hpp>
 #include <boost/beast/ssl/ssl_stream.hpp>
 #include <boost/beast/version.hpp>
-#include <boost/smart_ptr/make_shared_array.hpp>
-#include <boost/system/detail/errc.hpp>
-#include <boost/system/detail/error_code.hpp>
-#include <boost/system/detail/generic_category.hpp>
 #include <boost/system/errc.hpp>
-#include "anyhttp/server.hpp"
 
 using namespace std::chrono_literals;
 
 using namespace boost::asio;
 namespace beast = boost::beast;
 namespace http = beast::http;
+namespace errc = boost::system::errc;
 
 namespace anyhttp::beast_impl
 {
@@ -70,7 +66,6 @@ public:
    {
       logw("BeastReader: dtor");
       assert(!reading);
-      
    }
    void detach() override { session = nullptr; }
 
@@ -189,7 +184,6 @@ public:
       if (cancelled)
       {
          mloge("async_write: already canceled");
-         using namespace boost::system;
          std::move(handler)(errc::make_error_code(errc::operation_canceled));
          return;
       }
@@ -218,9 +212,10 @@ public:
       auto cb = [this, expected = buffer.size(), handler = std::move(handler)] //
          (boost::system::error_code ec, size_t n) mutable
       {
-         // n is the number of bytes written to the stream
+         // async op result 'n' is the number of bytes written to the stream,
+         // not the number of bytes read from the buffer
          mlogd("async_write: n={} ({}) done={} (body {})", n, ec.message(), serializer.is_done(),
-               serializer.get().body().data);
+               serializer.get().body().size);
 
          writing = false;
          if (deleting)
@@ -230,20 +225,26 @@ public:
             return;
          }
 
+         //
+         // 'need_buffer' means that the serializer is done consuming all of the given buffer
+         // and is ready to accept a new one.
+         //
          if (ec == beast::http::error::need_buffer)
             ec = {};
-         else if (ec == boost::system::errc::operation_canceled)
+         else if (ec == errc::operation_canceled)
          {
             mlogw("async_write: canceled after writing {} of {} bytes", n, expected);
             cancelled = true;
             mlogw("async_write: canceled, closing stream");
             get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send);
          }
+         /*
          else if (!ec && n < expected)
          {
             mlogw("async_write: wrote {} bytes which is less than expected ({})", n, expected);
-            ec = boost::system::errc::make_error_code(boost::system::errc::message_size);
+            ec = errc::make_error_code(errc::message_size);
          }
+         */
 
          std::move(handler)(ec);
       };
@@ -253,7 +254,8 @@ public:
       // large as possible. This means that, like the 'Cancellation' testcase, if the user writes
       // a single large buffer, cancellation can not be done gracefully at chunk boundary.
       //
-      http::async_write(stream, serializer, asio::bind_cancellation_slot(slot, std::move(cb)));
+      // http::async_write(stream, serializer, asio::bind_cancellation_slot(slot, std::move(cb)));
+      http::async_write(stream, serializer, std::move(cb));
    }
 
    // ----------------------------------------------------------------------------------------------

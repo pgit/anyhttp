@@ -26,7 +26,7 @@ public:
    Request(Request&& other) noexcept;
    ~Request();
 
-   const asio::any_io_executor& executor() const;
+   // const asio::any_io_executor& executor() const;
 
 public:
    using ReadSome = void(boost::system::error_code, std::vector<std::uint8_t>);
@@ -38,11 +38,11 @@ public:
    //
    // https://www.boost.org/doc/libs/1_85_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp
    //
-   template <boost::asio::completion_token_for<ReadSome> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
    auto async_read_some(CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, ReadSome>(
-         [&](asio::completion_handler_for<ReadSome> auto handler) { //
+         [&](ReadSomeHandler handler) { //
             async_read_some_any(std::move(handler));
          },
          token);
@@ -65,26 +65,24 @@ public:
    Response(Response&& other) noexcept;
    ~Response();
 
-   const asio::any_io_executor& executor() const;
    void content_length(std::optional<size_t> content_length);
 
 public:
-   template <boost::asio::completion_token_for<Write> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken>
    auto async_submit(unsigned int status_code, Fields headers, CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
-         [&](asio::completion_handler_for<Write> auto handler, unsigned int status_code,
-             Fields headers) { //
+         [&](WriteHandler handler, unsigned int status_code, Fields headers) { //
             async_submit_any(std::move(handler), status_code, headers);
          },
          token, status_code, headers);
    }
 
-   template <boost::asio::completion_token_for<Write> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken>
    auto async_write(asio::const_buffer buffer, CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
-         [&](asio::completion_handler_for<Write> auto handler, asio::const_buffer buffer) { //
+         [&](WriteHandler handler, asio::const_buffer buffer) { //
             async_write_any(std::move(handler), buffer);
          },
          token, buffer);
@@ -108,6 +106,8 @@ public:
    class Impl;
    Server(asio::any_io_executor executor, Config config);
    ~Server();
+
+   const asio::any_io_executor& executor() const;
 
    void setRequestHandler(RequestHandler&& handler);
    void setRequestHandlerCoro(RequestHandlerCoro&& handler);

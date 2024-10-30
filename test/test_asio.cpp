@@ -96,7 +96,7 @@ public:
       timer->async_wait(boost::asio::consign(std::move(handler), timer));
    }
 
-   template <asio::completion_token_for<Sleep> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
    static inline auto async_sleep(boost::asio::any_io_executor ex, Duration duration,
                                   CompletionToken&& token)
    {
@@ -137,7 +137,7 @@ public:
          token, std::move(ex), duration);
    }
 
-   template <boost::asio::completion_token_for<Sleep> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
    static auto async_sleep(boost::asio::any_io_executor ex, Duration duration,
                            CompletionToken&& token)
    {
@@ -192,7 +192,7 @@ public:
          token, duration);
    }
 
-   template <boost::asio::completion_token_for<Sleep> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
    static auto async_sleep(Duration duration, CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, Sleep>(
@@ -248,7 +248,7 @@ public:
          token, ex, duration);
    }
 
-   template <boost::asio::completion_token_for<Sleep> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
    static auto async_sleep(boost::asio::any_io_executor ex, Duration duration,
                            CompletionToken&& token)
    {
@@ -282,7 +282,7 @@ TEST_F(ComposedExecutor, AnyFuture)
 class ComposedComa : public testing::Test
 {
 public:
-   template <boost::asio::completion_token_for<Sleep> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
    auto coma_composed(Duration duration, CompletionToken&& token)
    {
       return asio::async_initiate<CompletionToken, Sleep>( //
@@ -298,7 +298,7 @@ public:
       token, duration);
    }
 
-   template <boost::asio::completion_token_for<Sleep> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
    auto coma(boost::asio::any_io_executor ex, Duration duration, CompletionToken&& token)
    {
       return asio::async_initiate<CompletionToken, Sleep>(
@@ -314,8 +314,8 @@ public:
    std::optional<WorkGuard> work;
    SleepHandler handler;
 
-   template <boost::asio::completion_token_for<Sleep> CompletionToken>
-   auto coma(Duration duration, CompletionToken token)
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
+   auto coma(Duration duration, CompletionToken&& token)
    {
       return asio::async_initiate<CompletionToken, Sleep>(
          [this](SleepHandler handler, Duration duration) -> void

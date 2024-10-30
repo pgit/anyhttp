@@ -8,9 +8,7 @@
 namespace anyhttp
 {
 class Session;
-} // namespace anyhttp
-
-namespace anyhttp::client
+namespace client
 {
 
 // =================================================================================================
@@ -32,14 +30,12 @@ public:
    Response(Response&& other) noexcept;
    ~Response();
 
-   // const asio::any_io_executor& executor() const;
-
 public:
-   template <boost::asio::completion_token_for<ReadSome> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
    auto async_read_some(CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, ReadSome>(
-         [&](asio::completion_handler_for<ReadSome> auto handler) { //
+         [&](ReadSomeHandler handler) { //
             async_read_some_any(std::move(handler));
          },
          token);
@@ -66,21 +62,21 @@ public:
    using GetResponse = void(boost::system::error_code, Response);
    using GetResponseHandler = asio::any_completion_handler<GetResponse>;
 
-   template <boost::asio::completion_token_for<GetResponse> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken>
    auto async_get_response(CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, GetResponse>(
-         [&](asio::completion_handler_for<GetResponse> auto handler) { //
+         [&](GetResponseHandler handler) { //
             async_get_response_any(std::move(handler));
          },
-         token);
+         std::forward<CompletionToken>(token));
    }
 
 public:
    using Write = void(boost::system::error_code);
    using WriteHandler = asio::any_completion_handler<Write>;
 
-   template <boost::asio::completion_token_for<Write> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken>
    auto async_write(asio::const_buffer buffer, CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
@@ -111,7 +107,7 @@ public:
    }
 
 private:
-   void async_write_any(WriteHandler&& handler, asio::const_buffer buffer);
+   void async_write_any(WriteHandler handler, asio::const_buffer buffer);
    void async_get_response_any(GetResponseHandler&& handler);
 
    std::unique_ptr<Impl> m_impl;
@@ -131,11 +127,11 @@ public:
 
    const asio::any_io_executor& executor() const;
 
-   template <boost::asio::completion_token_for<Connect> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken>
    auto async_connect(CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, Connect>(
-         [&](asio::completion_handler_for<Connect> auto handler) { //
+         [&](ConnectHandler&& handler) { //
             async_connect_any(std::move(handler));
          },
          token);
@@ -149,4 +145,5 @@ private:
 
 // =================================================================================================
 
-} // namespace anyhttp::client
+} // namespace client
+} // namespace anyhttp

@@ -103,7 +103,7 @@ public:
    //
    // https://www.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp
    //
-   template <boost::asio::completion_token_for<ReadSome> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
    auto async_read_some(CompletionToken&& token)
    {
       assert(!m_read_handler);
@@ -113,7 +113,7 @@ public:
       // operation. This is passed the concrete completion handler, followed by any
       // additional arguments that were passed through the call to async_initiate.
       //
-      auto init = [&](asio::completion_handler_for<ReadSome> auto handler)
+      auto init = [&](ReadSomeHandler handler)
       {
          assert(!m_read_handler);
          if (is_reading_finished)
@@ -172,7 +172,7 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   // template <boost::asio::completion_token_for<Write> CompletionToken>
+   // template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken>
    auto async_write(asio::const_buffer buffer, WriteHandler&& token)
    {
       return boost::asio::async_initiate<WriteHandler, Write>(

@@ -281,8 +281,8 @@ awaitable<void> Server::Impl::listen_loop()
       //
       ++sessionCounter;
       co_spawn(
-         // boost::asio::make_strand(executor),
-         executor,
+         boost::asio::make_strand(executor),  // put each connection on a strand
+         // executor,
          [&]() mutable { //
             return handleConnection(std::move(socket));
          },

@@ -77,16 +77,16 @@ public:
    ResumeHandler m_send_handler;
 
    // Wait to be resumed via `start_write()`, called from within `send_loop()`.
-   template <asio::completion_token_for<Resume> CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Resume) CompletionToken>
    auto async_wait_send(CompletionToken&& token)
    {
       return asio::async_initiate<CompletionToken, Resume>(
-         [&](asio::completion_handler_for<Resume> auto handler)
+         [&](ResumeHandler handler)
          {
             assert(!m_send_handler);
             m_send_handler = std::move(handler);
          },
-         token);
+         std::forward<CompletionToken>(token));
    }
 
    void start_write();
