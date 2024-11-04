@@ -487,9 +487,7 @@ std::shared_ptr<NGHttp2Stream> NGHttp2Session::close_stream(int32_t stream_id)
    {
       stream = std::move(it->second);
       stream->closed = true;
-      nghttp2_session_set_stream_user_data(session, stream_id, nullptr);
-      m_streams.erase(it); // FIXME: deleting this early may cause segfault in writer callback
-      m_trashcan.emplace(stream);
+      m_streams.erase(it);
    }
 
    if (!stream)

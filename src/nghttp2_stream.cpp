@@ -312,7 +312,6 @@ ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data
    if (closed)
    {
       logd("[{}] write callback: stream closed", logPrefix);
-      parent.m_trashcan.erase(shared_from_this());
       return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
    }
 

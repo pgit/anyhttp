@@ -116,7 +116,6 @@ public:
 
    nghttp2_session* session = nullptr;
    std::map<int, std::shared_ptr<NGHttp2Stream>> m_streams;
-   std::set<std::shared_ptr<NGHttp2Stream>> m_trashcan;
    size_t m_requestCounter = 0;
 
    Buffer m_buffer;
