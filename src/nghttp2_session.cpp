@@ -90,6 +90,9 @@ int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* fr
    std::ignore = user_data;
 
    // Issue RST_STREAM so that stream does not hang around.
+   auto handler = static_cast<NGHttp2Session*>(user_data);
+   loge("[{}] on_frame_not_send_callback: resetting stream");
+
    nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
                              NGHTTP2_INTERNAL_ERROR);
 
@@ -262,13 +265,27 @@ int on_frame_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
 int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32_t error_code,
                              void* user_data)
 {
-   std::ignore = session;
-   std::ignore = error_code;
+   bool local_close = nghttp2_session_get_stream_local_close(session, stream_id);
+   bool remote_close = nghttp2_session_get_stream_remote_close(session, stream_id);
 
    auto sessionWrapper = static_cast<NGHttp2Session*>(user_data);
-   logd("[{}] on_stream_close_callback:", sessionWrapper->logPrefix(stream_id));
+   logd("[{}] on_stream_close_callback: {} ({}) (local={}, remote={})",
+        sessionWrapper->logPrefix(stream_id), nghttp2_http2_strerror(error_code), error_code,
+        local_close, remote_close);
 
    auto stream = sessionWrapper->close_stream(stream_id);
+   if (!stream)
+   {
+      logw("[{}] stream already closed", sessionWrapper->logPrefix(stream_id));
+      return 0;
+   }
+
+   //
+   // This callback is invoked in two situations:
+   // 1) We receive a RST frame from the peer
+   // 2) We submit a RST frame ourselves
+   // In both situations, this stream is deleted. It seems that this may happen multiple times...
+   //
    assert(stream);
 
    stream->is_writer_done = true;
@@ -291,6 +308,7 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
    if (stream->sendHandler)
    {
       using namespace boost::system;
+      // FIXME: proper error code -- this could be e.g. NGHTTP2_STREAM_CLOSED which is NOT cancel
       std::move(stream->sendHandler)(errc::make_error_code(errc::operation_canceled));
       stream->sendHandler = nullptr;
    }
@@ -370,19 +388,13 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    //
    // https://nghttp2.org/documentation/types.html#c.nghttp2_data_source_read_callback
    //
-   // This callback is run by nghttp2 when it is ready to accept data to be sent.
+   // This callback is invoked by nghttp2 when it is ready to accept more data to be sent.
    //
    nghttp2_data_provider prd;
    prd.source.ptr = stream.get();
    prd.read_callback = [](nghttp2_session* session, int32_t stream_id, uint8_t* buf, size_t length,
-                          uint32_t* data_flags, nghttp2_data_source* source,
-                          void* user_data) -> ssize_t
+                          uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t
    {
-      std::ignore = session;
-      std::ignore = stream_id;
-      std::ignore = user_data;
-      std::ignore = source;
-
       auto stream = static_cast<NGHttp2Stream*>(source->ptr);
       assert(stream);
       return stream->read_callback(buf, length, data_flags);
@@ -428,8 +440,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
 
    logd("submit: stream={}", id);
    m_streams.emplace(id, stream);
-   std::move(handler)(boost::system::error_code{},
-                      client::Request{std::make_unique<NGHttp2Writer>(*stream)});
+   auto writer = std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream);
+   std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)});
 }
 
 void NGHttp2Session::handle_buffer_contents()
@@ -474,8 +486,20 @@ std::shared_ptr<NGHttp2Stream> NGHttp2Session::close_stream(int32_t stream_id)
    if (auto it = m_streams.find(stream_id); it != std::end(m_streams))
    {
       stream = std::move(it->second);
-      m_streams.erase(it);
+      stream->closed = true;
+      nghttp2_session_set_stream_user_data(session, stream_id, nullptr);
+      m_streams.erase(it); // FIXME: deleting this early may cause segfault in writer callback
+      m_trashcan.emplace(stream);
    }
+
+   if (!stream)
+   {
+      logd("[{}] close_stream: stream already gone", logPrefix(stream_id));
+      return nullptr;
+   }
+
+   logd("[{}] close_stream: found 0x{}, {} streams left", logPrefix(stream_id), (void*)stream.get(),
+        m_streams.size());
 
    //
    // FIXME: We can't just terminate the session after the last request -- what if the user wants
@@ -483,12 +507,13 @@ std::shared_ptr<NGHttp2Stream> NGHttp2Session::close_stream(int32_t stream_id)
    //        tie this to the lifetime of the user-facing 'Session' object...
    //
    // FIXME: Use virtual function instead of dynamic cast for the client-specific code.
+   // FIXME: Or even better, use static polymorphism.
    //
    if (auto client = dynamic_cast<ClientReference*>(this) && m_streams.empty())
    {
       // nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
-      logi("[{}] last stream closed, submitting GOAWAY...", m_logPrefix);
-      int32_t lastStreamId = 1;
+      logi("[{}] last stream closed (id={}), submitting GOAWAY...", m_logPrefix, stream_id);
+      int32_t lastStreamId = 1; // FIXME: should be max stream ID
       nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, lastStreamId, NGHTTP2_NO_ERROR, nullptr, 0);
    }
 

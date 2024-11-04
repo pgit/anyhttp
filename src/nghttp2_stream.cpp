@@ -12,8 +12,6 @@
 
 #include <nghttp2/nghttp2.h>
 
-#include <type_traits>
-
 using namespace boost::asio::experimental::awaitable_operators;
 
 namespace anyhttp::nghttp2
@@ -24,8 +22,7 @@ namespace anyhttp::nghttp2
 template <typename Base>
 NGHttp2Reader<Base>::NGHttp2Reader(NGHttp2Stream& stream) : Base(), stream(&stream)
 {
-   if constexpr (std::is_same_v<Base, server::Request::Impl>)
-      stream.request = this;
+   stream.reader = this;
 }
 
 template <typename Base>
@@ -33,9 +30,9 @@ NGHttp2Reader<Base>::~NGHttp2Reader()
 {
    if (stream)
    {
-      stream->request = nullptr;
-      // stream->delete_reader();
-      // stream->call_handler_loop();
+      stream->reader = nullptr;
+      stream->delete_reader();
+      stream->call_handler_loop();
    }
 }
 
@@ -79,34 +76,47 @@ void NGHttp2Reader<Base>::async_read_some(ReadSomeHandler&& handler)
 
 // =================================================================================================
 
-NGHttp2Writer::NGHttp2Writer(NGHttp2Stream& stream) : stream(&stream) { stream.response = this; }
+template <typename Base>
+NGHttp2Writer<Base>::NGHttp2Writer(NGHttp2Stream& stream) : stream(&stream)
+{
+   stream.writer = this;
+}
 
-NGHttp2Writer::~NGHttp2Writer()
+template <typename Base>
+NGHttp2Writer<Base>::~NGHttp2Writer()
 {
    if (stream)
    {
-      stream->response = nullptr;
+      stream->writer = nullptr;
       stream->delete_writer();
       // stream->call_handler_loop();
    }
 }
 
-void NGHttp2Writer::detach() { stream = nullptr; }
+template <typename Base>
+void NGHttp2Writer<Base>::detach()
+{
+   stream = nullptr;
+}
 
 // -------------------------------------------------------------------------------------------------
 
-const asio::any_io_executor& NGHttp2Writer::executor() const
+template <typename Base>
+const asio::any_io_executor& NGHttp2Writer<Base>::executor() const
 {
    assert(stream);
    return stream->executor();
 }
 
-void NGHttp2Writer::content_length(std::optional<size_t> content_length)
+template <typename Base>
+void NGHttp2Writer<Base>::content_length(std::optional<size_t> content_length)
 {
    m_content_length = content_length;
 }
 
-void NGHttp2Writer::async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers)
+template <typename Base>
+void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int status_code,
+                                       Fields headers)
 {
    assert(stream);
 
@@ -134,6 +144,7 @@ void NGHttp2Writer::async_submit(WriteHandler&& handler, unsigned int status_cod
    }
 
    // TODO: If we already know that there is no body, don't set a producer.
+   nghttp2_data_provider prd;
    prd.source.ptr = stream;
    prd.read_callback = [](nghttp2_session*, int32_t, uint8_t* buf, size_t length,
                           uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t
@@ -147,7 +158,8 @@ void NGHttp2Writer::async_submit(WriteHandler&& handler, unsigned int status_cod
    std::move(handler)(boost::system::error_code{});
 }
 
-void NGHttp2Writer::async_write(WriteHandler&& handler, asio::const_buffer buffer)
+template <typename Base>
+void NGHttp2Writer<Base>::async_write(WriteHandler&& handler, asio::const_buffer buffer)
 {
    if (!stream)
       std::move(handler)(boost::asio::error::basic_errors::connection_aborted);
@@ -155,7 +167,8 @@ void NGHttp2Writer::async_write(WriteHandler&& handler, asio::const_buffer buffe
       stream->async_write(buffer, std::move(handler));
 }
 
-void NGHttp2Writer::async_get_response(client::Request::GetResponseHandler&& handler)
+template <typename Base>
+void NGHttp2Writer<Base>::async_get_response(client::Request::GetResponseHandler&& handler)
 {
    stream->async_get_response(std::move(handler));
 }
@@ -249,15 +262,15 @@ void NGHttp2Stream::call_on_data(nghttp2_session* session, int32_t id_, const ui
 NGHttp2Stream::~NGHttp2Stream()
 {
    logd("[{}] \x1b[33mStream: dtor... \x1b[0m", logPrefix);
-   if (request)
+   if (reader)
    {
-      logd("Stream: dtor... detaching request", logPrefix);
-      request->detach();
+      logd("Stream: dtor... detaching reader", logPrefix);
+      reader->detach();
    }
-   if (response)
+   if (writer)
    {
-      logd("Stream: dtor... detaching response", logPrefix);
-      response->detach();
+      logd("Stream: dtor... detaching writer", logPrefix);
+      writer->detach();
    }
    logd("[{}] \x1b[33mStream: dtor... done\x1b[0m", logPrefix);
 }
@@ -290,11 +303,22 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
 
 // ==============================================================================================
 
+//
+// NOTE: The read callback of a nghttp2 data source is a write callback from our perspective.
+// https://nghttp2.org/documentation/types.html#c.nghttp2_data_source_read_callback2
+//
 ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data_flags)
-{
-   logd("[{}] write callback (buffer size={} bytes)", logPrefix, length);
+{   
+   if (closed)
+   {
+      logd("[{}] write callback: stream closed", logPrefix);
+      parent.m_trashcan.erase(shared_from_this());
+      return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+   }
+
    assert(!is_deferred);
    assert(!is_writer_done);
+   logd("[{}] write callback (buffer size={} bytes)", logPrefix, length);
 
    if (!sendHandler)
    {
@@ -370,7 +394,7 @@ void NGHttp2Stream::call_on_request()
    //       the actual handling.
    //
    server::Request request(std::make_unique<NGHttp2Reader<server::Request::Impl>>(*this));
-   server::Response response(std::make_unique<NGHttp2Writer>(*this));
+   server::Response response(std::make_unique<NGHttp2Writer<server::Response::Impl>>(*this));
 
    auto& server = dynamic_cast<ServerReference&>(parent).server();
    if (auto& handler = server.requestHandlerCoro())
@@ -392,8 +416,25 @@ void NGHttp2Stream::delete_reader()
 {
    logd("[{}] delete_reader", logPrefix);
    // Issue RST_STREAM so that stream does not hang around.
-   // nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_INTERNAL_ERROR);
-   // parent.start_write();
+   if (is_reading_finished)
+      logd("[{}] delete_reader: reading already finished", logPrefix);
+   else
+   {
+      for (auto& buffer : m_pending_read_buffers)
+      {
+         logd("[{}] delete_reader: discarding buffer of {} bytes", logPrefix, buffer.size());
+         nghttp2_session_consume_stream(parent.session, id, buffer.size());
+      }
+
+      if (this->closed)
+         logw("[{}] delete_reader: stream already closed", logPrefix);
+      else
+      {
+         logw("[{}] delete_reader: not done yet, submitting RST with STREAM_CLOSED", logPrefix);
+         nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
+         parent.start_write();
+      }
+   }
 }
 
 void NGHttp2Stream::delete_writer()
@@ -406,12 +447,22 @@ void NGHttp2Stream::delete_writer()
    //
    if (!is_writer_done)
    {
-      logw("[{}] delete_writer: not done yet, submitting RST with STREAM_CLOSED", logPrefix);
-      nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
-      parent.start_write();
+      if (this->closed)
+         logw("[{}] delete_writer: stream already closed", logPrefix);
+      else
+      {
+         logw("[{}] delete_writer: not done yet, submitting RST with STREAM_CLOSED", logPrefix);
+         nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
+         parent.start_write();
+      }
    }
 }
 
 // =================================================================================================
+
+template class NGHttp2Reader<client::Response::Impl>;
+template class NGHttp2Reader<server::Request::Impl>;
+template class NGHttp2Writer<client::Request::Impl>;
+template class NGHttp2Writer<server::Response::Impl>;
 
 } // namespace anyhttp::nghttp2

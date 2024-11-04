@@ -34,12 +34,12 @@ Request::Request(std::unique_ptr<Request::Impl> impl) : m_impl(std::move(impl))
 Request::Request(Request&&) noexcept = default;
 Request::~Request()
 {
-   if (!m_impl) // may happen if moved-from
-      return;
-
-   logd("\x1b[34mClient::Request: dtor\x1b[0m");
-   auto impl = m_impl.get();
-   impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
+   if (m_impl)
+   {
+      logd("\x1b[34mClient::Request: dtor\x1b[0m");
+      auto impl = m_impl.get();
+      impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
+   }
 }
 
 void Request::async_write_any(WriteHandler handler, asio::const_buffer buffer)
@@ -79,12 +79,12 @@ Response::Response(std::unique_ptr<Response::Impl> impl) : m_impl(std::move(impl
 Response::Response(Response&&) noexcept = default;
 Response::~Response()
 {
-   if (!m_impl)
-      return;
-
-   logd("\x1b[34mClient::Response: dtor\x1b[0m");
-   auto impl = m_impl.get();
-   impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
+   if (m_impl)
+   {
+      logd("\x1b[34mClient::Response: dtor\x1b[0m");
+      auto impl = m_impl.get();
+      impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
+   }
 }
 
 void Response::async_read_some_any(ReadSomeHandler&& handler)

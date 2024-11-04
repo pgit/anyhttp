@@ -25,24 +25,26 @@ namespace anyhttp::nghttp2
 class NGHttp2Stream;
 
 template <typename Base>
-class NGHttp2Reader : public Base // server::Request::Impl, public client::Response::Impl
+class NGHttp2Reader : public Base
 {
 public:
    explicit NGHttp2Reader(NGHttp2Stream& stream);
    ~NGHttp2Reader() override;
 
    const asio::any_io_executor& executor() const override;
-   boost::url_view url() const override;
    std::optional<size_t> content_length() const noexcept override;
    void async_read_some(server::Request::ReadSomeHandler&& handler) override;
    void detach() override;
+
+   boost::url_view url() const override;
 
    NGHttp2Stream* stream;
 };
 
 // -------------------------------------------------------------------------------------------------
 
-class NGHttp2Writer : public server::Response::Impl, public client::Request::Impl
+template <typename Base>
+class NGHttp2Writer : public Base
 {
 public:
    explicit NGHttp2Writer(NGHttp2Stream& stream);
@@ -50,13 +52,13 @@ public:
 
    const asio::any_io_executor& executor() const override;
    void content_length(std::optional<size_t> content_length) override;
-   void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override;
    void async_write(WriteHandler&& handler, asio::const_buffer buffer) override;
-   void async_get_response(client::Request::GetResponseHandler&& handler) override;
    void detach() override;
 
+   void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers);
+   void async_get_response(client::Request::GetResponseHandler&& handler);
+
    NGHttp2Stream* stream;
-   nghttp2_data_provider prd;
    std::optional<size_t> m_content_length;
 };
 
@@ -89,13 +91,15 @@ public:
    boost::urls::url url;
    std::optional<size_t> content_length;
 
+   bool closed = false; // set to true after on_stream_close_callback
+
 public:
    NGHttp2Stream(NGHttp2Session& parent, int id);
    ~NGHttp2Stream();
 
    void call_handler_loop();
    void call_on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len);
-   
+
    // ==============================================================================================
 
    server::Request::ReadSomeHandler m_read_handler;
@@ -173,11 +177,19 @@ public:
    // ----------------------------------------------------------------------------------------------
 
    // template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken>
-   auto async_write(asio::const_buffer buffer, WriteHandler&& token)
+   auto async_write(asio::const_buffer buffer, WriteHandler&& handler)
    {
       return boost::asio::async_initiate<WriteHandler, Write>(
          [&](WriteHandler handler, asio::const_buffer buffer)
          {
+            if (closed)
+            {
+               logw("async_write: stream already closed", logPrefix);
+               using namespace boost::system;
+               std::move(handler)(errc::make_error_code(errc::operation_canceled));
+               return;
+            }
+
             assert(!sendHandler);
 
             logd("[{}] async_write: buffer={} is_deferred={}", //
@@ -206,12 +218,11 @@ public:
 
             resume();
          },
-         token, buffer);
+         handler, buffer);
    }
 
    void resume();
 
-   // void async_write(WriteHandler&& handler, asio::const_buffer buffer);
    void async_get_response(client::Request::GetResponseHandler&& handler);
 
    // ==============================================================================================
@@ -221,8 +232,8 @@ public:
    void call_on_response();
    void call_on_request();
 
-   server::Request::Impl* request = nullptr;
-   server::Response::Impl* response = nullptr;
+   impl::Reader* reader = nullptr;
+   impl::Writer* writer = nullptr;
 
    void delete_reader();
    void delete_writer();

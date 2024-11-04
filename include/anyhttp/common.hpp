@@ -18,6 +18,8 @@ namespace anyhttp
 {
 namespace asio = boost::asio;
 
+// =================================================================================================
+
 enum class Protocol
 {
    http11,
@@ -39,6 +41,35 @@ using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
 
 using Write = void(boost::system::error_code);
 using WriteHandler = asio::any_completion_handler<Write>;
+
+// =================================================================================================
+
+namespace impl
+{
+class Reader
+{
+public:
+   virtual ~Reader() = default;
+   virtual const asio::any_io_executor& executor() const = 0;
+   virtual std::optional<size_t> content_length() const noexcept = 0;
+   virtual void async_read_some(ReadSomeHandler&& handler) = 0;
+   virtual void detach() = 0;
+
+   virtual void destroy(std::unique_ptr<Reader> self) { /* delete self */ }
+};
+
+class Writer
+{
+public:
+   virtual ~Writer() = default;
+   virtual const asio::any_io_executor& executor() const = 0;
+   virtual void content_length(std::optional<size_t> content_length) = 0;
+   virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
+   virtual void detach() = 0;
+   
+   virtual void destroy(std::unique_ptr<Writer> self) { /* delete self */ }
+};
+} // namespace impl
 
 // =================================================================================================
 

@@ -28,6 +28,9 @@ add_link_options(-stdlib=libc++ -lstdc++fs)
 # needed starting with clang 19
 add_compile_options(-Wno-deprecated-declarations)
 
+# FIXME: ngghtp2 reader/writer needs this ATM
+add_compile_options(-Wno-inconsistent-missing-override)
+
 # --------------------------------------------------------------------------------------------------
 
 #

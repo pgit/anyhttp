@@ -16,34 +16,40 @@ namespace anyhttp::client
 
 // =================================================================================================
 
-class Request::Impl
+class Request::Impl : public impl::Writer
 {
 public:
    Impl() noexcept;
    virtual ~Impl();
 
-   virtual const asio::any_io_executor& executor() const = 0;
+   // virtual const asio::any_io_executor& executor() const = 0;
+   // virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
+   // virtual void detach() = 0;
+   // virtual void destroy(std::unique_ptr<Impl> self) { /* delete self */ }
+
    virtual void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) = 0;
-   virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
    virtual void async_get_response(GetResponseHandler&& handler) = 0;
-   virtual void detach() = 0;
-   virtual void destroy(std::unique_ptr<Impl> self) { /* delete self */ }
+
+   using ReaderOrWriter = impl::Writer;
 };
 
 // -------------------------------------------------------------------------------------------------
 
-class Response::Impl
+class Response::Impl : public impl::Reader
 {
 public:
    Impl() noexcept;
    virtual ~Impl();
 
-   virtual const asio::any_io_executor& executor() const = 0;
+   // virtual const asio::any_io_executor& executor() const = 0;
+   // virtual std::optional<size_t> content_length() const noexcept = 0;
+   // virtual void async_read_some(ReadSomeHandler&& handler) = 0;
+   // virtual void detach() = 0;
+   // virtual void destroy(std::unique_ptr<Impl> self) { /* delete self */ }
+
    virtual boost::url_view url() const = 0;
-   virtual std::optional<size_t> content_length() const noexcept = 0;
-   virtual void async_read_some(ReadSomeHandler&& handler) = 0;
-   virtual void detach() = 0;
-   virtual void destroy(std::unique_ptr<Impl> self) { /* delete self */ }
+
+   using ReaderOrWriter = impl::Reader;
 };
 
 // =================================================================================================

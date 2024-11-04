@@ -14,13 +14,13 @@ Request::Request(std::unique_ptr<Request::Impl> impl) : m_impl(std::move(impl))
 Request::Request(Request&&) noexcept = default;
 Request::~Request()
 {
-   if (!m_impl)
-      return;
+   if (m_impl)
+   {
+      logd("\x1b[35mServer::Request: dtor\x1b[0m");
 
-   logd("\x1b[35mServer::Request: dtor\x1b[0m");
-
-   auto impl = m_impl.get();
-   impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
+      auto impl = m_impl.get();
+      impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
+   }
 }
 
 boost::url_view Request::url() const
@@ -50,14 +50,13 @@ Response::Response(std::unique_ptr<Response::Impl> impl) : m_impl(std::move(impl
 Response::Response(Response&&) noexcept = default;
 Response::~Response()
 {
-   if (!m_impl)
-      return;
+   if (m_impl)
+   {
+      logd("\x1b[35mServer::Response: dtor\x1b[0m");
 
-   logd("\x1b[35mServer::Response: dtor\x1b[0m");
-
-   auto impl = m_impl.get();
-   impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
-   m_impl.reset(); // if destroy() didn't
+      auto impl = m_impl.get();
+      impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
+   }
 }
 
 void Response::content_length(std::optional<size_t> content_length)

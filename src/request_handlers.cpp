@@ -217,8 +217,8 @@ awaitable<expected<size_t>> try_read_response(client::Request& request)
 awaitable<void> sendEOF(client::Request& request)
 {
    logi("send: finishing request...");
-   co_await request.async_write({}, deferred);
-   logi("send: finishing request... done");
+   auto [ec] =  co_await request.async_write({}, as_tuple(deferred));
+   logi("send: finishing request... done ({})", ec.what());
 }
 
 // =================================================================================================

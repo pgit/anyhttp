@@ -56,7 +56,7 @@ public:
       parser.body_limit(std::numeric_limits<uint64_t>::max());
    }
 
-   void destroy(std::unique_ptr<Parent> self) override
+   void destroy(std::unique_ptr<typename Parent::ReaderOrWriter> self) override
    {
       if (reading)
          this->deleting = std::move(self);
@@ -140,7 +140,7 @@ public:
    Parser parser;
    boost::url m_url;
    bool reading = false;
-   std::unique_ptr<Parent> deleting;
+   std::unique_ptr<typename Parent::ReaderOrWriter> deleting;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -159,7 +159,7 @@ public:
    {
    }
 
-   void destroy(std::unique_ptr<Parent> self) override
+   virtual void destroy(std::unique_ptr<typename Parent::ReaderOrWriter> self) override
    {
       if (writing)
          this->deleting = std::move(self);
@@ -238,6 +238,10 @@ public:
             mlogw("async_write: canceled, closing stream");
             get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send);
          }
+         else if (ec)
+         {
+            cancelled = true;
+         }
          /*
          else if (!ec && n < expected)
          {
@@ -254,8 +258,8 @@ public:
       // large as possible. This means that, like the 'Cancellation' testcase, if the user writes
       // a single large buffer, cancellation can not be done gracefully at chunk boundary.
       //
-      // http::async_write(stream, serializer, asio::bind_cancellation_slot(slot, std::move(cb)));
-      http::async_write(stream, serializer, std::move(cb));
+      http::async_write(stream, serializer, asio::bind_cancellation_slot(slot, std::move(cb)));
+      // http::async_write(stream, serializer, std::move(cb));
    }
 
    // ----------------------------------------------------------------------------------------------
@@ -285,7 +289,7 @@ public:
    Serializer serializer{message};
    bool writing = false;
    bool cancelled = false;
-   std::unique_ptr<Parent> deleting;
+   std::unique_ptr<typename Parent::ReaderOrWriter> deleting;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -348,6 +352,14 @@ public:
    }
 
    ~RequestWriter() override { logw("RequestWriter: dtor"); }
+
+   void content_length(std::optional<size_t> content_length) override
+   {
+      if (content_length)
+         super::message.content_length(*content_length);
+      else
+         super::message.content_length(boost::none);
+   }
 
    void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
    {
@@ -438,7 +450,7 @@ void BeastSession<Stream>::destroy()
 
 /**
  * This function waits for headers of an incoming, new request and passes control to a registered
- * handler. After the request has been completed, abd if the connection can be kept open, it starts
+ * handler. After the request has been completed, and if the connection can be kept open, it starts
  * waiting again.
  *
  * But that is only the simplified description: In reality, for pipelining support, the server
@@ -560,8 +572,8 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    mlogd("do_client_session, {} bytes in buffer", m_buffer.size());
    // get_socket(m_stream).set_option(asio::ip::tcp::no_delay(true));
 
-   // Set the timeout.
-   m_stream.expires_after(std::chrono::seconds(30));
+   // Set the low-level TCP stream timeout. This is relevant for some testcases...
+   m_stream.expires_after(5s);
 
    //
    // Even in HTTP/1.1, where the current request and the current response's serializers take

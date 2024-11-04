@@ -33,9 +33,9 @@ public:
     *
     * Use \ref Request::async_get_response() on the request to wait for the response.
     *
-    * TODO: There is only a single Session class for both server and client. This even might make
-    *       sense for HTTP/2, where the server can also (sort of) submit a push promise to the
-    *       client. But in general, it may be better to separate both interfaces.
+    * TODO: There is only a single Session interface for both server and client. This even might
+    *       make sense for HTTP/2, where the server can also (sort of) submit a push promise to the
+    *       client. But in general, it may be better to separate them.
     */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Submit) CompletionToken>
    auto async_submit(boost::urls::url url, Fields headers, CompletionToken&& token)

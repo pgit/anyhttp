@@ -103,7 +103,7 @@ public:
 #endif
             async_write_any(std::move(handler), buffer);
          },
-         std::forward<CompletionToken>(token), buffer);
+         token, buffer);
    }
 
 private:

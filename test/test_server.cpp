@@ -110,7 +110,7 @@ TEST_F(ClientConnect, ErrorNetworkUnreachable)
 
 // =================================================================================================
 
-#define USE_STRANDS
+// #define USE_STRANDS
 
 //
 // Server fixture with some default request handlers.
@@ -165,7 +165,12 @@ protected:
       for (auto& thread : threads)
          thread.join();
 #else
+#if 0
       context.run();
+#else
+      for (int i = 0; context.run_one(); ++i)
+         std::println("--- {} ----------------------------------------------------------------", i);
+#endif
 #endif
    }
 
@@ -436,7 +441,15 @@ public:
          [&]() -> awaitable<void>
          {
             auto session = co_await client->async_connect(asio::deferred);
-            co_await test(std::move(session));
+            try
+            {
+               co_await test(std::move(session));
+            }
+            catch (const boost::system::system_error& ex)
+            {
+               std::println("test: {}", ex.what());
+               throw;
+            }
          },
          completion_handler());
    }
@@ -481,7 +494,7 @@ TEST_P(ClientAsync, WHEN_post_to_unknown_path_THEN_error_404)
    test = [&](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("unknown"), {}, deferred);
-      co_await send(request, 1024);
+      co_await send(request, 1024 * 1024);
       auto response = co_await request.async_get_response(asio::deferred);
       auto received = co_await receive(response);
    };
@@ -722,6 +735,18 @@ TEST_P(ClientAsync, SendMoreThanContentLength)
       auto response = co_await request.async_get_response(asio::deferred);
       co_await receive(response);
       co_await send(request, rv::iota(uint8_t(0)) | rv::take(10 * 1024 + 1));
+   };
+   run();
+}
+
+// =================================================================================================
+
+TEST_P(ClientAsync, ClientDropRequest)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
+      auto response = co_await request.async_get_response(asio::deferred);
    };
    run();
 }
