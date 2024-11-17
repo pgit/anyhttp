@@ -127,8 +127,8 @@ protected:
 #if defined(USE_STRANDS)
       server.emplace(make_strand(context.get_executor()), config);
 #else
-      server.emplace(context.get_executor(), config);
 #endif
+      server.emplace(context.get_executor(), config);
       server->setRequestHandlerCoro(
          [this](server::Request request, server::Response response) -> awaitable<void>
          {
@@ -152,26 +152,27 @@ protected:
          });
    }
 
-   void run()
+   void run(boost::asio::io_context& context)
    {
-#if defined(USE_STRANDS)
-      const size_t extraThreads = 8;
-      auto threads = rv::iota(0) | rv::take(extraThreads) |
-                     rv::transform([&](int) { return std::thread([&] { context.run(); }); }) |
-                     ranges::to<std::vector>();
-
-      context.run();
-
-      for (auto& thread : threads)
-         thread.join();
-#else
 #if 0
       context.run();
 #else
       for (int i = 0; context.run_one(); ++i)
          std::println("--- {} ----------------------------------------------------------------", i);
 #endif
-#endif
+   }
+
+   void run()
+   {
+      const size_t extraThreads = 0;
+      auto threads = rv::iota(0) | rv::take(extraThreads) |
+                     rv::transform([&](int) { return std::thread([&] { run(context); }); }) |
+                     ranges::to<std::vector>();
+
+      run(context);
+
+      for (auto& thread : threads)
+         thread.join();
    }
 
 protected:
@@ -443,11 +444,13 @@ public:
             auto session = co_await client->async_connect(asio::deferred);
             try
             {
+               logd("running test...");
                co_await test(std::move(session));
+               logd("running test... done");
             }
             catch (const boost::system::system_error& ex)
             {
-               std::println("test: {}", ex.what());
+               logd("running test: {}", ex.what());
                throw;
             }
          },
@@ -628,7 +631,7 @@ TEST_P(ClientAsync, EatRequest)
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_P(ClientAsync, DISABLED_Backpressure)
+TEST_P(ClientAsync, Backpressure)
 {
    test = [&](Session session) -> awaitable<void>
    {
@@ -636,8 +639,11 @@ TEST_P(ClientAsync, DISABLED_Backpressure)
       auto response = co_await request.async_get_response(asio::deferred);
       auto sender = send(request, rv::iota(uint8_t(0)));
       co_await (std::move(sender) || sleep(2s));
-      auto received = co_await (sendEOF(request) && try_receive(response));
-      fmt::println("transferred {} bytes", received.value_or(-1));
+      co_await sendEOF(request);
+      // auto received = co_await (sendEOF(request) && try_receive(response));
+      fmt::println("receiving....");
+      auto received = co_await try_receive(response);
+      fmt::println("transferred {} bytes", received.value_or(0));
    };
    run();
 }
@@ -676,7 +682,8 @@ TEST_P(ClientAsync, CancellationContentLength)
 //           close the connection in this situation.
 //
 // HTTP/2: Cancelling a large buffer without Content-Length will look to the server just like a
-//         small buffer. No error is raised.
+//         small buffer. No error is raised. FIXME: we could try to support cancellation here
+//         by closing the stream without sending an EOF.
 //
 TEST_P(ClientAsync, Cancellation)
 {
@@ -718,7 +725,10 @@ TEST_P(ClientAsync, CancellationRange)
       auto received = co_await ((std::move(sender) || yield()) && try_receive(response, ec));
       fmt::println("received {} bytes", std::get<1>(received));
       EXPECT_GT(std::get<1>(received), 0);
-      EXPECT_EQ(ec, boost::system::errc::success);
+      if (GetParam() == anyhttp::Protocol::http2)
+         EXPECT_EQ(ec, boost::system::errc::success);
+      else
+         EXPECT_EQ(ec, boost::beast::http::error::partial_message);
    };
    run();
 }

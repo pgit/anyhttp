@@ -44,8 +44,8 @@ void NGHttp2SessionImpl<Stream>::destroy()
 
 // =================================================================================================
 
-// #define mylogd(...)
-#define mylogd(...) mlogd(__VA_ARGS__) // too noisy, even for debug
+#define mylogd(...)
+// #define mylogd(...) mlogd(__VA_ARGS__) // too noisy, even for debug
 
 //
 // Implementing the send loop as a coroutine does not make much sense, as it may run out
@@ -192,7 +192,7 @@ template <typename Stream>
 awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
-   // get_socket(super::m_socket).set_option(ip::tcp::no_delay(true));
+   // get_socket(m_stream).set_option(ip::tcp::no_delay(true));
    auto callbacks = super::setup_callbacks();
 
    //
@@ -240,7 +240,7 @@ template <typename Stream>
 awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
-   // get_socket(super::m_socket).set_option(ip::tcp::no_delay(true));
+   // get_socket(m_stream).set_option(ip::tcp::no_delay(true));
    auto callbacks = super::setup_callbacks();
 
    //
@@ -255,9 +255,6 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 
    if (auto rv = nghttp2_session_client_new2(&session, callbacks.get(), this, options.get()))
       throw std::runtime_error("nghttp2_session_client_new");
-
-   nghttp2_settings_entry ent{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100};
-   nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, &ent, 1);
 
    // const uint32_t window_size = 256 * 1024 * 1024;
    const uint32_t window_size = 1024 * 1024;

@@ -169,14 +169,18 @@ boost::asio::awaitable<expected<size_t>> try_receive(client::Response& response)
 awaitable<size_t> try_receive(client::Response& response, boost::system::error_code& ec)
 {
    ec = {};
-   size_t bytes = 0;
+   size_t bytes = 0, count = 0;
    try
-   {
+   {      
       for (;;)
       {
          auto buf = co_await response.async_read_some(deferred);
          if (buf.empty())
             break;
+
+         // do NOT 'respawn' read handler in first round, see NGHttp2Stream::call_handler_loop()
+         if (count == 0)
+            co_await yield();
 
          bytes += buf.size();
          logd("receive: {}, total {}", buf.size(), bytes);

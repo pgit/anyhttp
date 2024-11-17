@@ -79,6 +79,7 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
    return 0;
 }
 
+// https://github.com/nghttp2/nghttp2-asio/blob/e877868abe06a83ed0a6ac6e245c07f6f20866b5/lib/asio_server_http2_handler.cc#L222
 int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
                                int lib_error_code, void* user_data)
 {
@@ -91,7 +92,7 @@ int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* fr
 
    // Issue RST_STREAM so that stream does not hang around.
    auto handler = static_cast<NGHttp2Session*>(user_data);
-   loge("[{}] on_frame_not_send_callback: resetting stream");
+   loge("[{}] on_frame_not_send_callback: resetting stream", handler->logPrefix());
 
    nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
                              NGHTTP2_INTERNAL_ERROR);
@@ -165,21 +166,19 @@ static std::string_view frameType(uint8_t type)
 
 int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
 {
-   std::ignore = session;
-
    auto handler = static_cast<NGHttp2Session*>(user_data);
    auto stream = handler->find_stream(frame->hd.stream_id);
+
+   if (!stream && frame->hd.stream_id > 0)
+   {
+      logw("[{}] on_frame_recv_callback: {}, but no stream found (id={})", handler->logPrefix(),
+           frameType(frame->hd.type), frame->hd.stream_id);
+      return 0;
+   }
 
    switch (frame->hd.type)
    {
    case NGHTTP2_DATA:
-      if (!stream)
-      {
-         logw("[{}] on_frame_recv_callback: DATA, but no stream found (id={})",
-              handler->logPrefix(), frame->hd.stream_id);
-         break;
-      }
-
       logd("[{}] on_frame_recv_callback: DATA len={} flags={}", handler->logPrefix(frame),
            frame->hd.length, frame->hd.flags);
 
@@ -192,11 +191,6 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
 
    case NGHTTP2_HEADERS:
    {
-      if (!stream)
-      {
-         break;
-      }
-
       if (frame->headers.cat == NGHTTP2_HCAT_REQUEST)
          stream->call_on_request();
       else if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE)
@@ -338,26 +332,24 @@ nghttp2_unique_ptr<nghttp2_session_callbacks> NGHttp2Session::setup_callbacks()
    //        }, user_data=self, options=options)
    //        self.session.submit_settings(self._settings)
    //
-   auto callbacks_unique = nghttp2_session_callbacks_new();
-   auto callbacks = callbacks_unique.get();
+   auto callbacks = nghttp2_session_callbacks_new();
 
    //
    // https://nghttp2.org/documentation/nghttp2_session_server_new.html
    //
    // At a minimum, send and receive callbacks need to be specified.
    //
-   nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, on_frame_recv_callback);
-   nghttp2_session_callbacks_set_on_data_chunk_recv_callback(callbacks,
-                                                             on_data_chunk_recv_callback);
-   nghttp2_session_callbacks_set_on_frame_send_callback(callbacks, on_frame_send_callback);
-   nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, on_stream_close_callback);
-   nghttp2_session_callbacks_set_on_begin_headers_callback(callbacks, on_begin_headers_callback);
-   nghttp2_session_callbacks_set_on_header_callback(callbacks, on_header_callback);
-   nghttp2_session_callbacks_set_on_frame_not_send_callback(callbacks, on_frame_not_send_callback);
-   nghttp2_session_callbacks_set_error_callback2(callbacks, on_error_callback);
-   nghttp2_session_callbacks_set_on_invalid_header_callback2(callbacks, on_invalid_header_callback);
-
-   return callbacks_unique;
+   auto cbs = callbacks.get();
+   nghttp2_session_callbacks_set_on_frame_recv_callback(cbs, on_frame_recv_callback);
+   nghttp2_session_callbacks_set_on_data_chunk_recv_callback(cbs, on_data_chunk_recv_callback);
+   nghttp2_session_callbacks_set_on_frame_send_callback(cbs, on_frame_send_callback);
+   nghttp2_session_callbacks_set_on_stream_close_callback(cbs, on_stream_close_callback);
+   nghttp2_session_callbacks_set_on_begin_headers_callback(cbs, on_begin_headers_callback);
+   nghttp2_session_callbacks_set_on_header_callback(cbs, on_header_callback);
+   nghttp2_session_callbacks_set_on_frame_not_send_callback(cbs, on_frame_not_send_callback);
+   nghttp2_session_callbacks_set_error_callback2(cbs, on_error_callback);
+   nghttp2_session_callbacks_set_on_invalid_header_callback2(cbs, on_invalid_header_callback);
+   return callbacks;
 }
 
 // =================================================================================================
@@ -397,6 +389,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    {
       auto stream = static_cast<NGHttp2Stream*>(source->ptr);
       assert(stream);
+      assert(stream->id == stream_id);
       return stream->read_callback(buf, length, data_flags);
    };
 
@@ -417,7 +410,9 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
 
    for (auto&& item : headers)
    {
-      if (boost::iequals(item.first, "content-length") || item.first.starts_with(':'))
+      // FIXME: why should content length be invalid?
+      // if (boost::iequals(item.first, "content-length") || item.first.starts_with(':'))
+      if (item.first.starts_with(':'))
          logw("[{}] async_submit: invalid header '{}'", stream->logPrefix, item.first);
 
       nva.push_back(make_nv_ls(item.first, item.second));

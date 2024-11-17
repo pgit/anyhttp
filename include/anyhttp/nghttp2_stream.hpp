@@ -103,6 +103,7 @@ public:
    // ==============================================================================================
 
    server::Request::ReadSomeHandler m_read_handler;
+   bool m_inside_call_handler_loop = false;
 
    //
    // https://www.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp
@@ -176,49 +177,19 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
+   void async_write(WriteHandler handler, asio::const_buffer buffer);
+
    // template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken>
    auto async_write(asio::const_buffer buffer, WriteHandler&& handler)
    {
+   #if 1
+      async_write(std::move(handler), buffer);
+   #else
       return boost::asio::async_initiate<WriteHandler, Write>(
-         [&](WriteHandler handler, asio::const_buffer buffer)
-         {
-            if (closed)
-            {
-               logw("async_write: stream already closed", logPrefix);
-               using namespace boost::system;
-               std::move(handler)(errc::make_error_code(errc::operation_canceled));
-               return;
-            }
-
-            assert(!sendHandler);
-
-            logd("[{}] async_write: buffer={} is_deferred={}", //
-                 logPrefix, buffer.size(), is_deferred);
-
-            sendBuffer = buffer;
-            sendHandler = std::move(handler);
-
-            slot = asio::get_associated_cancellation_slot(sendHandler);
-            if (slot.is_connected() && !slot.has_handler())
-            {
-               slot.assign(
-                  [this](asio::cancellation_type_t ct)
-                  {
-                     logw("[{}] async_write: cancelled ({})", logPrefix, int(ct));
-                     // delete_writer();
-
-                     if (sendHandler)
-                     {
-                        using namespace boost::system;
-                        auto handler = std::move(sendHandler);
-                        std::move(handler)(errc::make_error_code(errc::operation_canceled));
-                     }
-                  });
-            }
-
-            resume();
-         },
-         handler, buffer);
+         [this](WriteHandler handler, asio::const_buffer buffer) {
+            async_write(std::move(handler), std::move(buffer));
+         }, handler, buffer);
+   #endif
    }
 
    void resume();

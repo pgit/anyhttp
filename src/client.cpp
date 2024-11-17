@@ -27,70 +27,64 @@ std::string to_string(Protocol protocol)
 namespace anyhttp::client
 {
 
-Request::Request(std::unique_ptr<Request::Impl> impl) : m_impl(std::move(impl))
+Request::Request(std::unique_ptr<Request::Impl> impl_) : impl(std::move(impl_))
 {
    logd("\x1b[1;34mClient::Request: ctor\x1b[0m");
 }
 Request::Request(Request&&) noexcept = default;
 Request::~Request()
 {
-   if (m_impl)
+   if (impl)
    {
       logd("\x1b[34mClient::Request: dtor\x1b[0m");
-      auto impl = m_impl.get();
-      impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
+      auto temp = impl.get();
+      temp->destroy(std::move(impl)); // give implementation a chance for cancellation
    }
 }
 
 void Request::async_write_any(WriteHandler handler, asio::const_buffer buffer)
 {
-   if (!m_impl)
-   {
+   if (impl)
+      impl->async_write(std::move(handler), buffer);
+   else
       std::move(handler)(boost::asio::error::operation_aborted);
-      return;
-   }
-
-   m_impl->async_write(std::move(handler), buffer);
 }
 
 void Request::async_get_response_any(Request::GetResponseHandler&& handler)
 {
-   if (!m_impl)
-   {
+   if (impl)
+      impl->async_get_response(std::move(handler));
+   else
       std::move(handler)(boost::asio::error::operation_aborted, Response{nullptr});
-      return;
-   }
-
-   m_impl->async_get_response(std::move(handler));
 }
 
 const asio::any_io_executor& Request::executor() const
 {
-   assert(m_impl);
-   return m_impl->executor();
+   assert(impl);
+   return impl->executor();
 }
 
 // -------------------------------------------------------------------------------------------------
 
-Response::Response(std::unique_ptr<Response::Impl> impl) : m_impl(std::move(impl))
+Response::Response(std::unique_ptr<Response::Impl> impl_) : impl(std::move(impl_))
 {
    logd("\x1b[1;34mClient::Response: ctor\x1b[0m");
 }
 Response::Response(Response&&) noexcept = default;
 Response::~Response()
 {
-   if (m_impl)
+   if (impl)
    {
       logd("\x1b[34mClient::Response: dtor\x1b[0m");
-      auto impl = m_impl.get();
-      impl->destroy(std::move(m_impl)); // give implementation a chance for cancellation
+      auto temp = impl.get();
+      temp->destroy(std::move(impl)); // give implementation a chance for cancellation
    }
 }
 
 void Response::async_read_some_any(ReadSomeHandler&& handler)
 {
-   assert(m_impl);
-   m_impl->async_read_some(std::move(handler));
+   assert(impl);
+   impl->async_read_some(std::move(handler));
 }
 
 // =================================================================================================
@@ -104,6 +98,7 @@ Client::~Client() = default;
 
 void Client::async_connect_any(ConnectHandler&& handler)
 {
+   assert(impl);
    impl->async_connect(std::move(handler));
 }
 

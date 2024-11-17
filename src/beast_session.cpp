@@ -233,6 +233,16 @@ public:
             ec = {};
          else if (ec == errc::operation_canceled)
          {
+            //
+            // Cancellation is tricky, see e.g.: https://github.com/boostorg/beast/issues/2325.
+            //
+            // Main reason is that depending on when the cancellation actually takes place,
+            // the stream is in an undefined state. For example, when writing a large chunk is
+            // interrupted, there is no meaningful way to recover. The length of the chunk has
+            // been written, but only part of the data.
+            //
+            // So the only sensible thing to do here is to close the socket.
+            //
             mlogw("async_write: canceled after writing {} of {} bytes", n, expected);
             cancelled = true;
             mlogw("async_write: canceled, closing stream");

@@ -60,10 +60,6 @@ awaitable<void> not_found(server::Request request, server::Response response)
 int main()
 {
    io_context context;
-
-   // auto executor = context.get_executor();
-   // auto executor = pool.get_executor();
-   // auto executor = boost::asio::make_strand(pool);
    auto executor = context.get_executor();
    auto server = std::make_optional<Server>(executor, Config{.port = 8080});
 

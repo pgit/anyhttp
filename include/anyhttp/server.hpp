@@ -52,7 +52,7 @@ private:
    void async_read_some_any(ReadSomeHandler&& handler);
 
 private:
-   std::unique_ptr<Impl> m_impl;
+   std::unique_ptr<Impl> impl;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -72,7 +72,7 @@ public:
    auto async_submit(unsigned int status_code, Fields headers, CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
-         [&](WriteHandler handler, unsigned int status_code, Fields headers) { //
+         [this](WriteHandler handler, unsigned int status_code, Fields headers) { //
             async_submit_any(std::move(handler), status_code, headers);
          },
          token, status_code, headers);
@@ -82,7 +82,7 @@ public:
    auto async_write(asio::const_buffer buffer, CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
-         [&](WriteHandler handler, asio::const_buffer buffer) { //
+         [this](WriteHandler handler, asio::const_buffer buffer) { //
             async_write_any(std::move(handler), buffer);
          },
          token, buffer);
@@ -92,7 +92,7 @@ private:
    void async_submit_any(WriteHandler&& handler, unsigned int status_code, Fields headers);
    void async_write_any(WriteHandler&& handler, asio::const_buffer buffer);
 
-   std::unique_ptr<Impl> m_impl;
+   std::unique_ptr<Impl> impl;
 };
 
 // =================================================================================================

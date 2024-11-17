@@ -43,7 +43,7 @@ public:
 
 private:
    void async_read_some_any(ReadSomeHandler&& handler);
-   std::unique_ptr<Impl> m_impl;
+   std::unique_ptr<Impl> impl;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -69,7 +69,7 @@ public:
          [&](GetResponseHandler handler) { //
             async_get_response_any(std::move(handler));
          },
-         std::forward<CompletionToken>(token));
+         token);
    }
 
 public:
@@ -109,8 +109,7 @@ public:
 private:
    void async_write_any(WriteHandler handler, asio::const_buffer buffer);
    void async_get_response_any(GetResponseHandler&& handler);
-
-   std::unique_ptr<Impl> m_impl;
+   std::unique_ptr<Impl> impl;
 };
 
 // =================================================================================================
@@ -133,8 +132,7 @@ public:
       return boost::asio::async_initiate<CompletionToken, Connect>(
          [&](ConnectHandler&& handler) { //
             async_connect_any(std::move(handler));
-         },
-         token);
+         }, token);
    }
 
 private:

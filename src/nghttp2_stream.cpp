@@ -12,6 +12,8 @@
 
 #include <nghttp2/nghttp2.h>
 
+#include <utility>
+
 using namespace boost::asio::experimental::awaitable_operators;
 
 namespace anyhttp::nghttp2
@@ -70,6 +72,7 @@ void NGHttp2Reader<Base>::async_read_some(ReadSomeHandler&& handler)
 {
    assert(stream);
    assert(!stream->m_read_handler);
+   logd("[{}] async_read_some:", stream->logPrefix);
    stream->m_read_handler = std::move(handler);
    stream->call_handler_loop();
 }
@@ -130,7 +133,9 @@ void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int stat
 
    for (auto&& item : headers)
    {
-      if (boost::iequals(item.first, "content-length") || item.first.starts_with(':'))
+      // FIXME: why should content length be invalid?
+      // if (boost::iequals(item.first, "content-length") || item.first.starts_with(':'))
+      if (item.first.starts_with(':'))
          logw("[{}] async_submit: invalid header '{}'", stream->logPrefix, item.first);
 
       nva.push_back(make_nv_ls(item.first, item.second));
@@ -193,22 +198,35 @@ void NGHttp2Stream::call_handler_loop()
       return;
    }
 
-   while (!m_pending_read_buffers.empty() && m_read_handler)
-   {
-      // move read handler into local variable, it may be set again by the handler
-      auto handler = std::move(m_read_handler);
-      auto buffer = std::move(m_pending_read_buffers.front());
-      m_pending_read_buffers.pop_front();
-      auto buffer_length = buffer.size();
+   //
+   // Avoid recursion. In here, we invoke the read handler. This may resume a user-provided
+   // coroutine, which is likely to call async_read_some() again. And this will lead to a call
+   // to this function again...
+   //
+   if (m_inside_call_handler_loop)
+      return;
+   m_inside_call_handler_loop = true;
 
+   //
+   // Try to deliver as many buffers as possible. As long as the consumer installs a new read
+   // handler every time, consumption continues.
+   //
+   size_t consumed = 0;
+   for (size_t count = 0; !m_pending_read_buffers.empty() && m_read_handler; ++count)
+   {
       boost::system::error_code ec;
       assert(!is_reading_finished);
+
+      auto buffer = std::move(m_pending_read_buffers.front());
+      m_pending_read_buffers.pop_front();
+
+      auto buffer_length = buffer.size();
       if (buffer_length)
       {
          bytesRead += buffer_length;
          if (content_length && bytesRead > *content_length)
          {
-            logw("[{}] read_callback: received {} bytes, more than content length of {}", //
+            logw("[{}] read_callback: received {} bytes total, exceeds content length of {}", //
                  logPrefix, bytesRead, *content_length);
             // reset stream?
          }
@@ -224,8 +242,17 @@ void NGHttp2Stream::call_handler_loop()
          }
       }
 
-      logd("[{}] read_callback: calling handler with {} bytes...", logPrefix, buffer_length);
+      logd("[{}] read_callback: calling handler with {} bytes... (#{})", logPrefix, buffer_length,
+           count);
+
+      //
+      // The read handler is moved into a local variable before it is called, so that a new read
+      // handler may be set during its invocation.
+      //
+      decltype(m_read_handler) handler;
+      m_read_handler.swap(handler);
       std::move(handler)(ec, std::move(buffer));
+
       if (m_read_handler)
          logd("[{}] read_callback: calling handler with {} bytes... done,"
               " RESPAWNED ({} buffers pending)",
@@ -234,15 +261,33 @@ void NGHttp2Stream::call_handler_loop()
          logd("[{}] read_callback: calling handler with {} bytes... done", logPrefix,
               buffer_length);
 
-      //
-      // To apply back pressure, the stream is consumed only after the handler is invoked.
-      //
-      nghttp2_session_consume_stream(parent.session, id, buffer_length);
+      consumed += buffer_length;
+   }
+
+   //
+   // To apply back pressure, the stream is consumed AFTER the handler is invoked.
+   //
+   if (consumed)
+   {
+      nghttp2_session_consume_stream(parent.session, id, consumed);
       parent.start_write();
    }
 
+   m_inside_call_handler_loop = false;
+
    logd("[{}] call_handler_loop: finished, {} buffers pending", logPrefix,
         m_pending_read_buffers.size());
+
+   if (closed && m_read_handler)
+   {
+      assert(m_pending_read_buffers.empty());
+      assert(!is_reading_finished);
+      logw("[{}] call_handler_loop: read after close", logPrefix);
+      decltype(m_read_handler) handler;
+      m_read_handler.swap(handler);
+      std::move(handler)(boost::system::error_code{}, Buffer{});
+      assert(!m_read_handler); // should not respawn
+   }
 }
 
 void NGHttp2Stream::call_on_data(nghttp2_session* session, int32_t id_, const uint8_t* data,
@@ -255,7 +300,11 @@ void NGHttp2Stream::call_on_data(nghttp2_session* session, int32_t id_, const ui
    if (len)
       nghttp2_session_consume_connection(session, len);
 
-   m_pending_read_buffers.emplace_back(data, data + len); // copy
+   //
+   // FIXME: We might be able to avoid copying in some situations: If there are no pending buffers
+   //        yet, and if there is already a pending read handler, we could invoke it immediatelly.
+   //
+   m_pending_read_buffers.emplace_back(data, data + len); // FIXME: avoid copy
    call_handler_loop();
 }
 
@@ -276,6 +325,45 @@ NGHttp2Stream::~NGHttp2Stream()
 }
 
 // ==============================================================================================
+
+void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
+{
+   if (closed)
+   {
+      logw("async_write: stream already closed", logPrefix);
+      using namespace boost::system;
+      std::move(handler)(errc::make_error_code(errc::operation_canceled));
+      return;
+   }
+
+   assert(!sendHandler);
+
+   logd("[{}] async_write: buffer={} is_deferred={}", //
+        logPrefix, buffer.size(), is_deferred);
+
+   sendBuffer = buffer;
+   sendHandler = std::move(handler);
+
+   slot = asio::get_associated_cancellation_slot(sendHandler);
+   if (slot.is_connected() && !slot.has_handler())
+   {
+      slot.assign(
+         [this](asio::cancellation_type_t ct)
+         {
+            logd("[{}] async_write: \x1b[1;31mcancelled\x1b[0m ({})", logPrefix, int(ct));
+            delete_writer();
+
+            if (sendHandler)
+            {
+               using namespace boost::system;
+               auto handler = std::move(sendHandler);
+               std::move(handler)(errc::make_error_code(errc::operation_canceled));
+            }
+         });
+   }
+
+   resume();
+}
 
 void NGHttp2Stream::resume()
 {
@@ -308,7 +396,7 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
 // https://nghttp2.org/documentation/types.html#c.nghttp2_data_source_read_callback2
 //
 ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data_flags)
-{   
+{
    if (closed)
    {
       logd("[{}] write callback: stream closed", logPrefix);
@@ -414,6 +502,9 @@ const asio::any_io_executor& NGHttp2Stream::executor() const { return parent.exe
 void NGHttp2Stream::delete_reader()
 {
    logd("[{}] delete_reader", logPrefix);
+
+   assert(!m_read_handler);
+
    // Issue RST_STREAM so that stream does not hang around.
    if (is_reading_finished)
       logd("[{}] delete_reader: reading already finished", logPrefix);
@@ -424,6 +515,7 @@ void NGHttp2Stream::delete_reader()
          logd("[{}] delete_reader: discarding buffer of {} bytes", logPrefix, buffer.size());
          nghttp2_session_consume_stream(parent.session, id, buffer.size());
       }
+      m_pending_read_buffers.clear();
 
       if (this->closed)
          logw("[{}] delete_reader: stream already closed", logPrefix);
@@ -442,7 +534,10 @@ void NGHttp2Stream::delete_writer()
 
    //
    // If the writer is deleted before it has delivered all data, we have to close the stream
-   // so that it does not hang around
+   // so that it does not hang around. There are a few design options:
+   //
+   // 1) Resetting the stream when the writer is deleted also means that we may notcomplete
+   //    reading either.
    //
    if (!is_writer_done)
    {

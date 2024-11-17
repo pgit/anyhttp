@@ -276,14 +276,15 @@ awaitable<void> Server::Impl::listen_loop()
       auto ep = normalize(socket.remote_endpoint());
 
       //
-      // Without something like a "nursery" or "async_scope", spwaning a tasks detaches it from
-      // the owning class without any means to join it.
+      // Without something like a "nursery" or "async_scope", spwaning a task detaches it from
+      // the owning class without any means to join it. Here, we use a simple session counter to
+      // track their destruction.
       //
       ++sessionCounter;
       co_spawn(
          // boost::asio::make_strand(executor),  // put each connection on a strand
          executor,
-         [&]() mutable { //
+         [this, socket = std::move(socket)]() mutable { //
             return handleConnection(std::move(socket));
          },
          [&](const std::exception_ptr& ex) mutable

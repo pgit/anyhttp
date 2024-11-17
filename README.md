@@ -30,9 +30,17 @@ awaitable<void> echo(server::Request request, server::Response response)
 }
 ```
 
+# Implementation
+
+The asynchronous operations exposed by server and client are [ASIO asynchronous operations](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/asynchronous_operations.html). As such, they support a range of [completion tokens](https://think-async.com/Asio/asio-1.30.2/doc/asio/overview/model/completion_tokens.html) like [use_awaitable](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/use_awaitable.html) or plain callbacks.
+
+
+This work is partly inspired by [asio-grpc](https://github.com/Tradias/asio-grpc), which takes the idea even one step further and also supports the upcomming sender/receiver model of execution.
+
+
 ## Links
 
 For now, this section contains just a set of random links collected during delevopment.
 
 * [Beast Example using Type Erasure](https://www.boost.org/doc/libs/develop/boost/beast/http/message_generator.hpp)
-
+* [asio-grpc](https://github.com/Tradias/asio-grpc)

@@ -151,12 +151,13 @@ void Client::Impl::async_connect(ConnectHandler handler)
    //
 #if 1
    co_spawn(ex, impl->do_session(Buffer{}),
-            [impl]  (const std::exception_ptr& ex)mutable
+            [impl]  (const std::exception_ptr& ex) mutable
             {
                if (ex)
                   logw("client run: {}", what(ex));
                else
                   logi("client run: done");
+               impl.reset();
             });
 #endif
 
