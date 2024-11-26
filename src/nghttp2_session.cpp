@@ -166,13 +166,17 @@ static std::string_view frameType(uint8_t type)
 
 int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
 {
-   auto handler = static_cast<NGHttp2Session*>(user_data);
-   auto stream = handler->find_stream(frame->hd.stream_id);
+   const auto handler = static_cast<NGHttp2Session*>(user_data);
+   const auto stream = handler->find_stream(frame->hd.stream_id);   
 
    if (!stream && frame->hd.stream_id > 0)
    {
       logw("[{}] on_frame_recv_callback: {}, but no stream found (id={})", handler->logPrefix(),
            frameType(frame->hd.type), frame->hd.stream_id);
+      
+      // fixes h2sepc http/5.1/7
+      nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
+                                NGHTTP2_STREAM_CLOSED);
       return 0;
    }
 
@@ -207,6 +211,10 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
    case NGHTTP2_WINDOW_UPDATE:
       logd("[{}] on_frame_recv_callback: WINDOW_UPDATE, increment={}", handler->logPrefix(frame),
            frame->window_update.window_size_increment);
+      break;
+
+   case NGHTTP2_GOAWAY:
+      handler->destroy(nullptr); // fixes h2spec generic/3.8
       break;
 
    default:
@@ -253,6 +261,13 @@ int on_frame_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
    else
       logd("[{}] on_frame_send_callback: {}", handler->logPrefix(), frameType(frame->hd.type));
 
+   switch (frame->hd.type)
+   {
+   case NGHTTP2_GOAWAY:
+      handler->destroy(nullptr); // fixes h2spec http2/5.4.1
+      break;
+   }
+
    return 0;
 }
 
@@ -266,6 +281,13 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
    logd("[{}] on_stream_close_callback: {} ({}) (local={}, remote={})",
         sessionWrapper->logPrefix(stream_id), nghttp2_http2_strerror(error_code), error_code,
         local_close, remote_close);
+
+   // h2spec http2/5.1 and several others but breaks generic/3.4, http2/7 and a few more
+   if (error_code == NGHTTP2_FLOW_CONTROL_ERROR)
+   {
+      nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, stream_id, NGHTTP2_NO_ERROR, nullptr, 0);
+      return 0;
+   }
 
    auto stream = sessionWrapper->close_stream(stream_id);
    if (!stream)

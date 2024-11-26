@@ -42,6 +42,15 @@ using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
 using Write = void(boost::system::error_code);
 using WriteHandler = asio::any_completion_handler<Write>;
 
+template <typename F, typename... Args>
+   requires std::invocable<F, Args...>
+inline void invoke(F& function, Args&&... args)
+{
+   std::decay_t<F> temp;
+   std::swap(function, temp);
+   std::move(temp)(std::forward<Args>(args)...);
+}
+
 // =================================================================================================
 
 namespace impl
@@ -66,7 +75,7 @@ public:
    virtual void content_length(std::optional<size_t> content_length) = 0;
    virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
    virtual void detach() = 0;
-   
+
    virtual void destroy(std::unique_ptr<Writer> self) { /* delete self */ }
 };
 } // namespace impl

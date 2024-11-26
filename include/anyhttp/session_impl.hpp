@@ -16,7 +16,7 @@ class Session::Impl
 {
 public:
    virtual ~Impl() {}
-   virtual void destroy() = 0;
+   virtual void destroy(std::shared_ptr<Impl> self) = 0;
 
    virtual void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) = 0;
    virtual asio::awaitable<void> do_session(Buffer&& data) = 0;

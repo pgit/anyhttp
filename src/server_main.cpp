@@ -1,3 +1,4 @@
+#include "anyhttp/request_handlers.hpp"
 #include "anyhttp/server.hpp"
 
 #include <boost/asio/as_tuple.hpp>
@@ -12,8 +13,6 @@
 
 #include <ranges>
 
-
-namespace ranges = std::ranges;
 namespace rv = std::ranges::views;
 
 using namespace std::chrono_literals;
@@ -21,39 +20,13 @@ using namespace boost::asio;
 using namespace anyhttp;
 using namespace anyhttp::server;
 
-awaitable<void> sleep(auto duration)
+awaitable<void> hello_world(server::Request request, server::Response response)
 {
-   asio::steady_timer timer(co_await asio::this_coro::executor);
-   timer.expires_from_now(duration);
-   try
-   {
-      co_await timer.async_wait(deferred);
-      logi("sleep: done");
-   }
-   catch (const boost::system::system_error& ec)
-   {
-      loge("sleep: {}", ec.what());
-   }
-}
-
-awaitable<void> echo(server::Request request, server::Response response)
-{
-   if (request.content_length())
-      response.content_length(request.content_length().value());
-
+   co_await yield();
    co_await response.async_submit(200, {}, deferred);
-   for (;;)
-   {
-      auto buffer = co_await request.async_read_some(deferred);
-      co_await response.async_write(asio::buffer(buffer), deferred);
-      if (buffer.empty())
-         co_return;
-   }
-}
-
-awaitable<void> not_found(server::Request request, server::Response response)
-{
-   co_await response.async_submit(404, {}, deferred);
+   const char* literal = "Hello, World!\n";
+   boost::asio::const_buffer buffer(literal, std::strlen(literal));
+   co_await response.async_write(buffer, deferred);
    co_await response.async_write({}, deferred);
 }
 
@@ -79,6 +52,8 @@ int main()
       {
          if (request.url().path() == "/echo")
             return echo(std::move(request), std::move(response));
+         else if (request.url().path() == "/")
+            return hello_world(std::move(request), std::move(response));
          else
             return not_found(std::move(request), std::move(response));
       });

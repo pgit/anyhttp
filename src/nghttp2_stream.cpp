@@ -70,7 +70,12 @@ std::optional<size_t> NGHttp2Reader<Base>::content_length() const noexcept
 template <typename Base>
 void NGHttp2Reader<Base>::async_read_some(ReadSomeHandler&& handler)
 {
-   assert(stream);
+   if (!stream)
+   {
+      using namespace boost::system;
+      std::move(handler)(boost::asio::error::operation_aborted, std::vector<uint8_t>{});
+      return;
+   }
    assert(!stream->m_read_handler);
    logd("[{}] async_read_some:", stream->logPrefix);
    stream->m_read_handler = std::move(handler);
@@ -205,6 +210,8 @@ void NGHttp2Stream::call_handler_loop()
    //
    if (m_inside_call_handler_loop)
       return;
+
+   Defer norecurse([this]() { m_inside_call_handler_loop = false; });
    m_inside_call_handler_loop = true;
 
    //
@@ -272,8 +279,6 @@ void NGHttp2Stream::call_handler_loop()
       nghttp2_session_consume_stream(parent.session, id, consumed);
       parent.start_write();
    }
-
-   m_inside_call_handler_loop = false;
 
    logd("[{}] call_handler_loop: finished, {} buffers pending", logPrefix,
         m_pending_read_buffers.size());
@@ -356,8 +361,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
             if (sendHandler)
             {
                using namespace boost::system;
-               auto handler = std::move(sendHandler);
-               std::move(handler)(errc::make_error_code(errc::operation_canceled));
+               invoke(sendHandler, errc::make_error_code(errc::operation_canceled));
             }
          });
    }
@@ -429,8 +433,7 @@ ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data
       if (sendBuffer.size() == 0)
       {
          logd("[{}] write callback: running handler...", logPrefix);
-         auto handler = std::move(sendHandler);
-         std::move(handler)(boost::system::error_code{});
+         invoke(sendHandler, boost::system::error_code{});
          if (sendHandler)
             logd("[{}] write callback: running handler... done -- RESPAWNED", logPrefix);
          else
@@ -522,6 +525,7 @@ void NGHttp2Stream::delete_reader()
       else
       {
          logw("[{}] delete_reader: not done yet, submitting RST with STREAM_CLOSED", logPrefix);
+         // nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_FLOW_CONTROL_ERROR);
          nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
          parent.start_write();
       }

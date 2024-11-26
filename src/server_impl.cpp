@@ -80,9 +80,11 @@ void Server::Impl::run()
 
 void Server::Impl::destroy()
 {
+   // dispatch(m_executor, [this](){
    logi("Server: destroy");
    m_stopped = true;
    m_acceptor.close(); // breaks listen_loop()
+   // });
 }
 
 // =================================================================================================
@@ -135,9 +137,9 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    socket.get_option(receive_buffer_size);
    logd("[{}] socket buffer sizes: send={} receive={}", normalize(socket.remote_endpoint()),
         send_buffer_size.value(), receive_buffer_size.value());
-#if 0
-   socket.set_option(sb::send_buffer_size(8192));
-   socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
+#if 1
+   // socket.set_option(sb::send_buffer_size(8192));
+   // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 #endif
 
    const auto prefix = normalize(socket.remote_endpoint());
@@ -211,7 +213,10 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
          (*this, executor, boost::beast::tcp_stream(std::move(socket)));
    }
 
-   m_sessions.emplace(session);
+   {
+      // auto lock = std::lock_guard(m_sessionMutex);
+      m_sessions.emplace(session);
+   }
 
    co_await session->do_session(std::move(buffer));
 
@@ -258,6 +263,14 @@ awaitable<void> Server::Impl::listen_loop()
 {
    auto executor = co_await boost::asio::this_coro::executor;
 
+   //
+   // FIXME: sessionCounter and m_sessions are not thread safe, yet
+   //
+   // The main problem with m_sessions is that the new session is emplaced within
+   // handleConnection(), which is already outside this couroutine's strand.
+   //
+   // Maybe the simplest solution is to put a mutex around it...
+   //
    size_t sessionCounter = 0;
    for (;;)
    {
@@ -280,7 +293,10 @@ awaitable<void> Server::Impl::listen_loop()
       // the owning class without any means to join it. Here, we use a simple session counter to
       // track their destruction.
       //
-      ++sessionCounter;
+      {
+         // auto lock = std::lock_guard(m_sessionMutex);
+         ++sessionCounter;
+      }
       co_spawn(
          // boost::asio::make_strand(executor),  // put each connection on a strand
          executor,
@@ -289,24 +305,28 @@ awaitable<void> Server::Impl::listen_loop()
          },
          [&](const std::exception_ptr& ex) mutable
          {
-            --sessionCounter;
+            // auto lock = std::lock_guard(m_sessionMutex);
             if (ex)            
                logw("{} {}", ep, what(ex));
             else
-               logi("{} session finished, {} sessions left", ep, sessionCounter);
+               logi("{} session finished, {} sessions left", ep, sessionCounter);            
+            --sessionCounter;
          });
    }
 
+   // auto lock = std::unique_lock(m_sessionMutex);
    const auto waitingFor = sessionCounter;
    logi("listen loop terminated, waiting for {} sessions...", waitingFor);
 
    while (sessionCounter)
    {
       for (auto& session : m_sessions)
-         session->destroy();
-
+         session->destroy(std::move(session));
       m_sessions.clear();
+
+      // lock.unlock();
       co_await post(executor, asio::deferred);
+      // lock.lock();
    }
 
    logi("listen loop terminated, waiting for {} sessions... done", waitingFor);

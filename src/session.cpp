@@ -19,7 +19,7 @@ public:
    ~SessionWrapper()
    {
       logw("SessionWrapper: dtor");
-      impl->destroy();
+      impl->destroy(std::move(impl));
    }
 
    std::shared_ptr<Session::Impl> impl;
@@ -55,9 +55,8 @@ Session::~Session()
 {
    if (m_impl)
    {
-      m_impl->destroy();
+      m_impl->destroy(std::move(m_impl));
       m_impl.reset();
-      logd("Session::dtor: use_count={}", m_impl.use_count());
    }
 }
 

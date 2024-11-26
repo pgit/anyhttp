@@ -89,7 +89,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
    for (auto&& elem : endpoints)
       logd("Client: {}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
 
-   // ip::tcp::socket socket(make_strand(executor));
+   // ip::tcp::socket socket(make_strand(ex));
    // asio::deferred_t::as_default_on_t<ip::tcp::socket> socket(executor);
    ip::tcp::socket socket(ex);
    ip::tcp::endpoint endpoint;

@@ -60,7 +60,6 @@ boost::asio::awaitable<void> discard(server::Request request, server::Response r
 
 boost::asio::awaitable<void> send(client::Request& request, size_t bytes);
 boost::asio::awaitable<size_t> receive(client::Response& response);
-boost::asio::awaitable<expected<size_t>> try_receive(client::Response& response);
 boost::asio::awaitable<size_t> try_receive(client::Response& response,
                                            boost::system::error_code& ec);
 boost::asio::awaitable<size_t> read_response(client::Request& request);

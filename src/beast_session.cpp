@@ -52,7 +52,7 @@ public:
    inline BeastReader(BeastSession<Stream>& session_, Stream& stream_, Buffer& buffer_)
       : session(&session_), stream(stream_), buffer(buffer_)
    {
-      logw("BeastReader: ctor");
+      logd("BeastReader: ctor");
       parser.body_limit(std::numeric_limits<uint64_t>::max());
    }
 
@@ -64,7 +64,7 @@ public:
 
    ~BeastReader() override
    {
-      logw("BeastReader: dtor");
+      logd("BeastReader: dtor");
       assert(!reading);
    }
    void detach() override { session = nullptr; }
@@ -167,7 +167,7 @@ public:
 
    ~WriterBase() override
    {
-      logw("WriterBase: dtor");
+      logd("WriterBase: dtor");
       assert(!writing);
    }
 
@@ -449,11 +449,13 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_execut
 }
 
 template <typename Stream>
-void BeastSession<Stream>::destroy()
+void BeastSession<Stream>::destroy(std::shared_ptr<Session::Impl> self)
 {
+   // post(executor(), [this, self]() mutable {
    boost::system::error_code ec;
    std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
    logwi(ec, "[{}] destroy: shutdown: {}", m_logPrefix, ec.message());
+   // });
 }
 
 // =================================================================================================
@@ -466,6 +468,9 @@ void BeastSession<Stream>::destroy()
  * But that is only the simplified description: In reality, for pipelining support, the server
  * session may still be writing the response of a previous request when a new one arrives. The
  * queues of request and responses are processed independently of each other.
+ *
+ * And even without pipelining, for structuring concurrency, we want to clean up existing request
+ * and response objects when the sessions ends.
  *
  */
 template <typename Stream>

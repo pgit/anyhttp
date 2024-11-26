@@ -14,8 +14,8 @@
 
 #include <nghttp2/nghttp2.h>
 
-#include <string>
 #include <iostream>
+#include <string>
 
 using namespace boost::asio::experimental::awaitable_operators;
 
@@ -35,11 +35,13 @@ inline auto& get_socket(ssl::stream<socket>& stream) { return stream.lowest_laye
 // =================================================================================================
 
 template <typename Stream>
-void NGHttp2SessionImpl<Stream>::destroy()
+void NGHttp2SessionImpl<Stream>::destroy(std::shared_ptr<Session::Impl> self)
 {
+   // post(executor(), [this, self]() mutable {
    boost::system::error_code ec;
    std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
    logwi(ec, "[{}] destroy: shutdown: {}", m_logPrefix, ec.message());
+   // });
 }
 
 // =================================================================================================
@@ -61,7 +63,7 @@ void NGHttp2SessionImpl<Stream>::destroy()
 //
 template <typename Stream>
 awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
-{   
+{
    Buffer buffer;
    buffer.reserve(1460);
    for (;;)
@@ -71,7 +73,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
       // The buffer is valid until next call nghttp2_session_mem_send, so we don't need to copy it.
       // Unless, of course, we buffer it to -- which we may do to avoid many small writes.
       //
-      const uint8_t* data; 
+      const uint8_t* data;
 
       mylogd("send loop: nghttp2_session_mem_send...");
       const auto nread = nghttp2_session_mem_send(session, &data);

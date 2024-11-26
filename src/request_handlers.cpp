@@ -157,6 +157,7 @@ awaitable<size_t> receive(client::Response& response)
    co_return bytes;
 }
 
+/*
 boost::asio::awaitable<expected<size_t>> try_receive(client::Response& response)
 {
    boost::system::error_code ec;
@@ -165,6 +166,7 @@ boost::asio::awaitable<expected<size_t>> try_receive(client::Response& response)
       co_return std::unexpected{ec};
    co_return bytes;
 }
+*/
 
 awaitable<size_t> try_receive(client::Response& response, boost::system::error_code& ec)
 {

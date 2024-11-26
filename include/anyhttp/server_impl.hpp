@@ -88,6 +88,7 @@ private:
    asio::ip::tcp::acceptor m_acceptor;
    // std::unordered_map<asio::ip::tcp::endpoint, asio::ip::tcp::socket> m_sockets;
    // std::set<std::shared_ptr<Session>> m_sessions;
+   // std::mutex m_sessionMutex;
    std::set<std::shared_ptr<Session::Impl>> m_sessions;
    RequestHandler m_requestHandler;
    RequestHandlerCoro m_requestHandlerCoro;

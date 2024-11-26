@@ -107,7 +107,7 @@ public:
    }
 
 private:
-   void async_write_any(WriteHandler handler, asio::const_buffer buffer);
+   void async_write_any(WriteHandler&& handler, asio::const_buffer buffer);
    void async_get_response_any(GetResponseHandler&& handler);
    std::unique_ptr<Impl> impl;
 };

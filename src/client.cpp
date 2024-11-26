@@ -42,7 +42,7 @@ Request::~Request()
    }
 }
 
-void Request::async_write_any(WriteHandler handler, asio::const_buffer buffer)
+void Request::async_write_any(WriteHandler&& handler, asio::const_buffer buffer)
 {
    if (impl)
       impl->async_write(std::move(handler), buffer);
