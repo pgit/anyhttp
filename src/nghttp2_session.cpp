@@ -162,20 +162,29 @@ static std::string_view frameType(uint8_t type)
    }
 }
 
+int on_invalid_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
+                                   int lib_error_code, void* user_data)
+{
+   const auto handler = static_cast<NGHttp2Session*>(user_data);
+   logw("[{}] on_invalid_frame_recv_callback: {} {}", handler->logPrefix(frame),
+        frameType(frame->hd.type), nghttp2_strerror(lib_error_code));
+   return 0;
+}
+
 /**
  * This generic callback is invoked after the more specific ones, e.g. on_header_callback().
- * 
+ *
  */
 int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
 {
    const auto handler = static_cast<NGHttp2Session*>(user_data);
-   const auto stream = handler->find_stream(frame->hd.stream_id);   
+   const auto stream = handler->find_stream(frame->hd.stream_id);
 
    if (!stream && frame->hd.stream_id > 0)
    {
       logw("[{}] on_frame_recv_callback: {}, but no stream found (id={})", handler->logPrefix(),
            frameType(frame->hd.type), frame->hd.stream_id);
-      
+
       // fixes h2sepc http/5.1/7
       nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
                                 NGHTTP2_STREAM_CLOSED);
@@ -364,6 +373,8 @@ nghttp2_unique_ptr<nghttp2_session_callbacks> NGHttp2Session::setup_callbacks()
    nghttp2_session_callbacks_set_on_frame_not_send_callback(cbs, on_frame_not_send_callback);
    nghttp2_session_callbacks_set_error_callback2(cbs, on_error_callback);
    nghttp2_session_callbacks_set_on_invalid_header_callback2(cbs, on_invalid_header_callback);
+   nghttp2_session_callbacks_set_on_invalid_frame_recv_callback(cbs,
+                                                                on_invalid_frame_recv_callback);
    return callbacks;
 }
 
