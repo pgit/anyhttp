@@ -106,7 +106,7 @@ public:
 
    nghttp2_unique_ptr<nghttp2_session_callbacks> setup_callbacks();
 
-   void create_stream(int stream_id);
+   NGHttp2Stream* create_stream(int stream_id);
    NGHttp2Stream* find_stream(int32_t stream_id);
    std::shared_ptr<NGHttp2Stream> close_stream(int32_t stream_id);
 

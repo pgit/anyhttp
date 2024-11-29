@@ -27,6 +27,43 @@ namespace anyhttp::nghttp2
 
 // =================================================================================================
 
+static std::string_view frameType(uint8_t type)
+{
+   switch (type)
+   {
+   case NGHTTP2_DATA:
+      return "DATA";
+   case NGHTTP2_HEADERS:
+      return "HEADERS";
+   case NGHTTP2_PRIORITY:
+      return "PRIORITY";
+   case NGHTTP2_RST_STREAM:
+      return "RST_STREAMS";
+   case NGHTTP2_SETTINGS:
+      return "SETTINGS";
+   case NGHTTP2_PUSH_PROMISE:
+      return "PUSH_PROMISE";
+   case NGHTTP2_PING:
+      return "PING";
+   case NGHTTP2_GOAWAY:
+      return "GOAWAY";
+   case NGHTTP2_WINDOW_UPDATE:
+      return "WINDOW_UPDATE";
+   case NGHTTP2_CONTINUATION:
+      return "CONTINU";
+   case NGHTTP2_ALTSVC:
+      return "ALTSVC";
+   case NGHTTP2_ORIGIN:
+      return "ORIGIN";
+   case NGHTTP2_PRIORITY_UPDATE:
+      return "PRIOIRTY_UPDATE";
+   default:
+      return "UNKNOWN";
+   }
+}
+
+// =================================================================================================
+
 int on_begin_headers_callback(nghttp2_session*, const nghttp2_frame* frame, void* user_data)
 {
    auto handler = static_cast<NGHttp2Session*>(user_data);
@@ -81,19 +118,19 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
 int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
                                int lib_error_code, void* user_data)
 {
-   if (frame->hd.type != NGHTTP2_HEADERS)
-   {
-      return 0;
-   }
    std::ignore = lib_error_code;
    std::ignore = user_data;
 
-   // Issue RST_STREAM so that stream does not hang around.
-   auto handler = static_cast<NGHttp2Session*>(user_data);
-   loge("[{}] on_frame_not_send_callback: resetting stream", handler->logPrefix());
+   const auto handler = static_cast<NGHttp2Session*>(user_data);
+   logw("[{}] on_invalid_frame_send_callback: {} {}", handler->logPrefix(frame),
+        frameType(frame->hd.type), nghttp2_strerror(lib_error_code));
 
+   /*
+   // Issue RST_STREAM so that stream does not hang around.
+   loge("[{}] on_frame_not_send_callback: resetting stream", handler->logPrefix());
    nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
                              NGHTTP2_INTERNAL_ERROR);
+   */
 
    return 0;
 }
@@ -125,41 +162,6 @@ int on_invalid_header_callback(nghttp2_session* session, const nghttp2_frame* fr
    loge("[{}] invalid_header_callback: {}: {}", //
         handler->logPrefix(), to_string_view(name), to_string_view(value));
    return 0;
-}
-
-static std::string_view frameType(uint8_t type)
-{
-   switch (type)
-   {
-   case NGHTTP2_DATA:
-      return "DATA";
-   case NGHTTP2_HEADERS:
-      return "HEADERS";
-   case NGHTTP2_PRIORITY:
-      return "PRIORITY";
-   case NGHTTP2_RST_STREAM:
-      return "RST_STREAMS";
-   case NGHTTP2_SETTINGS:
-      return "SETTINGS";
-   case NGHTTP2_PUSH_PROMISE:
-      return "PUSH_PROMISE";
-   case NGHTTP2_PING:
-      return "PING";
-   case NGHTTP2_GOAWAY:
-      return "GOAWAY";
-   case NGHTTP2_WINDOW_UPDATE:
-      return "WINDOW_UPDATE";
-   case NGHTTP2_CONTINUATION:
-      return "CONTINU";
-   case NGHTTP2_ALTSVC:
-      return "ALTSVC";
-   case NGHTTP2_ORIGIN:
-      return "ORIGIN";
-   case NGHTTP2_PRIORITY_UPDATE:
-      return "PRIOIRTY_UPDATE";
-   default:
-      return "UNKNOWN";
-   }
 }
 
 int on_invalid_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
@@ -487,10 +489,13 @@ void NGHttp2Session::handle_buffer_contents()
 
 // =================================================================================================
 
-void NGHttp2Session::create_stream(int stream_id)
+NGHttp2Stream* NGHttp2Session::create_stream(int stream_id)
 {
-   m_streams.emplace(stream_id, std::make_shared<NGHttp2Stream>(*this, stream_id));
+   auto [it, inserted] =
+      m_streams.emplace(stream_id, std::make_shared<NGHttp2Stream>(*this, stream_id));
+   assert(inserted);
    m_requestCounter++;
+   return it->second.get();
 }
 
 NGHttp2Stream* NGHttp2Session::find_stream(int32_t stream_id)

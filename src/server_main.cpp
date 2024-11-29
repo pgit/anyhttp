@@ -20,22 +20,6 @@ using namespace boost::asio;
 using namespace anyhttp;
 using namespace anyhttp::server;
 
-awaitable<void> hello_world(server::Request request, server::Response response)
-{
-   //
-   // FIXME: h2spec adding this yield() breaks a lot of h2spec tests, even the generic ones
-   //
-   // co_await yield();
-   auto buf = co_await request.async_read_some(deferred);
-   co_await response.async_submit(200, {}, deferred);
-   const char* literal = "Hello, World!\n";
-   boost::asio::const_buffer buffer(literal, std::strlen(literal));
-   co_await response.async_write(buffer, deferred);
-   co_await response.async_write({}, deferred);
-   while (!(co_await request.async_read_some(deferred)).empty())
-      ;
-}
-
 void run(boost::asio::io_context& context)
 {
 #if 0
@@ -86,7 +70,7 @@ int main()
          if (request.url().path() == "/echo")
             return echo(std::move(request), std::move(response));
          else if (request.url().path() == "/")
-            return hello_world(std::move(request), std::move(response));
+            return h2spec(std::move(request), std::move(response));
          else
             return not_found(std::move(request), std::move(response));
       });

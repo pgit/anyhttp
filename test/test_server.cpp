@@ -25,6 +25,8 @@
 #include <boost/url/url.hpp>
 
 #include <chrono>
+#include <regex>
+
 #include <gtest/gtest.h>
 
 #include <fmt/ostream.h>
@@ -283,7 +285,12 @@ protected:
             fmt::println("exit={}, ec={}", exit, ec.message());
          });
 
+#if 1
       auto result = co_await (log(std::move(err)) && consume(std::move(out)));
+#else
+      co_await (log(std::move(err)) && log(std::move(out)));
+      auto result = std::string();
+#endif
 
       child.wait(); // FIXME: this is sync
       if (child.exit_code())
@@ -410,6 +417,27 @@ TEST_P(External, curl_multiple_https)
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize * 2);
+}
+
+TEST_P(External, h2spec)
+{
+   if (GetParam() != anyhttp::Protocol::http2)
+      GTEST_SKIP();
+
+   handler = h2spec;
+
+   auto future = spawn("bin/h2spec", {"--host", server->local_endpoint().address().to_string(),
+                                      "--port", fmt::format("{}", server->local_endpoint().port()),
+                                      "--path", "/custom", "--timeout", "1", "--verbose"});
+   run();
+
+   const std::string output = future.get();
+
+   std::smatch match;
+   std::regex regex(R"(((\d+) tests, (\d+) passed, (\d+) skipped, (\d+) failed))");
+   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex));
+   EXPECT_EQ(std::stoi(match[2].str()), 146) << match[1];
+   EXPECT_EQ(std::stoi(match[3].str()), 145); // h2spec: http2/5.1.1 is known to fail
 }
 
 // -------------------------------------------------------------------------------------------------

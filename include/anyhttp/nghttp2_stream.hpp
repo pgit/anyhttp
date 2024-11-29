@@ -1,8 +1,10 @@
 #pragma once
 
-#include "client_impl.hpp"
+// #include "client_impl.hpp"
 #include "common.hpp"
-#include "server_impl.hpp"
+#include "server.hpp"
+#include "client.hpp"
+// #include "server_impl.hpp"
 
 #include "nghttp2/nghttp2.h"
 
@@ -181,16 +183,9 @@ public:
    void async_write(WriteHandler handler, asio::const_buffer buffer);
 
    // template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken>
-   auto async_write(asio::const_buffer buffer, WriteHandler&& handler)
+   inline auto async_write(asio::const_buffer buffer, WriteHandler&& handler)
    {
-   #if 1
       async_write(std::move(handler), buffer);
-   #else
-      return boost::asio::async_initiate<WriteHandler, Write>(
-         [this](WriteHandler handler, asio::const_buffer buffer) {
-            async_write(std::move(handler), std::move(buffer));
-         }, handler, buffer);
-   #endif
    }
 
    void resume();

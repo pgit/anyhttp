@@ -238,7 +238,7 @@ public:
             //
             // Main reason is that depending on when the cancellation actually takes place,
             // the stream is in an undefined state. For example, when writing a large chunk is
-            // interrupted, there is no meaningful way to recover. The length of the chunk has
+            // interrupted, there is no meaningful way to recover: The length of the chunk has
             // been written, but only part of the data.
             //
             // So the only sensible thing to do here is to close the socket.

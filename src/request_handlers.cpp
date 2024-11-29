@@ -13,7 +13,6 @@
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/iota.hpp>
 #include <range/v3/view/transform.hpp>
-#include <stdexcept>
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
@@ -225,6 +224,26 @@ awaitable<void> sendEOF(client::Request& request)
    logi("send: finishing request...");
    auto [ec] =  co_await request.async_write({}, as_tuple(deferred));
    logi("send: finishing request... done ({})", ec.what());
+}
+
+awaitable<void> h2spec(server::Request request, server::Response response)
+{
+   //
+   // FIXME: h2spec: Adding this yield() breaks a lot of h2spec tests, even the generic ones.
+   //        This seems to happen if we don't submit a response from within the request callback.
+   //
+   // co_await yield();
+   auto buf = co_await request.async_read_some(deferred);
+   co_await response.async_submit(200, {}, deferred);
+   co_await yield();  // ok
+   const char* literal = "Hello, World!\n";
+   boost::asio::const_buffer buffer(literal, std::strlen(literal));
+   co_await response.async_write(buffer, deferred);
+   co_await yield();  // ok
+   co_await response.async_write({}, deferred);
+   // co_await yield();  // FIXME: fails assert(!is_reading_finished) in call_read_handler()
+   while (!(co_await request.async_read_some(deferred)).empty())
+      ;
 }
 
 // =================================================================================================

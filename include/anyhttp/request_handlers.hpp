@@ -146,6 +146,10 @@ boost::asio::awaitable<void> sendAndForceEOF(client::Request& request, Range ran
    co_await sendEOF(request);
 }
 
+// -------------------------------------------------------------------------------------------------
+
+boost::asio::awaitable<void> h2spec(server::Request request, server::Response response);
+
 // =================================================================================================
 
 } // namespace anyhttp

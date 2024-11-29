@@ -295,12 +295,11 @@ void NGHttp2Stream::call_read_handler()
    }
 }
 
-void NGHttp2Stream::on_data(nghttp2_session* session, int32_t id_, const uint8_t* data,
-                                 size_t len)
+void NGHttp2Stream::on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len)
 {
    std::ignore = id_;
    assert(id == id_);
-   assert(len);  // EOF is handled by on_eof() instead
+   assert(len); // EOF is handled by on_eof() instead
    logd("[{}] read callback: {} bytes...", logPrefix, len);
 
    if (len)
@@ -323,7 +322,6 @@ void NGHttp2Stream::on_eof(nghttp2_session* session, int32_t id_)
    m_pending_read_buffers.emplace_back(/* empty buffer*/);
    call_read_handler();
 }
-
 
 NGHttp2Stream::~NGHttp2Stream()
 {
@@ -355,9 +353,9 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
 
    assert(!sendHandler);
 
-   logd("[{}] async_write: buffer={} is_deferred={}", //
-        logPrefix, buffer.size(), is_deferred);
+   logd("[{}] async_write: buffer={} is_deferred={}", logPrefix, buffer.size(), is_deferred);
 
+   assert(!sendHandler);
    sendBuffer = buffer;
    sendHandler = std::move(handler);
 
@@ -425,7 +423,7 @@ ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data
 
    if (!sendHandler)
    {
-      logd("[{}] write callback: no send handler, DEFERRING", logPrefix);
+      logd("[{}] write callback: nothing to send, DEFERRING", logPrefix);
       is_deferred = true;
       return NGHTTP2_ERR_DEFERRED;
    }
@@ -537,7 +535,8 @@ void NGHttp2Stream::delete_reader()
       else
       {
          logw("[{}] delete_reader: not done yet, submitting RST with STREAM_CLOSED", logPrefix);
-         // nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_FLOW_CONTROL_ERROR);
+         // nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id,
+         // NGHTTP2_FLOW_CONTROL_ERROR);
          nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
          parent.start_write();
       }
