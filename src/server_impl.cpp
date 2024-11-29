@@ -220,6 +220,8 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 
    co_await session->do_session(std::move(buffer));
 
+   m_sessions.erase(session);
+
    logi("[{}] session finished", prefix);
 }
 
@@ -306,11 +308,11 @@ awaitable<void> Server::Impl::listen_loop()
          [&](const std::exception_ptr& ex) mutable
          {
             // auto lock = std::lock_guard(m_sessionMutex);
+            --sessionCounter;
             if (ex)            
                logw("{} {}", ep, what(ex));
             else
                logi("{} session finished, {} sessions left", ep, sessionCounter);            
-            --sessionCounter;
          });
    }
 

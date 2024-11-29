@@ -111,7 +111,7 @@ TEST_F(ClientConnect, ErrorNetworkUnreachable)
 
 // =================================================================================================
 
-#define MULTITHREADED
+// #define MULTITHREADED
 
 //
 // Server fixture with some default request handlers.
@@ -810,12 +810,19 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
       // co_spawn(context, send(request, rv::iota(uint8_t(0))), detached);
       co_spawn(request.executor(), send(request, rv::iota(uint8_t(0))), detached);
 
-      std::println("----------------------------------------------------------------------");
+      std::println("=============================================================================");
+      for (size_t i = 0; i < 10; ++i)
+      {
+         std::println("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", i);
+         co_await yield();
+      }
+
+      std::println("=============================================================================");
       server.reset();
 
       for (size_t i = 0; i < 10; ++i)
       {
-         std::println("--- {} ----------------------------------------------------------------", i);
+         std::println("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", i);
          co_await yield();
       }
 

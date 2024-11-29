@@ -454,7 +454,7 @@ void BeastSession<Stream>::destroy(std::shared_ptr<Session::Impl> self)
    // post(executor(), [this, self]() mutable {
    boost::system::error_code ec;
    std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
-   logwi(ec, "[{}] destroy: shutdown: {}", m_logPrefix, ec.message());
+   logwi(ec, "[{}] destroy: socket shutdown: {}", m_logPrefix, ec.message());
    // });
 }
 

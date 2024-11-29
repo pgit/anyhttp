@@ -22,12 +22,45 @@ using namespace anyhttp::server;
 
 awaitable<void> hello_world(server::Request request, server::Response response)
 {
-   co_await yield();
+   //
+   // FIXME: h2spec adding this yield() breaks a lot of h2spec tests, even the generic ones
+   //
+   // co_await yield();
+   auto buf = co_await request.async_read_some(deferred);
    co_await response.async_submit(200, {}, deferred);
    const char* literal = "Hello, World!\n";
    boost::asio::const_buffer buffer(literal, std::strlen(literal));
    co_await response.async_write(buffer, deferred);
    co_await response.async_write({}, deferred);
+   while (!(co_await request.async_read_some(deferred)).empty())
+      ;
+}
+
+void run(boost::asio::io_context& context)
+{
+#if 0
+      context.run();
+#else
+   using namespace std::chrono;
+   auto t0 = steady_clock::now();
+   for (int i = 0; context.run_one(); ++i)
+   {
+      auto t1 = steady_clock::now();
+      auto dt = duration_cast<milliseconds>(t1 - t0);
+      t0 = t1;
+      if (dt < 100ms)
+         std::println("--- {} "
+                      "------------------------------------------------------------------------",
+                      i);
+      else
+      {
+         std::println("\x1b[1;31m--- {} ({}) "
+                      "----------------------------------------------------------------"
+                      "\x1b[0m",
+                      i, dt);
+      }
+   }
+#endif
 }
 
 int main()
@@ -61,7 +94,8 @@ int main()
    auto threads = rv::iota(0) | rv::take(0) |
                   rv::transform([&](int) { return std::thread([&] { context.run(); }); }) |
                   ranges::to<std::vector>();
-   context.run();
+
+   run(context);
 
    for (auto& thread : threads)
       thread.join();

@@ -34,7 +34,7 @@ NGHttp2Reader<Base>::~NGHttp2Reader()
    {
       stream->reader = nullptr;
       stream->delete_reader();
-      stream->call_handler_loop();
+      stream->call_read_handler();
    }
 }
 
@@ -79,7 +79,7 @@ void NGHttp2Reader<Base>::async_read_some(ReadSomeHandler&& handler)
    assert(!stream->m_read_handler);
    logd("[{}] async_read_some:", stream->logPrefix);
    stream->m_read_handler = std::move(handler);
-   stream->call_handler_loop();
+   stream->call_read_handler();
 }
 
 // =================================================================================================
@@ -191,7 +191,7 @@ NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int id_)
    logd("[{}] \x1b[1;33mStream: ctor\x1b[0m", logPrefix);
 }
 
-void NGHttp2Stream::call_handler_loop()
+void NGHttp2Stream::call_read_handler()
 {
    if (!m_read_handler)
    {
@@ -208,11 +208,11 @@ void NGHttp2Stream::call_handler_loop()
    // coroutine, which is likely to call async_read_some() again. And this will lead to a call
    // to this function again...
    //
-   if (m_inside_call_handler_loop)
+   if (m_inside_call_read_handler)
       return;
 
-   Defer norecurse([this]() { m_inside_call_handler_loop = false; });
-   m_inside_call_handler_loop = true;
+   Defer norecurse([this]() { m_inside_call_read_handler = false; });
+   m_inside_call_read_handler = true;
 
    //
    // Try to deliver as many buffers as possible. As long as the consumer installs a new read
@@ -295,11 +295,12 @@ void NGHttp2Stream::call_handler_loop()
    }
 }
 
-void NGHttp2Stream::call_on_data(nghttp2_session* session, int32_t id_, const uint8_t* data,
+void NGHttp2Stream::on_data(nghttp2_session* session, int32_t id_, const uint8_t* data,
                                  size_t len)
 {
    std::ignore = id_;
    assert(id == id_);
+   assert(len);  // EOF is handled by on_eof() instead
    logd("[{}] read callback: {} bytes...", logPrefix, len);
 
    if (len)
@@ -307,11 +308,22 @@ void NGHttp2Stream::call_on_data(nghttp2_session* session, int32_t id_, const ui
 
    //
    // FIXME: We might be able to avoid copying in some situations: If there are no pending buffers
-   //        yet, and if there is already a pending read handler, we could invoke it immediatelly.
+   //        yet, and if there is already a pending read handler, we could invoke it directly.
    //
    m_pending_read_buffers.emplace_back(data, data + len); // FIXME: avoid copy
-   call_handler_loop();
+   call_read_handler();
 }
+
+void NGHttp2Stream::on_eof(nghttp2_session* session, int32_t id_)
+{
+   std::ignore = id_;
+   assert(id == id_);
+   logd("[{}] read callback: EOF...", logPrefix);
+
+   m_pending_read_buffers.emplace_back(/* empty buffer*/);
+   call_read_handler();
+}
+
 
 NGHttp2Stream::~NGHttp2Stream()
 {

@@ -97,13 +97,14 @@ public:
    NGHttp2Stream(NGHttp2Session& parent, int id);
    ~NGHttp2Stream();
 
-   void call_handler_loop();
-   void call_on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len);
+   void call_read_handler();
+   void on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len);
+   void on_eof(nghttp2_session* session, int32_t id_);
 
    // ==============================================================================================
 
    server::Request::ReadSomeHandler m_read_handler;
-   bool m_inside_call_handler_loop = false;
+   bool m_inside_call_read_handler = false;
 
    //
    // https://www.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp
@@ -162,7 +163,7 @@ public:
          };
          logd("[{}] async_read_some: read handler set", logPrefix);
 #endif
-         call_handler_loop();
+         call_read_handler();
       };
 
       // The async_initiate function is used to transform the supplied completion

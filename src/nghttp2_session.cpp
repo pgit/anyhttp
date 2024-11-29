@@ -34,9 +34,7 @@ int on_begin_headers_callback(nghttp2_session*, const nghttp2_frame* frame, void
    logd("[{}] on_begin_header_callback:", handler->logPrefix(frame));
 
    if (frame->hd.type != NGHTTP2_HEADERS || frame->headers.cat != NGHTTP2_HCAT_REQUEST)
-   {
       return 0;
-   }
 
    handler->create_stream(frame->hd.stream_id);
    return 0;
@@ -164,6 +162,10 @@ static std::string_view frameType(uint8_t type)
    }
 }
 
+/**
+ * This generic callback is invoked after the more specific ones, e.g. on_header_callback().
+ * 
+ */
 int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
 {
    const auto handler = static_cast<NGHttp2Session*>(user_data);
@@ -187,9 +189,7 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
            frame->hd.length, frame->hd.flags);
 
       if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)
-      {
-         stream->call_on_data(session, frame->hd.stream_id, nullptr, 0);
-      }
+         stream->on_eof(session, frame->hd.stream_id);
 
       break;
 
@@ -202,7 +202,7 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
 
       // no body?
       if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)
-         stream->call_on_data(session, frame->hd.stream_id, nullptr, 0);
+         stream->on_eof(session, frame->hd.stream_id);
 
       handler->start_write();
       break;
@@ -241,7 +241,7 @@ int on_data_chunk_recv_callback(nghttp2_session* session, uint8_t flags, int32_t
    }
 
    logd("[{}.{}] on_data_chunk_recv_callback: DATA, len={}", handler->logPrefix(), stream_id, len);
-   stream->call_on_data(session, stream_id, data, len);
+   stream->on_data(session, stream_id, data, len);
    handler->start_write(); // might re-open windows
 
    return 0;
@@ -260,13 +260,6 @@ int on_frame_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
            frameType(frame->hd.type), frame->hd.length, frame->hd.flags);
    else
       logd("[{}] on_frame_send_callback: {}", handler->logPrefix(), frameType(frame->hd.type));
-
-   switch (frame->hd.type)
-   {
-   case NGHTTP2_GOAWAY:
-      handler->destroy(nullptr); // fixes h2spec http2/5.4.1
-      break;
-   }
 
    return 0;
 }

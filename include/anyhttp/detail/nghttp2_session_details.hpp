@@ -14,7 +14,6 @@
 
 #include <nghttp2/nghttp2.h>
 
-#include <iostream>
 #include <string>
 
 using namespace boost::asio::experimental::awaitable_operators;
@@ -40,7 +39,7 @@ void NGHttp2SessionImpl<Stream>::destroy(std::shared_ptr<Session::Impl> self)
    // post(executor(), [this, self]() mutable {
    boost::system::error_code ec;
    std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
-   logwi(ec, "[{}] destroy: shutdown: {}", m_logPrefix, ec.message());
+   logwi(ec, "[{}] destroy: socket shutdown: {}", m_logPrefix, ec.message());
    // });
 }
 
@@ -204,7 +203,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    // pynghttp2 does also disable "HTTP messaging semantics", but we don't
    //
    auto options = nghttp2_option_new();
-   nghttp2_option_set_no_http_messaging(options.get(), 1);
+   nghttp2_option_set_no_http_messaging(options.get(), 0);  // h2spec: 
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
 
    if (auto rv = nghttp2_session_server_new2(&session, callbacks.get(), this, options.get()))
