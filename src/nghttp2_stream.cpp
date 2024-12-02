@@ -165,6 +165,7 @@ void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int stat
    };
 
    nghttp2_submit_response(stream->parent.session, stream->id, nva.data(), nva.size(), &prd);
+   stream->parent.start_write();
    std::move(handler)(boost::system::error_code{});
 }
 
