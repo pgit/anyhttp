@@ -25,6 +25,8 @@
 
 #include <print>
 
+#include "anyhttp/common.hpp"
+
 using namespace std::chrono_literals;
 namespace asio = boost::asio;
 using namespace boost::asio::experimental::awaitable_operators;
@@ -185,7 +187,8 @@ public:
                asio::steady_timer timer(ex, duration);
                timer.expires_from_now(100ms);
                std::println("waiting...");
-               auto [ec] = co_await timer.async_wait(bind_executor(ex, asio::as_tuple(asio::deferred)));
+               auto [ec] =
+                  co_await timer.async_wait(bind_executor(ex, asio::as_tuple(asio::deferred)));
                std::println("waiting... done, {}", ec.what());
                co_return {boost::system::error_code{}};
             }),
@@ -286,16 +289,17 @@ public:
    auto coma_composed(Duration duration, CompletionToken&& token)
    {
       return asio::async_initiate<CompletionToken, Sleep>( //
-         asio::co_composed<Sleep>([this](auto state, Duration duration) -> void
-         {
-            // co_await asio::this_coro::executor;
-            auto ex = state.get_io_executor();
-            // co_await sleep(duration);
-            asio::steady_timer timer(ex, duration);
-            co_await timer.async_wait(asio::bind_executor(ex, asio::deferred));
-            co_return {boost::system::error_code{}};
-         }),
-      token, duration);
+         asio::co_composed<Sleep>(
+            [this](auto state, Duration duration) -> void
+            {
+               // co_await asio::this_coro::executor;
+               auto ex = state.get_io_executor();
+               // co_await sleep(duration);
+               asio::steady_timer timer(ex, duration);
+               co_await timer.async_wait(asio::bind_executor(ex, asio::deferred));
+               co_return {boost::system::error_code{}};
+            }),
+         token, duration);
    }
 
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
@@ -357,20 +361,16 @@ TEST_F(ComposedComa, ComaPoll)
    boost::asio::io_context context;
    bool done = false;
    auto tok = [&](boost::system::error_code ec) { done = true; };
-   coma(100ms, asio::bind_executor(context.get_executor(), tok));                                
+   coma(100ms, asio::bind_executor(context.get_executor(), tok));
    // coma(context.get_executor(), 100ms, tok);
    // coma(100ms, tok);  // FAILS, doesn't register work
-   // coma_composed(100ms, asio::bind_executor(context.get_executor(), tok));                                
+   // coma_composed(100ms, asio::bind_executor(context.get_executor(), tok));
    EXPECT_EQ(context.poll(), 0);
    EXPECT_FALSE(done);
    post(context.get_executor(),
         [this]()
         {
-           {
-              decltype(handler) swapped;
-              std::swap(handler, swapped);
-              std::move(swapped)(boost::system::error_code{});
-           }
+           anyhttp::swap_and_invoke(handler, boost::system::error_code{});
            work.reset();
         });
    EXPECT_FALSE(done);

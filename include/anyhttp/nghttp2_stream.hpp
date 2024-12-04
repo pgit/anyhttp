@@ -77,6 +77,7 @@ public:
 
    using Buffer = std::vector<uint8_t>;
    std::deque<Buffer> m_pending_read_buffers;
+   bool eof_received = false;   
    bool is_reading_finished = false;
 
    asio::const_buffer sendBuffer;

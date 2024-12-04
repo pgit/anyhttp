@@ -13,6 +13,9 @@
 
 #include <ranges>
 
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
+
 namespace rv = std::ranges::views;
 
 using namespace std::chrono_literals;
@@ -22,8 +25,8 @@ using namespace anyhttp::server;
 
 void run(boost::asio::io_context& context)
 {
-#if 0
-      context.run();
+#if defined(NDEBUG)
+   context.run();
 #else
    using namespace std::chrono;
    auto t0 = steady_clock::now();
@@ -49,11 +52,10 @@ void run(boost::asio::io_context& context)
 
 int main()
 {
-   io_context context;
+   io_context context; // (1); ~7% speedup
    auto executor = context.get_executor();
    auto server = std::make_optional<Server>(executor, Config{.port = 8080});
 
-#if 1
    signal_set signals(context, SIGINT, SIGTERM);
    signals.async_wait(
       [&](auto, auto)
@@ -62,7 +64,6 @@ int main()
          logw("interrupt");
          server.reset();
       });
-#endif
 
    server->setRequestHandlerCoro(
       [](server::Request request, server::Response response) -> awaitable<void>

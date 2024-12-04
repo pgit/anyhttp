@@ -437,7 +437,7 @@ TEST_P(External, h2spec)
    std::regex regex(R"(((\d+) tests, (\d+) passed, (\d+) skipped, (\d+) failed))");
    ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex));
    EXPECT_EQ(std::stoi(match[2].str()), 146) << match[1];
-   EXPECT_EQ(std::stoi(match[3].str()), 145); // h2spec: http2/5.1.1 is known to fail
+   EXPECT_EQ(std::stoi(match[3].str()), 145); // https://github.com/nghttp2/nghttp2/issues/2278
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -580,6 +580,25 @@ TEST_P(ClientAsync, WHEN_server_discards_request_delayed_THEN_error_500)
       co_await send(request, 1024);
       auto response = co_await request.async_get_response(asio::deferred);
       auto received = co_await receive(response);
+   };
+   run();
+}
+
+TEST_P(ClientAsync, ServerYieldFirst)
+{
+   handler = [&](server::Request request, server::Response response) -> awaitable<void>
+   {
+      co_await yield(10);
+      co_await response.async_submit(200, {}, deferred);
+      co_await yield(10);
+      co_await response.async_write({}, deferred);
+   };
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("custom"), {}, deferred);
+      co_await request.async_write({}, deferred);
+      co_await (read_response(request) || sleep(2s));
+
    };
    run();
 }
@@ -866,11 +885,16 @@ TEST_P(ClientAsync, SpawnAndForget)
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
       auto response = co_await request.async_get_response(asio::deferred);
+      co_await yield();
 
+      std::println("- - spawning - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ");
       co_spawn(
          context,
          [request = std::move(request)]() mutable -> awaitable<void>
          { //
+            std::println("- - SPAWNED - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+            co_await yield();
+            std::println("- - SPAWNED, sending  - - - - - - - - - - - - - - - - - - - - - - - - -");
             co_await send(request, rv::iota(uint8_t(0)));
          },
          detached);

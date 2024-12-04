@@ -25,6 +25,12 @@ namespace anyhttp
 
 // =================================================================================================
 
+boost::asio::awaitable<void> yield(size_t count)
+{
+   for (size_t i = 0; i < count; ++i)
+      co_await post(co_await asio::this_coro::executor, asio::deferred);
+}
+
 awaitable<void> echo(server::Request request, server::Response response)
 {
    if (request.content_length())
@@ -232,8 +238,9 @@ awaitable<void> h2spec(server::Request request, server::Response response)
    // FIXME: h2spec: Adding this yield() breaks a lot of h2spec tests, even the generic ones.
    //        This seems to happen if we don't submit a response from within the request callback.
    //
-   // co_await yield();
+   co_await yield(10);
    auto buf = co_await request.async_read_some(deferred);
+   co_await yield();  // ok
    co_await response.async_submit(200, {}, deferred);
    co_await yield();  // ok
    const char* literal = "Hello, World!\n";

@@ -1,5 +1,6 @@
 
 #include "anyhttp/nghttp2_stream.hpp"
+#include "anyhttp/common.hpp"
 #include "anyhttp/nghttp2_session.hpp"
 #include "anyhttp/request_handlers.hpp"
 
@@ -72,10 +73,10 @@ void NGHttp2Reader<Base>::async_read_some(ReadSomeHandler&& handler)
 {
    if (!stream)
    {
-      using namespace boost::system;
       std::move(handler)(boost::asio::error::operation_aborted, std::vector<uint8_t>{});
       return;
    }
+
    assert(!stream->m_read_handler);
    logd("[{}] async_read_some:", stream->logPrefix);
    stream->m_read_handler = std::move(handler);
@@ -126,6 +127,7 @@ template <typename Base>
 void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int status_code,
                                        Fields headers)
 {
+   logd("[{}] async_submit: {}", stream->logPrefix, status_code);
    assert(stream);
 
    auto nva = std::vector<nghttp2_nv>();
@@ -166,6 +168,7 @@ void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int stat
 
    nghttp2_submit_response(stream->parent.session, stream->id, nva.data(), nva.size(), &prd);
    stream->parent.start_write();
+
    std::move(handler)(boost::system::error_code{});
 }
 
@@ -205,9 +208,9 @@ void NGHttp2Stream::call_read_handler()
    }
 
    //
-   // Avoid recursion. In here, we invoke the read handler. This may resume a user-provided
-   // coroutine, which is likely to call async_read_some() again. And this will lead to a call
-   // to this function again...
+   // Avoid recursion. In this function, we invoke the read handler, which may resume a
+   // user-provided coroutine. That coroutine is likely to call async_read_some() again, resulting
+   // in another call to this function.
    //
    if (m_inside_call_read_handler)
       return;
@@ -217,7 +220,7 @@ void NGHttp2Stream::call_read_handler()
 
    //
    // Try to deliver as many buffers as possible. As long as the consumer installs a new read
-   // handler every time, consumption continues.
+   // handler after handling a buffer, this loop can continue.
    //
    size_t consumed = 0;
    for (size_t count = 0; !m_pending_read_buffers.empty() && m_read_handler; ++count)
@@ -228,13 +231,14 @@ void NGHttp2Stream::call_read_handler()
       auto buffer = std::move(m_pending_read_buffers.front());
       m_pending_read_buffers.pop_front();
 
-      auto buffer_length = buffer.size();
-      if (buffer_length)
+      const auto buffer_size = buffer.size();
+      if (buffer_size)
       {
-         bytesRead += buffer_length;
+         bytesRead += buffer_size;
          if (content_length && bytesRead > *content_length)
          {
-            logw("[{}] read_callback: received {} bytes total, exceeds content length of {}", //
+            logw("[{}] read_callback: received {} bytes total, "
+                 "exceeds advertised content length of {}",
                  logPrefix, bytesRead, *content_length);
             // reset stream?
          }
@@ -250,30 +254,29 @@ void NGHttp2Stream::call_read_handler()
          }
       }
 
-      logd("[{}] read_callback: calling handler with {} bytes... (#{})", logPrefix, buffer_length,
+      logd("[{}] read_callback: calling handler with {} bytes... (#{})", logPrefix, buffer_size,
            count);
 
       //
       // The read handler is moved into a local variable before it is called, so that a new read
       // handler may be set during its invocation.
       //
-      decltype(m_read_handler) handler;
-      m_read_handler.swap(handler);
-      std::move(handler)(ec, std::move(buffer));
+      swap_and_invoke(m_read_handler, ec, std::move(buffer));
 
       if (m_read_handler)
          logd("[{}] read_callback: calling handler with {} bytes... done,"
               " RESPAWNED ({} buffers pending)",
-              logPrefix, buffer_length, m_pending_read_buffers.size());
+              logPrefix, buffer_size, m_pending_read_buffers.size());
       else
          logd("[{}] read_callback: calling handler with {} bytes... done", logPrefix,
-              buffer_length);
+              buffer_size);
 
-      consumed += buffer_length;
+      consumed += buffer_size;
    }
 
    //
-   // To apply back pressure, the stream is consumed AFTER the handler is invoked.
+   // To apply back pressure, the stream is consumed AFTER the handler is invoked. As always, this
+   // is accompanied by a start_write() because this might un-block a stalled stream.
    //
    if (consumed)
    {
@@ -287,7 +290,7 @@ void NGHttp2Stream::call_read_handler()
    if (closed && m_read_handler)
    {
       assert(m_pending_read_buffers.empty());
-      assert(!is_reading_finished);
+      // assert(!is_reading_finished);
       logw("[{}] call_handler_loop: read after close", logPrefix);
       decltype(m_read_handler) handler;
       m_read_handler.swap(handler);
@@ -372,7 +375,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
             if (sendHandler)
             {
                using namespace boost::system;
-               invoke(sendHandler, errc::make_error_code(errc::operation_canceled));
+               swap_and_invoke(sendHandler, errc::make_error_code(errc::operation_canceled));
             }
          });
    }
@@ -444,7 +447,7 @@ ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data
       if (sendBuffer.size() == 0)
       {
          logd("[{}] write callback: running handler...", logPrefix);
-         invoke(sendHandler, boost::system::error_code{});
+         swap_and_invoke(sendHandler, boost::system::error_code{});
          if (sendHandler)
             logd("[{}] write callback: running handler... done -- RESPAWNED", logPrefix);
          else

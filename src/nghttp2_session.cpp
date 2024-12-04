@@ -548,10 +548,8 @@ void NGHttp2Session::start_write()
 {
    if (m_send_handler)
    {
-      decltype(m_send_handler) handler;
-      m_send_handler.swap(handler);
       logd("[{}] start_write: signalling write loop...", m_logPrefix);
-      std::move(handler)();
+      swap_and_invoke(m_send_handler);
       logd("[{}] start_write: signalling write loop... done", m_logPrefix);
    }
 }

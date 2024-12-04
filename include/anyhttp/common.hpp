@@ -42,9 +42,13 @@ using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
 using Write = void(boost::system::error_code);
 using WriteHandler = asio::any_completion_handler<Write>;
 
+/**
+ * Custom invoke template function that moves the invoked function away before actually calling it.
+ * This is important in places where the user-provided handler may re-install itself again.
+ */
 template <typename F, typename... Args>
    requires std::invocable<F, Args...>
-inline void invoke(F& function, Args&&... args)
+inline void swap_and_invoke(F& function, Args&&... args)
 {
    std::decay_t<F> temp;
    std::swap(function, temp);
