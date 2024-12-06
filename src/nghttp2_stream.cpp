@@ -7,15 +7,20 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/buffer.hpp>
+#include <boost/asio/error.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/beast/http/error.hpp>
 #include <boost/system/detail/error_code.hpp>
+
+#include <range/v3/numeric/accumulate.hpp>
+#include <range/v3/view/transform.hpp>
 
 #include <nghttp2/nghttp2.h>
 
 #include <utility>
 
 using namespace boost::asio::experimental::awaitable_operators;
+namespace rv = ranges::views;
 
 namespace anyhttp::nghttp2
 {
@@ -178,7 +183,7 @@ void NGHttp2Writer<Base>::async_write(WriteHandler&& handler, asio::const_buffer
    if (!stream)
       std::move(handler)(boost::asio::error::basic_errors::connection_aborted);
    else
-      stream->async_write(buffer, std::move(handler));
+      stream->async_write(std::move(handler), buffer);
 }
 
 template <typename Base>
@@ -195,27 +200,31 @@ NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int id_)
    logd("[{}] \x1b[1;33mStream: ctor\x1b[0m", logPrefix);
 }
 
+size_t NGHttp2Stream::read_buffers_size() const
+{
+   return ranges::accumulate(m_pending_read_buffers |
+                                rv::transform([](const auto& buffer) { return buffer.size(); }),
+                             size_t(0));
+}
+
 void NGHttp2Stream::call_read_handler()
 {
    if (!m_read_handler)
    {
-      size_t bytes = 0;
-      for (const auto& buf : m_pending_read_buffers)
-         bytes += buf.size();
       logd("[{}] read_callback: no pending read handler... ({} buffers and {} bytes pending)",
-           logPrefix, m_pending_read_buffers.size(), bytes);
+           logPrefix, m_pending_read_buffers.size(), read_buffers_size());
       return;
    }
 
    //
    // Avoid recursion. In this function, we invoke the read handler, which may resume a
-   // user-provided coroutine. That coroutine is likely to call async_read_some() again, resulting
-   // in another call to this function.
+   // user-provided coroutine. That coroutine is likely to call async_read_some() again,
+   // resulting in another call to this function.
    //
    if (m_inside_call_read_handler)
       return;
 
-   Defer norecurse([this]() { m_inside_call_read_handler = false; });
+   Defer no_recurse([&]() { m_inside_call_read_handler = false; });
    m_inside_call_read_handler = true;
 
    //
@@ -225,51 +234,37 @@ void NGHttp2Stream::call_read_handler()
    size_t consumed = 0;
    for (size_t count = 0; !m_pending_read_buffers.empty() && m_read_handler; ++count)
    {
-      boost::system::error_code ec;
-      assert(!is_reading_finished);
-
       auto buffer = std::move(m_pending_read_buffers.front());
       m_pending_read_buffers.pop_front();
 
       const auto buffer_size = buffer.size();
-      if (buffer_size)
+      bytesRead += buffer_size;
+      if (content_length && bytesRead > *content_length)
       {
-         bytesRead += buffer_size;
-         if (content_length && bytesRead > *content_length)
-         {
-            logw("[{}] read_callback: received {} bytes total, "
-                 "exceeds advertised content length of {}",
-                 logPrefix, bytesRead, *content_length);
-            // reset stream?
-         }
-      }
-      else
-      {
-         is_reading_finished = true;
-         if (content_length && *content_length != bytesRead)
-         {
-            logw("[{}] read_callback: EOF after {} bytes, less than content length of {}",
-                 logPrefix, bytesRead, *content_length);
-            ec = boost::beast::http::error::partial_message;
-         }
+         logw("[{}] read_callback: received {} bytes total, "
+              "exceeds advertised content length of {}",
+              logPrefix, bytesRead, *content_length);
+         // FIXME: reset stream? and we don't want to log this again...
+         // nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
+         // m_pending_read_buffers.clear();
+         break;
       }
 
-      logd("[{}] read_callback: calling handler with {} bytes... (#{})", logPrefix, buffer_size,
-           count);
+      logd("[{}] read_callback: calling handler with {} bytes... (#{} in a row)", logPrefix,
+           buffer_size, count);
 
       //
       // The read handler is moved into a local variable before it is called, so that a new read
       // handler may be set during its invocation.
       //
-      swap_and_invoke(m_read_handler, ec, std::move(buffer));
+      swap_and_invoke(m_read_handler, boost::system::error_code{}, std::move(buffer));
 
       if (m_read_handler)
          logd("[{}] read_callback: calling handler with {} bytes... done,"
               " RESPAWNED ({} buffers pending)",
               logPrefix, buffer_size, m_pending_read_buffers.size());
       else
-         logd("[{}] read_callback: calling handler with {} bytes... done", logPrefix,
-              buffer_size);
+         logd("[{}] read_callback: calling handler with {} bytes... done", logPrefix, buffer_size);
 
       consumed += buffer_size;
    }
@@ -284,46 +279,75 @@ void NGHttp2Stream::call_read_handler()
       parent.start_write();
    }
 
-   logd("[{}] call_handler_loop: finished, {} buffers pending", logPrefix,
-        m_pending_read_buffers.size());
+   logd("[{}] call_handler_loop: finished, {} buffers pending, eof_received={}", logPrefix,
+        m_pending_read_buffers.size(), eof_received);
 
-   if (closed && m_read_handler)
+   //
+   // If there is no furhter user-provided read handler to call, we can return now.
+   // The rest of this function is about delivering EOF or error codes.
+   //
+   if (!m_read_handler)
+      return;
+
+   if (reading_finished())
+   {
+      boost::system::error_code ec; //  = boost::asio::error::eof;
+      if (content_length && bytesRead < *content_length)
+      {
+         logw("[{}] read_callback: EOF after {} bytes total,"
+              " which less than advertised content length of {}",
+              logPrefix, bytesRead, *content_length);
+         ec = boost::beast::http::error::partial_message;
+      }
+
+      swap_and_invoke(m_read_handler, ec, Buffer{});
+   }
+   else if (closed)
    {
       assert(m_pending_read_buffers.empty());
       // assert(!is_reading_finished);
       logw("[{}] call_handler_loop: read after close", logPrefix);
-      decltype(m_read_handler) handler;
-      m_read_handler.swap(handler);
-      std::move(handler)(boost::system::error_code{}, Buffer{});
+      swap_and_invoke(m_read_handler, boost::system::error_code{}, Buffer{});
       assert(!m_read_handler); // should not respawn
    }
 }
 
 void NGHttp2Stream::on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len)
 {
-   std::ignore = id_;
    assert(id == id_);
-   assert(len); // EOF is handled by on_eof() instead
+   assert(len); // for EOF, on_eof() is called instead
+
    logd("[{}] read callback: {} bytes...", logPrefix, len);
 
    if (len)
       nghttp2_session_consume_connection(session, len);
 
+   if (eof_received) // nghttp2 should protect us from this, but better be safe
+   {
+      logw("[{}] read callback: received DATA chunk of {} bytes after EOF", logPrefix, len);
+      return;
+   }
+
    //
    // FIXME: We might be able to avoid copying in some situations: If there are no pending buffers
    //        yet, and if there is already a pending read handler, we could invoke it directly.
    //
-   m_pending_read_buffers.emplace_back(data, data + len); // FIXME: avoid copy
+   m_pending_read_buffers.emplace_back(data, data + len);
    call_read_handler();
 }
 
 void NGHttp2Stream::on_eof(nghttp2_session* session, int32_t id_)
 {
-   std::ignore = id_;
    assert(id == id_);
-   logd("[{}] read callback: EOF...", logPrefix);
+   logd("[{}] read callback: EOF", logPrefix);
 
-   m_pending_read_buffers.emplace_back(/* empty buffer*/);
+   if (eof_received)
+   {
+      logw("[{}] read callback: EOF received again, ignored", logPrefix);
+      return;
+   }
+
+   eof_received = true;
    call_read_handler();
 }
 
@@ -523,7 +547,7 @@ void NGHttp2Stream::delete_reader()
    assert(!m_read_handler);
 
    // Issue RST_STREAM so that stream does not hang around.
-   if (is_reading_finished)
+   if (reading_finished())
       logd("[{}] delete_reader: reading already finished", logPrefix);
    else
    {

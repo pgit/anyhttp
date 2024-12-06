@@ -1,10 +1,8 @@
 #pragma once
 
-// #include "client_impl.hpp"
+#include "client.hpp"
 #include "common.hpp"
 #include "server.hpp"
-#include "client.hpp"
-// #include "server_impl.hpp"
 
 #include "nghttp2/nghttp2.h"
 
@@ -75,10 +73,22 @@ public:
    size_t pending = 0;
    size_t unhandled = 0;
 
+   /**
+    * True after we have received an EOF flag from the peer. Note that there might be still some
+    * buffers left to deliver to the user. But after EOF, no more buffers will be added.
+    */
+   bool eof_received = false;
+
+   /**
+    * Buffers received from peer, pending delivery to the user. The receiver tries to avoid
+    * buffering if possible, but if there is no user-provided read handler to receive the data,
+    * we have to buffer it until the stream's receive window is depleted.
+    */
    using Buffer = std::vector<uint8_t>;
    std::deque<Buffer> m_pending_read_buffers;
-   bool eof_received = false;   
-   bool is_reading_finished = false;
+
+   inline bool reading_finished() const { return eof_received && m_pending_read_buffers.empty(); }
+   size_t read_buffers_size() const;
 
    asio::const_buffer sendBuffer;
    WriteHandler sendHandler;
@@ -100,14 +110,17 @@ public:
    NGHttp2Stream(NGHttp2Session& parent, int id);
    ~NGHttp2Stream();
 
-   void call_read_handler();
+   /// This function is called from `nghttp2_on_data_chunk_recv_callback`.
    void on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len);
+
+   /// This function is called after handling a header or data frame, if the EOF flag is set.
    void on_eof(nghttp2_session* session, int32_t id_);
 
    // ==============================================================================================
 
    server::Request::ReadSomeHandler m_read_handler;
    bool m_inside_call_read_handler = false;
+   void call_read_handler();
 
    //
    // https://www.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp
@@ -115,8 +128,6 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
    auto async_read_some(CompletionToken&& token)
    {
-      assert(!m_read_handler);
-
       //
       // Define a function object that contains the code to launch the asynchronous
       // operation. This is passed the concrete completion handler, followed by any
@@ -125,7 +136,7 @@ public:
       auto init = [&](ReadSomeHandler handler)
       {
          assert(!m_read_handler);
-         if (is_reading_finished)
+         if (reading_finished())
          {
             logw("[{}] async_read_some: stream already finished", logPrefix);
             handler(boost::asio::error::misc_errors::eof, std::vector<std::uint8_t>{});
@@ -182,12 +193,6 @@ public:
    // ----------------------------------------------------------------------------------------------
 
    void async_write(WriteHandler handler, asio::const_buffer buffer);
-
-   // template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken>
-   inline auto async_write(asio::const_buffer buffer, WriteHandler&& handler)
-   {
-      async_write(std::move(handler), buffer);
-   }
 
    void resume();
 
