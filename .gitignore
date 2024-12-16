@@ -3,3 +3,5 @@
 report.xml
 build
 64kminus1
+secrets
+*.pcap
