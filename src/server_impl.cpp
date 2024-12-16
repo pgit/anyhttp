@@ -378,42 +378,6 @@ awaitable<void> Server::Impl::listen_loop()
 
 // =================================================================================================
 
-unsigned int msghdr_get_ecn(msghdr* msg, int family)
-{
-   switch (family)
-   {
-   case AF_INET:
-      for (auto cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg))
-      {
-         if (cmsg->cmsg_level == IPPROTO_IP &&
-#ifdef __APPLE__
-             cmsg->cmsg_type == IP_RECVTOS
-#else // !defined(__APPLE__)
-             cmsg->cmsg_type == IP_TOS
-#endif // !defined(__APPLE__)
-             && cmsg->cmsg_len)
-         {
-            return *reinterpret_cast<uint8_t*>(CMSG_DATA(cmsg)) & IPTOS_ECN_MASK;
-         }
-      }
-      break;
-   case AF_INET6:
-      for (auto cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg))
-      {
-         if (cmsg->cmsg_level == IPPROTO_IPV6 && cmsg->cmsg_type == IPV6_TCLASS && cmsg->cmsg_len)
-         {
-            unsigned int tos;
-
-            memcpy(&tos, CMSG_DATA(cmsg), sizeof(int));
-
-            return tos & IPTOS_ECN_MASK;
-         }
-      }
-      break;
-   }
-
-   return 0;
-}
 boost::asio::ip::tcp::endpoint sockaddr_to_endpoint(const sockaddr_storage& addr)
 {
    using namespace boost::asio::ip;
@@ -462,7 +426,7 @@ awaitable<void> Server::Impl::udp_receive_loop()
 
       auto ec = recvmsg(m_udp_socket->native_handle(), &msg, 0);
       logd("ec={} from={} tos={}", ec, sockaddr_to_endpoint(sender_addr),
-           msghdr_get_ecn(&msg, family));
+           ngtcp2::msghdr_get_ecn(&msg, family));
 
       for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg); cmsg != nullptr;
            cmsg = CMSG_NXTHDR(&msg, cmsg))
