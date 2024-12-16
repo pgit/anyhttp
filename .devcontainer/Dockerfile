@@ -34,14 +34,15 @@ RUN cd /home/${USERNAME} && \
 #        replace that...
 #
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
-    apt-get -y install libnghttp2-dev libnghttp3-dev && \
+    apt-get -y install libnghttp2-dev libev-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 https://github.com/curl/curl.git && \
+RUN cd opt && \
+    git clone --depth 1 https://github.com/curl/curl.git && \
     cd curl && autoreconf -fi && \
     ./configure --with-openssl --without-libpsl --with-nghttp2 --prefix /usr/local && \
-    make -j 20 && make install && \
+    make -j$(nproc) && make install && \
     cd .. && rm -rf curl
 
 #
@@ -49,19 +50,68 @@ RUN git clone --depth 1 https://github.com/curl/curl.git && \
 #
 # https://github.com/gabime/spdlog
 #
-RUN git clone https://github.com/gabime/spdlog.git && \
+RUN cd opt && \
+    git clone https://github.com/gabime/spdlog.git && \
     cd spdlog && mkdir build && cd build && \
-    cmake .. && make -j && make install && \
+    cmake .. && make -j$(nproc) && make install && \
     cd ../.. && rm -rf spdlog
 
 #
 # gtest-parallel
 #
-RUN git clone https://github.com/google/gtest-parallel.git && \
+RUN cd opt && \
+    git clone https://github.com/google/gtest-parallel.git && \
     cd /usr/local/bin && \
-    ln -s /gtest-parallel/gtest-parallel
+    ln -s /opt/gtest-parallel/gtest-parallel
 
 RUN echo "export LESS=RS" >/etc/profile.d/less.sh
+
+#
+# TEST: build ngtcp2 with BoringSSL backend
+#
+RUN cd opt && git clone --recursive https://github.com/ngtcp2/nghttp3
+RUN cd opt && git clone --recursive https://github.com/ngtcp2/ngtcp2
+
+RUN cd opt && git clone https://boringssl.googlesource.com/boringssl
+RUN cd opt && \
+    cd boringssl && \
+    cmake -B build -DCMAKE_POSITION_INDEPENDENT_CODE=ON && \
+    make -j$(nproc) -C build  && \
+    cd .. && \
+    cd nghttp3 && \
+    autoreconf -i && \
+    ./configure --prefix=$PWD/build --enable-lib-only && \
+    make -j$(nproc) check && \
+    make install && \
+    cd .. && \
+    cd ngtcp2 && \
+    autoreconf -i && \
+    ./configure PKG_CONFIG_PATH=$PWD/../nghttp3/build/lib/pkgconfig \
+       BORINGSSL_LIBS="-L$PWD/../boringssl/build/ssl -lssl -L$PWD/../boringssl/build/crypto -lcrypto" \
+       BORINGSSL_CFLAGS="-I$PWD/../boringssl/include" \
+       --with-boringssl && \
+    make -j$(nproc) check && \
+    make install
+
+# RUN cd opt && git clone --depth 1 -b v4.0.0 https://github.com/libressl/portable.git libressl
+# RUN cd opt && \
+#     cd libressl && \
+#     export LIBRESSL_GIT_OPTIONS="-b libressl-v4.0.0" && \
+#     ./autogen.sh && \
+#     ./configure --prefix=$PWD/build && \
+#     make -j$(nproc) install && \
+#     cd .. && \
+#     cd nghttp3 && \
+#     autoreconf -i && \
+#     ./configure --prefix=$PWD/build --enable-lib-only && \
+#     make -j$(nproc) check && \
+#     make install && \
+#     cd .. && \
+#     cd ngtcp2 && \
+#     autoreconf -i && \
+#     ./configure PKG_CONFIG_PATH=$PWD/../nghttp3/build/lib/pkgconfig:$PWD/../libressl/build/lib/pkgconfig && \
+#     make -j$(nproc) check && \
+#     make install
 
 #
 # enable persistent bash history in container

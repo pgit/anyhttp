@@ -11,6 +11,7 @@
 
 #include <fmt/ostream.h>
 
+#include <range/v3/view/take_while.hpp>
 #include <ranges>
 
 #include <boost/asio/io_context.hpp>

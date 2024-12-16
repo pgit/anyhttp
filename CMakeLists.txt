@@ -28,7 +28,7 @@ add_link_options(-stdlib=libc++ -lstdc++fs)
 # needed starting with clang 19
 add_compile_options(-Wno-deprecated-declarations)
 
-# FIXME: ngghtp2 reader/writer needs this ATM
+# FIXME: nghttp2 reader/writer needs this ATM
 add_compile_options(-Wno-inconsistent-missing-override)
 
 # --------------------------------------------------------------------------------------------------
@@ -68,6 +68,21 @@ include_directories(/usr/local/include/range-v3)
 # spodlog
 #
 find_package(spdlog REQUIRED)
+
+# --------------------------------------------------------------------------------------------------
+
+# Checks for header files, used by ngtcp2 code.
+include(CheckIncludeFile)
+check_include_file("arpa/inet.h"   HAVE_ARPA_INET_H)
+check_include_file("netinet/in.h"  HAVE_NETINET_IN_H)
+check_include_file("netinet/ip.h"  HAVE_NETINET_IP_H)
+check_include_file("unistd.h"      HAVE_UNISTD_H)
+check_include_file("sys/endian.h"  HAVE_SYS_ENDIAN_H)
+check_include_file("endian.h"      HAVE_ENDIAN_H)
+check_include_file("byteswap.h"    HAVE_BYTESWAP_H)
+check_include_file("asm/types.h"   HAVE_ASM_TYPES_H)
+check_include_file("linux/netlink.h"   HAVE_LINUX_NETLINK_H)
+check_include_file("linux/rtnetlink.h" HAVE_LINUX_RTNETLINK_H)
 
 # --------------------------------------------------------------------------------------------------
 

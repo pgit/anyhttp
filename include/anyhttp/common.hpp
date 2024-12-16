@@ -1,6 +1,7 @@
 #pragma once
 
 #include <boost/asio/any_completion_handler.hpp>
+#include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
 #include <boost/core/detail/string_view.hpp>
@@ -23,7 +24,8 @@ namespace asio = boost::asio;
 enum class Protocol
 {
    http11,
-   http2
+   http2,
+   http3
 };
 
 std::string to_string(Protocol protocol);
@@ -41,6 +43,8 @@ using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
 
 using Write = void(boost::system::error_code);
 using WriteHandler = asio::any_completion_handler<Write>;
+
+// =================================================================================================
 
 /**
  * Custom invoke template function that moves the invoked function away before actually calling it.

@@ -5,6 +5,7 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/as_tuple.hpp>
+#include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
@@ -598,7 +599,6 @@ TEST_P(ClientAsync, ServerYieldFirst)
       auto request = co_await session.async_submit(url.set_path("custom"), {}, deferred);
       co_await request.async_write({}, deferred);
       co_await (read_response(request) || sleep(2s));
-
    };
    run();
 }
@@ -813,6 +813,25 @@ TEST_P(ClientAsync, CancellationRange)
       else
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
 #endif
+   };
+   run();
+}
+
+TEST_P(ClientAsync, PerOperationCancellation)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
+      auto response = co_await request.async_get_response(asio::deferred);
+
+      asio::cancellation_signal cancel;
+      // auto buf = co_await response.async_read_some(deferred);
+      auto buf = co_await response.async_read_some(asio::bind_cancellation_slot(cancel.slot(), deferred));
+      co_await yield();
+      std::println("- - - - -  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+      cancel.emit(asio::cancellation_type::terminal);
+      co_await yield();
+      std::println("- - - - -  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
    };
    run();
 }

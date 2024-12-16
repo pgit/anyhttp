@@ -34,7 +34,7 @@
 #ifdef HAVE_NETINET_IN_H
 #  include <netinet/in.h>
 #endif // defined(HAVE_NETINET_IN_H)
-#ifdef HAVE_NETINET_UDP_H
+#ifdef HAVE_NETINET_UDP_H 
 #  include <netinet/udp.h>
 #endif // defined(HAVE_NETINET_UDP_H)
 #ifdef HAVE_NETINET_IP_H

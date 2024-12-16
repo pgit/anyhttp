@@ -185,7 +185,7 @@ public:
             {
                auto ex = state.get_io_executor();
                asio::steady_timer timer(ex, duration);
-               timer.expires_from_now(100ms);
+               timer.expires_after(100ms);
                std::println("waiting...");
                auto [ec] =
                   co_await timer.async_wait(bind_executor(ex, asio::as_tuple(asio::deferred)));
@@ -242,7 +242,7 @@ public:
             [](auto state, boost::asio::any_io_executor ex, Duration duration) -> void
             {
                asio::steady_timer timer(ex, duration);
-               timer.expires_from_now(100ms);
+               timer.expires_after(100ms);
                std::println("waiting (with ex)...");
                auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::deferred));
                std::println("waiting (with ex)... done, {}", ec.what());

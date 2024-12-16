@@ -125,14 +125,14 @@ awaitable<void> eat_request(server::Request request, server::Response response)
 awaitable<void> delayed(server::Request request, server::Response response)
 {
    asio::steady_timer timer(co_await asio::this_coro::executor);
-   timer.expires_from_now(100ms);
+   timer.expires_after(100ms);
    co_await eat_request(std::move(request), std::move(response));
 }
 
 awaitable<void> detach(server::Request request, server::Response response)
 {
    asio::steady_timer timer(co_await asio::this_coro::executor);
-   timer.expires_from_now(100ms);
+   timer.expires_after(100ms);
    // co_await eat_request(std::move(request), std::move(response));
 }
 

@@ -1,5 +1,6 @@
 #include "anyhttp/client_impl.hpp"
 #include "anyhttp/beast_session.hpp"
+#include "anyhttp/common.hpp"
 #include "anyhttp/nghttp2_session.hpp"
 
 #include "anyhttp/detail/nghttp2_session_details.hpp"
@@ -114,7 +115,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
    logd("Client: socket buffer sizes: send={} receive={}", send_buffer_size.value(),
         receive_buffer_size.value());
 #if 1
-   // socket.set_option(sb::send_buffer_size(8192));
+   socket.set_option(sb::send_buffer_size(8192));
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 #endif
 
@@ -124,7 +125,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
    //
    std::shared_ptr<Session::Impl> impl;
    switch (config().protocol)
-   {
+   {      
    case Protocol::http11:
       impl = std::make_shared<beast_impl::ClientSession<boost::beast::tcp_stream>>(
          *this, ex, boost::beast::tcp_stream(std::move(socket)));
@@ -139,6 +140,9 @@ void Client::Impl::async_connect(ConnectHandler handler)
          (*this, ex, std::move(socket));
 #endif
       break;
+   case anyhttp::Protocol::http3:      
+      namespace errc = boost::system::errc;
+      co_return {errc::make_error_code(errc::invalid_argument), Session{nullptr}};
    };
 
    //

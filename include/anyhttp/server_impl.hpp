@@ -69,7 +69,11 @@ public:
    asio::awaitable<void> handleConnection(asio::ip::tcp::socket socket);
 
    void listen();
-   asio::ip::tcp::endpoint local_endpoint() const { return m_acceptor.local_endpoint(); }
+   asio::ip::tcp::endpoint local_endpoint() const
+   {
+      assert(m_acceptor);
+      return m_acceptor->local_endpoint();
+   }
 
    void setRequestHandler(RequestHandler&& handler) { m_requestHandler = std::move(handler); }
    void setRequestHandler(RequestHandlerCoro&& handler)
@@ -82,14 +86,17 @@ public:
    void run(); // FIXME: rename to spawn or async_run
    void destroy();
 
+   asio::awaitable<void> udp_receive_loop();
+
 private:
    Config m_config;
+
    boost::asio::any_io_executor m_executor;
-   asio::ip::tcp::acceptor m_acceptor;
-   // std::unordered_map<asio::ip::tcp::endpoint, asio::ip::tcp::socket> m_sockets;
-   // std::set<std::shared_ptr<Session>> m_sessions;
-   // std::mutex m_sessionMutex;
+   std::optional<asio::ip::tcp::acceptor> m_acceptor;
+   std::optional<asio::ip::udp::socket> m_udp_socket;
+
    std::set<std::shared_ptr<Session::Impl>> m_sessions;
+
    RequestHandler m_requestHandler;
    RequestHandlerCoro m_requestHandlerCoro;
    bool m_stopped = false;

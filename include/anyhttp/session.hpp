@@ -44,7 +44,7 @@ public:
          [&](SubmitHandler handler, boost::urls::url url, Fields headers) { //
             async_submit_any(std::move(handler), std::move(url), std::move(headers));
          },
-         std::move(token), url, headers);
+         token, url, headers);
    }
 
 private:

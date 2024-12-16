@@ -612,7 +612,7 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    // TEST: wait
    //
    asio::steady_timer timer(co_await asio::this_coro::executor);
-   timer.expires_from_now(2s);
+   timer.expires_after(2s);
    co_await timer.async_wait(deferred);
 
    // auto [ec, len] = co_await async_read_header(m_stream, buffer, parser, as_tuple(deferred));

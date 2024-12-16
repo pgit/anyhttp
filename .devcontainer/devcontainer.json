@@ -6,7 +6,7 @@
 		"dockerfile": "Dockerfile",
 		"args": { }
 	},
-	// "runArgs": [ "--cap-add=SYS_PTRACE", "--security-opt", "seccomp=unconfined" ],
+	"runArgs": [ "--cap-add=SYS_PTRACE", "--security-opt", "seccomp=unconfined" ],
 
 	"customizations": {
 		"vscode": {
@@ -47,7 +47,8 @@
 
 	"mounts": [
 		"source=cpp-devcontainer-bashhistory,target=/commandhistory,type=volume",
-		"source=${localEnv:HOME}/src/nghttp2,target=/workspaces/nghttp2,type=bind,consistency=cached"
+		"source=${localEnv:HOME}/src/nghttp2,target=/workspaces/nghttp2,type=bind,consistency=cached",
+		"source=${localEnv:HOME}/src/ngtcp2,target=/workspaces/ngtcp2,type=bind,consistency=cached"
 	],
 
 	// Comment out this line to run as root instead.

@@ -9,17 +9,27 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/error.hpp>
+#include <boost/asio/ip/address_v6.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/stream.hpp>
+#include <boost/asio/experimental/as_single.hpp>
 
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/ssl/ssl_stream.hpp>
 
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
+
+#include <netinet/udp.h>
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
+
+// #include <netinet/ip.h>
+#define IPTOS_ECN_MASK 0x03
+
+#include "ngtcp2/network.h"
+#include "ngtcp2/shared.h"
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
@@ -57,6 +67,19 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    listen();
 }
 
+void Server::Impl::destroy()
+{
+   logi("Server: destroy");
+
+   if (m_acceptor)
+      m_acceptor->close(); // breaks listen_loop()
+
+   if (m_udp_socket)
+      m_udp_socket->close(); // breaks  udp_receive_loop()
+
+   m_stopped = true;
+}
+
 Server::Impl::~Impl()
 {
    logi("Server: dtor");
@@ -65,6 +88,10 @@ Server::Impl::~Impl()
 
 // -------------------------------------------------------------------------------------------------
 
+/**
+ * A shared pointer is captured in the completion handler of the spawned tasks. This way, we
+ * make sure it stays around long enough, even if the user has already deleted it.
+ */
 void Server::Impl::run()
 {
    // co_spawn(m_executor, listen_loop(), asio::consign(detached, shared_from_this()));
@@ -76,15 +103,18 @@ void Server::Impl::run()
                else
                   logi("server run: done");
             });
-}
 
-void Server::Impl::destroy()
-{
-   // dispatch(m_executor, [this](){
-   logi("Server: destroy");
-   m_stopped = true;
-   m_acceptor.close(); // breaks listen_loop()
-   // });
+   if (m_udp_socket)
+   {
+      co_spawn(m_executor, udp_receive_loop(),
+               [self = shared_from_this()](const std::exception_ptr& ex)
+               {
+                  if (ex)
+                     logw("UDP receive loop: {}", what(ex));
+                  else
+                     logi("UDP receive loop: done");
+               });
+   }
 }
 
 // =================================================================================================
@@ -138,7 +168,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    logd("[{}] socket buffer sizes: send={} receive={}", normalize(socket.remote_endpoint()),
         send_buffer_size.value(), receive_buffer_size.value());
 #if 1
-   // socket.set_option(sb::send_buffer_size(8192));
+   socket.set_option(sb::send_buffer_size(8192));
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 #endif
 
@@ -229,10 +259,11 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 
 void Server::Impl::listen()
 {
-   auto& acceptor = m_acceptor;
+   assert(m_acceptor);
+   auto& acceptor = *m_acceptor;
 
    boost::system::error_code ec;
-   ip::address address = ip::address::from_string(config().listen_address, ec);
+   auto address = ip::make_address(config().listen_address, ec);
    if (ec)
       logw("Server: error resolving '{}': {}", config().listen_address, ec.what());
 
@@ -247,6 +278,15 @@ void Server::Impl::listen()
 
    endpoint = acceptor.local_endpoint();
    logi("Server: listening on {}", endpoint);
+
+   //
+   // QUIC
+   //
+#if 1
+   m_udp_socket.emplace(m_executor, ip::udp::endpoint(ip::udp::v4(), config().port));
+   m_udp_socket->set_option(boost::asio::detail::socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
+   m_udp_socket->set_option(boost::asio::detail::socket_option::integer<IPPROTO_IP, IP_RECVTTL>(1));
+#endif
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -263,6 +303,8 @@ void Server::Impl::listen()
  */
 awaitable<void> Server::Impl::listen_loop()
 {
+   assert(m_acceptor);
+   auto& acceptor = *m_acceptor;
    auto executor = co_await boost::asio::this_coro::executor;
 
    //
@@ -276,7 +318,7 @@ awaitable<void> Server::Impl::listen_loop()
    size_t sessionCounter = 0;
    for (;;)
    {
-      auto [ec, socket] = co_await m_acceptor.async_accept(as_tuple(deferred));
+      auto [ec, socket] = co_await acceptor.async_accept(as_tuple(deferred));
       if (ec == boost::system::errc::operation_canceled)
       {
          logi("accept: {}", ec.message());
@@ -332,6 +374,121 @@ awaitable<void> Server::Impl::listen_loop()
    }
 
    logi("listen loop terminated, waiting for {} sessions... done", waitingFor);
+}
+
+// =================================================================================================
+
+unsigned int msghdr_get_ecn(msghdr* msg, int family)
+{
+   switch (family)
+   {
+   case AF_INET:
+      for (auto cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg))
+      {
+         if (cmsg->cmsg_level == IPPROTO_IP &&
+#ifdef __APPLE__
+             cmsg->cmsg_type == IP_RECVTOS
+#else // !defined(__APPLE__)
+             cmsg->cmsg_type == IP_TOS
+#endif // !defined(__APPLE__)
+             && cmsg->cmsg_len)
+         {
+            return *reinterpret_cast<uint8_t*>(CMSG_DATA(cmsg)) & IPTOS_ECN_MASK;
+         }
+      }
+      break;
+   case AF_INET6:
+      for (auto cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg))
+      {
+         if (cmsg->cmsg_level == IPPROTO_IPV6 && cmsg->cmsg_type == IPV6_TCLASS && cmsg->cmsg_len)
+         {
+            unsigned int tos;
+
+            memcpy(&tos, CMSG_DATA(cmsg), sizeof(int));
+
+            return tos & IPTOS_ECN_MASK;
+         }
+      }
+      break;
+   }
+
+   return 0;
+}
+boost::asio::ip::tcp::endpoint sockaddr_to_endpoint(const sockaddr_storage& addr)
+{
+   using namespace boost::asio::ip;
+   if (addr.ss_family == AF_INET)
+   {
+      const auto& sa = reinterpret_cast<const sockaddr_in&>(addr);
+      return tcp::endpoint(make_address_v4(ntohl(sa.sin_addr.s_addr)), ntohs(sa.sin_port));
+   }
+   else if (addr.ss_family == AF_INET6)
+   {
+      const auto& sa6 = reinterpret_cast<const sockaddr_in6&>(addr);
+      const auto& bytes = reinterpret_cast<const address_v6::bytes_type&>(sa6.sin6_addr);
+      return tcp::endpoint(make_address_v6(bytes, sa6.sin6_scope_id), ntohs(sa6.sin6_port));
+   }
+   else
+   {
+      throw std::invalid_argument("Unsupported address family");
+   }
+}
+
+awaitable<void> Server::Impl::udp_receive_loop()
+{
+   std::array<uint8_t, 64 * 1024> buf;
+
+   struct iovec iov{buf.data(), buf.size()};
+   struct sockaddr_storage sender_addr;
+   auto family = sender_addr.ss_family;
+   struct msghdr msg{};
+   msg.msg_name = &sender_addr;
+   msg.msg_namelen = sizeof(sender_addr);
+   msg.msg_iov = &iov;
+   msg.msg_iovlen = 1;
+   std::array<uint8_t, CMSG_SPACE(sizeof(int)) + CMSG_SPACE(sizeof(int))> control_data;
+   msg.msg_control = control_data.data();
+   msg.msg_controllen = control_data.size();
+
+   for (;;)
+   {
+      co_await m_udp_socket->async_wait(boost::asio::socket_base::wait_read, deferred);
+      // asio::ip::udp::endpoint remote_endpoint;
+      // auto n =
+      //         co_await m_udp_socket->async_receive_from(asio::buffer(buf), remote_endpoint,
+      //         deferred);
+      // logd("reived {} UDP bytes ({:02x} {:02x} {:02x} {:02x}", n, buf[0], buf[1], buf[2],
+      // buf[3]);
+
+      auto ec = recvmsg(m_udp_socket->native_handle(), &msg, 0);
+      logd("ec={} from={} tos={}", ec, sockaddr_to_endpoint(sender_addr),
+           msghdr_get_ecn(&msg, family));
+
+      for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg); cmsg != nullptr;
+           cmsg = CMSG_NXTHDR(&msg, cmsg))
+      {
+         if (cmsg->cmsg_level == IPPROTO_IP)
+         {
+            if (cmsg->cmsg_type == IP_TOS)
+            {
+               int tos = *reinterpret_cast<int*>(CMSG_DATA(cmsg));
+               std::println("Received TOS: {:x}", tos);
+            }
+            else if (cmsg->cmsg_type == IP_TTL)
+            {
+               int ttl = *reinterpret_cast<int*>(CMSG_DATA(cmsg));
+               std::cout << "Received TTL: " << ttl << "\n";
+            }
+         }
+         else if (cmsg->cmsg_level == SOL_UDP && cmsg->cmsg_type == UDP_GRO)
+         {
+            int gso_size = 0;
+            memcpy(&gso_size, CMSG_DATA(cmsg), sizeof(gso_size));
+            std::cout << "Received UDP GRO " << gso_size << "\n";
+            break;
+         }
+      }
+   }
 }
 
 // =================================================================================================
