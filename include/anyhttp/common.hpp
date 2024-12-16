@@ -125,9 +125,9 @@ inline asio::ip::address normalize(asio::ip::address addr)
 {
    if (addr.is_v6())
    {
-      auto v6 = addr.to_v6();
+      asio::ip::address_v6 v6 = addr.to_v6();
       if (v6.is_v4_mapped())
-         return v6.to_v4();
+         return boost::asio::ip::make_address_v4(asio::ip::v4_mapped, v6);
    }
    return addr;
 }

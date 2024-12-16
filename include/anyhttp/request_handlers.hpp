@@ -31,7 +31,7 @@ template <typename T>
 boost::asio::awaitable<void> sleep(T duration)
 {
    asio::steady_timer timer(co_await asio::this_coro::executor);
-   timer.expires_from_now(duration);
+   timer.expires_after(duration);
    try
    {
       co_await timer.async_wait(asio::deferred);
