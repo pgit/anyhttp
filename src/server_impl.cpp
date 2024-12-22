@@ -168,7 +168,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    logd("[{}] socket buffer sizes: send={} receive={}", normalize(socket.remote_endpoint()),
         send_buffer_size.value(), receive_buffer_size.value());
 #if 1
-   socket.set_option(sb::send_buffer_size(8192));
+   // socket.set_option(sb::send_buffer_size(8192));
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 #endif
 
