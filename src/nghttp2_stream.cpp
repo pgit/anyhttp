@@ -82,6 +82,27 @@ void NGHttp2Reader<Base>::async_read_some(ReadSomeHandler&& handler)
       return;
    }
 
+#if 1
+   auto slot = asio::get_associated_cancellation_slot(handler);
+   if (slot.is_connected() && !slot.has_handler())
+      slot.assign(
+         [this](asio::cancellation_type_t ct)
+         {
+            logd("[{}] async_read_some: \x1b[1;31mcancelled\x1b[0m ({})", stream->logPrefix,
+                 int(ct));
+
+            if (stream->m_read_handler)
+            {
+               using namespace boost::system;
+               swap_and_invoke(stream->m_read_handler,
+                               errc::make_error_code(errc::operation_canceled),
+                               std::vector<uint8_t>{});
+            }
+
+            // stream->delete_writer();
+         });
+#endif
+
    assert(!stream->m_read_handler);
    logd("[{}] async_read_some:", stream->logPrefix);
    stream->m_read_handler = std::move(handler);

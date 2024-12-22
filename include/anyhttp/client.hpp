@@ -80,7 +80,7 @@ public:
    auto async_write(asio::const_buffer buffer, CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
-         [&](WriteHandler handler, asio::const_buffer buffer) { //
+         [](WriteHandler handler, Request* self, asio::const_buffer buffer) { //
 #if 0
             //
             // https://stackoverflow.com/questions/76004637/asio-awaitable-operator-dont-return-when-timer-expires
@@ -101,9 +101,9 @@ public:
                   work.reset();
                });
 #endif
-            async_write_any(std::move(handler), buffer);
+            self->async_write_any(std::move(handler), buffer);
          },
-         token, buffer);
+         token, this, buffer);
    }
 
 private:

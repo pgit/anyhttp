@@ -133,8 +133,8 @@ protected:
       // The main server acceptor loop does not need to run on a strand. Instead, a per-connection
       // strand is created after accepting a new connection.
       //
-      // server.emplace(context.get_executor(), config);
-      server.emplace(make_strand(context.get_executor()), config);
+      server.emplace(context.get_executor(), config);
+      // server.emplace(make_strand(context.get_executor()), config);
       server->setRequestHandlerCoro(
          [this](server::Request request, server::Response response) -> awaitable<void>
          {
@@ -428,7 +428,7 @@ TEST_P(External, h2spec)
    handler = h2spec;
 
    auto future = spawn("bin/h2spec", {"--host", server->local_endpoint().address().to_string(),
-                                      "--port", fmt::format("{}", server->local_endpoint().port()),
+                                      "--port", std::to_string(server->local_endpoint().port()),
                                       "--path", "/custom", "--timeout", "1", "--verbose"});
    run();
 
@@ -825,13 +825,17 @@ TEST_P(ClientAsync, PerOperationCancellation)
       auto response = co_await request.async_get_response(asio::deferred);
 
       asio::cancellation_signal cancel;
+
       // auto buf = co_await response.async_read_some(deferred);
-      auto buf = co_await response.async_read_some(asio::bind_cancellation_slot(cancel.slot(), deferred));
+      // auto buf = co_await (response.async_read_some(deferred) || sleep(10ms));
+      asio::steady_timer timer(co_await asio::this_coro::executor, 110ms);
+      timer.async_wait([&](const boost::system::error_code& ec)
+                       { cancel.emit(asio::cancellation_type::terminal); });
+      auto buf =
+         co_await response.async_read_some(asio::bind_cancellation_slot(cancel.slot(), deferred));
+      std::println("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
       co_await yield();
-      std::println("- - - - -  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
-      cancel.emit(asio::cancellation_type::terminal);
-      co_await yield();
-      std::println("- - - - -  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+      std::println("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
    };
    run();
 }

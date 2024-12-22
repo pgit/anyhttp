@@ -100,8 +100,10 @@ public:
       body_buffer.resize(64 * 1024);
       parser.get().body().data = body_buffer.data();
       parser.get().body().size = body_buffer.size();
-      auto cb = [this, body_buffer = std::move(body_buffer), handler = std::move(handler)] //
-         (boost::system::error_code ec, size_t n) mutable
+
+      auto cs = asio::get_associated_cancellation_slot(handler);
+      auto cb = [this, body_buffer = std::move(body_buffer),
+                 handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
       {
          reading = false;
          if (deleting)
@@ -128,7 +130,16 @@ public:
          }
       };
 
-      boost::beast::http::async_read_some(stream, buffer, parser, std::move(cb));
+      //
+      // TODO: Manually forwarding the cancellation slot fixes per-operation cancellation. But 
+      //       there are other handler traits (executor, allocator) that might need forwarding.
+      //       Instead of doing this, we should try to use async_compose<>, which seems to do
+      //       that automatically.
+      //
+      //  Note that beast::http::async_read_same() is implemented using async_compose<>, too.
+      //
+      boost::beast::http::async_read_some(stream, buffer, parser,
+                                          asio::bind_cancellation_slot(cs, std::move(cb)));
    }
 
    const asio::any_io_executor& executor() const override { return session->executor(); }

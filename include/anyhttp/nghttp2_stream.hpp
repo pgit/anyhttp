@@ -122,6 +122,7 @@ public:
    bool m_inside_call_read_handler = false;
    void call_read_handler();
 
+#if 0
    //
    // https://www.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp
    //
@@ -189,6 +190,7 @@ public:
          init, // First, pass the function object that launches the operation,
          token); // then the completion token that will be transformed to a handler.
    }
+#endif
 
    // ----------------------------------------------------------------------------------------------
 
