@@ -280,7 +280,7 @@ void Server::Impl::listen()
    logi("Server: listening on {}", endpoint);
 
    //
-   // QUIC
+   // QUIC test -- open a UDP port
    //
 #if 1
    m_udp_socket.emplace(m_executor, ip::udp::endpoint(ip::udp::v4(), config().port));

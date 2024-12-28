@@ -2,6 +2,7 @@
 #include "anyhttp/request_handlers.hpp"
 #include "anyhttp/server.hpp"
 #include "anyhttp/session.hpp"
+#include "anyhttp/utils.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/as_tuple.hpp>
@@ -25,7 +26,6 @@
 #include <boost/system/system_error.hpp>
 #include <boost/url/url.hpp>
 
-#include <chrono>
 #include <regex>
 
 #include <gtest/gtest.h>
@@ -158,33 +158,6 @@ protected:
          });
    }
 
-   void run(boost::asio::io_context& context)
-   {
-#if 0
-      context.run();
-#else
-      using namespace std::chrono;
-      auto t0 = steady_clock::now();
-      for (int i = 0; context.run_one(); ++i)
-      {
-         auto t1 = steady_clock::now();
-         auto dt = duration_cast<milliseconds>(t1 - t0);
-         t0 = t1;
-         if (dt < 100ms)
-            std::println("--- {} "
-                         "------------------------------------------------------------------------",
-                         i);
-         else
-         {
-            std::println("\x1b[1;31m--- {} ({}) "
-                         "----------------------------------------------------------------"
-                         "\x1b[0m",
-                         i, dt);
-         }
-      }
-#endif
-   }
-
    void run()
    {
 #if defined(MULTITHREADED)
@@ -198,7 +171,7 @@ protected:
       for (auto& thread : threads)
          thread.join();
 #else
-      run(context);
+      ::run(context);
 #endif
    }
 
