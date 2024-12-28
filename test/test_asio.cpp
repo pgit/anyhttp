@@ -1,3 +1,6 @@
+#include "anyhttp/common.hpp"
+#include "anyhttp/utils.hpp"
+
 #include <boost/asio.hpp>
 #include <boost/asio/any_completion_executor.hpp>
 #include <boost/asio/any_io_executor.hpp>
@@ -12,6 +15,7 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
+#include <boost/asio/system_context.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/asio/use_future.hpp>
@@ -24,8 +28,7 @@
 #include <gtest/gtest.h>
 
 #include <print>
-
-#include "anyhttp/common.hpp"
+#include <thread>
 
 using namespace std::chrono_literals;
 namespace asio = boost::asio;
@@ -66,7 +69,7 @@ TEST_F(Asio, SpawnDetached)
          co_return;
       },
       asio::detached);
-   context.run();
+   ::run(context);
    EXPECT_TRUE(ok);
 }
 
@@ -81,13 +84,13 @@ TEST_F(Asio, SpawnFuture)
          co_return true;
       },
       asio::use_future);
-   context.run();
+   ::run(context);
    EXPECT_TRUE(future.get());
 }
 
 // =================================================================================================
 
-// https://www.boost.org/doc/libs/1_86_0/doc/html/boost_asio/example/cpp20/type_erasure/sleep.hpp
+/// https://www.boost.org/doc/libs/1_86_0/doc/html/boost_asio/example/cpp20/type_erasure/sleep.hpp
 class ComposedAny : public testing::Test
 {
 public:
@@ -111,14 +114,14 @@ TEST_F(ComposedAny, CustomDetached)
 {
    boost::asio::io_context context;
    async_sleep(context.get_executor(), 100ms, asio::detached);
-   context.run();
+   ::run(context);
 }
 
 TEST_F(ComposedAny, CustomFuture)
 {
    boost::asio::io_context context;
    auto future = async_sleep(context.get_executor(), 100ms, asio::use_future);
-   context.run();
+   ::run(context);
    EXPECT_NO_THROW(future.get());
 }
 
@@ -145,7 +148,9 @@ public:
    {
       return boost::asio::async_initiate<CompletionToken, Sleep>(
          [](SleepHandler handler, boost::asio::any_io_executor ex, Duration duration)
-         { async_sleep_impl(std::move(handler), std::move(ex), duration); },
+         {
+            async_sleep_impl(std::move(handler), std::move(ex), duration); //
+         },
          std::forward<CompletionToken>(token), std::move(ex), duration);
    }
 };
@@ -156,14 +161,14 @@ TEST_F(ComposedAny, AnyDetached)
 {
    boost::asio::io_context context;
    async_sleep(context.get_executor(), 100ms, asio::detached);
-   context.run();
+   ::run(context);
 }
 
 TEST_F(ComposedAny, AnyFuture)
 {
    boost::asio::io_context context;
    auto future = async_sleep(context.get_executor(), 100ms, asio::use_future);
-   context.run();
+   ::run(context);
    EXPECT_NO_THROW(future.get());
 }
 
@@ -177,59 +182,93 @@ TEST_F(ComposedAny, AnyFuture)
 class ComposedCoro : public testing::Test
 {
 public:
-   static auto async_sleep_impl(SleepHandler token, Duration duration)
+   boost::asio::io_context context;
+
+   template <typename CompletionToken>
+   auto async_sleep(Duration duration, CompletionToken&& token)
    {
-      return asio::async_initiate<SleepHandler, Sleep>( //
+      return asio::async_initiate<CompletionToken, Sleep>( //
          asio::co_composed<Sleep>(
-            [](auto state, Duration duration) -> void
+            [this](auto state, Duration duration) -> void
             {
                auto ex = state.get_io_executor();
-               asio::steady_timer timer(ex, duration);
-               timer.expires_after(100ms);
-               std::println("waiting...");
-               auto [ec] =
-                  co_await timer.async_wait(bind_executor(ex, asio::as_tuple(asio::deferred)));
-               std::println("waiting... done, {}", ec.what());
+               auto thread_id = std::this_thread::get_id();
+               std::println("waiting in thread {}...", thread_id);
+               // asio::steady_timer timer(ex, duration);
+               // auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::deferred));
+               co_await asio::steady_timer(ex, duration).async_wait(asio::deferred);
+               if (thread_id == std::this_thread::get_id())
+                  std::println("waiting in thread {}... done", thread_id);
+               else
+                  std::println("waiting in thread {}... done, but now in {}!", thread_id,
+                               std::this_thread::get_id());
+               ++done;
                co_return {boost::system::error_code{}};
             }),
          token, duration);
    }
 
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
-   static auto async_sleep(Duration duration, CompletionToken&& token)
-   {
-      return boost::asio::async_initiate<CompletionToken, Sleep>(
-         [](SleepHandler handler, Duration duration)
-         { async_sleep_impl(std::move(handler), duration); }, std::forward<CompletionToken>(token),
-         duration);
-   }
+   // std::atomic<size_t> done = 0;
+   size_t done = 0;
 };
 
 // -------------------------------------------------------------------------------------------------
 
 //
-// This one will FAIL to register work properly. The wait will somehow be carried over into
-// the next test... BAD.
+// This one does not register work properly, because async_sleep() is called with a token that
+// is NOT bound to the executor. The async operation will then uses the system executor as fallback.
 //
-TEST_F(ComposedCoro, AnyDetached)
+// If this test is run and other tests follow that keep asio running for 100ms, then the
+// asynchronous operation will continue to run. Eventually, it will call ++done, which is
+// a use-after-free.
+//
+TEST_F(ComposedCoro, DISABLED_Unbound)
 {
    boost::asio::io_context context;
    async_sleep(100ms, asio::detached);
-   context.run();
+   ::run(context);
+   EXPECT_EQ(done, 2);
 }
 
+//
+// This test is only safe because there is a longer sleep in the test that follows.
+//
+TEST_F(ComposedCoro, DefaultExecutor)
+{
+   boost::asio::io_context context;
+   async_sleep(100ms, asio::detached);
+   async_sleep(120ms, bind_executor(context, asio::detached));
+   ::run(context);
+   EXPECT_EQ(done, 2);
+}
+
+TEST_F(ComposedCoro, AnyDetached)
+{
+   boost::asio::io_context context;
+   async_sleep(100ms, bind_executor(context, asio::detached));
+   async_sleep(100ms, bind_executor(context, asio::detached));
+   ::run(context);
+   EXPECT_TRUE(done);
+}
+
+//
+// For some reason, the future completion token does not suffer from this.
+//
 TEST_F(ComposedCoro, AnyFuture)
 {
    boost::asio::io_context context;
-   auto future = async_sleep(100ms, asio::use_future);
-   context.run();
-   EXPECT_NO_THROW(future.get());
+   auto f1 = async_sleep(100ms, asio::use_future);
+   auto f2 = async_sleep(100ms, asio::use_future);
+   ::run(context);
+   EXPECT_NO_THROW(f1.get());
+   EXPECT_NO_THROW(f2.get());
+   EXPECT_EQ(done, 2);
 }
 
 // =================================================================================================
 
 //
-// Simply by passing an executor to register work in, async_initiate seems to register work for us.
+// Another way to pass the executor to the composed function is to pass the executor as an argument.
 //
 class ComposedExecutor : public testing::Test
 {
@@ -270,112 +309,74 @@ TEST_F(ComposedExecutor, AnyDetached)
 {
    boost::asio::io_context context;
    async_sleep(context.get_executor(), 100ms, asio::detached);
-   context.run();
+   ::run(context);
 }
 TEST_F(ComposedExecutor, AnyFuture)
 {
    boost::asio::io_context context;
    auto future = async_sleep(context.get_executor(), 100ms, asio::use_future);
-   context.run();
+   ::run(context);
    EXPECT_NO_THROW(future.get());
 }
 
 // =================================================================================================
 
-class ComposedComa : public testing::Test
+class ComposedHandler : public testing::Test
 {
 public:
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
-   auto coma_composed(Duration duration, CompletionToken&& token)
-   {
-      return asio::async_initiate<CompletionToken, Sleep>( //
-         asio::co_composed<Sleep>(
-            [this](auto state, Duration duration) -> void
-            {
-               // co_await asio::this_coro::executor;
-               auto ex = state.get_io_executor();
-               // co_await sleep(duration);
-               asio::steady_timer timer(ex, duration);
-               co_await timer.async_wait(asio::bind_executor(ex, asio::deferred));
-               co_return {boost::system::error_code{}};
-            }),
-         token, duration);
-   }
-
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
-   auto coma(boost::asio::any_io_executor ex, Duration duration, CompletionToken&& token)
-   {
-      return asio::async_initiate<CompletionToken, Sleep>(
-         [this](SleepHandler handler, boost::asio::any_io_executor ex, Duration duration) -> void
-         {
-            this->work.emplace(ex);
-            this->handler = std::move(handler); //
-         },
-         token, ex, duration);
-   }
-
    using WorkGuard = boost::asio::executor_work_guard<asio::any_completion_executor>;
    std::optional<WorkGuard> work;
    SleepHandler handler;
 
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
-   auto coma(Duration duration, CompletionToken&& token)
+   auto wait_for_handler(CompletionToken&& token)
    {
       return asio::async_initiate<CompletionToken, Sleep>(
-         [this](SleepHandler handler, Duration duration) -> void
+         [this](SleepHandler handler) -> void
          {
             // this works only if we associate our executor with the handler before
             // but I guess that makes sense... how else would it know about the executor?
             auto ex = boost::asio::get_associated_executor(handler);
+            this->handler = std::move(handler);
+         },
+         token);
+   }
+
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
+   auto wait_for_handler_with_work(CompletionToken&& token)
+   {
+      return asio::async_initiate<CompletionToken, Sleep>(
+         [this](SleepHandler handler) -> void
+         {
+            auto ex = boost::asio::get_associated_executor(handler);
             this->work.emplace(ex);
             this->handler = std::move(handler);
          },
-         token, duration);
+         token);
    }
 };
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_F(ComposedComa, Coma)
+TEST_F(ComposedHandler, Coma)
 {
    boost::asio::io_context context;
-   coma(100ms, asio::bind_executor(context.get_executor(), asio::detached));
-   // coma(100ms, asio::detached);
-   std::atomic<bool> running = true;
-   std::thread thread(
-      [&]
-      {
-         context.run();
-         running = false;
-      });
-
-   std::this_thread::sleep_for(50ms);
-   EXPECT_TRUE(running); // if not, work was not registered properly
-   post(context.get_executor(), [this]() { work.reset(); });
-
-   thread.join();
+   wait_for_handler(asio::bind_executor(context.get_executor(), asio::detached));
+   EXPECT_EQ(context.run_for(100ms), 0);
+   dispatch(context.get_executor(), [handler = std::move(handler)]() mutable
+            { std::move(handler)(boost::system::error_code{}); });
+   EXPECT_EQ(::run(context), 0);
 }
 
-TEST_F(ComposedComa, ComaPoll)
+TEST_F(ComposedHandler, ComaPoll)
 {
    boost::asio::io_context context;
-   bool done = false;
-   auto tok = [&](boost::system::error_code ec) { done = true; };
-   coma(100ms, asio::bind_executor(context.get_executor(), tok));
-   // coma(context.get_executor(), 100ms, tok);
-   // coma(100ms, tok);  // FAILS, doesn't register work
-   // coma_composed(100ms, asio::bind_executor(context.get_executor(), tok));
-   EXPECT_EQ(context.poll(), 0);
-   EXPECT_FALSE(done);
-   post(context.get_executor(),
-        [this]()
-        {
-           anyhttp::swap_and_invoke(handler, boost::system::error_code{});
-           work.reset();
-        });
-   EXPECT_FALSE(done);
-   EXPECT_EQ(context.poll(), 1);
-   EXPECT_TRUE(done);
+   wait_for_handler_with_work(asio::bind_executor(context.get_executor(), asio::detached));
+   EXPECT_EQ(context.run_for(100ms), 0);
+   dispatch(context.get_executor(), [handler = std::move(handler)]() mutable
+            { std::move(handler)(boost::system::error_code{}); });
+   work.reset();
+   EXPECT_EQ(::run(context), 1);
 }
 
 // =================================================================================================
