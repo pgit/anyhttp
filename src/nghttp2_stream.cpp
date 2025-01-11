@@ -131,6 +131,7 @@ NGHttp2Writer<Base>::~NGHttp2Writer()
 template <typename Base>
 void NGHttp2Writer<Base>::detach()
 {
+   logd("[{}] detach:", stream->logPrefix);
    stream = nullptr;
 }
 
@@ -153,8 +154,15 @@ template <typename Base>
 void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int status_code,
                                        Fields headers)
 {
+   if (!stream)
+   {
+      logw("[] async_submit: stream already gone");
+      using namespace boost::system;
+      std::move(handler)(errc::make_error_code(errc::operation_canceled));
+      return;
+   }
+
    logd("[{}] async_submit: {}", stream->logPrefix, status_code);
-   assert(stream);
 
    auto nva = std::vector<nghttp2_nv>();
    nva.reserve(3 + headers.size());
@@ -553,7 +561,7 @@ void NGHttp2Stream::call_on_request()
    else
    {
       loge("[{}] call_on_request: no request handler!", logPrefix);
-      co_spawn(executor(), not_found(std::move(request), std::move(response)), detached);
+      co_spawn(executor(), not_found(std::move(response)), detached);
    }
 }
 

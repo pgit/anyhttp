@@ -35,7 +35,7 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   void async_read_some(server::Request::ReadSomeHandler&& handler);
+   void async_read_some(ReadSomeHandler&& handler);
    void async_write(WriteHandler&& handler, asio::const_buffer buffer);
 
    // ----------------------------------------------------------------------------------------------

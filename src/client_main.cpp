@@ -100,7 +100,7 @@ int main(int argc, char* argv[])
    }
 
    io_context context;
-   Config config{.url = boost::urls::url(argv[1]), .protocol = Protocol::http2};
+   Config config{.url = boost::urls::url(argv[1]), .protocol = Protocol::h2};
    Client client(context.get_executor(), config);
 
    for (size_t i = 0; i < 1; ++i)

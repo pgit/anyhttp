@@ -1,5 +1,6 @@
 .cache
 .vscode
+gtest-parallel-logs
 report.xml
 build
 64kminus1

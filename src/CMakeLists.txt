@@ -28,6 +28,7 @@ target_link_libraries(anyhttp spdlog::spdlog_header_only)
 add_executable(server)
 target_sources(server PRIVATE "server_main.cpp")
 target_link_libraries(server PRIVATE anyhttp)
+target_link_libraries(server PRIVATE Boost::program_options)
 
 #
 # client

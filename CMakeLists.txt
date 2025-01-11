@@ -15,8 +15,8 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
     # add_link_options(-fsanitize=thread)
     
     # address sanitizer
-    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
-    add_link_options(-fsanitize=address)
+    # add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    # add_link_options(-fsanitize=address)
 
     # include(CodeCoverage)
     # append_coverage_compiler_flags()
@@ -37,7 +37,7 @@ add_compile_options(-Wno-inconsistent-missing-override)
 # find boost
 # https://github.com/madmongo1/blog-december-2020/blob/master/CMakeLists.txt
 #
-find_package(Boost 1.78 COMPONENTS system thread atomic coroutine url filesystem REQUIRED)
+find_package(Boost 1.78 COMPONENTS system thread atomic coroutine url filesystem program_options REQUIRED)
 find_package(OpenSSL COMPONENTS)
 find_package(Threads)
 

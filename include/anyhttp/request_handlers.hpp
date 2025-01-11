@@ -43,8 +43,9 @@ boost::asio::awaitable<void> sleep(T duration)
 }
 
 boost::asio::awaitable<void> yield(size_t count = 1);
-boost::asio::awaitable<void> echo(server::Request request, server::Response response);
+boost::asio::awaitable<void> not_found(server::Response response);
 boost::asio::awaitable<void> not_found(server::Request request, server::Response response);
+boost::asio::awaitable<void> echo(server::Request request, server::Response response);
 boost::asio::awaitable<void> eat_request(server::Request request, server::Response response);
 
 boost::asio::awaitable<void> delayed(server::Request request, server::Response response);
@@ -68,7 +69,7 @@ template <typename Range>
 boost::asio::awaitable<void> send(client::Request& request, Range range)
 {
    logi("send: (continous range)...");
-#if 1
+#if 0
    try
    {
       co_await request.async_write(asio::buffer(range.data(), range.size()), asio::deferred);
@@ -96,9 +97,12 @@ boost::asio::awaitable<void> send(client::Request& request, Range range)
    {
       auto end = std::ranges::copy(chunk, buffer.data()).out;
       bytes += end - buffer.data();
-#if 0
+#if 1
       //
-      // FIXME: With as_tuple<>, this testcase fails, sporadically.
+      // FIXME: With as_tuple<>, testcase h2spec fails, very sporadically.
+      //
+      //        This is also influenced by the logging level: With INFO only for the server,
+      //        it happens more often than with DEBUG.
       //
       auto result = co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()),
                                                  asio::as_tuple(asio::deferred));

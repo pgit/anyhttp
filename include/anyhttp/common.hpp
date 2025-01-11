@@ -1,5 +1,7 @@
 #pragma once
 
+#include <anyhttp/concepts.hpp>
+
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -24,8 +26,8 @@ namespace asio = boost::asio;
 enum class Protocol
 {
    http11,
-   http2,
-   http3
+   h2,
+   h3
 };
 
 std::string to_string(Protocol protocol);
@@ -41,6 +43,9 @@ using Fields = std::map<std::string, std::string>;
 using ReadSome = void(boost::system::error_code, std::vector<std::uint8_t>);
 using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
 
+using OperationWithStatus = void(boost::system::error_code);
+using StatusHandler = asio::any_completion_handler<void(boost::system::error_code)>;
+
 using Write = void(boost::system::error_code);
 using WriteHandler = asio::any_completion_handler<Write>;
 
@@ -49,6 +54,8 @@ using WriteHandler = asio::any_completion_handler<Write>;
 /**
  * Custom invoke template function that moves the invoked function away before actually calling it.
  * This is important in places where the user-provided handler may re-install itself again.
+ *
+ * This also ensures that the callback is destroyed after invocation.
  */
 template <typename F, typename... Args>
    requires std::invocable<F, Args...>
@@ -70,6 +77,7 @@ public:
    virtual const asio::any_io_executor& executor() const = 0;
    virtual std::optional<size_t> content_length() const noexcept = 0;
    virtual void async_read_some(ReadSomeHandler&& handler) = 0;
+   // virtual void async_read_some(boost::asio::mutable_buffer& buffer, StatusHandler&& handler) = 0;
    virtual void detach() = 0;
 
    virtual void destroy(std::unique_ptr<Reader> self) { /* delete self */ }

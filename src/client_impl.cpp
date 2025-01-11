@@ -130,7 +130,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
       impl = std::make_shared<beast_impl::ClientSession<boost::beast::tcp_stream>>(
          *this, ex, boost::beast::tcp_stream(std::move(socket)));
       break;
-   case Protocol::http2:
+   case Protocol::h2:
 #if 0
       auto stream = boost::beast::tcp_stream{std::move(socket)};
       impl = std::make_shared<nghttp2::ClientSession<boost::beast::tcp_stream>> //
@@ -140,7 +140,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
          (*this, ex, std::move(socket));
 #endif
       break;
-   case anyhttp::Protocol::http3:      
+   case anyhttp::Protocol::h3:      
       namespace errc = boost::system::errc;
       co_return {errc::make_error_code(errc::invalid_argument), Session{nullptr}};
    };
@@ -150,12 +150,12 @@ void Client::Impl::async_connect(ConnectHandler handler)
    //        as there is no communication outside the current request right now, but that may
    //        still come with pipelining.
    //
-   //        We do need a user interface to stop sessions, though. This should be the deleted
+   //        We do need a user interface to stop sessions, though. This should be the destructor
    //        of the user-facing "Session" object. So we should use only the "impl" internally.
    //
 #if 1
    co_spawn(ex, impl->do_session(Buffer{}),
-            [impl]  (const std::exception_ptr& ex) mutable
+            [impl](const std::exception_ptr& ex) mutable
             {
                if (ex)
                   logw("client run: {}", what(ex));
@@ -166,7 +166,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
 #endif
 
    //
-   // It's important to call this handler after spawning the session, because stream configuration
+   // It's important to call this handler AFTER spawning the session, because stream configuration
    // happens in the beginning of do_client_session(), but calling the handler may result in a
    // submit(), which must happen after that.
    //

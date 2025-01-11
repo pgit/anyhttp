@@ -78,7 +78,7 @@ public:
          return std::nullopt;
    }
 
-   void async_read_some(server::Request::ReadSomeHandler&& handler) override
+   void async_read_some(ReadSomeHandler&& handler) override
    {
       buffer.reserve(64 * 1024);
       mlogd("async_read_some: is_done={} size={} capacity={}", parser.is_done(), buffer.size(),

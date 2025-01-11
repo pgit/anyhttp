@@ -14,6 +14,7 @@ struct Config
 {
    std::string listen_address = "::";
    uint16_t port = 8080;
+   bool use_strand = false;
 };
 
 // =================================================================================================
@@ -29,9 +30,6 @@ public:
    // const asio::any_io_executor& executor() const;
 
 public:
-   using ReadSome = void(boost::system::error_code, std::vector<std::uint8_t>);
-   using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
-
    boost::url_view url() const;
    std::optional<size_t> content_length() const noexcept;
 
@@ -111,7 +109,7 @@ public:
    Server(Server&& other) = default;
    Server& operator=(const Server& other) = delete;
    Server& operator=(Server&& other) = default;
-   
+
    const asio::any_io_executor& executor() const;
    void setRequestHandler(RequestHandler&& handler);
    void setRequestHandlerCoro(RequestHandlerCoro&& handler);

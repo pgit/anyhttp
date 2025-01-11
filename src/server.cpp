@@ -82,7 +82,7 @@ void Response::async_write_any(WriteHandler&& handler, asio::const_buffer buffer
 Server::Server(boost::asio::any_io_executor executor, Config config)
    : impl(std::make_unique<Server::Impl>(std::move(executor), std::move(config)))
 {
-   impl->run();
+   impl->start();
 }
 
 void Server::setRequestHandler(RequestHandler&& handler)

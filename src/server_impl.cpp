@@ -9,11 +9,11 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/error.hpp>
+#include <boost/asio/experimental/as_single.hpp>
 #include <boost/asio/ip/address_v6.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/stream.hpp>
-#include <boost/asio/experimental/as_single.hpp>
 
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/ssl/ssl_stream.hpp>
@@ -28,7 +28,6 @@
 // #include <netinet/ip.h>
 #define IPTOS_ECN_MASK 0x03
 
-#include "ngtcp2/network.h"
 #include "ngtcp2/shared.h"
 
 using namespace std::chrono_literals;
@@ -59,31 +58,13 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
 #if !defined(NDEBUG)
-   spdlog::set_level(spdlog::level::debug);
+   spdlog::set_level(spdlog::level::info);
 #else
    spdlog::set_level(spdlog::level::info);
 #endif
    logi("Server: ctor");
-   listen();
-}
-
-void Server::Impl::destroy()
-{
-   logi("Server: destroy");
-
-   if (m_acceptor)
-      m_acceptor->close(); // breaks listen_loop()
-
-   if (m_udp_socket)
-      m_udp_socket->close(); // breaks  udp_receive_loop()
-
-   m_stopped = true;
-}
-
-Server::Impl::~Impl()
-{
-   logi("Server: dtor");
-   assert(m_stopped);
+   listen_tcp();
+   listen_udp();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -91,17 +72,18 @@ Server::Impl::~Impl()
 /**
  * A shared pointer is captured in the completion handler of the spawned tasks. This way, we
  * make sure it stays around long enough, even if the user has already deleted it.
+ *
+ * Most of the cleanup is done at the end of listen_loop(), which collects all the shared pointers.
  */
-void Server::Impl::run()
+void Server::Impl::start()
 {
-   // co_spawn(m_executor, listen_loop(), asio::consign(detached, shared_from_this()));
    co_spawn(m_executor, listen_loop(),
             [self = shared_from_this()](const std::exception_ptr& ex)
             {
                if (ex)
-                  logw("server run: {}", what(ex));
+                  logw("TCP accept loop: {}", what(ex));
                else
-                  logi("server run: done");
+                  logi("TCP accept loop: done");
             });
 
    if (m_udp_socket)
@@ -115,6 +97,66 @@ void Server::Impl::run()
                      logi("UDP receive loop: done");
                });
    }
+}
+
+// -------------------------------------------------------------------------------------------------
+
+void Server::Impl::destroy()
+{
+   logi("Server: destroy");
+
+   if (m_acceptor)
+      m_acceptor->close(); // breaks listen_loop()
+
+   if (m_udp_socket)
+      m_udp_socket->close(); // breaks udp_receive_loop()
+
+   m_stopped = true;
+}
+
+// -------------------------------------------------------------------------------------------------
+
+Server::Impl::~Impl()
+{
+   logi("Server: dtor");
+   assert(m_stopped);
+}
+
+// =================================================================================================
+
+void Server::Impl::listen_tcp()
+{
+   assert(m_acceptor);
+   auto& acceptor = *m_acceptor;
+
+   boost::system::error_code ec;
+   auto address = ip::make_address(config().listen_address, ec);
+   if (ec)
+      logw("Server: error resolving '{}': {}", config().listen_address, ec.what());
+
+   ip::tcp::endpoint endpoint(address, config().port);
+   if (endpoint.protocol() == ip::tcp::v6())
+      std::ignore = acceptor.set_option(ip::v6_only(false), ec);
+
+   acceptor.open(endpoint.protocol());
+   acceptor.set_option(asio::socket_base::reuse_address(true));
+   acceptor.bind(endpoint);
+   acceptor.listen();
+
+   endpoint = acceptor.local_endpoint();
+   logi("Server: listening on {}", endpoint);
+}
+
+// -------------------------------------------------------------------------------------------------
+
+void Server::Impl::listen_udp()
+{
+   //
+   // QUIC test -- open a UDP port
+   //
+   m_udp_socket.emplace(m_executor, ip::udp::endpoint(ip::udp::v4(), config().port));
+   m_udp_socket->set_option(boost::asio::detail::socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
+   m_udp_socket->set_option(boost::asio::detail::socket_option::integer<IPPROTO_IP, IP_RECVTTL>(1));
 }
 
 // =================================================================================================
@@ -152,8 +194,8 @@ static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned ch
 
 awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 {
-   logi("[{}] new connection", normalize(socket.remote_endpoint()));
-   auto executor = co_await boost::asio::this_coro::executor;
+   const auto prefix = normalize(socket.remote_endpoint());
+   logi("[{}] new connection", prefix);
 
    socket.set_option(ip::tcp::no_delay(true));
 
@@ -165,21 +207,18 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    sb::receive_buffer_size receive_buffer_size;
    socket.get_option(send_buffer_size);
    socket.get_option(receive_buffer_size);
-   logd("[{}] socket buffer sizes: send={} receive={}", normalize(socket.remote_endpoint()),
-        send_buffer_size.value(), receive_buffer_size.value());
-#if 1
+   logd("[{}] socket buffer sizes: send={} receive={}", prefix, send_buffer_size.value(),
+        receive_buffer_size.value());
    // socket.set_option(sb::send_buffer_size(8192));
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
-#endif
 
-   const auto prefix = normalize(socket.remote_endpoint());
+   auto executor = co_await boost::asio::this_coro::executor;
 
    auto buffer = boost::beast::flat_buffer();
 
    //
-   // try to detect TLS
+   // detect TLS
    //
-#if 1
    std::shared_ptr<Session::Impl> session;
    std::optional<asio::ssl::stream<asio::ip::tcp::socket>> sslStream;
    if (co_await async_detect_ssl_awaitable(socket, buffer, deferred))
@@ -198,7 +237,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       buffer.consume(n);
 
       //
-      // ALPN
+      // perform ALPN
       //
       std::string_view alpn;
       {
@@ -218,24 +257,20 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
             std::make_shared<beast_impl::ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>> //
             (*this, executor, std::move(*sslStream));
    }
-#endif
 
    //
-   // detect HTTP2 client preface, fallback to HTTP/1.1 if not found
+   // detect HTTP2 client preface
    //
-   if (session)
-      ; // SSL session, see above
    else if (co_await async_detect_http2_client_preface(socket, buffer, deferred))
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
-#if 0
-      session = std::make_shared<nghttp2::ServerSession<boost::beast::tcp_stream>> //
-         (*this, executor, boost::beast::tcp_stream(std::move(socket)));
-#else
       session = std::make_shared<nghttp2::ServerSession<asio::ip::tcp::socket>> //
          (*this, executor, std::move(socket));
-#endif
    }
+
+   //
+   // fallback to HTTP/1.1
+   //
    else
    {
       logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", prefix);
@@ -243,50 +278,20 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
          (*this, executor, boost::beast::tcp_stream(std::move(socket)));
    }
 
+
    {
-      // auto lock = std::lock_guard(m_sessionMutex);
+      auto lock = std::lock_guard(m_sessionMutex);
       m_sessions.emplace(session);
    }
 
    co_await session->do_session(std::move(buffer));
 
-   m_sessions.erase(session);
+   {
+      auto lock = std::lock_guard(m_sessionMutex);
+      m_sessions.erase(session);
+   }
 
    logi("[{}] session finished", prefix);
-}
-
-// -------------------------------------------------------------------------------------------------
-
-void Server::Impl::listen()
-{
-   assert(m_acceptor);
-   auto& acceptor = *m_acceptor;
-
-   boost::system::error_code ec;
-   auto address = ip::make_address(config().listen_address, ec);
-   if (ec)
-      logw("Server: error resolving '{}': {}", config().listen_address, ec.what());
-
-   ip::tcp::endpoint endpoint(address, config().port);
-   if (endpoint.protocol() == ip::tcp::v6())
-      std::ignore = acceptor.set_option(ip::v6_only(false), ec);
-
-   acceptor.open(endpoint.protocol());
-   acceptor.set_option(asio::socket_base::reuse_address(true));
-   acceptor.bind(endpoint);
-   acceptor.listen();
-
-   endpoint = acceptor.local_endpoint();
-   logi("Server: listening on {}", endpoint);
-
-   //
-   // QUIC test -- open a UDP port
-   //
-#if 1
-   m_udp_socket.emplace(m_executor, ip::udp::endpoint(ip::udp::v4(), config().port));
-   m_udp_socket->set_option(boost::asio::detail::socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
-   m_udp_socket->set_option(boost::asio::detail::socket_option::integer<IPPROTO_IP, IP_RECVTTL>(1));
-#endif
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -338,27 +343,31 @@ awaitable<void> Server::Impl::listen_loop()
       // track their destruction.
       //
       {
-         // auto lock = std::lock_guard(m_sessionMutex);
+         auto lock = std::lock_guard(m_sessionMutex);
          ++sessionCounter;
       }
+
+      // put each connection on a strand if needed
+      if (config().use_strand)
+         executor = boost::asio::make_strand(executor);
+
       co_spawn(
-         // boost::asio::make_strand(executor),  // put each connection on a strand
          executor,
          [this, socket = std::move(socket)]() mutable { //
             return handleConnection(std::move(socket));
          },
          [&](const std::exception_ptr& ex) mutable
          {
-            // auto lock = std::lock_guard(m_sessionMutex);
+            auto lock = std::lock_guard(m_sessionMutex);
             --sessionCounter;
             if (ex)            
-               logw("{} {}", ep, what(ex));
+               logw("[{}] {}", ep, what(ex));
             else
-               logi("{} session finished, {} sessions left", ep, sessionCounter);            
+               logi("[{}] session finished, {} sessions left", ep, sessionCounter);            
          });
    }
 
-   // auto lock = std::unique_lock(m_sessionMutex);
+   auto lock = std::unique_lock(m_sessionMutex);
    const auto waitingFor = sessionCounter;
    logi("listen loop terminated, waiting for {} sessions...", waitingFor);
 
@@ -368,9 +377,9 @@ awaitable<void> Server::Impl::listen_loop()
          session->destroy(std::move(session));
       m_sessions.clear();
 
-      // lock.unlock();
+      lock.unlock();
       co_await post(executor, asio::deferred);
-      // lock.lock();
+      lock.lock();
    }
 
    logi("listen loop terminated, waiting for {} sessions... done", waitingFor);

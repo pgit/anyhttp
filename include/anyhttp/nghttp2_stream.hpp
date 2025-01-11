@@ -33,7 +33,8 @@ public:
 
    const asio::any_io_executor& executor() const override;
    std::optional<size_t> content_length() const noexcept override;
-   void async_read_some(server::Request::ReadSomeHandler&& handler) override;
+   void async_read_some(ReadSomeHandler&& handler) override;
+   // void async_read_some(boost::asio::mutable_buffer& buffer, StatusHandler&& handler) override;
    void detach() override;
 
    boost::url_view url() const override;
@@ -118,7 +119,7 @@ public:
 
    // ==============================================================================================
 
-   server::Request::ReadSomeHandler m_read_handler;
+   ReadSomeHandler m_read_handler;
    bool m_inside_call_read_handler = false;
    void call_read_handler();
 

@@ -1,6 +1,5 @@
 #pragma once
 #include "client.hpp"
-#include "session.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_completion_handler.hpp>
@@ -66,8 +65,6 @@ public:
 
 private:
    const Config& config() const { return m_config; }
-   
-   // void async_connect_impl(ConnectHandler&& token);
 
 private:
    Config m_config;

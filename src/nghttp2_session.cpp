@@ -485,6 +485,7 @@ void NGHttp2Session::handle_buffer_contents()
 
    assert(rv == data.size());
    m_buffer.consume(rv);
+   m_buffer.clear();
 }
 
 // =================================================================================================

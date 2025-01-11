@@ -1,4 +1,5 @@
 
+#include <boost/asio/buffer.hpp>
 #include <boost/asio/error.hpp>
 #include <utility>
 
@@ -13,7 +14,7 @@ std::string to_string(Protocol protocol)
    {
    case Protocol::http11:
       return "HTTP11";
-   case Protocol::http2:
+   case Protocol::h2:
       return "HTTP2";
    default:
       return fmt::format("UNKNOWN ({})", std::to_underlying(protocol));
@@ -86,6 +87,14 @@ void Response::async_read_some_any(ReadSomeHandler&& handler)
    assert(impl);
    impl->async_read_some(std::move(handler));
 }
+
+/*
+void Response::async_read_some_any(boost::asio::mutable_buffer& buffer, StatusHandler&& handler)
+{
+   assert(impl);
+   impl->async_read_some(buffer, std::move(handler));
+}
+*/
 
 // =================================================================================================
 

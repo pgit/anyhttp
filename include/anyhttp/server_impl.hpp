@@ -62,13 +62,18 @@ public:
    Impl(boost::asio::any_io_executor executor, Config config);
    ~Impl();
 
+   void start();
+   void destroy();
+
+   void listen_tcp();
+   void listen_udp();
+
    const Config& config() const { return m_config; }
    const boost::asio::any_io_executor& executor() const { return m_executor; }
 
    asio::awaitable<void> listen_loop();
    asio::awaitable<void> handleConnection(asio::ip::tcp::socket socket);
 
-   void listen();
    asio::ip::tcp::endpoint local_endpoint() const
    {
       assert(m_acceptor);
@@ -83,9 +88,6 @@ public:
    const RequestHandler& requestHandler() const { return m_requestHandler; }
    const RequestHandlerCoro& requestHandlerCoro() const { return m_requestHandlerCoro; }
 
-   void run(); // FIXME: rename to spawn or async_run
-   void destroy();
-
    asio::awaitable<void> udp_receive_loop();
 
 private:
@@ -95,6 +97,7 @@ private:
    std::optional<asio::ip::tcp::acceptor> m_acceptor;
    std::optional<asio::ip::udp::socket> m_udp_socket;
 
+   std::mutex m_sessionMutex;   
    std::set<std::shared_ptr<Session::Impl>> m_sessions;
 
    RequestHandler m_requestHandler;

@@ -1,4 +1,3 @@
-#include "anyhttp/common.hpp"
 #include "anyhttp/utils.hpp"
 
 #include <boost/asio.hpp>
@@ -202,7 +201,7 @@ public:
                else
                   std::println("waiting in thread {}... done, but now in {}!", thread_id,
                                std::this_thread::get_id());
-               ++done;
+               ++done;               
                co_return {boost::system::error_code{}};
             }),
          token, duration);
@@ -231,12 +230,12 @@ TEST_F(ComposedCoro, DISABLED_Unbound)
 }
 
 //
-// This test is only safe because there is a longer sleep in the test that follows.
+// This test is only (somewhat) safe because there is a longer sleep in the test that follows.
 //
 TEST_F(ComposedCoro, DefaultExecutor)
 {
    boost::asio::io_context context;
-   async_sleep(100ms, asio::detached);
+   async_sleep(100ms, asio::detached);  // this not safe, does not register work properly
    async_sleep(120ms, bind_executor(context, asio::detached));
    ::run(context);
    EXPECT_EQ(done, 2);
@@ -252,13 +251,16 @@ TEST_F(ComposedCoro, AnyDetached)
 }
 
 //
-// For some reason, the future completion token does not suffer from this.
+// Also with futures, we need to bind the executor to the completion token. If we don't do this,
+// there is a rare chance that the async operation will complete after the test has finished. The
+// handler is executed in the system executor, which is out of our control. TSAN shows this, at
+// least sometimes.
 //
 TEST_F(ComposedCoro, AnyFuture)
 {
    boost::asio::io_context context;
-   auto f1 = async_sleep(100ms, asio::use_future);
-   auto f2 = async_sleep(100ms, asio::use_future);
+   auto f1 = async_sleep(100ms, bind_executor(context, asio::use_future));
+   auto f2 = async_sleep(100ms, bind_executor(context, asio::use_future));
    ::run(context);
    EXPECT_NO_THROW(f1.get());
    EXPECT_NO_THROW(f2.get());

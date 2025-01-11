@@ -134,11 +134,10 @@ protected:
       // strand is created after accepting a new connection.
       //
       server.emplace(context.get_executor(), config);
-      // server.emplace(make_strand(context.get_executor()), config);
       server->setRequestHandlerCoro(
          [this](server::Request request, server::Response response) -> awaitable<void>
          {
-            logi("{}", request.url().path());
+            logd("{}", request.url().path());
             if (request.url().path() == "/echo")
                return echo(std::move(request), std::move(response));
             else if (request.url().path() == "/eat_request")
@@ -155,6 +154,7 @@ protected:
                return handler(std::move(request), std::move(response));
             else
                return not_found(std::move(request), std::move(response));
+               // return not_found(std::move(response));
          });
    }
 
@@ -182,7 +182,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(Server, Server,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2),
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
@@ -290,7 +290,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(External, External,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2),
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
@@ -314,7 +314,7 @@ TEST_P(External, curl)
    auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "--data-binary", fmt::format("@{}", testFile.string()), url};
 
-   if (GetParam() == anyhttp::Protocol::http2)
+   if (GetParam() == anyhttp::Protocol::h2)
       args.insert(args.begin(), "--http2-prior-knowledge");
 
    auto future = spawn("/usr/bin/curl", std::move(args));
@@ -333,7 +333,7 @@ TEST_P(External, curl_many)
       auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
       Args args = {"-sS", "-v", "--data-binary", fmt::format("@{}", testFile.string()), url};
 
-      if (GetParam() == anyhttp::Protocol::http2)
+      if (GetParam() == anyhttp::Protocol::h2)
          args.insert(args.begin(), "--http2-prior-knowledge");
 
       futures.emplace_back(spawn("/usr/bin/curl", std::move(args)));
@@ -350,7 +350,7 @@ TEST_P(External, curl_https)
    auto url = fmt::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "-k", "--data-binary", fmt::format("@{}", testFile.string()), url};
 
-   if (GetParam() == anyhttp::Protocol::http2)
+   if (GetParam() == anyhttp::Protocol::h2)
       args.insert(args.begin(), "--http2");
    else
       args.insert(args.begin(), "--http1.1"); // not implemented, yet
@@ -366,7 +366,7 @@ TEST_P(External, curl_multiple)
    auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "--data-binary", fmt::format("@{}", testFile.string()), url, url};
 
-   if (GetParam() == anyhttp::Protocol::http2)
+   if (GetParam() == anyhttp::Protocol::h2)
       args.insert(args.begin(), "--http2-prior-knowledge");
 
    // https://github.com/curl/curl/issues/10634 --> use custom built curl
@@ -382,7 +382,7 @@ TEST_P(External, curl_multiple_https)
    Args args = {"-sS", "-v", "-k", "--data-binary", fmt::format("@{}", testFile.string()),
                 url,   url};
 
-   if (GetParam() == anyhttp::Protocol::http2)
+   if (GetParam() == anyhttp::Protocol::h2)
       args.insert(args.begin(), "--http2");
    else
       args.insert(args.begin(), "--http1.1");
@@ -395,7 +395,7 @@ TEST_P(External, curl_multiple_https)
 
 TEST_P(External, h2spec)
 {
-   if (GetParam() != anyhttp::Protocol::http2)
+   if (GetParam() != anyhttp::Protocol::h2)
       GTEST_SKIP();
 
    handler = h2spec;
@@ -411,7 +411,7 @@ TEST_P(External, h2spec)
    std::regex regex(R"(((\d+) tests, (\d+) passed, (\d+) skipped, (\d+) failed))");
    ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex));
    EXPECT_EQ(std::stoi(match[2].str()), 146) << match[1];
-   EXPECT_EQ(std::stoi(match[3].str()), 145); // https://github.com/nghttp2/nghttp2/issues/2278
+   EXPECT_EQ(std::stoi(match[3].str()), 145) << output; // https://github.com/nghttp2/nghttp2/issues/2278
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -493,7 +493,7 @@ public:
 };
 
 INSTANTIATE_TEST_SUITE_P(ClientAsync, ClientAsync,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2),
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------

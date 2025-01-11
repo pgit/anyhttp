@@ -17,7 +17,7 @@ struct Config
 {
    // FIXME: the client does not connect to an URL, it connects to a host:port or endpoint
    boost::urls::url url{"localhost:8080"};
-   Protocol protocol{Protocol::http2};
+   Protocol protocol{Protocol::h2};
 };
 
 // =================================================================================================
@@ -41,8 +41,21 @@ public:
          token);
    }
 
+   /*
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(OperationWithStatus) CompletionToken>
+   auto async_read_some(boost::asio::mutable_buffer& buffer, CompletionToken&& token)
+   {
+      return boost::asio::async_initiate<CompletionToken, ReadSome>(
+         [&](StatusHandler handler) { //
+            async_read_some_any(buffer, std::move(handler));
+         },
+         token);
+   }
+   */
+
 private:
    void async_read_some_any(ReadSomeHandler&& handler);
+   // void async_read_some_any(boost::asio::mutable_buffer& buffer, StatusHandler&& handler);
    std::unique_ptr<Impl> impl;
 };
 

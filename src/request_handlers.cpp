@@ -87,7 +87,13 @@ awaitable<void> echo_debug(Request request, Response response)
    co_return;
 }
 
-awaitable<void> not_found(server::Request request, server::Response response)
+awaitable<void> not_found(server::Response response)
+{
+   co_await response.async_submit(404, {}, deferred);
+   co_await response.async_write({}, deferred);
+}
+
+awaitable<void> not_found(server::Request, server::Response response)
 {
    co_await response.async_submit(404, {}, deferred);
    co_await response.async_write({}, deferred);
@@ -178,7 +184,7 @@ awaitable<size_t> try_receive(client::Response& response, boost::system::error_c
    ec = {};
    size_t bytes = 0, count = 0;
    try
-   {      
+   {
       for (;;)
       {
          auto buf = co_await response.async_read_some(deferred);
@@ -228,27 +234,23 @@ awaitable<expected<size_t>> try_read_response(client::Request& request)
 awaitable<void> sendEOF(client::Request& request)
 {
    logi("send: finishing request...");
-   auto [ec] =  co_await request.async_write({}, as_tuple(deferred));
+   auto [ec] = co_await request.async_write({}, as_tuple(deferred));
    logi("send: finishing request... done ({})", ec.what());
 }
 
 awaitable<void> h2spec(server::Request request, server::Response response)
 {
-   //
-   // FIXME: h2spec: Adding this yield() breaks a lot of h2spec tests, even the generic ones.
-   //        This seems to happen if we don't submit a response from within the request callback.
-   //
    co_await yield(10);
    auto buf = co_await request.async_read_some(deferred);
-   co_await yield();  // ok
+   co_await yield(); // ok
    co_await response.async_submit(200, {}, deferred);
-   co_await yield();  // ok
+   co_await yield(); // ok
    const char* literal = "Hello, World!\n";
    boost::asio::const_buffer buffer(literal, std::strlen(literal));
    co_await response.async_write(buffer, deferred);
-   co_await yield();  // ok
+   co_await yield(); // ok
    co_await response.async_write({}, deferred);
-   // co_await yield();  // FIXME: fails assert(!is_reading_finished) in call_read_handler()
+   co_await yield(); // ok
    while (!(co_await request.async_read_some(deferred)).empty())
       ;
 }
