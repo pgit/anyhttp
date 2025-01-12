@@ -643,6 +643,7 @@ TEST_P(ClientAsync, PostRange)
       auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1 * 1024 * 1024));
       auto received = co_await (std::move(sender) && receive(response));
       loge("received: {}", received);
+      EXPECT_GT(received, 0);
    };
    run();
 }

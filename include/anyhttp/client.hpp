@@ -31,31 +31,30 @@ public:
    ~Response();
 
 public:
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSomeBuffer) CompletionToken>
    auto async_read_some(CompletionToken&& token)
    {
-      return boost::asio::async_initiate<CompletionToken, ReadSome>(
-         [&](ReadSomeHandler handler) { //
+      return boost::asio::async_initiate<CompletionToken, ReadSomeBuffer>(
+         [&](ReadSomeBufferHandler handler) { //
             async_read_some_any(std::move(handler));
          },
          token);
    }
 
-   /*
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(OperationWithStatus) CompletionToken>
-   auto async_read_some(boost::asio::mutable_buffer& buffer, CompletionToken&& token)
+
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
+   auto async_read_some(boost::asio::mutable_buffer buffer, CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, ReadSome>(
-         [&](StatusHandler handler) { //
+         [&](ReadSomeHandler handler, asio::mutable_buffer buffer) { //
             async_read_some_any(buffer, std::move(handler));
          },
-         token);
+         token, buffer);
    }
-   */
 
 private:
-   void async_read_some_any(ReadSomeHandler&& handler);
-   // void async_read_some_any(boost::asio::mutable_buffer& buffer, StatusHandler&& handler);
+   void async_read_some_any(ReadSomeBufferHandler&& handler);
+   void async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler);
    std::unique_ptr<Impl> impl;
 };
 

@@ -37,6 +37,23 @@ awaitable<void> echo(server::Request request, server::Response response)
       response.content_length(request.content_length().value());
 
    co_await response.async_submit(200, {}, deferred);
+
+   std::array<uint8_t, 64 * 1024> buffer;
+   for (;;)
+   {
+      size_t n = co_await request.async_read_some(asio::buffer(buffer), deferred);
+      co_await response.async_write(asio::buffer(buffer, n), deferred);
+      if (n == 0)
+         co_return;
+   }
+}
+
+awaitable<void> echo_buffer(server::Request request, server::Response response)
+{
+   if (request.content_length())
+      response.content_length(request.content_length().value());
+
+   co_await response.async_submit(200, {}, deferred);
    for (;;)
    {
       auto buffer = co_await request.async_read_some(deferred);

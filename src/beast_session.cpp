@@ -78,7 +78,27 @@ public:
          return std::nullopt;
    }
 
-   void async_read_some(ReadSomeHandler&& handler) override
+   void async_read_some(ReadSomeBufferHandler&& handler) override
+   {
+      std::vector<uint8_t> buffer;
+      buffer.resize(64 * 1024);
+
+      auto buffer_view = asio::buffer(buffer);
+      async_read_some(buffer_view,
+                      [buffer = std::move(buffer),
+                       handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
+                      {
+                         if (ec)
+                            std::move(handler)(ec, std::vector<uint8_t>{});
+                         else
+                         {
+                            buffer.resize(n);
+                            std::move(handler)(ec, std::move(buffer));
+                         }
+                      });
+   }
+
+   void async_read_some(asio::mutable_buffer body_buffer, ReadSomeHandler&& handler) override
    {
       buffer.reserve(64 * 1024);
       mlogd("async_read_some: is_done={} size={} capacity={}", parser.is_done(), buffer.size(),
@@ -89,15 +109,12 @@ public:
       if (parser.is_done())
       {
          deleting.reset();
-         std::move(handler)(boost::system::error_code{}, std::vector<uint8_t>{});
+         swap_and_invoke(handler, boost::system::error_code{}, 0);
          return;
       }
 
       reading = true;
 
-      std::vector<uint8_t> body_buffer;
-      // body_buffer.resize(1460);
-      body_buffer.resize(64 * 1024);
       parser.get().body().data = body_buffer.data();
       parser.get().body().size = body_buffer.size();
 
@@ -108,8 +125,7 @@ public:
          reading = false;
          if (deleting)
          {
-            (std::move(handler))(errc::make_error_code(errc::operation_canceled),
-                                 std::vector<std::uint8_t>{});
+            (std::move(handler))(errc::make_error_code(errc::operation_canceled), 0);
             deleting.reset();
             return;
          }
@@ -122,16 +138,13 @@ public:
             ec = {}; // FIXME: maybe we should keep 'need_buffer' to avoid extra empty round trip
 
          if (!ec && payload == 0)
-            async_read_some(std::move(handler));
+            async_read_some(body_buffer, std::move(handler));
          else
-         {
-            body_buffer.resize(payload);
-            std::move(handler)(ec, std::move(body_buffer));
-         }
+            std::move(handler)(ec, payload);
       };
 
       //
-      // TODO: Manually forwarding the cancellation slot fixes per-operation cancellation. But 
+      // TODO: Manually forwarding the cancellation slot fixes per-operation cancellation. But
       //       there are other handler traits (executor, allocator) that might need forwarding.
       //       Instead of doing this, we should try to use async_compose<>, which seems to do
       //       that automatically.

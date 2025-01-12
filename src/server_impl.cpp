@@ -64,7 +64,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
 #endif
    logi("Server: ctor");
    listen_tcp();
-   listen_udp();
+   // listen_udp();
 }
 
 // -------------------------------------------------------------------------------------------------

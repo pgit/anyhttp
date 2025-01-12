@@ -36,18 +36,30 @@ public:
    //
    // https://www.boost.org/doc/libs/1_85_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp
    //
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
+
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSomeBuffer) CompletionToken>
    auto async_read_some(CompletionToken&& token)
    {
-      return boost::asio::async_initiate<CompletionToken, ReadSome>(
-         [&](ReadSomeHandler handler) { //
+      return boost::asio::async_initiate<CompletionToken, ReadSomeBuffer>(
+         [&](ReadSomeBufferHandler handler) { //
             async_read_some_any(std::move(handler));
          },
          token);
    }
 
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
+   auto async_read_some(boost::asio::mutable_buffer buffer, CompletionToken&& token)
+   {
+      return boost::asio::async_initiate<CompletionToken, ReadSome>(
+         [&](ReadSomeHandler handler, asio::mutable_buffer buffer) { //
+            async_read_some_any(buffer, std::move(handler));
+         },
+         token, buffer);
+   }
+
 private:
-   void async_read_some_any(ReadSomeHandler&& handler);
+   void async_read_some_any(ReadSomeBufferHandler&& handler);
+   void async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler);
 
 private:
    std::unique_ptr<Impl> impl;

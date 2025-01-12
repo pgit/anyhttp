@@ -74,18 +74,43 @@ std::optional<size_t> NGHttp2Reader<Base>::content_length() const noexcept
 }
 
 template <typename Base>
-void NGHttp2Reader<Base>::async_read_some(ReadSomeHandler&& handler)
+void NGHttp2Reader<Base>::async_read_some(ReadSomeBufferHandler&& handler)
+{
+   std::vector<uint8_t> buffer;
+   buffer.resize(64 * 1024);
+
+   auto cs = asio::get_associated_cancellation_slot(handler);
+
+   auto buffer_view = asio::buffer(buffer);
+   auto cb = [buffer = std::move(buffer),
+              handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
+   {
+      if (ec)
+         std::move(handler)(ec, std::vector<uint8_t>{});
+      else
+      {
+         buffer.resize(n);
+         std::move(handler)(ec, std::move(buffer));
+      }
+   };
+
+   async_read_some(buffer_view, asio::bind_cancellation_slot(cs, std::move(cb)));
+}
+
+template <typename Base>
+void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
+                                          ReadSomeHandler&& handler)
 {
    if (!stream)
    {
-      std::move(handler)(boost::asio::error::operation_aborted, std::vector<uint8_t>{});
+      std::move(handler)(boost::asio::error::operation_aborted, 0);
       return;
    }
 
 #if 1
-   auto slot = asio::get_associated_cancellation_slot(handler);
-   if (slot.is_connected() && !slot.has_handler())
-      slot.assign(
+   auto cs = asio::get_associated_cancellation_slot(handler);
+   if (cs.is_connected() && !cs.has_handler())
+      cs.assign(
          [this](asio::cancellation_type_t ct)
          {
             logd("[{}] async_read_some: \x1b[1;31mcancelled\x1b[0m ({})", stream->logPrefix,
@@ -95,8 +120,7 @@ void NGHttp2Reader<Base>::async_read_some(ReadSomeHandler&& handler)
             {
                using namespace boost::system;
                swap_and_invoke(stream->m_read_handler,
-                               errc::make_error_code(errc::operation_canceled),
-                               std::vector<uint8_t>{});
+                               errc::make_error_code(errc::operation_canceled), 0);
             }
 
             // stream->delete_writer();
@@ -105,6 +129,7 @@ void NGHttp2Reader<Base>::async_read_some(ReadSomeHandler&& handler)
 
    assert(!stream->m_read_handler);
    logd("[{}] async_read_some:", stream->logPrefix);
+   stream->m_read_buffer = buffer;
    stream->m_read_handler = std::move(handler);
    stream->call_read_handler();
 }
@@ -264,38 +289,30 @@ void NGHttp2Stream::call_read_handler()
    for (size_t count = 0; !m_pending_read_buffers.empty() && m_read_handler; ++count)
    {
       auto buffer = std::move(m_pending_read_buffers.front());
-      m_pending_read_buffers.pop_front();
 
-      const auto buffer_size = buffer.size();
-      bytesRead += buffer_size;
-      if (content_length && bytesRead > *content_length)
-      {
-         logw("[{}] read_callback: received {} bytes total, "
-              "exceeds advertised content length of {}",
-              logPrefix, bytesRead, *content_length);
-         // FIXME: reset stream? and we don't want to log this again...
-         // nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
-         // m_pending_read_buffers.clear();
-         break;
-      }
+      size_t copied = asio::buffer_copy(asio::buffer(buffer), m_read_buffer);
+      bytesRead += copied;
 
-      logd("[{}] read_callback: calling handler with {} bytes... (#{} in a row)", logPrefix,
-           buffer_size, count);
+      logd("[{}] read_callback: calling read handler with {} bytes... (#{} in a row)", logPrefix,
+           copied, count);
 
       //
       // The read handler is moved into a local variable before it is called, so that a new read
       // handler may be set during its invocation.
       //
-      swap_and_invoke(m_read_handler, boost::system::error_code{}, std::move(buffer));
+      swap_and_invoke(m_read_handler, boost::system::error_code{}, copied);
+
+      if (copied == buffer.size())
+         m_pending_read_buffers.pop_front();
 
       if (m_read_handler)
          logd("[{}] read_callback: calling handler with {} bytes... done,"
               " RESPAWNED ({} buffers pending)",
-              logPrefix, buffer_size, m_pending_read_buffers.size());
+              logPrefix, copied, m_pending_read_buffers.size());
       else
-         logd("[{}] read_callback: calling handler with {} bytes... done", logPrefix, buffer_size);
+         logd("[{}] read_callback: calling handler with {} bytes... done", logPrefix, copied);
 
-      consumed += buffer_size;
+      consumed += copied;
    }
 
    //
@@ -329,15 +346,15 @@ void NGHttp2Stream::call_read_handler()
          ec = boost::beast::http::error::partial_message;
       }
 
-      swap_and_invoke(m_read_handler, ec, Buffer{});
+      swap_and_invoke(m_read_handler, ec, 0);
    }
    else if (closed)
    {
       assert(m_pending_read_buffers.empty());
       // assert(!is_reading_finished);
       logw("[{}] call_handler_loop: read after close", logPrefix);
-      swap_and_invoke(m_read_handler, boost::system::error_code{}, Buffer{});
-      assert(!m_read_handler); // should not respawn
+      swap_and_invoke(m_read_handler, boost::system::error_code{}, 0);
+      assert(!m_read_handler); // FIXME -- but what if the user sets a new handler anyway?
    }
 }
 

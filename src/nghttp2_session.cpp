@@ -1,6 +1,7 @@
 
 #include "anyhttp/nghttp2_session.hpp"
 #include "anyhttp/client.hpp"
+#include "anyhttp/common.hpp"
 #include "anyhttp/detail/nghttp2_session_details.hpp"
 #include "anyhttp/nghttp2_stream.hpp"
 
@@ -313,8 +314,7 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
    {
       logd("[{}] stream closed while reading, raising 'partial_message'",
            sessionWrapper->logPrefix(stream_id));
-      auto handler = std::move(stream->m_read_handler);
-      std::move(handler)(boost::beast::http::error::partial_message, std::vector<uint8_t>{});
+      swap_and_invoke(stream->m_read_handler, boost::beast::http::error::partial_message, 0);
    }
 
    if (stream->responseHandler)
