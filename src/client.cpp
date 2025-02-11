@@ -82,12 +82,6 @@ Response::~Response()
    }
 }
 
-void Response::async_read_some_any(ReadSomeBufferHandler&& handler)
-{
-   assert(impl);
-   impl->async_read_some(std::move(handler));
-}
-
 void Response::async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler)
 {
    assert(impl);

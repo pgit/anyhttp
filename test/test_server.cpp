@@ -127,6 +127,12 @@ class Server : public testing::TestWithParam<anyhttp::Protocol>
 protected:
    void SetUp() override
    {
+#if !defined(NDEBUG)
+      spdlog::set_level(spdlog::level::debug);
+#else
+      spdlog::set_level(spdlog::level::info);
+#endif
+
       auto config = server::Config{.listen_address = "127.0.0.2", .port = 0};
 
       //
@@ -154,7 +160,7 @@ protected:
                return handler(std::move(request), std::move(response));
             else
                return not_found(std::move(request), std::move(response));
-               // return not_found(std::move(response));
+            // return not_found(std::move(response));
          });
    }
 
@@ -411,7 +417,8 @@ TEST_P(External, h2spec)
    std::regex regex(R"(((\d+) tests, (\d+) passed, (\d+) skipped, (\d+) failed))");
    ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex));
    EXPECT_EQ(std::stoi(match[2].str()), 146) << match[1];
-   EXPECT_EQ(std::stoi(match[3].str()), 145) << output; // https://github.com/nghttp2/nghttp2/issues/2278
+   EXPECT_EQ(std::stoi(match[3].str()), 145)
+      << output; // https://github.com/nghttp2/nghttp2/issues/2278
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -581,11 +588,12 @@ TEST_P(ClientAsync, Custom)
    handler = [&](server::Request request, server::Response response) -> awaitable<void>
    {
       co_await response.async_submit(200, {}, deferred);
+      std::array<uint8_t, 1024> buffer;
       for (;;)
       {
-         auto buffer = co_await request.async_read_some(deferred);
-         co_await response.async_write(asio::buffer(buffer), deferred);
-         if (buffer.empty())
+         size_t n = co_await request.async_read_some(asio::buffer(buffer), deferred);
+         co_await response.async_write(asio::buffer(buffer, n), deferred);
+         if (n == 0)
             co_return;
       }
    };
@@ -805,8 +813,9 @@ TEST_P(ClientAsync, PerOperationCancellation)
       asio::steady_timer timer(co_await asio::this_coro::executor, 110ms);
       timer.async_wait([&](const boost::system::error_code& ec)
                        { cancel.emit(asio::cancellation_type::terminal); });
-      auto buf =
-         co_await response.async_read_some(asio::bind_cancellation_slot(cancel.slot(), deferred));
+      std::array<uint8_t, 1024> buffer;
+      size_t n = co_await response.async_read_some(
+         asio::buffer(buffer), asio::bind_cancellation_slot(cancel.slot(), deferred));
       std::println("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
       co_await yield();
       std::println("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");

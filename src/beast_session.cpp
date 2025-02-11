@@ -78,26 +78,6 @@ public:
          return std::nullopt;
    }
 
-   void async_read_some(ReadSomeBufferHandler&& handler) override
-   {
-      std::vector<uint8_t> buffer;
-      buffer.resize(64 * 1024);
-
-      auto buffer_view = asio::buffer(buffer);
-      async_read_some(buffer_view,
-                      [buffer = std::move(buffer),
-                       handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
-                      {
-                         if (ec)
-                            std::move(handler)(ec, std::vector<uint8_t>{});
-                         else
-                         {
-                            buffer.resize(n);
-                            std::move(handler)(ec, std::move(buffer));
-                         }
-                      });
-   }
-
    void async_read_some(asio::mutable_buffer body_buffer, ReadSomeHandler&& handler) override
    {
       buffer.reserve(64 * 1024);

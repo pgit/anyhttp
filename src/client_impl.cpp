@@ -52,10 +52,12 @@ Response::Impl::~Impl() = default;
 Client::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_resolver(m_executor)
 {
+#if 0
 #if !defined(NDEBUG)
    spdlog::set_level(spdlog::level::debug);
 #else
    spdlog::set_level(spdlog::level::info);
+#endif
 #endif
    spdlog::info("Client: ctor");
 }
@@ -115,7 +117,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
    logd("Client: socket buffer sizes: send={} receive={}", send_buffer_size.value(),
         receive_buffer_size.value());
 #if 1
-   // socket.set_option(sb::send_buffer_size(8192));
+   socket.set_option(sb::send_buffer_size(8192));
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 #endif
 

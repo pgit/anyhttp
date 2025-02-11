@@ -40,14 +40,15 @@ awaitable<size_t> read_response(Request& request)
    auto response = co_await request.async_get_response(deferred);
    logd("receive: waiting for response... done");
    size_t total = 0;
+   std::array<uint8_t, 1024> buffer;
    for (;;)
    {
       logd("receive: async_read_some...");
-      auto buf = co_await response.async_read_some(deferred);
-      logd("receive: async_read_some... done, read {} bytes", buf.size());
-      if (buf.empty())
+      size_t n = co_await response.async_read_some(asio::buffer(buffer), deferred);
+      logd("receive: async_read_some... done, read {} bytes", n);
+      if (n == 0)
          break;
-      total += buf.size();
+      total += n;
    }
    logd("receive: done, total {} bytes", total);
    co_return total;

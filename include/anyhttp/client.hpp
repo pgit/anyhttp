@@ -31,17 +31,6 @@ public:
    ~Response();
 
 public:
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSomeBuffer) CompletionToken>
-   auto async_read_some(CompletionToken&& token)
-   {
-      return boost::asio::async_initiate<CompletionToken, ReadSomeBuffer>(
-         [&](ReadSomeBufferHandler handler) { //
-            async_read_some_any(std::move(handler));
-         },
-         token);
-   }
-
-
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
    auto async_read_some(boost::asio::mutable_buffer buffer, CompletionToken&& token)
    {
@@ -53,7 +42,6 @@ public:
    }
 
 private:
-   void async_read_some_any(ReadSomeBufferHandler&& handler);
    void async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler);
    std::unique_ptr<Impl> impl;
 };
@@ -85,9 +73,6 @@ public:
    }
 
 public:
-   using Write = void(boost::system::error_code);
-   using WriteHandler = asio::any_completion_handler<Write>;
-
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken>
    auto async_write(asio::const_buffer buffer, CompletionToken&& token)
    {

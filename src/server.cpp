@@ -36,12 +36,6 @@ std::optional<size_t> Request::content_length() const noexcept
    return impl->content_length();
 }
 
-void Request::async_read_some_any(ReadSomeBufferHandler&& handler)
-{
-   assert(impl);
-   impl->async_read_some(std::move(handler));
-}
-
 void Request::async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler)
 {
    assert(impl);

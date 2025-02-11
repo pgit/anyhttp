@@ -7,6 +7,7 @@
 #include "nghttp2/nghttp2.h"
 
 #include <boost/asio.hpp>
+#include <boost/asio/buffer.hpp>
 #include <boost/asio/cancellation_signal.hpp>
 #include <boost/asio/cancellation_type.hpp>
 #include <boost/asio/error.hpp>
@@ -33,7 +34,6 @@ public:
 
    const asio::any_io_executor& executor() const override;
    std::optional<size_t> content_length() const noexcept override;
-   void async_read_some(ReadSomeBufferHandler&& handler) override;
    void async_read_some(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler) override;
    void detach() override;
 
@@ -82,13 +82,33 @@ public:
 
    /**
     * Buffers received from peer, pending delivery to the user. The receiver tries to avoid
-    * buffering if possible, but if there is no user-provided read handler to receive the data,
-    * we have to buffer it until the stream's receive window is depleted.
+    * buffering if possible, but if there is no user-provided read handler to deliver the data to,
+    * we have to store it until the stream's receive window is exhausted.
+    *
+    * As long as \c m_pending_read_buffers is non-empty, \c m_read_buffer is viewing the part of
+    * the first pending read buffer that has not been delivered, yet.
+    *
+    * If (and only if) the list of pending read buffers is empty, \c m_read_buffer is empty, too.
     */
    using Buffer = std::vector<uint8_t>;
    std::deque<Buffer> m_pending_read_buffers;
+   asio::const_buffer m_read_buffer;
 
-   inline bool reading_finished() const { return eof_received && m_pending_read_buffers.empty(); }
+   inline Buffer make_buffer(asio::const_buffer b)
+   {
+      return Buffer(static_cast<const uint8_t*>(b.data()),
+                    static_cast<const uint8_t*>(b.data()) + asio::buffer_size(b));
+   }
+
+   inline bool reading_finished() const
+   {
+      return eof_received && asio::buffer_size(m_read_buffer) == 0;
+   }
+   
+   /**
+    * Returns the number of bytes left to read. This is the remaining part of the first buffer
+    * and the sum of all following buffers.
+    */
    size_t read_buffers_size() const;
 
    asio::const_buffer sendBuffer;
@@ -120,9 +140,9 @@ public:
    // ==============================================================================================
 
    ReadSomeHandler m_read_handler;
-   boost::asio::mutable_buffer m_read_buffer;
+   boost::asio::mutable_buffer m_read_handler_buffer;
    bool m_inside_call_read_handler = false;
-   void call_read_handler();
+   void call_read_handler(asio::const_buffer buffer);
 
 #if 0
    //

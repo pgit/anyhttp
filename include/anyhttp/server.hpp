@@ -27,26 +27,11 @@ public:
    Request(Request&& other) noexcept;
    ~Request();
 
-   // const asio::any_io_executor& executor() const;
-
 public:
    boost::url_view url() const;
    std::optional<size_t> content_length() const noexcept;
 
-   //
-   // https://www.boost.org/doc/libs/1_85_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp
-   //
-
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSomeBuffer) CompletionToken>
-   auto async_read_some(CompletionToken&& token)
-   {
-      return boost::asio::async_initiate<CompletionToken, ReadSomeBuffer>(
-         [&](ReadSomeBufferHandler handler) { //
-            async_read_some_any(std::move(handler));
-         },
-         token);
-   }
-
+public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
    auto async_read_some(boost::asio::mutable_buffer buffer, CompletionToken&& token)
    {
@@ -58,10 +43,8 @@ public:
    }
 
 private:
-   void async_read_some_any(ReadSomeBufferHandler&& handler);
    void async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler);
 
-private:
    std::unique_ptr<Impl> impl;
 };
 

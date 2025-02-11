@@ -57,10 +57,12 @@ Response::Impl::~Impl() = default;
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
+#if 0
 #if !defined(NDEBUG)
-   spdlog::set_level(spdlog::level::info);
+   spdlog::set_level(spdlog::level::debug);
 #else
    spdlog::set_level(spdlog::level::info);
+#endif
 #endif
    logi("Server: ctor");
    listen_tcp();
@@ -209,8 +211,10 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    socket.get_option(receive_buffer_size);
    logd("[{}] socket buffer sizes: send={} receive={}", prefix, send_buffer_size.value(),
         receive_buffer_size.value());
-   // socket.set_option(sb::send_buffer_size(8192));
+#if 1
+   socket.set_option(sb::send_buffer_size(8192));
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
+#endif
 
    auto executor = co_await boost::asio::this_coro::executor;
 
@@ -277,7 +281,6 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       session = std::make_shared<beast_impl::ServerSession<boost::beast::tcp_stream>> //
          (*this, executor, boost::beast::tcp_stream(std::move(socket)));
    }
-
 
    {
       auto lock = std::lock_guard(m_sessionMutex);

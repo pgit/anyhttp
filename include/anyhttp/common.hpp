@@ -43,12 +43,6 @@ using Fields = std::map<std::string, std::string>;
 using ReadSome = void(boost::system::error_code, size_t);
 using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
 
-// FIXME: for backwars compatibility, this uses std::vector instead of asio::mutable_buffer
-using ReadSomeBuffer = void(boost::system::error_code, std::vector<std::uint8_t>);
-using ReadSomeBufferHandler = asio::any_completion_handler<ReadSomeBuffer>;
-
-using StatusHandler = asio::any_completion_handler<void(boost::system::error_code)>;
-
 using Write = void(boost::system::error_code);
 using WriteHandler = asio::any_completion_handler<Write>;
 
@@ -79,7 +73,6 @@ public:
    virtual ~Reader() = default;
    virtual const asio::any_io_executor& executor() const = 0;
    virtual std::optional<size_t> content_length() const noexcept = 0;
-   virtual void async_read_some(ReadSomeBufferHandler&& handler) = 0;
    virtual void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) = 0;
    virtual void detach() = 0;
 
