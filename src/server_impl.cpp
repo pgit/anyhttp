@@ -57,12 +57,10 @@ Response::Impl::~Impl() = default;
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
-#if 0
 #if !defined(NDEBUG)
    spdlog::set_level(spdlog::level::debug);
 #else
    spdlog::set_level(spdlog::level::info);
-#endif
 #endif
    logi("Server: ctor");
    listen_tcp();
@@ -212,7 +210,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    logd("[{}] socket buffer sizes: send={} receive={}", prefix, send_buffer_size.value(),
         receive_buffer_size.value());
 #if 1
-   socket.set_option(sb::send_buffer_size(8192));
+   // socket.set_option(sb::send_buffer_size(8192));
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 #endif
 
