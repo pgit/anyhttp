@@ -421,6 +421,31 @@ TEST_P(External, h2spec)
       << output; // https://github.com/nghttp2/nghttp2/issues/2278
 }
 
+TEST_P(External, h2load)
+{
+   const size_t n = 100;
+   auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   Args args = {"-d", "64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3", url};
+
+   if (GetParam() == anyhttp::Protocol::http11)
+      args.insert(args.begin(), "--h1");
+
+   auto future = spawn("/workspaces/nghttp2/install/bin/h2load", std::move(args));
+   run();
+
+   const std::string output = future.get();
+   std::smatch match;
+   std::regex regex(
+      R"((\d+) total, \d+ started, (\d+) done, (\d+) succeeded, (\d+) failed, \d+ errored)");
+   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
+   EXPECT_EQ(std::stoul(match[3].str()), n) << match[1];
+   EXPECT_EQ(std::stoul(match[4].str()), 0) << match[1];
+
+   regex = std::regex(R"(\((\d+)\) data)");
+   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
+   EXPECT_EQ(std::stoul(match[1].str()), n * 65535) << match[1];
+}
+
 // -------------------------------------------------------------------------------------------------
 
 TEST_P(External, echo)

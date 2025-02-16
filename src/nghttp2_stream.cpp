@@ -278,7 +278,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    // If there is no pending data to write, we can start writing the view right away.
    //
    if (m_pending_read_buffers.empty())
-      std::swap(m_read_buffer, view);
+      std::swap(m_read_buffer, view);  // view is empty after this
 
    //
    // Try to deliver as many buffers as possible. As long as the consumer installs a new read
