@@ -88,7 +88,9 @@ public:
     * As long as \c m_pending_read_buffers is non-empty, \c m_read_buffer is viewing the part of
     * the first pending read buffer that has not been delivered, yet.
     *
-    * If (and only if) the list of pending read buffers is empty, \c m_read_buffer is empty, too.
+    * If (and only if) the list of pending read buffers is empty, \c m_read_buffer may be empty as
+    * well. While in \c call_read_handler(), it may be vieweing the newly received data that has not
+    * been added to the pending read buffers, yet.
     */
    using Buffer = std::vector<uint8_t>;
    std::deque<Buffer> m_pending_read_buffers;
@@ -100,11 +102,13 @@ public:
                     static_cast<const uint8_t*>(b.data()) + asio::buffer_size(b));
    }
 
-   inline bool reading_finished() const
+   static inline bool is_empty(const asio::const_buffer& view)
    {
-      return eof_received && asio::buffer_size(m_read_buffer) == 0;
+      return asio::buffer_size(view) == 0;
    }
-   
+
+   inline bool reading_finished() const { return eof_received && is_empty(m_read_buffer); }
+
    /**
     * Returns the number of bytes left to read. This is the remaining part of the first buffer
     * and the sum of all following buffers.
@@ -142,7 +146,7 @@ public:
    ReadSomeHandler m_read_handler;
    boost::asio::mutable_buffer m_read_handler_buffer;
    bool m_inside_call_read_handler = false;
-   void call_read_handler(asio::const_buffer buffer);
+   void call_read_handler(asio::const_buffer buffer = {});
 
 #if 0
    //

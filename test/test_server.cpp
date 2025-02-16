@@ -656,6 +656,19 @@ TEST_P(ClientAsync, PostRange)
    run();
 }
 
+TEST_P(ClientAsync, PostRangeImmediate)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
+      auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1 * 1024 * 1024));
+      auto received = co_await (std::move(sender) && read_response(request));
+      loge("received: {}", received);
+      EXPECT_GT(received, 0);
+   };
+   run();
+}
+
 // -------------------------------------------------------------------------------------------------
 
 TEST_P(ClientAsync, WHEN_request_is_sent_THEN_response_is_received_before_body_is_posted)
@@ -705,6 +718,7 @@ TEST_P(ClientAsync, Backpressure)
       boost::system::error_code ec;
       auto received = co_await try_receive(response, ec);
       fmt::println("receiving... done, got {} bytes ({})", received, ec.message());
+      EXPECT_GT(received, 0);
    };
    run();
 }
