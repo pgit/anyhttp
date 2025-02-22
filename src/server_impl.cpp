@@ -64,7 +64,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
 #endif
    logi("Server: ctor");
    listen_tcp();
-   // listen_udp();
+   listen_udp();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -424,6 +424,7 @@ awaitable<void> Server::Impl::udp_receive_loop()
    msg.msg_control = control_data.data();
    msg.msg_controllen = control_data.size();
 
+   auto native_handle = m_udp_socket->native_handle();
    for (;;)
    {
       co_await m_udp_socket->async_wait(boost::asio::socket_base::wait_read, deferred);
@@ -434,7 +435,7 @@ awaitable<void> Server::Impl::udp_receive_loop()
       // logd("reived {} UDP bytes ({:02x} {:02x} {:02x} {:02x}", n, buf[0], buf[1], buf[2],
       // buf[3]);
 
-      auto ec = recvmsg(m_udp_socket->native_handle(), &msg, 0);
+      auto ec = recvmsg(native_handle, &msg, 0);
       logd("ec={} from={} tos={}", ec, sockaddr_to_endpoint(sender_addr),
            ngtcp2::msghdr_get_ecn(&msg, family));
 
