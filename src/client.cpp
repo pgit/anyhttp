@@ -6,23 +6,6 @@
 #include "anyhttp/client.hpp"
 #include "anyhttp/client_impl.hpp"
 
-namespace anyhttp
-{
-std::string to_string(Protocol protocol)
-{
-   switch (protocol)
-   {
-   case Protocol::http11:
-      return "HTTP11";
-   case Protocol::h2:
-      return "HTTP2";
-   default:
-      return fmt::format("UNKNOWN ({})", std::to_underlying(protocol));
-   }
-}
-
-} // namespace anyhttp
-
 // =================================================================================================
 
 namespace anyhttp::client

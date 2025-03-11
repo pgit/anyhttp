@@ -2,7 +2,6 @@
 
 #include "client.hpp"
 #include "common.hpp"
-#include "server.hpp"
 
 #include "nghttp2/nghttp2.h"
 

@@ -3,6 +3,9 @@
 #include <anyhttp/concepts.hpp>
 
 #include <boost/asio/any_completion_handler.hpp>
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/awaitable.hpp>
+#include <boost/asio/deferred.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
@@ -18,12 +21,15 @@
 #include <nghttp2/nghttp2.h>
 
 #include <chrono>
-#include <format>
 #include <map>
 
 namespace anyhttp
 {
 namespace asio = boost::asio;
+// using asio::awaitable;
+// using asio::deferred;
+// using asio::any_io_executor;
+// namespace ip = asio::ip;  // IWYU pragma: export
 
 // =================================================================================================
 
@@ -36,10 +42,7 @@ enum class Protocol
 };
 
 std::string to_string(Protocol protocol);
-inline std::ostream& operator<<(std::ostream& str, Protocol protocol)
-{
-   return str << to_string(protocol);
-}
+std::ostream& operator<<(std::ostream& str, Protocol protocol);
 
 // =================================================================================================
 
@@ -138,21 +141,8 @@ Defer<F, T...> defer(F&& f, T&&... t)
    return Defer<F, T...>(std::forward<F>(f), std::forward<T>(t)...);
 }
 
-inline asio::ip::address normalize(asio::ip::address addr)
-{
-   if (addr.is_v6())
-   {
-      asio::ip::address_v6 v6 = addr.to_v6();
-      if (v6.is_v4_mapped())
-         return boost::asio::ip::make_address_v4(asio::ip::v4_mapped, v6);
-   }
-   return addr;
-}
-
-inline asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint)
-{
-   return {normalize(endpoint.address()), endpoint.port()};
-}
+asio::ip::address normalize(asio::ip::address addr);
+asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint);
 
 }; // namespace anyhttp
 
@@ -187,49 +177,13 @@ struct fmt::formatter<std::filesystem::path> : formatter<std::string_view>
 
 // -------------------------------------------------------------------------------------------------
 
-inline std::string what(const std::exception_ptr& ptr)
-{
-   if (!ptr)
-      return "success";
-   else
-   {
-      try
-      {
-         std::rethrow_exception(ptr);
-      }
-      catch (boost::system::system_error& ex)
-      {
-         return fmt::format("exception: {}", ex.code().message());
-      }
-      catch (std::exception& ex)
-      {
-         return fmt::format("exception: {}", ex.what());
-      }
-   }
-}
+/// Get error message from exception pointer, as returned by \c co_spawn().
+std::string what(const std::exception_ptr& ptr);
 
 // -------------------------------------------------------------------------------------------------
 
 /// Format according to HTTP date spec (RFC 7231)
-inline std::string format_http_date(std::chrono::system_clock::time_point tp)
-{
-   using namespace std::chrono;
-
-   #if 1
-   // cet current system time and convert to UTC
-   std::time_t time = system_clock::to_time_t(tp);
-   std::tm tm = *std::gmtime(&time);
-
-   constexpr auto months = std::array{"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-
-   return fmt::format("{:02d}, {:02d} {} {:04d} {:02d}:{:02d}:{:02d} GMT", tm.tm_wday, tm.tm_mday,
-                      months[tm.tm_mon], tm.tm_year + 1900, tm.tm_hour, tm.tm_min, tm.tm_sec);
-#else
-   auto utc_time = floor<seconds>(tp);
-   return fmt::format("{:%a, %d %b %Y %H:%M:%S} GMT", utc_time);
-#endif
-}
+std::string format_http_date(std::chrono::system_clock::time_point tp);
 
 // -------------------------------------------------------------------------------------------------
 
