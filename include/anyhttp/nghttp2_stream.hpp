@@ -82,8 +82,8 @@ public:
 
    /**
     * Buffers received from peer, pending delivery to the user. The receiver tries to avoid
-    * buffering if possible, but if there is no user-provided read handler to deliver the data to,
-    * we have to store it until the stream's receive window is exhausted.
+    * buffering if possible, but if there is currently no user-provided read handler to deliver
+    * the data to, we have to store it -- decreasing the stream's receive window in the process.
     *
     * As long as \c m_pending_read_buffers is non-empty, \c m_read_buffer is viewing the part of
     * the first pending read buffer that has not been delivered, yet.
@@ -92,9 +92,9 @@ public:
     * well. While in \c call_read_handler(), it may be vieweing the newly received data that has not
     * been added to the pending read buffers, yet.
     */
+   asio::const_buffer m_read_buffer;
    using Buffer = std::vector<uint8_t>;
    std::deque<Buffer> m_pending_read_buffers;
-   asio::const_buffer m_read_buffer;
 
    inline Buffer make_buffer(asio::const_buffer b)
    {
@@ -117,7 +117,7 @@ public:
 
    asio::const_buffer sendBuffer;
    WriteHandler sendHandler;
-   asio::cancellation_slot slot;
+   // asio::cancellation_slot slot;
    bool is_deferred = false;
    bool is_writer_done = false;
 

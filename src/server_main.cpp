@@ -107,11 +107,16 @@ int main(int argc, char* argv[])
    server->setRequestHandlerCoro(
       [](server::Request request, server::Response response) -> awaitable<void>
       {
-         if (request.url().path() == "/echo")
+         std::string path = request.url().path();
+         if (path == "/echo")
             return echo(std::move(request), std::move(response));
-         else if (request.url().path() == "/eat_request")
+         else if (path == "/dump")
+            return dump(std::move(request), std::move(response));
+         else if (path == "/dump space")
+            return dump(std::move(request), std::move(response));
+         else if (path == "/eat_request")
             return eat_request(std::move(request), std::move(response));
-         else if (request.url().path() == "/")
+         else if (path == "/")
             return h2spec(std::move(request), std::move(response));
          else
             return not_found(std::move(response));

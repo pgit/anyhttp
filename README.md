@@ -5,7 +5,7 @@ Low-level C++ HTTP client and server library, based on ASIO.
 
 It supports HTTP/1.x, HTTP/2 and HTTP/3 behind a common, type-erasing interface, hence the *any* int the name.
 
-None of those protocols are implemented from scratch. Instead, it is a wrapper around the following established libraries:
+None of those protocols are implemented from scratch. Instead, it is a wrapper around the following well-established libraries:
 
 * Boost Beast
 * nghttp2
@@ -20,12 +20,14 @@ awaitable<void> echo(server::Request request, server::Response response)
       response.content_length(request.content_length().value());
 
    co_await response.async_submit(200, {}, deferred);
+
+   std::array<uint8_t, 64 * 1024> buffer;
    for (;;)
    {
-      auto buffer = co_await request.async_read_some(deferred);
-      co_await response.async_write(asio::buffer(buffer), deferred);
-      if (buffer.empty())
-         co_return;
+      size_t n = co_await request.async_read_some(asio::buffer(buffer), deferred);
+      co_await response.async_write(asio::buffer(buffer, n), deferred);
+      if (n == 0)
+         break;
    }
 }
 ```

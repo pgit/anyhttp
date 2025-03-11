@@ -123,6 +123,14 @@ void Client::Impl::async_connect(ConnectHandler handler)
    // Select implementation, currently by configuration only.
    // With TLS and ALPN, HTTP protocol negotiation can be automatic as well.
    //
+   // FIXME: How to handle upgrades? This is a top-level responsibility of the client. There are
+   //        different types of upgrades:
+   //
+   // 1) HTTP/1.1 to HTTP/2 via Connection: upgrade header
+   // 2) HTTP/1.1 to HTTP/3 via Alt-Svc header
+   // 3) Protactively connect using HTTP/1 (using TCP) and HTTP/3 (UDP) in parallel
+   // 4) Support DNS HTTPS RR (serving the same purpose as Alt-Svc)
+   //
    std::shared_ptr<Session::Impl> impl;
    switch (config().protocol)
    {      
@@ -130,16 +138,12 @@ void Client::Impl::async_connect(ConnectHandler handler)
       impl = std::make_shared<beast_impl::ClientSession<boost::beast::tcp_stream>>(
          *this, ex, boost::beast::tcp_stream(std::move(socket)));
       break;
+   
    case Protocol::h2:
-#if 0
-      auto stream = boost::beast::tcp_stream{std::move(socket)};
-      impl = std::make_shared<nghttp2::ClientSession<boost::beast::tcp_stream>> //
-         (*this, ex, std::move(stream));
-#else
-      impl = std::make_shared<nghttp2::ClientSession<asio::ip::tcp::socket>> //
+      impl = std::make_shared<nghttp2::ClientSession<asio::ip::tcp::socket>> 
          (*this, ex, std::move(socket));
-#endif
       break;
+   
    case anyhttp::Protocol::h3:      
       namespace errc = boost::system::errc;
       co_return {errc::make_error_code(errc::invalid_argument), Session{nullptr}};
@@ -167,8 +171,8 @@ void Client::Impl::async_connect(ConnectHandler handler)
 
    //
    // It's important to call this handler AFTER spawning the session, because stream configuration
-   // happens in the beginning of do_client_session(), but calling the handler may result in a
-   // submit(), which must happen after that.
+   // happens in the beginning of do_client_session(), and we don't want to start any request
+   // before that.
    //
    // FIXME: instead of executing a submit() directly, it should be queued and executed within
    //        do_client_session(). This approach avoids the problem, and allows pipelining, too.

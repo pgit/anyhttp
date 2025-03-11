@@ -24,8 +24,10 @@ namespace anyhttp::beast_impl
 template <typename Stream>
 class BeastSession : public ::anyhttp::Session::Impl
 {
+   using stream_type = Stream;
+
 protected:
-   BeastSession(std::string_view logPrefix, any_io_executor executor, Stream&& stream);
+   BeastSession(std::string_view logPrefix, any_io_executor executor, stream_type&& stream);
 
 public:
    ~BeastSession() override;
@@ -47,7 +49,7 @@ public:
 public:
    std::string m_logPrefix;
    asio::any_io_executor m_executor;
-   Stream m_stream;
+   stream_type m_stream;
    Buffer m_buffer;
 };
 

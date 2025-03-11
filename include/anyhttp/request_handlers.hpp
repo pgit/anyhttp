@@ -45,6 +45,7 @@ boost::asio::awaitable<void> sleep(T duration)
 boost::asio::awaitable<void> yield(size_t count = 1);
 boost::asio::awaitable<void> not_found(server::Response response);
 boost::asio::awaitable<void> not_found(server::Request request, server::Response response);
+boost::asio::awaitable<void> dump(server::Request request, server::Response response);
 boost::asio::awaitable<void> echo(server::Request request, server::Response response);
 boost::asio::awaitable<void> echo_buffer(server::Request request, server::Response response);
 boost::asio::awaitable<void> eat_request(server::Request request, server::Response response);

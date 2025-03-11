@@ -25,6 +25,7 @@ public:
    class Impl;
    explicit Request(std::unique_ptr<Impl> impl);
    Request(Request&& other) noexcept;
+   Request& operator=(Request&& other) noexcept;
    ~Request();
 
 public:
@@ -56,6 +57,7 @@ public:
    class Impl;
    explicit Response(std::unique_ptr<Impl> impl);
    Response(Response&& other) noexcept;
+   Response& operator=(Response&& other) noexcept;
    ~Response();
 
    void content_length(std::optional<size_t> content_length);
@@ -101,8 +103,8 @@ public:
    ~Server();
 
    Server(const Server& other) = delete;
-   Server(Server&& other) = default;
    Server& operator=(const Server& other) = delete;
+   Server(Server&& other) = default;
    Server& operator=(Server&& other) = default;
 
    const asio::any_io_executor& executor() const;

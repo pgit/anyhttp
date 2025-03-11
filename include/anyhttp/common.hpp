@@ -8,6 +8,8 @@
 
 #include <boost/core/detail/string_view.hpp>
 #include <boost/system/system_error.hpp>
+#include <boost/url/authority_view.hpp>
+#include <boost/url/pct_string_view.hpp>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 
@@ -15,6 +17,8 @@
 
 #include <nghttp2/nghttp2.h>
 
+#include <chrono>
+#include <format>
 #include <map>
 
 namespace anyhttp
@@ -25,7 +29,8 @@ namespace asio = boost::asio;
 
 enum class Protocol
 {
-   http11,
+   h1,
+   http11 = h1,
    h2,
    h3
 };
@@ -153,23 +158,21 @@ inline asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint
 
 // =================================================================================================
 
-// https://fmt.dev/latest/api.html#std-ostream-support
-template <>
-struct fmt::formatter<boost::asio::ip::tcp::endpoint> : ostream_formatter
-{
-};
+#define ENABLE_FMT_OSTREAM(X)                                                                      \
+   template <>                                                                                     \
+   struct fmt::formatter<X> : ostream_formatter                                                    \
+   {                                                                                               \
+   }
 
-// https://fmt.dev/latest/api.html#std-ostream-support
-template <>
-struct fmt::formatter<std::__thread_id> : ostream_formatter
-{
-};
+ENABLE_FMT_OSTREAM(boost::core::string_view);
+ENABLE_FMT_OSTREAM(boost::asio::ip::tcp::endpoint);
+ENABLE_FMT_OSTREAM(std::__thread_id);
+ENABLE_FMT_OSTREAM(boost::urls::pct_string_view);
+ENABLE_FMT_OSTREAM(boost::urls::authority_view);
 
-// https://fmt.dev/latest/api.html#std-ostream-support
-template <>
-struct fmt::formatter<boost::core::string_view> : ostream_formatter
-{
-};
+#undef ENANBLE_FMT_OSTREAM
+
+// -------------------------------------------------------------------------------------------------
 
 // https://github.com/fmtlib/fmt/issues/2865
 template <>
@@ -203,6 +206,29 @@ inline std::string what(const std::exception_ptr& ptr)
          return fmt::format("exception: {}", ex.what());
       }
    }
+}
+
+// -------------------------------------------------------------------------------------------------
+
+/// Format according to HTTP date spec (RFC 7231)
+inline std::string format_http_date(std::chrono::system_clock::time_point tp)
+{
+   using namespace std::chrono;
+
+   #if 1
+   // cet current system time and convert to UTC
+   std::time_t time = system_clock::to_time_t(tp);
+   std::tm tm = *std::gmtime(&time);
+
+   constexpr auto months = std::array{"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+
+   return fmt::format("{:02d}, {:02d} {} {:04d} {:02d}:{:02d}:{:02d} GMT", tm.tm_wday, tm.tm_mday,
+                      months[tm.tm_mon], tm.tm_year + 1900, tm.tm_hour, tm.tm_min, tm.tm_sec);
+#else
+   auto utc_time = floor<seconds>(tp);
+   return fmt::format("{:%a, %d %b %Y %H:%M:%S} GMT", utc_time);
+#endif
 }
 
 // -------------------------------------------------------------------------------------------------

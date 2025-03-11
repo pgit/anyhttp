@@ -15,8 +15,10 @@
 #include <boost/beast/http/error.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
+
 #include <boost/url/format.hpp>
 
+#include <boost/url/parse.hpp>
 #include <charconv>
 #include <nghttp2/nghttp2.h>
 #include <string>
@@ -39,7 +41,7 @@ static std::string_view frameType(uint8_t type)
    case NGHTTP2_PRIORITY:
       return "PRIORITY";
    case NGHTTP2_RST_STREAM:
-      return "RST_STREAMS";
+      return "RST_STREAM";
    case NGHTTP2_SETTINGS:
       return "SETTINGS";
    case NGHTTP2_PUSH_PROMISE:
@@ -99,7 +101,14 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
    if (namesv == ":method")
       stream->method = valuesv;
    else if (namesv == ":path")
-      stream->url.set_path(valuesv);
+   {
+      if (auto url = boost::urls::parse_relative_ref(valuesv); url.has_value())
+      {
+         stream->url.set_path(url->path());
+         stream->url.set_query(url->query());
+         stream->url.set_fragment(url->fragment());
+      }
+   }
    else if (namesv == ":scheme")
       stream->url.set_scheme(valuesv);
    else if (namesv == ":authority")
@@ -123,15 +132,15 @@ int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* fr
    std::ignore = user_data;
 
    const auto handler = static_cast<NGHttp2Session*>(user_data);
-   logw("[{}] on_invalid_frame_send_callback: {} {}", handler->logPrefix(frame),
+   logw("[{}] on_frame_not_send_callback: {} {}", handler->logPrefix(frame),
         frameType(frame->hd.type), nghttp2_strerror(lib_error_code));
 
-   /*
    // Issue RST_STREAM so that stream does not hang around.
+#if 0   
    loge("[{}] on_frame_not_send_callback: resetting stream", handler->logPrefix());
    nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
                              NGHTTP2_INTERNAL_ERROR);
-   */
+#endif
 
    return 0;
 }
@@ -287,12 +296,14 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
         sessionWrapper->logPrefix(stream_id), nghttp2_http2_strerror(error_code), error_code,
         local_close, remote_close);
 
+#if 0        
    // h2spec http2/5.1 and several others but breaks generic/3.4, http2/7 and a few more
    if (error_code == NGHTTP2_FLOW_CONTROL_ERROR)
    {
       nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, stream_id, NGHTTP2_NO_ERROR, nullptr, 0);
       return 0;
    }
+#endif
 
    auto stream = sessionWrapper->close_stream(stream_id);
    if (!stream)
@@ -320,17 +331,15 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
    if (stream->responseHandler)
    {
       using namespace boost::system;
-      std::move(stream->responseHandler)(errc::make_error_code(errc::io_error), // FIXME:
-                                         client::Response{nullptr});
-      stream->responseHandler = nullptr;
+      swap_and_invoke(stream->responseHandler, errc::make_error_code(errc::io_error), // FIXME:
+                      client::Response{nullptr});
    }
 
    if (stream->sendHandler)
    {
       using namespace boost::system;
       // FIXME: proper error code -- this could be e.g. NGHTTP2_STREAM_CLOSED which is NOT cancel
-      std::move(stream->sendHandler)(errc::make_error_code(errc::operation_canceled));
-      stream->sendHandler = nullptr;
+      swap_and_invoke(stream->sendHandler, errc::make_error_code(errc::operation_canceled));
    }
 
    post(stream->executor(), [stream]() { /* deferred delete */ });
@@ -465,6 +474,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    m_streams.emplace(id, stream);
    auto writer = std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream);
    std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)});
+   start_write();
 }
 
 void NGHttp2Session::handle_buffer_contents()

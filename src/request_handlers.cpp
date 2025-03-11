@@ -13,6 +13,7 @@
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/iota.hpp>
 #include <range/v3/view/transform.hpp>
+#include <sstream>
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
@@ -31,6 +32,26 @@ boost::asio::awaitable<void> yield(size_t count)
       co_await post(co_await asio::this_coro::executor, asio::deferred);
 }
 
+awaitable<void> dump(server::Request request, server::Response response)
+{
+   auto url = request.url();
+
+   std::stringstream str;
+   fmt::println(str, "RAW URL: {}", url.buffer());
+   fmt::println(str, "authority: {} ({})", url.authority(), url.encoded_authority());
+   fmt::println(str, "path: {} ({})", url.path(), url.encoded_path());
+   fmt::println(str, "query: {} ({})", url.query(), url.encoded_query());
+   fmt::println(str, "fragment: {} ({})", url.fragment(), url.encoded_fragment());
+
+   auto buf = str.str();
+   co_await response.async_submit(200,
+                                  {{"Content-Length", fmt::format("{}", buf.size())}, //
+                                   {"Content-Type", "text/plain"}},
+                                  deferred);
+   co_await response.async_write(asio::buffer(str.str()), deferred);
+   co_await response.async_write({}, deferred);
+}
+
 awaitable<void> echo(server::Request request, server::Response response)
 {
    if (request.content_length())
@@ -44,7 +65,7 @@ awaitable<void> echo(server::Request request, server::Response response)
       size_t n = co_await request.async_read_some(asio::buffer(buffer), deferred);
       co_await response.async_write(asio::buffer(buffer, n), deferred);
       if (n == 0)
-         co_return;
+         break;
    }
 }
 
@@ -137,7 +158,7 @@ awaitable<size_t> try_receive(client::Response& response, boost::system::error_c
 {
    ec = {};
    size_t bytes = 0, count = 0;
-   std::array<uint8_t, 1024> buffer;
+   std::array<uint8_t, 16 * 1024> buffer;
    try
    {
       for (;;)

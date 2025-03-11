@@ -33,8 +33,9 @@
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
 
-#include <range-v3/range/v3/view/iota.hpp>
-#include <range-v3/range/v3/view/take.hpp>
+#include <range/v3/view/iota.hpp>
+#include <range/v3/view/take.hpp>
+#include <range/v3/view/transform.hpp>
 
 using namespace std::chrono_literals;
 namespace bp = boost::process;
@@ -134,7 +135,9 @@ protected:
 #endif
 
       auto config = server::Config{.listen_address = "127.0.0.2", .port = 0};
-
+#if defined(MULTITHREADED)
+      config.use_strand = true;
+#endif
       //
       // The main server acceptor loop does not need to run on a strand. Instead, a per-connection
       // strand is created after accepting a new connection.
@@ -167,12 +170,11 @@ protected:
    void run()
    {
 #if defined(MULTITHREADED)
-      const size_t extraThreads = 19;
-      auto threads = rv::iota(0) | rv::take(extraThreads) |
-                     rv::transform([&](int) { return std::thread([&] { run(context); }); }) |
+      auto threads = rv::iota(0) | rv::take(std::max(1u, std::thread::hardware_concurrency())) |
+                     rv::transform([&](int) { return std::thread([&] { ::run(context); }); }) |
                      ranges::to<std::vector>();
 
-      run(context);
+      ::run(context);
 
       for (auto& thread : threads)
          thread.join();
@@ -757,18 +759,21 @@ TEST_P(ClientAsync, CancellationContentLength)
 {
    test = [&](Session session) -> awaitable<void>
    {
-      const size_t length = 5ul * 1024 * 1024;
-      auto request = co_await session.async_submit(
-         url.set_path("echo"), {{"content-length", std::to_string(length)}}, deferred);
-      auto response = co_await request.async_get_response(asio::deferred);
-      std::vector<char> buffer(length);
-      auto sender = sendAndForceEOF(request, std::string_view(buffer));
+      for (size_t i = 0; i <= 20; ++i)
+      {
+         const size_t length = 5ul * 1024 * 1024;
+         auto request = co_await session.async_submit(
+            url.set_path("echo"), {{"content-length", std::to_string(length)}}, deferred);
+         auto response = co_await request.async_get_response(asio::deferred);
+         std::vector<char> buffer(length);
+         auto sender = sendAndForceEOF(request, std::string_view(buffer));
 
-      boost::system::error_code ec;
-      auto received = co_await ((std::move(sender) || yield()) && try_receive(response, ec));
-      fmt::println("received {} bytes ({})", std::get<1>(received), ec.message());
-      EXPECT_LT(std::get<1>(received), length);
-      EXPECT_EQ(ec, boost::beast::http::error::partial_message);
+         boost::system::error_code ec;
+         auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
+         fmt::println("received {} bytes ({}, yielded {})", std::get<1>(received), ec.message(), i);
+         EXPECT_LT(std::get<1>(received), length);
+         EXPECT_EQ(ec, boost::beast::http::error::partial_message);
+      }
    };
    run();
 }
@@ -789,22 +794,20 @@ TEST_P(ClientAsync, Cancellation)
 {
    test = [&](Session session) -> awaitable<void>
    {
-      const size_t length = 5ul * 1024 * 1024;
-      auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
-      auto response = co_await request.async_get_response(asio::deferred);
-      std::vector<char> buffer(length, 'a');
-      auto sender = sendAndForceEOF(request, std::string_view(buffer));
+      for (size_t i = 0; i <= 20; ++i)
+      {
+         const size_t length = 5ul * 1024 * 1024;
+         auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
+         auto response = co_await request.async_get_response(asio::deferred);
+         std::vector<char> buffer(length, 'a');
+         auto sender = sendAndForceEOF(request, std::string_view(buffer));
 
-      boost::system::error_code ec;
-      auto received = co_await ((std::move(sender) || yield()) && try_receive(response, ec));
-      fmt::println("received {} bytes ({})", std::get<1>(received), ec.message());
-#if 0
-      EXPECT_GT(std::get<1>(received), 0);
-      if (GetParam() == anyhttp::Protocol::http2)
-         EXPECT_EQ(ec, boost::system::errc::success);
-      else
+         boost::system::error_code ec;
+         auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
+         fmt::println("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
+         EXPECT_LT(std::get<1>(received), length);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
-#endif
+      }
    };
    run();
 }
@@ -820,20 +823,19 @@ TEST_P(ClientAsync, CancellationRange)
 {
    test = [&](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
-      auto response = co_await request.async_get_response(asio::deferred);
-      auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)));
+      for (size_t i = 6; i <= 7; ++i)
+      {
+         co_await yield();
+         auto request = co_await session.async_submit(url.set_path("echo"), {}, deferred);
+         auto response = co_await request.async_get_response(asio::deferred);
+         auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)));
 
-      boost::system::error_code ec;
-      auto received = co_await ((std::move(sender) || yield()) && try_receive(response, ec));
-      fmt::println("received {} bytes", std::get<1>(received));
-#if 0      
-      EXPECT_GT(std::get<1>(received), 0);
-      if (GetParam() == anyhttp::Protocol::http2)
-         EXPECT_EQ(ec, boost::system::errc::success);
-      else
+         boost::system::error_code ec;
+         auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
+         fmt::println("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
-#endif
+         co_await client->async_connect(deferred);
+      }
    };
    run();
 }

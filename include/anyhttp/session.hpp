@@ -41,10 +41,10 @@ public:
    auto async_submit(boost::urls::url url, Fields headers, CompletionToken&& token)
    {
       return boost::asio::async_initiate<CompletionToken, Submit>(
-         [&](SubmitHandler handler, boost::urls::url url, Fields headers) { //
-            async_submit_any(std::move(handler), std::move(url), std::move(headers));
+         [](SubmitHandler handler, Session* self, boost::urls::url url, Fields headers) { //
+            self->async_submit_any(std::move(handler), std::move(url), std::move(headers));
          },
-         token, url, headers);
+         token, this, url, headers);
    }
 
 private:

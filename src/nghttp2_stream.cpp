@@ -1,4 +1,3 @@
-
 #include "anyhttp/nghttp2_stream.hpp"
 #include "anyhttp/common.hpp"
 #include "anyhttp/nghttp2_session.hpp"
@@ -10,7 +9,6 @@
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/beast/http/error.hpp>
-#include <boost/system/detail/error_code.hpp>
 
 #include <range/v3/numeric/accumulate.hpp>
 #include <range/v3/view/drop.hpp>
@@ -29,7 +27,7 @@ namespace anyhttp::nghttp2
 // =================================================================================================
 
 template <typename Base>
-NGHttp2Reader<Base>::NGHttp2Reader(NGHttp2Stream& stream) : Base(), stream(&stream)
+NGHttp2Reader<Base>::NGHttp2Reader(NGHttp2Stream& stream) : stream(&stream)
 {
    stream.reader = this;
 }
@@ -80,7 +78,10 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
 {
    if (!stream)
    {
-      std::move(handler)(boost::asio::error::operation_aborted, 0);
+      logw("[] async_read_some: stream already gone");
+      // FIXME: this may return the wrong error code in some situations
+      std::move(handler)(boost::beast::http::error::partial_message, 0);
+      // std::move(handler)(boost::asio::error::operation_aborted, 0);
       return;
    }
 
@@ -93,6 +94,7 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
 #if 1
    auto cs = asio::get_associated_cancellation_slot(handler);
    if (cs.is_connected() && !cs.has_handler())
+   {
       cs.assign(
          [this](asio::cancellation_type_t ct)
          {
@@ -108,6 +110,7 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
 
             // stream->delete_writer();
          });
+   }
 #endif
 
    assert(!stream->m_read_handler);
@@ -177,7 +180,7 @@ void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int stat
 
    std::string status_code_str = fmt::format("{}", status_code);
    nva.push_back(make_nv_ls(":status", status_code_str));
-   std::string date = "Sat, 01 Apr 2023 09:33:09 GMT";
+   std::string date = format_http_date(std::chrono::system_clock::now());
    nva.push_back(make_nv_ls("date", date));
 
    for (auto&& item : headers)
@@ -239,7 +242,7 @@ NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int id_)
 
 size_t NGHttp2Stream::read_buffers_size() const
 {
-   return asio::buffer_size(m_read_buffer) +
+   return asio::buffer_size(m_read_buffer) + // this is a view of m_pending_read_buffers[0]
           ranges::accumulate(m_pending_read_buffers | rv::drop(1) |
                                 rv::transform([](const auto& buffer) { return buffer.size(); }),
                              size_t(0));
@@ -278,7 +281,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    // If there is no pending data to write, we can start writing the view right away.
    //
    if (m_pending_read_buffers.empty())
-      std::swap(m_read_buffer, view);  // view is empty after this
+      std::swap(m_read_buffer, view); // view is empty after this
 
    //
    // Try to deliver as many buffers as possible. As long as the consumer installs a new read
@@ -320,7 +323,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
          if (!m_pending_read_buffers.empty())
             m_read_buffer = asio::buffer(m_pending_read_buffers.front());
          else
-            std::swap(m_read_buffer, view);  // clear view so that we don't write it twice
+            std::swap(m_read_buffer, view); // clear view so that we don't write it twice
       }
    }
 
@@ -370,6 +373,10 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    if (!m_read_handler)
       return;
 
+#if 1
+   if (reading_finished() || closed)
+      swap_and_invoke(m_read_handler, boost::beast::http::error::partial_message, 0);
+#else
    if (reading_finished())
    {
       boost::system::error_code ec; //  = boost::asio::error::eof;
@@ -391,6 +398,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
       swap_and_invoke(m_read_handler, boost::system::error_code{}, 0);
       assert(!m_read_handler); // FIXME -- but what if the user sets a new handler anyway?
    }
+#endif
 }
 
 void NGHttp2Stream::on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len)
@@ -444,7 +452,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
 {
    if (closed)
    {
-      logw("async_write: stream already closed", logPrefix);
+      logw("[{}] async_write: stream already closed", logPrefix);
       using namespace boost::system;
       std::move(handler)(errc::make_error_code(errc::operation_canceled));
       return;
@@ -458,7 +466,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
    sendBuffer = buffer;
    sendHandler = std::move(handler);
 
-   slot = asio::get_associated_cancellation_slot(sendHandler);
+   auto slot = asio::get_associated_cancellation_slot(sendHandler);
    if (slot.is_connected() && !slot.has_handler())
    {
       slot.assign(
@@ -485,8 +493,8 @@ void NGHttp2Stream::resume()
       logd("[{}] async_write: resuming session ({})", logPrefix, sendBuffer.size());
 
       //
-      // It is important to reset the deferred state before resuming, because this may result in
-      // another call to the read callback.
+      // It is important to reset the deferred state before resuming, because that may result in
+      // an immediate call to the read callback.
       //
       is_deferred = false;
       nghttp2_session_resume_data(parent.session, id);
@@ -658,7 +666,7 @@ void NGHttp2Stream::delete_writer()
    // If the writer is deleted before it has delivered all data, we have to close the stream
    // so that it does not hang around. There are a few design options:
    //
-   // 1) Resetting the stream when the writer is deleted also means that we may notcomplete
+   // 1) Resetting the stream when the writer is deleted also means that we may not complete
    //    reading either.
    //
    if (!is_writer_done)

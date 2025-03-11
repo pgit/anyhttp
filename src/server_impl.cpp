@@ -325,14 +325,12 @@ awaitable<void> Server::Impl::listen_loop()
    for (;;)
    {
       auto [ec, socket] = co_await acceptor.async_accept(as_tuple(deferred));
-      if (ec == boost::system::errc::operation_canceled)
+      if (ec)
       {
-         logi("accept: {}", ec.message());
-         break;
-      }
-      else if (ec)
-      {
-         logw("accept: {}", ec.message());
+         if (ec == boost::system::errc::operation_canceled)
+            logi("accept: {}", ec.message());
+         else
+            logw("accept: {}", ec.message());
          break;
       }
 
@@ -341,7 +339,7 @@ awaitable<void> Server::Impl::listen_loop()
       //
       // Without something like a "nursery" or "async_scope", spwaning a task detaches it from
       // the owning class without any means to join it. Here, we use a simple session counter to
-      // track their destruction.
+      // track their lifetime.
       //
       {
          auto lock = std::lock_guard(m_sessionMutex);
@@ -372,7 +370,8 @@ awaitable<void> Server::Impl::listen_loop()
    const auto waitingFor = sessionCounter;
    logi("listen loop terminated, waiting for {} sessions...", waitingFor);
 
-   while (sessionCounter)
+   size_t i = 0;
+   for (; sessionCounter; ++i)
    {
       for (auto& session : m_sessions)
          session->destroy(std::move(session));
@@ -383,7 +382,7 @@ awaitable<void> Server::Impl::listen_loop()
       lock.lock();
    }
 
-   logi("listen loop terminated, waiting for {} sessions... done", waitingFor);
+   logi("listen loop terminated, waiting for {} sessions... done, {} iterations", waitingFor, i);
 }
 
 // =================================================================================================
@@ -428,12 +427,6 @@ awaitable<void> Server::Impl::udp_receive_loop()
    for (;;)
    {
       co_await m_udp_socket->async_wait(boost::asio::socket_base::wait_read, deferred);
-      // asio::ip::udp::endpoint remote_endpoint;
-      // auto n =
-      //         co_await m_udp_socket->async_receive_from(asio::buffer(buf), remote_endpoint,
-      //         deferred);
-      // logd("reived {} UDP bytes ({:02x} {:02x} {:02x} {:02x}", n, buf[0], buf[1], buf[2],
-      // buf[3]);
 
       auto ec = recvmsg(native_handle, &msg, 0);
       logd("ec={} from={} tos={}", ec, sockaddr_to_endpoint(sender_addr),

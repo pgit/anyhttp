@@ -1,3 +1,4 @@
+#include "anyhttp/common.hpp"
 #include "anyhttp/utils.hpp"
 
 #include <boost/asio.hpp>
@@ -54,6 +55,12 @@ class Asio : public testing::Test
 };
 
 // -------------------------------------------------------------------------------------------------
+
+TEST_F(Asio, DISABLED_HttpDateBenchmark)
+{
+   for (size_t i = 0; i < 1'000'000; ++i)
+      format_http_date(std::chrono::system_clock::now());
+}
 
 TEST_F(Asio, SpawnDetached)
 {

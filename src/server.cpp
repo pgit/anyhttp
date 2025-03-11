@@ -13,9 +13,10 @@ Request::Request(std::unique_ptr<Request::Impl> impl) : impl(std::move(impl))
    logd("\x1b[1;35mServer::Request: ctor\x1b[0m");
 }
 Request::Request(Request&&) noexcept = default;
+Request& Request::operator=(Request&& other) noexcept = default;
 Request::~Request()
 {
-   if (impl)
+   if (impl) // may be moved-from
    {
       logd("\x1b[35mServer::Request: dtor\x1b[0m");
 
@@ -49,9 +50,10 @@ Response::Response(std::unique_ptr<Response::Impl> impl) : impl(std::move(impl))
    logd("\x1b[1;35mServer::Response: ctor\x1b[0m");
 }
 Response::Response(Response&&) noexcept = default;
+Response& Response::operator=(Response&& other) noexcept = default;
 Response::~Response()
 {
-   if (impl)
+   if (impl) // may be moved-from
    {
       logd("\x1b[35mServer::Response: dtor\x1b[0m");
 

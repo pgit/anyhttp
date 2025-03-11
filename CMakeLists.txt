@@ -25,7 +25,7 @@ endif()
 add_compile_options(-stdlib=libc++)
 add_link_options(-stdlib=libc++ -lstdc++fs)
 
-# needed starting with clang 19
+# needed for ranges/v3 starting with clang 19
 add_compile_options(-Wno-deprecated-declarations)
 
 # FIXME: nghttp2 reader/writer needs this ATM

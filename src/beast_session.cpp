@@ -23,6 +23,8 @@
 #include <boost/beast/version.hpp>
 #include <boost/system/errc.hpp>
 
+#include <boost/url/parse.hpp>
+
 using namespace std::chrono_literals;
 
 using namespace boost::asio;
@@ -240,7 +242,7 @@ public:
             //
             // Cancellation is tricky, see e.g.: https://github.com/boostorg/beast/issues/2325.
             //
-            // Main reason is that depending on when the cancellation actually takes place,
+            // Main reason is that, depending on when the cancellation actually takes place,
             // the stream is in an undefined state. For example, when writing a large chunk is
             // interrupted, there is no meaningful way to recover: The length of the chunk has
             // been written, but only part of the data.
@@ -330,8 +332,15 @@ public:
 
    void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
    {
-      super::submit_headers(headers);
       super::message.result(status_code);
+
+      if (super::message.find(http::field::date) == super::message.end())
+         super::message.set(http::field::date, format_http_date(std::chrono::system_clock::now()));
+
+      super::submit_headers(headers);
+
+      if (super::message.find(http::field::date) == super::message.end())
+         super::message.set(http::field::server, "anyhttp");
 
       //
       // TODO: For bundling writing the header and body, we should just post the writing here,
@@ -521,8 +530,20 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       for (auto& header : request)
          mlogd("  {}: {}", header.name_string(), header.value());
 
-      reader->m_url.clear();
-      reader->m_url.set_path(request.target());
+      if (auto url = boost::urls::parse_relative_ref(request.target()); url.has_value())
+         reader->m_url = url.value();
+      else
+         mlogw("{} {}: invalid target: {}", request.method_string(), request.target(),
+               url.error().message());
+
+      //
+      // Deduce scheme from underlying socket type.
+      //
+      if constexpr (std::is_same_v<Stream, asio::ssl::stream<asio::ip::tcp::socket>>)
+         reader->m_url.set_scheme("https");
+      else
+         reader->m_url.set_scheme("http");
+      reader->m_url.set_encoded_authority(request[http::field::host]);
 
       server::Request request_wrapper(std::move(reader));
 
@@ -653,9 +674,9 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
    // TODO: make writer shared? put into queue
    //
    async_write_header(m_stream, writer->serializer,
-                      [handler = std::move(handler), writer = std::move(writer)](
+                      [handler = std::move(handler), writer = std::move(writer), this](
                          boost::system::error_code ec, size_t n) mutable { //
-                         std::move(handler)(boost::system::error_code{},
+                         std::move(handler)(std::move(ec),
                                             client::Request(std::move(writer)));
                       });
    ;
