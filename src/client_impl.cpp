@@ -26,11 +26,11 @@
 using namespace std::chrono_literals;
 using namespace boost::asio;
 
-using namespace boost::asio::experimental::awaitable_operators;
 
 namespace anyhttp::client
 {
-
+using namespace asio::experimental::awaitable_operators;
+   
 // =================================================================================================
 
 #if 0
@@ -49,7 +49,7 @@ Response::Impl::~Impl() = default;
 
 // =================================================================================================
 
-Client::Impl::Impl(boost::asio::any_io_executor executor, Config config)
+Client::Impl::Impl(asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_resolver(m_executor)
 {
 #if !defined(NDEBUG)
@@ -68,7 +68,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
 {
       return asio::async_initiate<ConnectHandler, Connect>(
          asio::experimental::co_composed<Connect>(
-              [this](auto state, boost::asio::any_io_executor exnix) -> void
+              [this](auto state, asio::any_io_executor exnix) -> void
             {
    const auto ex = m_executor;
    // auto ex = state.get_io_executor();  // FAILS to register work properly
@@ -107,7 +107,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
    //
    // Playing with socket buffer sizes... Doesn't seem to do any good.
    //
-   using sb = boost::asio::socket_base;
+   using sb = asio::socket_base;
    sb::send_buffer_size send_buffer_size;
    sb::receive_buffer_size receive_buffer_size;
    socket.get_option(send_buffer_size);

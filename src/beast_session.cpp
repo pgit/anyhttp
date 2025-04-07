@@ -1,6 +1,8 @@
 #include "anyhttp/beast_session.hpp"
+#include "anyhttp/any_async_stream.hpp"
 #include "anyhttp/server.hpp"
 
+#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/buffer.hpp>
@@ -8,6 +10,7 @@
 #include <boost/asio/ip/tcp.hpp>
 
 #include <boost/beast/core.hpp>
+#include <boost/beast/core/buffer_traits.hpp>
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/core/stream_traits.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
@@ -21,9 +24,12 @@
 #include <boost/beast/http/write.hpp>
 #include <boost/beast/ssl/ssl_stream.hpp>
 #include <boost/beast/version.hpp>
+#include <boost/system/detail/error_code.hpp>
 #include <boost/system/errc.hpp>
 
 #include <boost/url/parse.hpp>
+
+#include <string_view>
 
 using namespace std::chrono_literals;
 
@@ -44,6 +50,7 @@ using socket = asio::ip::tcp::socket;
 inline auto& get_socket(socket& socket) { return socket; }
 inline auto& get_socket(tcp_stream& stream) { return stream.socket(); }
 inline auto& get_socket(ssl::stream<socket>& stream) { return stream.lowest_layer(); }
+inline auto& get_socket(AnyAsyncStream& stream) { return stream.get_socket(); }
 
 // =================================================================================================
 
@@ -530,7 +537,8 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       for (auto& header : request)
          mlogd("  {}: {}", header.name_string(), header.value());
 
-      if (auto url = boost::urls::parse_relative_ref(request.target()); url.has_value())
+      // if (auto url = boost::urls::parse_relative_ref(request.target()); url.has_value())
+      if (auto url = boost::urls::parse_uri_reference(request.target()); url.has_value())
          reader->m_url = url.value();
       else
          mlogw("{} {}: invalid target: {}", request.method_string(), request.target(),
@@ -543,7 +551,14 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          reader->m_url.set_scheme("https");
       else
          reader->m_url.set_scheme("http");
-      reader->m_url.set_encoded_authority(request[http::field::host]);
+      try
+      {
+         reader->m_url.set_encoded_authority(request[http::field::host]);
+      }
+      catch (std::exception& ex)
+      {
+         mlogw("ignoring invalid host header: {}", request[http::field::host]);
+      }
 
       server::Request request_wrapper(std::move(reader));
 
@@ -687,5 +702,6 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
 template class ClientSession<boost::beast::tcp_stream>;
 template class ServerSession<boost::beast::tcp_stream>;
 template class ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>;
+template class ServerSession<AnyAsyncStream>;
 
 } // namespace anyhttp::beast_impl

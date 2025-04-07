@@ -8,6 +8,8 @@ add_executable(test_all ${SRC_FILES})
 target_link_libraries(test_all PRIVATE GTest::GTest anyhttp)
 target_link_libraries(test_all PRIVATE spdlog::spdlog_header_only)
 
+set_source_files_properties(test_parallel_groups.cpp PROPERTIES COMPILE_DEFINITIONS BOOST_ASIO_USE_TS_EXECUTOR_AS_DEFAULT)
+
 # include(CTest)
 # Fetch Google Test
 # include(FetchContent)

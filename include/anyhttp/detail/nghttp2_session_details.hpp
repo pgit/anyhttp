@@ -1,5 +1,7 @@
 
 #include "anyhttp/nghttp2_session.hpp"
+#include "anyhttp/any_async_stream.hpp"
+#include "anyhttp/session.hpp"
 
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
@@ -30,6 +32,7 @@ using socket = asio::ip::tcp::socket;
 inline auto& get_socket(socket& socket) { return socket; }
 inline auto& get_socket(tcp_stream& stream) { return stream.socket(); }
 inline auto& get_socket(ssl::stream<socket>& stream) { return stream.lowest_layer(); }
+inline auto& get_socket(AnyAsyncStream& stream) { return stream.get_socket(); }
 
 // =================================================================================================
 
@@ -138,6 +141,10 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
          mylogd("send loop: waiting... done");
       }
    }
+
+   mylogd("send loop: destroying streams...");
+   m_streams.clear();
+   mylogd("send loop: destroying streams... done");
 
    mylogd("send loop: done");
 }

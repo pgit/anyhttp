@@ -2,13 +2,13 @@
 #include "anyhttp/client.hpp"
 #include "anyhttp/server.hpp"
 
-#include <__expected/unexpect.h>
-#include <__expected/unexpected.h>
+#include <boost/algorithm/string/replace.hpp>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/system/detail/error_code.hpp>
 
 #include <fmt/ostream.h>
+#include <fmt/format.h>
 
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/iota.hpp>
@@ -21,6 +21,28 @@ using namespace anyhttp;
 using namespace anyhttp::server;
 namespace rv = ranges::views;
 
+
+struct EscapedString {
+   std::string_view str;
+};
+
+
+template <>
+struct fmt::formatter<EscapedString> : fmt::formatter<std::string> {
+    auto format(const EscapedString& esc, fmt::format_context& ctx) -> fmt::format_context::iterator {
+        std::string result;
+        for (unsigned char ch : esc.str) {
+            if (ch < 32 || ch >= 127) {
+                fmt::format_to(std::back_inserter(result), "\x1b[33m%\x1b[34;1m{:02X}\x1b[0m", ch);
+            } else {
+                result.push_back(ch);
+            }
+        }
+        return fmt::formatter<std::string>::format(result, ctx);
+    }
+};
+
+
 namespace anyhttp
 {
 
@@ -28,9 +50,12 @@ namespace anyhttp
 
 boost::asio::awaitable<void> yield(size_t count)
 {
+   auto ex = co_await asio::this_coro::executor;
    for (size_t i = 0; i < count; ++i)
-      co_await post(co_await asio::this_coro::executor, asio::deferred);
+      co_await post(ex, asio::deferred);
 }
+
+
 
 awaitable<void> dump(server::Request request, server::Response response)
 {
@@ -40,7 +65,13 @@ awaitable<void> dump(server::Request request, server::Response response)
    fmt::println(str, "RAW URL: {}", url.buffer());
    fmt::println(str, "authority: {} ({})", url.authority(), url.encoded_authority());
    fmt::println(str, "path: {} ({})", url.path(), url.encoded_path());
-   fmt::println(str, "query: {} ({})", url.query(), url.encoded_query());
+   for (auto segment : url.segments())
+      fmt::println(str, "  {}", EscapedString(segment));
+  
+   fmt::println(str, "query: {}", EscapedString(url.query()));
+   fmt::println(str, "query: {} (encoded)", url.encoded_query());
+   for (auto [key, value, _] : url.params())
+      fmt::println(str, "  {}={} ({})", key, EscapedString(value), _);
    fmt::println(str, "fragment: {} ({})", url.fragment(), url.encoded_fragment());
 
    auto buf = str.str();

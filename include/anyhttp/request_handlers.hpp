@@ -29,17 +29,33 @@ using expected = std::expected<T, boost::system::error_code>;
 template <typename T>
 boost::asio::awaitable<void> sleep(T duration)
 {
-   asio::steady_timer timer(co_await asio::this_coro::executor);
+   using namespace asio;
+
+#if 1
+#if 1
+   as_tuple_t<deferred_t>::as_default_on_t<steady_timer> timer(co_await this_coro::executor);
+   timer.expires_after(duration);
+   auto [ec] = co_await timer.async_wait();
+#else
+   steady_timer timer(co_await this_coro::executor);
+   timer.expires_after(duration);
+   auto [ec] = co_await timer.async_wait(as_tuple(deferred));
+#endif
+   if (ec)
+      loge("sleep: {}", ec.what());
+#else
+   steady_timer timer(co_await this_coro::executor);
    timer.expires_after(duration);
    try
    {
-      co_await timer.async_wait(asio::deferred);
+      co_await timer.async_wait(deferred);
       logi("sleep: done");
    }
    catch (const boost::system::system_error& ec)
    {
       loge("sleep: {}", ec.what());
    }
+#endif
 }
 
 boost::asio::awaitable<void> yield(size_t count = 1);
@@ -110,8 +126,8 @@ boost::asio::awaitable<void> send(client::Request& request, Range range)
                                                  asio::as_tuple(asio::deferred));
       if (auto ec = std::get<0>(result))
       {
-         loge("send: (range) {}", ec.what());
-         break;
+         loge("send: (range) \x1b[1;31m{}\x1b[0m after {} bytes", what(ec), bytes);
+         co_return;
       }
 #else
       try

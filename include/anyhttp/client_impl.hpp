@@ -5,11 +5,6 @@
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/experimental/co_composed.hpp>
 
-namespace anyhttp
-{
-class Session;
-}
-
 namespace anyhttp::client
 {
 
@@ -56,7 +51,7 @@ public:
 class Client::Impl
 {
 public:
-   explicit Impl(boost::asio::any_io_executor executor, Config config);
+   explicit Impl(asio::any_io_executor executor, Config config);
    ~Impl();
 
    const boost::asio::any_io_executor& executor() const { return m_executor; }
@@ -68,7 +63,7 @@ private:
 
 private:
    Config m_config;
-   boost::asio::any_io_executor m_executor;
+   asio::any_io_executor m_executor;
    std::optional<asio::ip::tcp::resolver> m_resolver;
 };
 

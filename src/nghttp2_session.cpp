@@ -53,7 +53,7 @@ static std::string_view frameType(uint8_t type)
    case NGHTTP2_WINDOW_UPDATE:
       return "WINDOW_UPDATE";
    case NGHTTP2_CONTINUATION:
-      return "CONTINU";
+      return "CONTINUATION";
    case NGHTTP2_ALTSVC:
       return "ALTSVC";
    case NGHTTP2_ORIGIN:
@@ -98,27 +98,39 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
    auto stream = handler->find_stream(frame->hd.stream_id);
    assert(stream);
 
-   if (namesv == ":method")
-      stream->method = valuesv;
-   else if (namesv == ":path")
+   try
    {
-      if (auto url = boost::urls::parse_relative_ref(valuesv); url.has_value())
+      if (namesv == ":method")
+         stream->method = valuesv;
+      else if (namesv == ":path")
       {
-         stream->url.set_path(url->path());
-         stream->url.set_query(url->query());
-         stream->url.set_fragment(url->fragment());
+         if (auto url = boost::urls::parse_relative_ref(valuesv); url.has_value())
+         {
+            stream->url.set_path(url->path());
+            stream->url.set_query(url->query());
+            stream->url.set_fragment(url->fragment());
+         }
+      }
+      else if (namesv == ":scheme")
+         stream->url.set_scheme(valuesv);
+      else if (namesv == ":authority")
+      {
+         stream->url.set_encoded_authority(valuesv);
+      }
+      else if (namesv == ":host")
+      {
+         stream->url.set_host(valuesv);
+      }
+      else if (namesv == "content-length")
+      {
+         stream->content_length.emplace();
+         std::from_chars(valuesv.begin(), valuesv.end(), *stream->content_length);
       }
    }
-   else if (namesv == ":scheme")
-      stream->url.set_scheme(valuesv);
-   else if (namesv == ":authority")
-      stream->url.set_encoded_authority(valuesv);
-   else if (namesv == ":host")
-      stream->url.set_host(valuesv);
-   else if (namesv == "content-length")
+   catch (std::exception& ex)
    {
-      stream->content_length.emplace();
-      std::from_chars(valuesv.begin(), valuesv.end(), *stream->content_length);
+      logw("[{}] ignoring invalid host header: {} ({})", handler->logPrefix(frame), valuesv,
+           ex.what());
    }
 
    return 0;
@@ -538,8 +550,8 @@ std::shared_ptr<NGHttp2Stream> NGHttp2Session::close_stream(int32_t stream_id)
 
    //
    // FIXME: We can't just terminate the session after the last request -- what if the user wants
-   //        to do another one? Shutting down a session has to be (somewhat) explicit. Try to
-   //        tie this to the lifetime of the user-facing 'Session' object...
+   //        to do another one? Shutting down a session has to be (somewhat) explicit. Try to tie
+   //        this to the lifetime of the user-facing 'Session' object...
    //
    // FIXME: Use virtual function instead of dynamic cast for the client-specific code.
    // FIXME: Or even better, use static polymorphism.

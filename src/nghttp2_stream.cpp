@@ -79,7 +79,17 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    if (!stream)
    {
       logw("[] async_read_some: stream already gone");
-      // FIXME: this may return the wrong error code in some situations
+      //
+      // FIXME: This may return the wrong error code in some situations. For example, in the
+      //        cancellation testcases, it may happen that the stream gets destroyed before the
+      //        user has seen the 'partial_message' error from async_read_some().
+      //
+      //        As a solution, we might need to store the error code in the reader, so it can be
+      //        delivered on the next call to async_read_some().
+      //
+      //        It is still a bit unclear what should happen if the user calls async_read_some()
+      //        after that. This is arguably misuse of the interface.
+      //
       std::move(handler)(boost::beast::http::error::partial_message, 0);
       // std::move(handler)(boost::asio::error::operation_aborted, 0);
       return;
@@ -143,6 +153,15 @@ template <typename Base>
 void NGHttp2Writer<Base>::detach()
 {
    logd("[{}] detach:", stream->logPrefix);
+
+   //
+   // FIXME: This causes ASAN errors in External.h2spec and a few others.
+   //        Not sure why this is here anyway...
+   //
+#if 0
+   if (stream->sendHandler)
+      swap_and_invoke(stream->sendHandler, boost::asio::error::operation_aborted);
+#endif
    stream = nullptr;
 }
 
@@ -299,8 +318,8 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
            logPrefix, copied, count, asio::buffer_size(m_read_buffer));
 
       //
-      // The read handler is moved into a local variable before it is called, so that a new read
-      // handler may be set during its invocation.
+      // swap_and_invoke() moves the read handler into a local variable before invoking it,
+      // allowing a new read handler to be set. This is what we call 'respawning' here.
       //
       swap_and_invoke(m_read_handler, boost::system::error_code{}, copied);
 

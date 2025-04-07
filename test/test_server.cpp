@@ -26,6 +26,7 @@
 #include <boost/system/system_error.hpp>
 #include <boost/url/url.hpp>
 
+#include <future>
 #include <regex>
 
 #include <gtest/gtest.h>
@@ -57,6 +58,16 @@ std::string NameGenerator(const testing::TestParamInfo<anyhttp::Protocol>& info)
 {
    return to_string(info.param);
 };
+
+auto error_future(std::future<std::exception_ptr>& future)
+{
+   std::promise<std::exception_ptr> promise;
+   future = promise.get_future();
+   return [promise = std::move(promise)](std::exception_ptr ptr) mutable
+   {
+      promise.set_value(std::move(ptr)); //
+   };
+}
 
 // =================================================================================================
 
@@ -592,6 +603,19 @@ TEST_P(ClientAsync, WHEN_server_discards_request_delayed_THEN_error_500)
    run();
 }
 
+TEST_P(ClientAsync, WHEN_invalid_port_in_host_header_THEN_reports_error)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request =
+         co_await session.async_submit(url.set_path("echo"), {{"Host", "host:12345x"}}, deferred);
+      auto response = co_await (sendEOF(request) && read_response(request));
+   };
+   run();
+}
+
+// -------------------------------------------------------------------------------------------------
+
 TEST_P(ClientAsync, ServerYieldFirst)
 {
    handler = [&](server::Request request, server::Response response) -> awaitable<void>
@@ -746,6 +770,7 @@ TEST_P(ClientAsync, Backpressure)
       auto received = co_await try_receive(response, ec);
       fmt::println("receiving... done, got {} bytes ({})", received, ec.message());
       EXPECT_GT(received, 0);
+      // FIXME: we should be able to receive the remainders that already have been buffered
    };
    run();
 }
@@ -902,7 +927,8 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
       auto response = co_await request.async_get_response(asio::deferred);
 
       // co_spawn(context, send(request, rv::iota(uint8_t(0))), detached);
-      co_spawn(request.executor(), send(request, rv::iota(uint8_t(0))), detached);
+      std::future<std::exception_ptr> future;
+      co_spawn(request.executor(), send(request, rv::iota(uint8_t(0))), error_future(future));
 
       std::println("=============================================================================");
       for (size_t i = 0; i < 10; ++i)
@@ -920,8 +946,12 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
          co_await yield();
       }
 
-      // auto received = co_await receive(response);
-      // loge("received: {}", received);
+      auto exception_ptr = future.get();
+
+      boost::system::error_code ec;
+      auto received = co_await try_receive(response, ec);
+      loge("received: {} ({} bytes)", ec.message(), received);
+      // future.wait_for(2s);
    };
    run();
 }

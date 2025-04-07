@@ -45,6 +45,11 @@ asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint)
 
 // =================================================================================================
 
+std::string what(const boost::system::error_code ec)
+{
+   return ec.message();
+}
+
 std::string what(const std::exception_ptr& ptr)
 {
    if (!ptr)

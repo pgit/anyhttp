@@ -64,7 +64,7 @@ using WriteHandler = asio::any_completion_handler<Write>;
  */
 template <typename F, typename... Args>
    requires std::invocable<F, Args...>
-inline void swap_and_invoke(F& function, Args&&... args)
+inline void swap_and_invoke(F&& function, Args&&... args)
 {
    std::decay_t<F> temp;
    std::swap(function, temp);
@@ -179,6 +179,7 @@ struct fmt::formatter<std::filesystem::path> : formatter<std::string_view>
 
 /// Get error message from exception pointer, as returned by \c co_spawn().
 std::string what(const std::exception_ptr& ptr);
+std::string what(const boost::system::error_code ec);
 
 // -------------------------------------------------------------------------------------------------
 

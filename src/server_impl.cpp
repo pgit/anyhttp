@@ -1,4 +1,5 @@
 #include "anyhttp/server_impl.hpp"
+#include "anyhttp/any_async_stream.hpp"
 #include "anyhttp/beast_session.hpp"
 #include "anyhttp/common.hpp"
 #include "anyhttp/detect_http2.hpp"
@@ -6,6 +7,7 @@
 #include "anyhttp/beast_session.hpp"
 #include "anyhttp/detail/nghttp2_session_details.hpp"
 #include "anyhttp/nghttp2_session.hpp"
+#include "range/v3/view/any_view.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/error.hpp>
@@ -218,6 +220,26 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 
    auto buffer = boost::beast::flat_buffer();
 
+   class TestStream : public AnyAsyncStream::Impl
+   {
+   public:
+      TestStream(ip::tcp::socket socket) : socket_(std::move(socket)) {}
+      executor_type get_executor() noexcept override { return socket_.get_executor(); }
+
+      ip::tcp::socket& get_socket() final { return socket_; }
+      void async_write_impl(ReadWriteHandler handler, ConstBufferSpan buffers) final
+      {
+         socket_.async_write_some(buffers, std::move(handler));
+      }
+      void async_read_impl(ReadWriteHandler handler, MutableBufferSpan buffers) final
+      {
+         socket_.async_read_some(buffers, std::move(handler));
+      }
+
+   private:
+      ip::tcp::socket socket_;
+   };
+
    //
    // detect TLS
    //
@@ -266,8 +288,14 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    else if (co_await async_detect_http2_client_preface(socket, buffer, deferred))
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
+#if 0
+      AnyAsyncStream stream(std::make_unique<TestStream>(std::move(socket)));
+      session = std::make_shared<nghttp2::ServerSession<AnyAsyncStream>> //
+         (*this, executor, std::move(stream));
+#else
       session = std::make_shared<nghttp2::ServerSession<asio::ip::tcp::socket>> //
          (*this, executor, std::move(socket));
+#endif
    }
 
    //
@@ -276,8 +304,14 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    else
    {
       logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", prefix);
+#if 1
+      AnyAsyncStream stream(std::make_unique<TestStream>(std::move(socket)));
+      session = std::make_shared<beast_impl::ServerSession<AnyAsyncStream>> //
+         (*this, executor, std::move(stream));
+#else
       session = std::make_shared<beast_impl::ServerSession<boost::beast::tcp_stream>> //
          (*this, executor, boost::beast::tcp_stream(std::move(socket)));
+#endif
    }
 
    {

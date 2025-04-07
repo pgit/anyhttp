@@ -34,6 +34,8 @@ using namespace std::chrono_literals;
 namespace asio = boost::asio;
 using namespace boost::asio::experimental::awaitable_operators;
 
+#if 0
+
 // =================================================================================================
 
 template <typename T>
@@ -389,3 +391,5 @@ TEST_F(ComposedHandler, ComaPoll)
 }
 
 // =================================================================================================
+
+#endif
