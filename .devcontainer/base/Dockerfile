@@ -1,7 +1,8 @@
 #
 # https://github.com/microsoft/vscode-dev-containers/tree/main/containers/debian
 #
-FROM docker.io/psedoc/cpp-devcontainer:0.12
+# FROM docker.io/psedoc/cpp-devcontainer:0.12
+FROM cpp-devcontainer:1.0
 
 #
 # GDB libc++ pretty printer (works for string, but not for map with llvm-18)
@@ -73,21 +74,25 @@ RUN cd opt && git clone --recursive https://github.com/ngtcp2/nghttp3
 RUN cd opt && git clone --recursive https://github.com/ngtcp2/ngtcp2
 RUN cd opt && git clone https://boringssl.googlesource.com/boringssl
 RUN cd opt && \
-    cd boringssl && \
-    cmake -B build -DCMAKE_POSITION_INDEPENDENT_CODE=ON && \
-    make -j$(nproc) -C build  && \
-    cd .. && \
+    cd boringssl && mkdir build && cd build && \
+    cmake .. -DCMAKE_POSITION_INDEPENDENT_CODE=ON && \
+    make -j$(nproc) && make install && \
+    cd ../..
+RUN cd opt && \
     cd nghttp3 && \
     autoreconf -i && \
     ./configure --prefix=$PWD/build --enable-lib-only && \
     make -j$(nproc) check && \
     make install && \
-    cd .. && \
+    cd ..
+RUN cd opt && \
     cd ngtcp2 && \
     autoreconf -i && \
     ./configure PKG_CONFIG_PATH=$PWD/../nghttp3/build/lib/pkgconfig \
-       BORINGSSL_LIBS="-L$PWD/../boringssl/build/ssl -lssl -L$PWD/../boringssl/build/crypto -lcrypto" \
-       BORINGSSL_CFLAGS="-I$PWD/../boringssl/include" \
-       --with-boringssl && \
+    BORINGSSL_CFLAGS="-I$PWD/../boringssl/install/include" \
+    BORINGSSL_LIBS="-L$PWD/../boringssl/install/lib -lssl -lcrypto" \
+    --with-boringssl && \
     make -j$(nproc) check && \
     make install
+
+# docker build . -t anyhttp:1.0

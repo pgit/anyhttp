@@ -3,6 +3,7 @@
 # separately. This image can be pushed to the HUB, speeding up codespace creation considerably.
 #
 FROM docker.io/psedoc/anyhttp:latest
+# FROM anyhttp:1.0
 
 #
 # enable persistent bash history in container
