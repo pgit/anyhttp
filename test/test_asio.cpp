@@ -34,8 +34,6 @@ using namespace std::chrono_literals;
 namespace asio = boost::asio;
 using namespace boost::asio::experimental::awaitable_operators;
 
-#if 0
-
 // =================================================================================================
 
 template <typename T>
@@ -64,7 +62,7 @@ TEST_F(Asio, DISABLED_HttpDateBenchmark)
       format_http_date(std::chrono::system_clock::now());
 }
 
-TEST_F(Asio, SpawnDetached)
+TEST_F(Asio, WHEN_task_is_spawned_THEN_work_is_tracked)
 {
    boost::asio::io_context context;
    bool ok = false;
@@ -81,7 +79,7 @@ TEST_F(Asio, SpawnDetached)
    EXPECT_TRUE(ok);
 }
 
-TEST_F(Asio, SpawnFuture)
+TEST_F(Asio, WHEN_task_is_finished_THEN_sets_future)
 {
    boost::asio::io_context context;
    auto future = co_spawn(
@@ -118,14 +116,14 @@ public:
    }
 };
 
-TEST_F(ComposedAny, CustomDetached)
+TEST_F(ComposedAny, WHEN_async_op_is_initiated_THEN_tracks_work)
 {
    boost::asio::io_context context;
    async_sleep(context.get_executor(), 100ms, asio::detached);
    ::run(context);
 }
 
-TEST_F(ComposedAny, CustomFuture)
+TEST_F(ComposedAny, WHEN_async_op_finishes_THEN_sets_future)
 {
    boost::asio::io_context context;
    auto future = async_sleep(context.get_executor(), 100ms, asio::use_future);
@@ -165,14 +163,14 @@ public:
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_F(ComposedAny, AnyDetached)
+TEST_F(ComposedIndirect, WHEN_async_op_is_initiated_THEN_tracks_work)
 {
    boost::asio::io_context context;
    async_sleep(context.get_executor(), 100ms, asio::detached);
    ::run(context);
 }
 
-TEST_F(ComposedAny, AnyFuture)
+TEST_F(ComposedIndirect, WHEN_async_op_finishes_THEN_sets_future)
 {
    boost::asio::io_context context;
    auto future = async_sleep(context.get_executor(), 100ms, asio::use_future);
@@ -235,11 +233,12 @@ TEST_F(ComposedCoro, DISABLED_Unbound)
    boost::asio::io_context context;
    async_sleep(100ms, asio::detached);
    ::run(context);
-   EXPECT_EQ(done, 2);
+   EXPECT_EQ(done, 1);
 }
 
 //
 // This test is only (somewhat) safe because there is a longer sleep in the test that follows.
+// If you run it under very high load, it may still fail, very seldomly.
 //
 TEST_F(ComposedCoro, DefaultExecutor)
 {
@@ -256,7 +255,7 @@ TEST_F(ComposedCoro, AnyDetached)
    async_sleep(100ms, bind_executor(context, asio::detached));
    async_sleep(100ms, bind_executor(context, asio::detached));
    ::run(context);
-   EXPECT_TRUE(done);
+   EXPECT_EQ(done, 2);
 }
 
 //
@@ -391,5 +390,3 @@ TEST_F(ComposedHandler, ComaPoll)
 }
 
 // =================================================================================================
-
-#endif

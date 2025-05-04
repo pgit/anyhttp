@@ -68,12 +68,13 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
 {
    Buffer buffer;
    buffer.reserve(1460);
+
    for (;;)
    {
       //
       // Retrieve a chunk of data to be sent from NGHTTP2.
       // The buffer is valid until next call nghttp2_session_mem_send, so we don't need to copy it.
-      // Unless, of course, we buffer it to -- which we may do to avoid many small writes.
+      // We still may want to copy it into a local buffer to bundle many small writes.
       //
       const uint8_t* data;
 
@@ -107,10 +108,6 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
       {
          const std::array<asio::const_buffer, 2> seq{buffer.data(), asio::buffer(data, nread)};
          mylogd("send loop: writing {} bytes...", bytes_to_write);
-         if (!get_socket(m_stream).is_open())
-         {
-            mloge("send loop: SOCKET HAS BEEN CLOSED!!!!!!!!!!");
-         }
          auto [ec, written] = co_await asio::async_write(m_stream, seq, as_tuple(deferred));
          if (ec)
          {
@@ -160,7 +157,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
 {
    m_buffer.reserve(64 * 1024);
 
-   std::string reason("done");
+   unsigned int reason = NGHTTP2_NO_ERROR;
    while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
    {
       auto free = m_buffer.capacity() - m_buffer.size();
@@ -168,8 +165,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
       if (ec)
       {
          mylogd("read: {}, terminating session", ec.message());
-         reason = ec.message();
-         nghttp2_session_terminate_session(session, NGHTTP2_STREAM_CLOSED);
+         reason = NGHTTP2_STREAM_CLOSED;
          break;
       }
       m_buffer.commit(n);
@@ -178,11 +174,10 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
       start_write();
    }
 
-   if (reason == "done")
-      nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
+   nghttp2_session_terminate_session(session, reason);
 
    start_write();
-   mlogi("recv loop: {}, served {} requests", reason, m_requestCounter);
+   mlogi("recv loop: done, served {} requests", m_requestCounter);
 }
 
 // =================================================================================================

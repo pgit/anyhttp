@@ -7,8 +7,8 @@
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/system/detail/error_code.hpp>
 
-#include <fmt/ostream.h>
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/iota.hpp>
@@ -21,27 +21,26 @@ using namespace anyhttp;
 using namespace anyhttp::server;
 namespace rv = ranges::views;
 
-
-struct EscapedString {
+struct EscapedString
+{
    std::string_view str;
 };
 
-
 template <>
-struct fmt::formatter<EscapedString> : fmt::formatter<std::string> {
-    auto format(const EscapedString& esc, fmt::format_context& ctx) -> fmt::format_context::iterator {
-        std::string result;
-        for (unsigned char ch : esc.str) {
-            if (ch < 32 || ch >= 127) {
-                fmt::format_to(std::back_inserter(result), "\x1b[33m%\x1b[34;1m{:02X}\x1b[0m", ch);
-            } else {
-                result.push_back(ch);
-            }
-        }
-        return fmt::formatter<std::string>::format(result, ctx);
-    }
+struct fmt::formatter<EscapedString> : fmt::formatter<std::string>
+{
+   auto format(const EscapedString& esc, fmt::format_context& ctx) const
+      -> fmt::format_context::iterator
+   {
+      std::string result;
+      for (unsigned char ch : esc.str)
+         if (ch < 32 || ch >= 127)
+            fmt::format_to(std::back_inserter(result), "\x1b[33m%\x1b[34;1m{:02X}\x1b[0m", ch);
+         else
+            result.push_back(ch);
+      return fmt::formatter<std::string>::format(result, ctx);
+   }
 };
-
 
 namespace anyhttp
 {
@@ -55,8 +54,6 @@ boost::asio::awaitable<void> yield(size_t count)
       co_await post(ex, asio::deferred);
 }
 
-
-
 awaitable<void> dump(server::Request request, server::Response response)
 {
    auto url = request.url();
@@ -67,7 +64,7 @@ awaitable<void> dump(server::Request request, server::Response response)
    fmt::println(str, "path: {} ({})", url.path(), url.encoded_path());
    for (auto segment : url.segments())
       fmt::println(str, "  {}", EscapedString(segment));
-  
+
    fmt::println(str, "query: {}", EscapedString(url.query()));
    fmt::println(str, "query: {} (encoded)", url.encoded_query());
    for (auto [key, value, _] : url.params())

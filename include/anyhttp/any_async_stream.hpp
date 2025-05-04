@@ -10,10 +10,15 @@
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
+#include <boost/container/small_vector.hpp>
+
 #include <boost/beast/core/buffer_traits.hpp>
 #include <boost/beast/core/stream_traits.hpp>
 
 #include <range/v3/view/any_view.hpp>
+
+#include <fmt/core.h>
+#include <fmt/ranges.h>
 
 namespace asio = boost::asio;
 namespace ip = asio::ip;
@@ -25,9 +30,17 @@ namespace anyhttp
 using ReadWrite = void(boost::system::error_code, std::size_t);
 using ReadWriteHandler = asio::any_completion_handler<ReadWrite>;
 
-using ConstBufferSpan = std::span<const asio::const_buffer>;
-using MutableBufferSpan = std::span<asio::mutable_buffer>;
+#if 0
+using ConstBufferVector = std::vector<asio::const_buffer>;
+using MutableBufferVector = std::vector<asio::mutable_buffer>;
+#else
+using ConstBufferVector = boost::container::small_vector<asio::const_buffer, 4>;
+using MutableBufferVector = boost::container::small_vector<asio::mutable_buffer, 4>;
+#endif
 
+/**
+ * Attempt to create a type-erased async stream.
+ */
 class AnyAsyncStream
 {
 public:
@@ -40,8 +53,8 @@ public:
       virtual ~Impl() = default;
       virtual executor_type get_executor() noexcept = 0;
       virtual ip::tcp::socket& get_socket() = 0;
-      virtual void async_write_impl(ReadWriteHandler handler, ConstBufferSpan buffer) = 0;
-      virtual void async_read_impl(ReadWriteHandler handler, MutableBufferSpan buffer) = 0;
+      virtual void async_write_impl(ReadWriteHandler handler, ConstBufferVector buffer) = 0;
+      virtual void async_read_impl(ReadWriteHandler handler, MutableBufferVector buffer) = 0;
    };
 
 public:
@@ -54,6 +67,17 @@ public:
    //
    // async_write_some
    //
+   // The async operations of ASIO are designed to work with sequences of buffers. Those cannot
+   // easily be type-erased, aside transforming them to a vector.
+   //
+   // The requirements for ConstBufferSequence are defined here:
+   // https://live.boost.org/doc/libs/1_88_0/doc/html/boost_asio/reference/ConstBufferSequence.html
+   //
+   // The iterators returned by asio::buffer_sequence_{begin,end} must model:
+   // * https://en.cppreference.com/w/cpp/iterator/bidirectional_iterator
+   //
+   // So those iterators cannot be simply modelled as a span.
+   //
    template <typename ConstBufferSequence,
              BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite) CompletionToken>
       requires boost::beast::is_const_buffer_sequence<ConstBufferSequence>::value
@@ -62,17 +86,9 @@ public:
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
          [this](ReadWriteHandler handler, const ConstBufferSequence& buffers)
          {
-            size_t size = std::distance(asio::buffer_sequence_begin(buffers),
-                                        asio::buffer_sequence_end(buffers));
-            std::vector<asio::const_buffer> temp;
-            temp.reserve(size);
-            std::copy(asio::buffer_sequence_begin(buffers), asio::buffer_sequence_end(buffers),
-                      std::back_inserter(temp));
-            auto span = ConstBufferSpan(temp.begin(), size);
-            impl->async_write_impl([handler = std::move(handler), temp = std::move(temp)](
-                                      boost::system::error_code ec, size_t n) mutable
-                                   { std::move(handler)(ec, n); },
-                                   span);
+            impl->async_write_impl(std::move(handler),
+                                   ConstBufferVector{asio::buffer_sequence_begin(buffers),
+                                                     asio::buffer_sequence_end(buffers)});
          },
          token, buffers);
    }
@@ -88,30 +104,9 @@ public:
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
          [this](ReadWriteHandler handler, const MutableBufferSequence& buffers)
          {
-#if 0
-            auto range = ranges::subrange(asio::buffer_sequence_begin(buffers),
-                                          asio::buffer_sequence_end(buffers));
-            ranges::any_view<asio::mutable_buffer> anyrange(range);
-            impl->async_read_impl(std::move(handler), anyrange);
-#else
-            size_t size = std::distance(asio::buffer_sequence_begin(buffers),
-                                        asio::buffer_sequence_end(buffers));
-            //
-            // FIXME: allocating a vector is slow -- but we are passing a std::span<>, which
-            //        contains the address of one (or more) buffers. And that address needs
-            //        to be stored somewhere for the duration of the asyn op. Maybe it is not
-            //        the best idea to use spans here...
-            //
-            std::vector<asio::mutable_buffer> temp;
-            temp.reserve(size);
-            std::copy(asio::buffer_sequence_begin(buffers), asio::buffer_sequence_end(buffers),
-                      std::back_inserter(temp));
-            auto span = MutableBufferSpan(temp.begin(), size);
-            impl->async_read_impl([handler = std::move(handler), temp = std::move(temp)](
-                                     boost::system::error_code ec, size_t n) mutable
-                                  { std::move(handler)(ec, n); },
-                                  span);
-#endif
+            impl->async_read_impl(std::move(handler),
+                                  MutableBufferVector{asio::buffer_sequence_begin(buffers),
+                                                      asio::buffer_sequence_end(buffers)});
          },
          token, buffers);
    }

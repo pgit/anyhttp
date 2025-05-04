@@ -194,6 +194,28 @@ static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned ch
 
 // -------------------------------------------------------------------------------------------------
 
+class TestStream : public AnyAsyncStream::Impl
+{
+public:
+   TestStream(ip::tcp::socket socket) : socket_(std::move(socket)) {}
+   executor_type get_executor() noexcept override { return socket_.get_executor(); }
+
+   ip::tcp::socket& get_socket() final { return socket_; }
+   void async_write_impl(ReadWriteHandler handler, ConstBufferVector buffers) final
+   {
+      socket_.async_write_some(buffers, std::move(handler));
+   }
+   void async_read_impl(ReadWriteHandler handler, MutableBufferVector buffers) final
+   {
+      socket_.async_read_some(buffers, std::move(handler));
+   }
+
+private:
+   ip::tcp::socket socket_;  // the underlying socket, for cancellation
+};
+
+// -------------------------------------------------------------------------------------------------
+
 awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 {
    const auto prefix = normalize(socket.remote_endpoint());
@@ -220,25 +242,6 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 
    auto buffer = boost::beast::flat_buffer();
 
-   class TestStream : public AnyAsyncStream::Impl
-   {
-   public:
-      TestStream(ip::tcp::socket socket) : socket_(std::move(socket)) {}
-      executor_type get_executor() noexcept override { return socket_.get_executor(); }
-
-      ip::tcp::socket& get_socket() final { return socket_; }
-      void async_write_impl(ReadWriteHandler handler, ConstBufferSpan buffers) final
-      {
-         socket_.async_write_some(buffers, std::move(handler));
-      }
-      void async_read_impl(ReadWriteHandler handler, MutableBufferSpan buffers) final
-      {
-         socket_.async_read_some(buffers, std::move(handler));
-      }
-
-   private:
-      ip::tcp::socket socket_;
-   };
 
    //
    // detect TLS
@@ -288,7 +291,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    else if (co_await async_detect_http2_client_preface(socket, buffer, deferred))
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
-#if 0
+#if 1
       AnyAsyncStream stream(std::make_unique<TestStream>(std::move(socket)));
       session = std::make_shared<nghttp2::ServerSession<AnyAsyncStream>> //
          (*this, executor, std::move(stream));

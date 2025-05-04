@@ -15,11 +15,19 @@
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/asio/use_future.hpp>
+
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/http/error.hpp>
+
 #include <boost/filesystem/path.hpp>
+
 #include <boost/process.hpp>
-#include <boost/process/args.hpp>
+#include <boost/process/v1/args.hpp>
+#include <boost/process/v1/async.hpp>
+#include <boost/process/v1/async_pipe.hpp>
+#include <boost/process/v1/child.hpp>
+#include <boost/process/v1/environment.hpp>
+#include <boost/process/v1/io.hpp>
 
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
@@ -39,7 +47,7 @@
 #include <range/v3/view/transform.hpp>
 
 using namespace std::chrono_literals;
-namespace bp = boost::process;
+namespace bp = boost::process::v1;
 using namespace boost::asio;
 namespace asio = boost::asio;
 using namespace boost::asio::experimental::awaitable_operators;
