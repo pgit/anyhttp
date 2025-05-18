@@ -7,6 +7,7 @@
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/associated_allocator.hpp>
 #include <boost/asio/associated_executor.hpp>
+#include <boost/asio/async_result.hpp>
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/consign.hpp>
 #include <boost/asio/deferred.hpp>
@@ -131,9 +132,53 @@ TEST_F(ComposedAny, WHEN_async_op_finishes_THEN_sets_future)
    EXPECT_NO_THROW(future.get());
 }
 
-// -------------------------------------------------------------------------------------------------
+// =================================================================================================
 
+/**
+ * Try forwarding to a type-erased completion handler.
+ */
 class ComposedIndirect : public testing::Test
+{
+public:
+   static auto async_sleep_impl(SleepHandler token, Duration duration)
+   {
+      return asio::async_initiate<SleepHandler, Sleep>(
+         [](auto handler, Duration duration)
+         {
+            auto ex = boost::asio::get_associated_executor(handler);
+            auto timer = std::make_shared<asio::steady_timer>(std::move(ex), duration);
+            return timer->async_wait(consign(std::move(handler), timer));
+         },
+         token, duration);
+   }
+
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
+   static auto async_sleep(Duration duration, CompletionToken&& token)
+   {
+      return boost::asio::async_initiate<CompletionToken, Sleep>(
+         [](boost::asio::completion_handler_for<Sleep> auto&& handler, Duration duration)
+         {
+            async_sleep_impl(std::move(handler), duration); //
+         },
+         token, duration);
+   }
+};
+
+TEST_F(ComposedIndirect, AnyDetached)
+{
+   boost::asio::io_context context;
+   async_sleep(100ms, bind_executor(context, asio::detached));
+   async_sleep(100ms, bind_executor(context, asio::detached));
+   ::run(context);
+}
+
+// =================================================================================================
+
+/**
+ * Passing the executor explicitly is not very idiomatic -- instaed just bind the executor to
+ * the completion token.
+ */
+class ComposedIndirectExplicit : public testing::Test
 {
 public:
    static auto async_sleep_impl(SleepHandler token, boost::asio::any_io_executor ex,
@@ -163,14 +208,14 @@ public:
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_F(ComposedIndirect, WHEN_async_op_is_initiated_THEN_tracks_work)
+TEST_F(ComposedIndirectExplicit, WHEN_async_op_is_initiated_THEN_tracks_work)
 {
    boost::asio::io_context context;
    async_sleep(context.get_executor(), 100ms, asio::detached);
    ::run(context);
 }
 
-TEST_F(ComposedIndirect, WHEN_async_op_finishes_THEN_sets_future)
+TEST_F(ComposedIndirectExplicit, WHEN_async_op_finishes_THEN_sets_future)
 {
    boost::asio::io_context context;
    auto future = async_sleep(context.get_executor(), 100ms, asio::use_future);
@@ -180,10 +225,123 @@ TEST_F(ComposedIndirect, WHEN_async_op_finishes_THEN_sets_future)
 
 // =================================================================================================
 
+class ComposedAsyncInitiate : public testing::Test
+{
+public:
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
+   static auto async_sleep(Duration duration, CompletionToken&& token)
+   {
+      return boost::asio::async_initiate<CompletionToken, Sleep>(
+         [](SleepHandler handler, Duration duration)
+         {
+            auto ex = boost::asio::get_associated_executor(handler);
+            auto timer = std::make_shared<asio::steady_timer>(std::move(ex), duration);
+            return timer->async_wait(consign(std::move(handler), timer));
+         },
+         token, duration);
+   }
+
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Sleep) CompletionToken>
+   static auto drop_handler(Duration duration, CompletionToken&& token)
+   {
+      return boost::asio::async_initiate<CompletionToken, Sleep>(
+         [](SleepHandler handler, Duration duration)
+         {
+            std::ignore = duration;
+            std::ignore = handler;
+            std::move(handler)(boost::system::error_code{});
+         },
+         token, duration);
+   }
+};
+
+TEST_F(ComposedAsyncInitiate, AnyDetached)
+{
+   boost::asio::io_context context;
+   async_sleep(100ms, bind_executor(context, asio::detached));
+   async_sleep(100ms, bind_executor(context, asio::detached));
+   EXPECT_EQ(::run(context), 2);
+}
+
+TEST_F(ComposedAsyncInitiate, AnyFuture)
+{
+   boost::asio::io_context context;
+   auto f1 = async_sleep(100ms, bind_executor(context, asio::use_future));
+   auto f2 = async_sleep(100ms, bind_executor(context, asio::use_future));
+   ::run(context);
+   EXPECT_NO_THROW(f1.get());
+   EXPECT_NO_THROW(f2.get());
+}
+
+TEST_F(ComposedAsyncInitiate, DISABLED_AnyDetachedDefault)
+{
+   async_sleep(100ms, asio::detached);
+   async_sleep(100ms, asio::detached);
+}
+
+TEST_F(ComposedAsyncInitiate, AnyFutureDefault)
+{
+   auto f1 = async_sleep(100ms, asio::use_future);
+   auto f2 = async_sleep(100ms, asio::use_future);
+   EXPECT_NO_THROW(f1.get());
+   EXPECT_NO_THROW(f2.get());
+}
+
+TEST_F(ComposedAsyncInitiate, DropHandler)
+{
+   boost::asio::io_context context;
+
+   co_spawn(
+      context.get_executor(),
+      [&]() -> asio::awaitable<void>
+      {
+         co_await async_sleep(100ms, asio::deferred);
+         co_await drop_handler(100ms, asio::deferred);
+      },
+      [](const std::exception_ptr& ex)
+      {
+         if (ex)
+            logw("TCP accept loop: {}", what(ex));
+         else
+            logi("TCP accept loop: done");
+      });
+   ::run(context);
+}
+
+TEST_F(ComposedAsyncInitiate, DropHandlerFuture)
+{
+   boost::asio::io_context context;
+
+   auto f = co_spawn(
+      context.get_executor(),
+      [&]() -> asio::awaitable<void>
+      { //
+         std::println("waiting...");
+         co_await async_sleep(100ms, asio::deferred);
+         std::println("waiting... done");
+         std::println("dropping handler...");
+         // co_await drop_handler(100ms, asio::as_tuple(asio::deferred));
+         co_await drop_handler(100ms, asio::deferred);
+         std::println("dropping handler... done");
+      },
+      asio::use_future);
+   ::run(context);
+   EXPECT_THROW(f.get(), std::future_error);
+}
+
+// =================================================================================================
+
 //
 // This variant using co_composed<> does not register work properly: If used with a 'detached'
 // completion token, the sleep will not register work in the executor. At least not in the one
 // fetchted using get_io_executor()...
+//
+// UPDATE: Actually, this works. When calling the initiating function, we have to bind the
+//         executor to the completion token, as usual. No suprises here. Comparing to
+//         async_initiate<>, the only difference is that we get the executor from the state object
+//         instead of calling get_associated_executor().
+//
+// FIXME: What about allocators etc?
 //
 class ComposedCoro : public testing::Test
 {
@@ -208,7 +366,7 @@ public:
                else
                   std::println("waiting in thread {}... done, but now in {}!", thread_id,
                                std::this_thread::get_id());
-               ++done;               
+               ++done;
                co_return {boost::system::error_code{}};
             }),
          token, duration);
@@ -243,7 +401,7 @@ TEST_F(ComposedCoro, DISABLED_Unbound)
 TEST_F(ComposedCoro, DefaultExecutor)
 {
    boost::asio::io_context context;
-   async_sleep(100ms, asio::detached);  // this not safe, does not register work properly
+   async_sleep(100ms, asio::detached); // this not safe, does not register work properly
    async_sleep(120ms, bind_executor(context, asio::detached));
    ::run(context);
    EXPECT_EQ(done, 2);
@@ -279,6 +437,8 @@ TEST_F(ComposedCoro, AnyFuture)
 
 //
 // Another way to pass the executor to the composed function is to pass the executor as an argument.
+// But given that binding the executor works as intended (see ComposedCoro.*) I don't see why we
+// would want to it like this.
 //
 class ComposedExecutor : public testing::Test
 {

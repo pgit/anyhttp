@@ -2,8 +2,9 @@
 # The dependencies of this project have been moved into another Dockerfile that can be built
 # separately. This image can be pushed to the HUB, speeding up codespace creation considerably.
 #
-FROM docker.io/psedoc/anyhttp:latest
-# FROM anyhttp:1.0
+# FROM docker.io/psedoc/anyhttp:latest
+FROM anyhttp:1.0
+# FROM anyhttp:nghttp2-v1.64.0
 
 #
 # enable persistent bash history in container
@@ -23,5 +24,7 @@ RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhisto
     && touch /commandhistory/.bash_history \
     && chown -R $USERNAME /commandhistory \
     && echo "$SNIPPET" >> "/home/$USERNAME/.bashrc"
+
+RUN echo "export LESS=RS" >/etc/profile.d/less.sh
 
 SHELL ["/bin/bash", "-c"]

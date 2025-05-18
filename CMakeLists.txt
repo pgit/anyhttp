@@ -15,8 +15,8 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
     # add_link_options(-fsanitize=thread)
     
     # address sanitizer
-    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
-    add_link_options(-fsanitize=address)
+    # add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    # add_link_options(-fsanitize=address)
 
     # include(CodeCoverage)
     # append_coverage_compiler_flags()
@@ -45,8 +45,13 @@ find_package(Threads)
 # nghttp2
 # https://github.com/curl/curl/blob/master/CMake/FindNGHTTP2.cmake
 #
-include_directories(${CMAKE_SOURCE_DIR}/../nghttp2/install/include)
-link_directories(${CMAKE_SOURCE_DIR}/../nghttp2/install/lib)
+# include_directories(${CMAKE_SOURCE_DIR}/../nghttp2/install/include)
+# link_directories(${CMAKE_SOURCE_DIR}/../nghttp2/install/lib)
+#
+# or, just rely on pkg-config:
+#
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2)
 
 #
 # fmt
@@ -54,18 +59,12 @@ link_directories(${CMAKE_SOURCE_DIR}/../nghttp2/install/lib)
 find_package(fmt)
 
 #
-# fmtlog
-#
-# include_directories(/fmtlog/fmt/include)
-# link_directories(/usr/lib)
-
-#
 # range-v3
 #
 include_directories(/usr/local/include/range-v3)
 
 #
-# spodlog
+# spdlog
 #
 find_package(spdlog REQUIRED)
 

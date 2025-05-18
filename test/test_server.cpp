@@ -35,6 +35,7 @@
 #include <boost/url/url.hpp>
 
 #include <future>
+#include <nghttp2/nghttp2ver.h>
 #include <regex>
 
 #include <gtest/gtest.h>
@@ -181,8 +182,8 @@ protected:
             else if (request.url().path() == "/custom")
                return handler(std::move(request), std::move(response));
             else
-               return not_found(std::move(request), std::move(response));
-            // return not_found(std::move(response));
+               // return not_found(std::move(request), std::move(response));
+               return not_found(std::move(response)); // discard request
          });
    }
 
@@ -276,9 +277,9 @@ protected:
       logi("spawn: {} {}", path.generic_string(), fmt::join(args, " "));
 
       auto env = bp::environment();
-      // env["LD_LIBRARY_PATH"] = "/usr/local/lib";
+      env["LD_LIBRARY_PATH"] = "/usr/local/lib";
       // env["LD_LIBRARY_PATH"] = "/workspaces/nghttp2/install/lib";
-      env["LD_LIBRARY_PATH"] = "/workspaces/nghttp2/install/lib:/usr/local/lib";
+      // env["LD_LIBRARY_PATH"] = "/workspaces/nghttp2/install/lib:/usr/local/lib";
       bp::async_pipe out(context), err(context);
       bp::child child(
          path, env, std::move(args), bp::std_out > out, bp::std_err > err,
@@ -286,12 +287,14 @@ protected:
             fmt::println("exit={}, ec={}", exit, ec.message());
          });
 
+      logi("spawn: starting to communicate...");
 #if 1
       auto result = co_await (log(std::move(err)) && consume(std::move(out)));
 #else
       co_await (log(std::move(err)) && log(std::move(out)));
       auto result = std::string();
 #endif
+      logi("spawn: starting to communicate... done");
 
       child.wait(); // FIXME: this is sync
       if (child.exit_code())
@@ -305,10 +308,23 @@ protected:
       co_return result;
    }
 
-   auto spawn(bp::filesystem::path path, std::vector<std::string> args)
+   std::future<std::string> spawn(bp::filesystem::path path, std::vector<std::string> args)
    {
       ++numSpawned;
-      return co_spawn(context, spawn_process(std::move(path), std::move(args)), use_future);
+      std::future<std::string> future;
+      std::promise<std::string> promise;
+      future = promise.get_future();
+      co_spawn(context, spawn_process(std::move(path), std::move(args)),
+               [promise = std::move(promise)](const std::exception_ptr& ex, std::string str) mutable
+               {
+                  if (ex)
+                  {
+                     str = what(ex);
+                     loge("{}", str);
+                  }
+                  promise.set_value(std::move(str));
+               });
+      return std::move(future);
    }
 
    bp::filesystem::path testFile{"CMakeLists.txt"};
@@ -328,7 +344,7 @@ TEST_P(External, nghttp2)
       GTEST_SKIP(); // no --nghttp2-prior-knowledge for 'nghttp', re-enable when ALPN works
 
    auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   auto future = spawn("/workspaces/nghttp2/install/bin/nghttp", {"-d", testFile.string(), url});
+   auto future = spawn("/usr/local/bin/nghttp", {"-d", testFile.string(), url});
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize);
@@ -438,8 +454,11 @@ TEST_P(External, h2spec)
    std::regex regex(R"(((\d+) tests, (\d+) passed, (\d+) skipped, (\d+) failed))");
    ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex));
    EXPECT_EQ(std::stoi(match[2].str()), 146) << match[1];
-   EXPECT_EQ(std::stoi(match[3].str()), 145)
-      << output; // https://github.com/nghttp2/nghttp2/issues/2278
+
+   // https://github.com/nghttp2/nghttp2/issues/2278
+   // https://github.com/nghttp2/nghttp2/issues/2365
+   const int expected_ok = NGHTTP2_VERSION_NUM >= 0x004100 ? 139 : 145;
+   EXPECT_EQ(std::stoi(match[3].str()), expected_ok) << output;
 }
 
 TEST_P(External, h2load)
@@ -451,7 +470,7 @@ TEST_P(External, h2load)
    if (GetParam() == anyhttp::Protocol::http11)
       args.insert(args.begin(), "--h1");
 
-   auto future = spawn("/workspaces/nghttp2/install/bin/h2load", std::move(args));
+   auto future = spawn("/usr/local/bin/h2load", std::move(args));
    run();
 
    const std::string output = future.get();

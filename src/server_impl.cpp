@@ -34,6 +34,7 @@
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
+namespace socket_option = boost::asio::detail::socket_option;
 
 namespace anyhttp::server
 {
@@ -157,8 +158,8 @@ void Server::Impl::listen_udp()
    // QUIC test -- open a UDP port
    //
    m_udp_socket.emplace(m_executor, ip::udp::endpoint(ip::udp::v4(), config().port));
-   m_udp_socket->set_option(boost::asio::detail::socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
-   m_udp_socket->set_option(boost::asio::detail::socket_option::integer<IPPROTO_IP, IP_RECVTTL>(1));
+   m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
+   m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTTL>(1));
 }
 
 // =================================================================================================
@@ -205,6 +206,7 @@ public:
    {
       socket_.async_write_some(buffers, std::move(handler));
    }
+   
    void async_read_impl(ReadWriteHandler handler, MutableBufferVector buffers) final
    {
       socket_.async_read_some(buffers, std::move(handler));

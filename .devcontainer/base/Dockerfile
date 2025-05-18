@@ -1,8 +1,7 @@
 #
 # https://github.com/microsoft/vscode-dev-containers/tree/main/containers/debian
 #
-# FROM docker.io/psedoc/cpp-devcontainer:0.12
-FROM cpp-devcontainer:1.0
+FROM docker.io/psedoc/cpp-devcontainer:0.12
 
 #
 # GDB libc++ pretty printer (works for string, but not for map with llvm-18)
@@ -65,34 +64,66 @@ RUN cd opt && \
     cd /usr/local/bin && \
     ln -s /opt/gtest-parallel/gtest-parallel
 
-RUN echo "export LESS=RS" >/etc/profile.d/less.sh
+# --------------------------------------------------------------------------------------------------
+
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig
+ENV LD_LIBRARY_PATH=/usr/local/lib
 
 #
-# TEST: build ngtcp2 with BoringSSL backend
+# boringssl / nghttp3 / ngtcp2 (using boringssl) / urlparse
 #
-RUN cd opt && git clone --recursive https://github.com/ngtcp2/nghttp3
-RUN cd opt && git clone --recursive https://github.com/ngtcp2/ngtcp2
-RUN cd opt && git clone https://boringssl.googlesource.com/boringssl
-RUN cd opt && \
-    cd boringssl && mkdir build && cd build && \
-    cmake .. -DCMAKE_POSITION_INDEPENDENT_CODE=ON && \
+# NOTE: don't install BoringSSL to /usr/local, we don't want it to interfere with OpenSSL
+#
+RUN git clone --depth 1 https://boringssl.googlesource.com/boringssl && \
+    cd boringssl && \
+    mkdir build && cd build && \
+    cmake .. -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_INSTALL_PREFIX=/opt/boringssl && \
     make -j$(nproc) && make install && \
-    cd ../..
-RUN cd opt && \
+    cd ../.. && rm -rf boringssl
+
+ARG NGHTTP3_VERSION=v1.9.0
+RUN git clone --recursive --depth 1 --branch ${NGHTTP3_VERSION} https://github.com/ngtcp2/nghttp3 && \
     cd nghttp3 && \
     autoreconf -i && \
-    ./configure --prefix=$PWD/build --enable-lib-only && \
-    make -j$(nproc) check && \
-    make install && \
-    cd ..
-RUN cd opt && \
+    ./configure --prefix=/usr/local --enable-lib-only && \
+    make -j$(nproc) check && make install && \
+    cd .. && rm -rf nghttp3
+
+ARG NGTCP2_VERSION=v1.12.0
+RUN git clone --recursive --depth 1 --branch ${NGTCP2_VERSION} https://github.com/ngtcp2/ngtcp2 && \
     cd ngtcp2 && \
     autoreconf -i && \
-    ./configure PKG_CONFIG_PATH=$PWD/../nghttp3/build/lib/pkgconfig \
-    BORINGSSL_CFLAGS="-I$PWD/../boringssl/install/include" \
-    BORINGSSL_LIBS="-L$PWD/../boringssl/install/lib -lssl -lcrypto" \
-    --with-boringssl && \
-    make -j$(nproc) check && \
-    make install
+    ./configure --prefix=/usr/local \
+       BORINGSSL_CFLAGS="-I/opt/boringssl/include" \
+       BORINGSSL_LIBS="-L/opt/boringssl/lib -lssl -lcrypto" \
+       --with-boringssl && \
+    make -j$(nproc) check && make install && \
+    cd third-party/urlparse && \
+    autoreconf -i && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && make install && \
+    cd ../.. && \
+    cd .. && rm -rf ngctp2
+  
+# ==================================================================================================
+
+#
+# nghttp2
+#
+# FIXME: try to add --enable-http3 (for nghttx and h2load only)
+#
+ARG NGHTTP2_VERSION=v1.65.0
+RUN git clone --recursive --depth 1 --branch ${NGHTTP2_VERSION} https://github.com/nghttp2/nghttp2.git && \
+    cd nghttp2 && \
+    autoreconf -i && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && make install && \
+    cd .. && rm -rf nghttp2
+
+#    ./configure --prefix=/usr/local --enable-http3 \
+#       LIBNGTCP2_CRYPTO_BORINGSSL_CFLAGS="-I/opt/boringssl/include" \
+#       LIBNGTCP2_CRYPTO_BORINGSSL_LIBS="-L/opt/boringssl/lib -lssl -lcrypto" && \
+
+# ==================================================================================================
 
 # docker build . -t anyhttp:1.0

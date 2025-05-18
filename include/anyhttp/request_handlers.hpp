@@ -82,6 +82,10 @@ boost::asio::awaitable<void> sendEOF(client::Request& request);
 
 // =================================================================================================
 
+//
+// FIXME: Do we really need to restrit to "borrowed range" here? The range is keept alive in
+//        the coroutine frame, so we do not need to worry about it's lifetime.
+//
 template <typename Range>
    requires ranges::borrowed_range<Range> && ranges::contiguous_range<Range>
 boost::asio::awaitable<void> send(client::Request& request, Range range)

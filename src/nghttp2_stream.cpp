@@ -287,6 +287,9 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    // user-provided coroutine. That coroutine is likely to call async_read_some() again,
    // resulting in another call to this function.
    //
+   // This is an expected scenario in ASIO, similar to using dispatch() instead of post()
+   // -- although ASIO also has some countermeasures against recursion I think.
+   //
    if (m_inside_call_read_handler)
    {
       logd("[{}] read_callback: avoided recursion, returning...", logPrefix);
@@ -643,6 +646,15 @@ const asio::any_io_executor& NGHttp2Stream::executor() const { return parent.exe
 
 // =================================================================================================
 
+/**
+ * This function is called if the "Request" (on the server side) is deleted. This means that we no
+ * we no longer want to to read DATA from the peer. However, we might still might want to deliver a
+ * response, like a 404. But if we reset the stream too early, this doesn't work any more.
+ *
+ * The key is to NOT close the stream early, but rely on NGHTTP/2 flow control to eventually stop
+ * any incoming DATA frames. The closing of the stream is delayed until after the response has been
+ * delivered.
+ */
 void NGHttp2Stream::delete_reader()
 {
    logd("[{}] delete_reader", logPrefix);
@@ -668,11 +680,16 @@ void NGHttp2Stream::delete_reader()
          logw("[{}] delete_reader: stream already closed", logPrefix);
       else
       {
+#if 1         
+         logw("[{}] delete_reader: not done yet, keeping stream open", logPrefix);
+         // if we do this, we have to close the stream later, see below
+#else
          logw("[{}] delete_reader: not done yet, submitting RST with STREAM_CLOSED", logPrefix);
          // nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id,
          // NGHTTP2_FLOW_CONTROL_ERROR);
          nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
          parent.start_write();
+#endif
       }
    }
 }
@@ -687,6 +704,7 @@ void NGHttp2Stream::delete_writer()
    //
    // 1) Resetting the stream when the writer is deleted also means that we may not complete
    //    reading either.
+   // 2) We could just leave the stream open and close it only when the reader has finished as well.
    //
    if (!is_writer_done)
    {
@@ -698,6 +716,12 @@ void NGHttp2Stream::delete_writer()
          nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
          parent.start_write();
       }
+   }
+   else if (!reader && !this->closed)
+   {
+      logw("[{}] delete_writer: no reader left, submitting RST with STREAM_CLOSED", logPrefix);
+      nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
+      parent.start_write();
    }
 }
 
