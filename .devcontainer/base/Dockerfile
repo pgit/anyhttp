@@ -74,12 +74,20 @@ ENV LD_LIBRARY_PATH=/usr/local/lib
 #
 # NOTE: don't install BoringSSL to /usr/local, we don't want it to interfere with OpenSSL
 #
-RUN git clone --depth 1 https://boringssl.googlesource.com/boringssl && \
-    cd boringssl && \
-    mkdir build && cd build && \
-    cmake .. -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_INSTALL_PREFIX=/opt/boringssl && \
-    make -j$(nproc) && make install && \
-    cd ../.. && rm -rf boringssl
+# RUN git clone --depth 1 https://boringssl.googlesource.com/boringssl && \
+#     cd boringssl && \
+#     mkdir build && cd build && \
+#     cmake .. -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_INSTALL_PREFIX=/opt/boringssl && \
+#     make -j$(nproc) && make install && \
+#     cd ../.. && rm -rf boringssl
+ARG AWS_LC_VERSION=v1.51.2
+RUN git clone --depth 1 -b ${AWS_LC_VERSION} https://github.com/aws/aws-lc && \
+    cd aws-lc && \
+    cmake -B build -DDISABLE_GO=ON --install-prefix=/opt/boringssl && \
+    make -j$(nproc) -C build && \
+    cmake --install build && \
+    cd .. && \
+    rm -rf aws-lc
 
 ARG NGHTTP3_VERSION=v1.9.0
 RUN git clone --recursive --depth 1 --branch ${NGHTTP3_VERSION} https://github.com/ngtcp2/nghttp3 && \
@@ -107,10 +115,16 @@ RUN git clone --recursive --depth 1 --branch ${NGTCP2_VERSION} https://github.co
   
 # ==================================================================================================
 
+# RUN git clone --depth 1 -b v1.5.0 https://github.com/libbpf/libbpf && \
+#     cd libbpf && \
+#     PREFIX=/usr/local LIBDIR=/usr/local/lib make -j$(nproc) -C src install && \
+#     cd .. && rm -rf libbpf
+
 #
 # nghttp2
 #
 # FIXME: try to add --enable-http3 (for nghttx and h2load only)
+# Seems like OpenSSL gets in the way of BoringSSL (aws-lc) somehow.
 #
 ARG NGHTTP2_VERSION=v1.65.0
 RUN git clone --recursive --depth 1 --branch ${NGHTTP2_VERSION} https://github.com/nghttp2/nghttp2.git && \
@@ -120,9 +134,9 @@ RUN git clone --recursive --depth 1 --branch ${NGHTTP2_VERSION} https://github.c
     make -j$(nproc) && make install && \
     cd .. && rm -rf nghttp2
 
-#    ./configure --prefix=/usr/local --enable-http3 \
-#       LIBNGTCP2_CRYPTO_BORINGSSL_CFLAGS="-I/opt/boringssl/include" \
-#       LIBNGTCP2_CRYPTO_BORINGSSL_LIBS="-L/opt/boringssl/lib -lssl -lcrypto" && \
+#    ./configure --prefix=/usr/local --with-mruby --enable-http3 --with-libbpf \
+#        LIBNGTCP2_CRYPTO_BORINGSSL_CFLAGS="-I/opt/boringssl/include" \
+#        LIBNGTCP2_CRYPTO_BORINGSSL_LIBS="-L/opt/boringssl/lib -lssl -lcrypto" && \
 
 # ==================================================================================================
 
