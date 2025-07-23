@@ -1,26 +1,29 @@
-
 #include "anyhttp/nghttp2_session.hpp"
+
 #include "anyhttp/client.hpp"
 #include "anyhttp/common.hpp"
 #include "anyhttp/detail/nghttp2_session_details.hpp"
+#include "anyhttp/formatter.hpp" // IWYU pragma: keep
+#include "anyhttp/nghttp2_common.hpp"
 #include "anyhttp/nghttp2_stream.hpp"
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ssl/stream.hpp>
+
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/beast/core/static_buffer.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/http/error.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
-
 #include <boost/url/format.hpp>
-
 #include <boost/url/parse.hpp>
-#include <charconv>
+
 #include <nghttp2/nghttp2.h>
+
+#include <charconv>
 #include <string>
 
 using namespace boost::asio::experimental::awaitable_operators;
@@ -469,7 +472,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
 
    auto id = nghttp2_submit_request(session, nullptr, nva.data(), nva.size(), &prd, this);
    stream->id = id;
-   stream->logPrefix = fmt::format("{}.{}", logPrefix(), id);
+   stream->logPrefix = std::format("{}.{}", logPrefix(), id);
 
    for (auto nv : nva)
       mlogd("submit: {}: {}", std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen),

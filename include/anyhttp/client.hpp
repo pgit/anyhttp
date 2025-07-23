@@ -57,10 +57,12 @@ public:
    ~Request();
 
    const asio::any_io_executor& executor() const;
-
+   
 public:
    using GetResponse = void(boost::system::error_code, Response);
    using GetResponseHandler = asio::any_completion_handler<GetResponse>;
+
+   using executor_type = asio::any_io_executor;
 
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken>
    auto async_get_response(CompletionToken&& token)
@@ -124,7 +126,8 @@ public:
    const asio::any_io_executor& executor() const;
 
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken>
-   auto async_connect(CompletionToken&& token)
+   auto async_connect(CompletionToken&& token =
+        asio::default_completion_token_t<asio::any_io_executor>())
    {
       return boost::asio::async_initiate<CompletionToken, Connect>(
          [&](ConnectHandler&& handler) { //

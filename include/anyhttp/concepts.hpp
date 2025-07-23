@@ -8,6 +8,9 @@
 namespace anyhttp
 {
 
+template <typename T>
+concept ConstBufferSequence = boost::asio::is_const_buffer_sequence<T>::value;
+
 //
 // https://think-async.com/Asio/asio-1.11.0/doc/asio/reference/AsyncReadStream.html
 // https://think-async.com/Asio/asio-1.11.0/doc/asio/reference/AsyncWriteStream.html
@@ -32,8 +35,5 @@ concept AsyncReadStream = requires(T t, const MutableBufferSequence& buffers, To
    requires std::is_destructible_v<T>;
    requires std::is_move_constructible_v<T>;
 };
-
-
-
 
 } // namespace anyhttp

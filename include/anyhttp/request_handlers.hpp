@@ -11,8 +11,6 @@
 
 #include <boost/system/detail/error_code.hpp>
 
-#include <fmt/ostream.h>
-
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/chunk.hpp>
 #include <range/v3/view/iota.hpp>
@@ -83,30 +81,21 @@ boost::asio::awaitable<void> sendEOF(client::Request& request);
 // =================================================================================================
 
 //
-// FIXME: Do we really need to restrit to "borrowed range" here? The range is keept alive in
+// FIXME: Do we really need to restrict to "borrowed range" here? The range is kept alive in
 //        the coroutine frame, so we do not need to worry about it's lifetime.
 //
 template <typename Range>
    requires ranges::borrowed_range<Range> && ranges::contiguous_range<Range>
 boost::asio::awaitable<void> send(client::Request& request, Range range)
 {
-   logi("send: (continous range)...");
-#if 0
-   try
-   {
-      co_await request.async_write(asio::buffer(range.data(), range.size()), asio::deferred);
-   }
-   catch (const boost::system::system_error& ec)
-   {
-      loge("send: (contiguous range)... {}", ec.code().message());
-      throw;
-   }
-#else
+   logi("send: (continuous range)...");
    co_await request.async_write(asio::buffer(range.data(), range.size()), asio::deferred);
-#endif
-   logi("send: (continous range)... done");
+   logi("send: (continuous range)... done");
 }
 
+//
+// For a non-contiguous range, we need to copy into a buffer first.
+//
 template <typename Range>
    requires ranges::borrowed_range<Range> && (!ranges::contiguous_range<Range>)
 boost::asio::awaitable<void> send(client::Request& request, Range range)
@@ -127,7 +116,7 @@ boost::asio::awaitable<void> send(client::Request& request, Range range)
       //        it happens more often than with DEBUG.
       //
       auto result = co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()),
-                                                 asio::as_tuple(asio::deferred));
+                                                 asio::as_tuple);
       if (auto ec = std::get<0>(result))
       {
          loge("send: (range) \x1b[1;31m{}\x1b[0m after {} bytes", what(ec), bytes);

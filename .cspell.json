@@ -1,19 +1,40 @@
 {
     "words": [
+        "64kminus1",
         "anyhttp",
+        "ASAN",
+        "ASIO",
         "coro",
+        "Eisenlohr",
+        "epoll",
+        "GTEST",
         "HCAT",
+        "IOCP",
+        "IWYU",
         "logd",
         "loge",
         "logi",
         "logw",
+        "logwi",
+        "marp",
         "mlogd",
         "mloge",
         "mlogi",
         "mlogw",
+        "ngtcp",
         "pynghttp",
+        "QUIC",
+        "RECVTOS",
+        "respawn",
         "RESPAWNED",
+        "respawning",
         "spdlog",
-        "testcases"
+        "testcases",
+        "TLSEXT",
+        "TSAN"
+    ],
+    "ignorePaths": [
+        ".devcontainer/*",
+        "**/CMakeLists.txt"
     ]
 }

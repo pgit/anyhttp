@@ -1,7 +1,7 @@
 find_package(GTest REQUIRED)
 target_link_libraries(GTest::GTest INTERFACE gtest_main)
 
-link_libraries(Boost::atomic Boost::url Boost::filesystem)
+link_libraries(Boost::atomic Boost::url Boost::filesystem Boost::process)
 
 file(GLOB SRC_FILES test_*.cpp)
 add_executable(test_all ${SRC_FILES})

@@ -6,22 +6,16 @@
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/signal_set.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/asio/use_awaitable.hpp>
+
 #include <boost/program_options.hpp>
-
-// #include <range/v3/view/take_while.hpp>
-// #include <range/v3/view/transform.hpp>
-#include <ranges>
-
-#include <fmt/ostream.h>
 
 #include <expected>
 #include <iostream>
-
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/ip/tcp.hpp>
+#include <ranges>
 
 namespace rv = std::ranges::views;
 
@@ -59,7 +53,7 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
    }
    catch (const po::error& error)
    {
-      fmt::println(stderr, "{}", error.what());
+      std::println(stderr, "{}", error.what());
       return std::unexpected(-1);
    }
 
@@ -72,7 +66,7 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
    size_t num_threads = vm["threads"].as<size_t>();
    if (num_threads == 0)
    {
-      fmt::println(stderr, "number of threads must be greater than 0");
+      std::println(stderr, "number of threads must be greater than 0");
       return std::unexpected(1);
    }
 
@@ -99,7 +93,7 @@ int main(int argc, char* argv[])
    signals.async_wait(
       [&](boost::system::error_code error, auto signal)
       {
-         fmt::println(" INTERRUPTED (signal {})", signal);
+         std::println(" INTERRUPTED (signal {})", signal);
          logw("interrupt");
          server.reset();
       });

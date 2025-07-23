@@ -1,15 +1,14 @@
 #include "anyhttp/server_impl.hpp"
+
 #include "anyhttp/any_async_stream.hpp"
 #include "anyhttp/beast_session.hpp"
-#include "anyhttp/common.hpp"
-#include "anyhttp/detect_http2.hpp"
-
-#include "anyhttp/beast_session.hpp"
 #include "anyhttp/detail/nghttp2_session_details.hpp"
+#include "anyhttp/detect_http2.hpp"
+#include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/nghttp2_session.hpp"
-#include "range/v3/view/any_view.hpp"
 
 #include <boost/asio.hpp>
+#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/as_single.hpp>
 #include <boost/asio/ip/address_v6.hpp>
@@ -23,11 +22,14 @@
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 
-#include <netinet/udp.h>
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
 
+#include <netinet/udp.h>
 // #include <netinet/ip.h>
+
+#include <print>
+
 #define IPTOS_ECN_MASK 0x03
 
 #include "ngtcp2/shared.h"
@@ -206,14 +208,14 @@ public:
    {
       socket_.async_write_some(buffers, std::move(handler));
    }
-   
+
    void async_read_impl(ReadWriteHandler handler, MutableBufferVector buffers) final
    {
       socket_.async_read_some(buffers, std::move(handler));
    }
 
 private:
-   ip::tcp::socket socket_;  // the underlying socket, for cancellation
+   ip::tcp::socket socket_; // the underlying socket, for cancellation
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -244,7 +246,6 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 
    auto buffer = boost::beast::flat_buffer();
 
-
    //
    // detect TLS
    //
@@ -261,8 +262,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       ctx.use_private_key_file("etc/darkbase-key.pem", asio::ssl::context::pem);
 
       sslStream.emplace(std::move(socket), ctx);
-      auto n = co_await sslStream->async_handshake(asio::ssl::stream_base::server, buffer.data(),
-                                                   asio::deferred);
+      auto n = co_await sslStream->async_handshake(asio::ssl::stream_base::server, buffer.data());
       buffer.consume(n);
 
       //
@@ -338,7 +338,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 
 /**
  * Typically, a listen loop "spawns" a new thread of execution for each connection it accepts.
- * Doing that in a "detached" fassion violates the principles of structured concurrency, as we
+ * Doing that in a "detached" fashion violates the principles of structured concurrency, as we
  * don't have a clear way of cancelling those threads.
  *
  * To solve this, we always use spawn with a callback and use that to wait for pending tasks.
@@ -350,13 +350,13 @@ awaitable<void> Server::Impl::listen_loop()
 {
    assert(m_acceptor);
    auto& acceptor = *m_acceptor;
-   auto executor = co_await boost::asio::this_coro::executor;
+   const auto executor = co_await boost::asio::this_coro::executor;
 
    //
    // FIXME: sessionCounter and m_sessions are not thread safe, yet
    //
    // The main problem with m_sessions is that the new session is emplaced within
-   // handleConnection(), which is already outside this couroutine's strand.
+   // handleConnection(), which is already outside this coroutines strand.
    //
    // Maybe the simplest solution is to put a mutex around it...
    //
@@ -376,7 +376,7 @@ awaitable<void> Server::Impl::listen_loop()
       auto ep = normalize(socket.remote_endpoint());
 
       //
-      // Without something like a "nursery" or "async_scope", spwaning a task detaches it from
+      // Without something like a "nursery" or "async_scope", spawning a task detaches it from
       // the owning class without any means to join it. Here, we use a simple session counter to
       // track their lifetime.
       //
@@ -385,24 +385,29 @@ awaitable<void> Server::Impl::listen_loop()
          ++sessionCounter;
       }
 
-      // put each connection on a strand if needed
-      if (config().use_strand)
-         executor = boost::asio::make_strand(executor);
-
-      co_spawn(
-         executor,
+      //
+      // Put each connection on a strand if needed.
+      //
+      // TODO: This is slow. Consider multiple IO contexts instead,
+      //       or explicit thread pools where really needed.
+      //
+      co_spawn(config().use_strand ? boost::asio::make_strand(executor) : executor,
+#if 1
+               handleConnection(std::move(socket)),
+#else      
          [this, socket = std::move(socket)]() mutable { //
             return handleConnection(std::move(socket));
          },
-         [&](const std::exception_ptr& ex) mutable
-         {
-            auto lock = std::lock_guard(m_sessionMutex);
-            --sessionCounter;
-            if (ex)            
-               logw("[{}] {}", ep, what(ex));
-            else
-               logi("[{}] session finished, {} sessions left", ep, sessionCounter);            
-         });
+#endif
+               [&](const std::exception_ptr& ex) mutable
+               {
+                  auto lock = std::lock_guard(m_sessionMutex);
+                  --sessionCounter;
+                  if (ex)
+                     logw("[{}] {}", ep, what(ex));
+                  else
+                     logi("[{}] session finished, {} sessions left", ep, sessionCounter);
+               });
    }
 
    auto lock = std::unique_lock(m_sessionMutex);
@@ -417,7 +422,7 @@ awaitable<void> Server::Impl::listen_loop()
       m_sessions.clear();
 
       lock.unlock();
-      co_await post(executor, asio::deferred);
+      co_await post(executor);
       lock.lock();
    }
 
@@ -484,14 +489,14 @@ awaitable<void> Server::Impl::udp_receive_loop()
             else if (cmsg->cmsg_type == IP_TTL)
             {
                int ttl = *reinterpret_cast<int*>(CMSG_DATA(cmsg));
-               std::cout << "Received TTL: " << ttl << "\n";
+               std::println("Received TTL: {}", ttl);
             }
          }
          else if (cmsg->cmsg_level == SOL_UDP && cmsg->cmsg_type == UDP_GRO)
          {
             int gso_size = 0;
             memcpy(&gso_size, CMSG_DATA(cmsg), sizeof(gso_size));
-            std::cout << "Received UDP GRO " << gso_size << "\n";
+            std::println("Received UDP GRO {}", gso_size);
             break;
          }
       }

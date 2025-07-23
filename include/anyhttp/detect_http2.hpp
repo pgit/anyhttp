@@ -8,7 +8,6 @@
 #include <boost/logic/tribool.hpp>
 
 #include <cstring>
-#include <iostream>
 
 namespace anyhttp::server
 {
@@ -18,25 +17,43 @@ namespace asio = boost::asio;
 
 namespace detail
 {
-template <class ConstBufferSequence>
+template <typename T>
+concept ConstBufferSequence = boost::asio::is_const_buffer_sequence<T>::value;
+
+template <ConstBufferSequence ConstBufferSequence>
+boost::tribool buffer_sequence_starts_with(const ConstBufferSequence& buffers, std::string_view prefix)
+{
+   if (prefix.empty()) // corner case
+      return true;
+
+   std::size_t matched = 0;
+   const auto begin = boost::asio::buffer_sequence_begin(buffers);
+   const auto end = boost::asio::buffer_sequence_end(buffers);
+   for (auto it = begin; it != end; ++it)
+   {
+      const char* data = static_cast<const char*>(it->data());
+      std::size_t size = it->size();
+
+      std::size_t to_compare = std::min(size, prefix.size() - matched);
+      if (std::memcmp(data, prefix.data() + matched, to_compare) != 0)
+         return false;
+
+      matched += to_compare;
+      if (matched == prefix.size())
+         return true;
+   }
+
+   return boost::indeterminate;
+}
+
+template <ConstBufferSequence ConstBufferSequence>
 boost::tribool is_http2_client_preface(const ConstBufferSequence& buffers)
 {
    // Make sure buffers meets the requirements
    static_assert(asio::is_const_buffer_sequence<ConstBufferSequence>::value,
                  "ConstBufferSequence type requirements not met");
 
-   // Flatten the input buffers into a single contiguous range
-   // of bytes on the stack to make it easier to work with the data.
-   std::array<char, 24> buf;
-   auto const n = asio::buffer_copy(asio::mutable_buffer(buf.data(), buf.size()), buffers);
-
-   if (strncmp("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", buf.data(), n))
-      return false;
-
-   if (n < 24)
-      return boost::indeterminate;
-
-   return true;
+   return buffer_sequence_starts_with(buffers, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
 }
 
 using boost::beast::detail::is_tls_client_hello;
@@ -60,8 +77,13 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
    using namespace boost::asio;
    return async_initiate<CompletionToken, void(boost::system::error_code, size_t)>(
       experimental::co_composed<void(boost::system::error_code, bool)>(
-         [](auto state, AsyncReadStream& stream, DynamicBuffer& buffer) -> void
+         [](auto state, DynamicBuffer& buffer, AsyncReadStream& stream) -> void
          {
+            //
+            // https://think-async.com/Asio/asio-1.26.0/doc/asio/reference/experimental__co_composed.html
+            //
+            // With co_composed, per-operation cancellation is NOT enabled by default.
+            //
             state.throw_if_cancelled(true);
             state.reset_cancellation_state(enable_terminal_cancellation());
 
@@ -79,14 +101,14 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
                   co_return {{}, static_cast<bool>(result)};
 
                auto prepared = buffer.prepare(1460);
-               auto [ec, n] = co_await stream.async_read_some(prepared, as_tuple(deferred));
+               auto [ec, n] = co_await stream.async_read_some(prepared, as_tuple);
                if (ec)
                   co_return {ec, false};
                buffer.commit(n);
             }
          },
          stream),
-      token, std::ref(stream), std::ref(buffer));
+      token, std::ref(buffer), std::ref(stream));
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -105,7 +127,6 @@ auto async_detect_ssl_awaitable(AsyncReadStream& stream, DynamicBuffer& buffer,
       experimental::co_composed<void(boost::system::error_code, bool)>(
          [](auto state, AsyncReadStream& stream, DynamicBuffer& buffer) -> void
          {
-            state.throw_if_cancelled(false);
             state.reset_cancellation_state(enable_terminal_cancellation());
 
             for (;;)
@@ -115,7 +136,7 @@ auto async_detect_ssl_awaitable(AsyncReadStream& stream, DynamicBuffer& buffer,
                   co_return {{}, static_cast<bool>(result)};
 
                auto prepared = buffer.prepare(1460);
-               auto [ec, n] = co_await stream.async_read_some(prepared, as_tuple(deferred));
+               auto [ec, n] = co_await stream.async_read_some(prepared, as_tuple);
                if (ec)
                   co_return {ec, false};
                buffer.commit(n);

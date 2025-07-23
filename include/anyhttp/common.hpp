@@ -1,5 +1,6 @@
 #pragma once
 
+#include <anyhttp/common.hpp>
 #include <anyhttp/concepts.hpp>
 
 #include <boost/asio/any_completion_handler.hpp>
@@ -9,16 +10,16 @@
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
+#include <boost/beast/http/fields.hpp>
+
+#include <boost/beast/http/fields_fwd.hpp>
+#include <boost/beast/http/type_traits.hpp>
 #include <boost/core/detail/string_view.hpp>
 #include <boost/system/system_error.hpp>
 #include <boost/url/authority_view.hpp>
 #include <boost/url/pct_string_view.hpp>
-#include <fmt/format.h>
-#include <fmt/ostream.h>
 
 #include <spdlog/spdlog.h>
-
-#include <nghttp2/nghttp2.h>
 
 #include <chrono>
 #include <map>
@@ -26,10 +27,6 @@
 namespace anyhttp
 {
 namespace asio = boost::asio;
-// using asio::awaitable;
-// using asio::deferred;
-// using asio::any_io_executor;
-// namespace ip = asio::ip;  // IWYU pragma: export
 
 // =================================================================================================
 
@@ -47,6 +44,8 @@ std::ostream& operator<<(std::ostream& str, Protocol protocol);
 // =================================================================================================
 
 using Fields = std::map<std::string, std::string>;
+// using Fields = boost::beast::http::fields;
+// static_assert(boost::beast::http::is_fields<Fields>::value);
 
 using ReadSome = void(boost::system::error_code, size_t);
 using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
@@ -102,20 +101,6 @@ public:
 
 // =================================================================================================
 
-// Create nghttp2_nv from string literal |name| and std::string |value|.
-// FIXME: don't use this, it is dangerous (prone to dangling string references)
-template <size_t N>
-nghttp2_nv make_nv_ls(const char (&name)[N], const std::string& value)
-{
-   return {(uint8_t*)name, (uint8_t*)value.c_str(), N - 1, value.size(),
-           NGHTTP2_NV_FLAG_NO_COPY_NAME};
-}
-
-inline nghttp2_nv make_nv_ls(const std::string& key, const std::string& value)
-{
-   return {(uint8_t*)key.c_str(), (uint8_t*)value.c_str(), key.size(), value.size(), 0};
-}
-
 template <class T>
 constexpr auto make_string_view(const T* data, size_t len)
 {
@@ -146,35 +131,6 @@ asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint);
 
 }; // namespace anyhttp
 
-// =================================================================================================
-
-#define ENABLE_FMT_OSTREAM(X)                                                                      \
-   template <>                                                                                     \
-   struct fmt::formatter<X> : ostream_formatter                                                    \
-   {                                                                                               \
-   }
-
-ENABLE_FMT_OSTREAM(boost::core::string_view);
-ENABLE_FMT_OSTREAM(boost::asio::ip::tcp::endpoint);
-ENABLE_FMT_OSTREAM(std::__thread_id);
-ENABLE_FMT_OSTREAM(boost::urls::pct_string_view);
-ENABLE_FMT_OSTREAM(boost::urls::authority_view);
-
-#undef ENANBLE_FMT_OSTREAM
-
-// -------------------------------------------------------------------------------------------------
-
-// https://github.com/fmtlib/fmt/issues/2865
-template <>
-struct fmt::formatter<std::filesystem::path> : formatter<std::string_view>
-{
-   template <typename FormatContext>
-   auto format(const std::filesystem::path& path, FormatContext& ctx)
-   {
-      return formatter<std::string_view>::format(path.string(), ctx);
-   }
-};
-
 // -------------------------------------------------------------------------------------------------
 
 /// Get error message from exception pointer, as returned by \c co_spawn().
@@ -188,12 +144,6 @@ std::string format_http_date(std::chrono::system_clock::time_point tp);
 
 // -------------------------------------------------------------------------------------------------
 
-#if 0
-#define loge(...) SPDLOG_ERROR(__VA_ARGS__)
-#define logw(...) SPDLOG_WARN(__VA_ARGS__)
-#define logi(...) SPDLOG_INFO(__VA_ARGS__)
-#define logd(...) SPDLOG_DEBUG(__VA_ARGS__)
-#else
 #define logwi(ec, ...)                                                                             \
    do                                                                                              \
    {                                                                                               \
@@ -230,7 +180,6 @@ std::string format_http_date(std::chrono::system_clock::time_point tp);
       if (spdlog::default_logger_raw()->should_log(spdlog::level::debug))                          \
          spdlog::default_logger_raw()->debug(__VA_ARGS__);                                         \
    } while (false)
-#endif
 
 #define mloge(x, ...) loge("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
 #define mlogd(x, ...) logd("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)

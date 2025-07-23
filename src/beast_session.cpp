@@ -1,6 +1,7 @@
 #include "anyhttp/beast_session.hpp"
 #include "anyhttp/any_async_stream.hpp"
 #include "anyhttp/server.hpp"
+#include "anyhttp/common.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
@@ -282,7 +283,6 @@ public:
       // a single large buffer, cancellation can not be done gracefully at chunk boundary.
       //
       http::async_write(stream, serializer, asio::bind_cancellation_slot(slot, std::move(cb)));
-      // http::async_write(stream, serializer, std::move(cb));
    }
 
    // ----------------------------------------------------------------------------------------------
@@ -551,6 +551,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          reader->m_url.set_scheme("https");
       else
          reader->m_url.set_scheme("http");
+
       try
       {
          reader->m_url.set_encoded_authority(request[http::field::host]);

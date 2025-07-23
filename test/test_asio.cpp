@@ -175,7 +175,7 @@ TEST_F(ComposedIndirect, AnyDetached)
 // =================================================================================================
 
 /**
- * Passing the executor explicitly is not very idiomatic -- instaed just bind the executor to
+ * Passing the executor explicitly is not very idiomatic -- instead just bind the executor to
  * the completion token.
  */
 class ComposedIndirectExplicit : public testing::Test
@@ -249,7 +249,7 @@ public:
          {
             std::ignore = duration;
             std::ignore = handler;
-            std::move(handler)(boost::system::error_code{});
+            // std::move(handler)(boost::system::error_code{});
          },
          token, duration);
    }
@@ -291,12 +291,21 @@ TEST_F(ComposedAsyncInitiate, DropHandler)
 {
    boost::asio::io_context context;
 
+   class Blah
+   {
+   public:
+      Blah() { logi("constructor"); }
+      ~Blah() { logi("destructor"); }
+   };
+
    co_spawn(
       context.get_executor(),
       [&]() -> asio::awaitable<void>
       {
          co_await async_sleep(100ms, asio::deferred);
+         Blah blah1;
          co_await drop_handler(100ms, asio::deferred);
+         Blah blah2;
       },
       [](const std::exception_ptr& ex)
       {
@@ -337,7 +346,7 @@ TEST_F(ComposedAsyncInitiate, DropHandlerFuture)
 // fetchted using get_io_executor()...
 //
 // UPDATE: Actually, this works. When calling the initiating function, we have to bind the
-//         executor to the completion token, as usual. No suprises here. Comparing to
+//         executor to the completion token, as usual. No surprises here. Comparing to
 //         async_initiate<>, the only difference is that we get the executor from the state object
 //         instead of calling get_associated_executor().
 //
@@ -357,6 +366,7 @@ public:
             {
                auto ex = state.get_io_executor();
                auto thread_id = std::this_thread::get_id();
+               std::cout << thread_id;
                std::println("waiting in thread {}...", thread_id);
                // asio::steady_timer timer(ex, duration);
                // auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::deferred));

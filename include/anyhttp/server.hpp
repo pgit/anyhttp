@@ -45,7 +45,6 @@ public:
 
 private:
    void async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler);
-
    std::unique_ptr<Impl> impl;
 };
 

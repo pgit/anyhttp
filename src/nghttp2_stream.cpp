@@ -1,7 +1,9 @@
 #include "anyhttp/nghttp2_stream.hpp"
+
 #include "anyhttp/common.hpp"
+#include "anyhttp/nghttp2_common.hpp"
 #include "anyhttp/nghttp2_session.hpp"
-#include "anyhttp/request_handlers.hpp"
+#include "anyhttp/request_handlers.hpp" // IWYU pragma: keep
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
@@ -108,8 +110,10 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
       cs.assign(
          [this](asio::cancellation_type_t ct)
          {
-            logd("[{}] async_read_some: \x1b[1;31mcancelled\x1b[0m ({})", stream->logPrefix,
-                 int(ct));
+            logd("[{}] async_read_some: \x1b[1;31m"
+                 "cancelled"
+                 "\x1b[0m ({})",
+                 stream->logPrefix, int(ct));
 
             if (stream->m_read_handler)
             {
@@ -197,7 +201,7 @@ void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int stat
    auto nva = std::vector<nghttp2_nv>();
    nva.reserve(3 + headers.size());
 
-   std::string status_code_str = fmt::format("{}", status_code);
+   std::string status_code_str = std::format("{}", status_code);
    nva.push_back(make_nv_ls(":status", status_code_str));
    std::string date = format_http_date(std::chrono::system_clock::now());
    nva.push_back(make_nv_ls("date", date));
@@ -215,7 +219,7 @@ void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int stat
    std::string length_str;
    if (m_content_length)
    {
-      length_str = fmt::format("{}", *m_content_length);
+      length_str = std::format("{}", *m_content_length);
       nva.push_back(make_nv_ls("content-length", length_str));
    }
 
@@ -254,7 +258,7 @@ void NGHttp2Writer<Base>::async_get_response(client::Request::GetResponseHandler
 // =================================================================================================
 
 NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int id_)
-   : parent(parent), id(id_), logPrefix(fmt::format("{}.{}", parent.logPrefix(), id_))
+   : parent(parent), id(id_), logPrefix(std::format("{}.{}", parent.logPrefix(), id_))
 {
    logd("[{}] \x1b[1;33mStream: ctor\x1b[0m", logPrefix);
 }
@@ -389,7 +393,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    }
 
    //
-   // If there is no furhter user-provided read handler to call, we can return now.
+   // If there is no further user-provided read handler to call, we can return now.
    // The rest of this function is about delivering EOF or error codes.
    //
    if (!m_read_handler)
@@ -494,13 +498,16 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
       slot.assign(
          [this](asio::cancellation_type_t ct)
          {
-            logd("[{}] async_write: \x1b[1;31mcancelled\x1b[0m ({})", logPrefix, int(ct));
+            logd("[{}] async_write: \x1b[1;31m"
+                 "cancelled"
+                 "\x1b[0m ({})",
+                 logPrefix, int(ct));
             delete_writer();
 
             if (sendHandler)
             {
-               using namespace boost::system;
-               swap_and_invoke(sendHandler, errc::make_error_code(errc::operation_canceled));
+               using namespace boost::system::errc;
+               swap_and_invoke(sendHandler, make_error_code(operation_canceled));
             }
          });
    }
@@ -680,7 +687,7 @@ void NGHttp2Stream::delete_reader()
          logw("[{}] delete_reader: stream already closed", logPrefix);
       else
       {
-#if 1         
+#if 1
          logw("[{}] delete_reader: not done yet, keeping stream open", logPrefix);
          // if we do this, we have to close the stream later, see below
 #else

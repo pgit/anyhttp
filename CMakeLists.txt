@@ -28,6 +28,9 @@ add_link_options(-stdlib=libc++ -lstdc++fs)
 # needed for ranges/v3 starting with clang 19
 add_compile_options(-Wno-deprecated-declarations)
 
+# we don't use fmtlib any more
+add_compile_options(-DSPDLOG_USE_STD_FORMAT)
+
 # FIXME: nghttp2 reader/writer needs this ATM
 add_compile_options(-Wno-inconsistent-missing-override)
 
@@ -37,8 +40,8 @@ add_compile_options(-Wno-inconsistent-missing-override)
 # find boost
 # https://github.com/madmongo1/blog-december-2020/blob/master/CMakeLists.txt
 #
-find_package(Boost 1.78 COMPONENTS system thread atomic coroutine url filesystem program_options REQUIRED)
-find_package(OpenSSL COMPONENTS)
+find_package(Boost 1.78 COMPONENTS system thread atomic coroutine url filesystem program_options process REQUIRED)
+find_package(OpenSSL)
 find_package(Threads)
 
 #
@@ -52,11 +55,6 @@ find_package(Threads)
 #
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2)
-
-#
-# fmt
-#
-find_package(fmt)
 
 #
 # range-v3

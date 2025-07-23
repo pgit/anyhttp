@@ -27,14 +27,15 @@
 
 			// Add the IDs of extensions you want installed when the container is created.
 			"extensions": [
-				"ms-vscode.cpptools",
+				"llvm-vs-code-extensions.vscode-clangd",				
+				"matepek.vscode-catch2-test-adapter",
 				"ms-vscode.cmake-tools",
 				"ms-vscode.cpptools-extension-pack",
-				"llvm-vs-code-extensions.vscode-clangd",				
-				"xaver.clang-format",
-				"vadimcn.vscode-lldb",
+				"ms-vscode.cpptools",
+				"streetsidesoftware.code-spell-checker",
 				"usernamehw.errorlens",
-				"matepek.vscode-catch2-test-adapter"
+				"vadimcn.vscode-lldb",
+				"xaver.clang-format"
 			]			
 		}
 	},
@@ -46,7 +47,7 @@
 	// "postCreateCommand": "gcc -v",
 
 	"mounts": [
-		"source=cpp-devcontainer-bashhistory,target=/commandhistory,type=volume",
+		"source=cpp-devcontainer-bashhistory,target=/commandhistory,type=volume"
 		// "source=${localEnv:HOME}/src/nghttp2,target=/workspaces/nghttp2,type=bind,consistency=cached",
 		// "source=${localEnv:HOME}/src/ngtcp2,target=/workspaces/ngtcp2,type=bind,consistency=cached"
 	],

@@ -1,7 +1,5 @@
 #pragma once
 
-#include <span>
-
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
@@ -16,9 +14,6 @@
 #include <boost/beast/core/stream_traits.hpp>
 
 #include <range/v3/view/any_view.hpp>
-
-#include <fmt/core.h>
-#include <fmt/ranges.h>
 
 namespace asio = boost::asio;
 namespace ip = asio::ip;

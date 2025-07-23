@@ -1,15 +1,16 @@
 
-#include <boost/asio/buffer.hpp>
-#include <boost/asio/error.hpp>
-#include <utility>
-
 #include "anyhttp/client.hpp"
 #include "anyhttp/client_impl.hpp"
 
-// =================================================================================================
+#include <boost/asio/buffer.hpp>
+#include <boost/asio/error.hpp>
+
+#include <utility>
 
 namespace anyhttp::client
 {
+   
+// =================================================================================================
 
 Request::Request(std::unique_ptr<Request::Impl> impl_) : impl(std::move(impl_))
 {

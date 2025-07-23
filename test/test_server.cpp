@@ -19,6 +19,8 @@
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/http/error.hpp>
 
+#include <boost/algorithm/string/join.hpp>
+
 #include <boost/filesystem/path.hpp>
 
 #include <boost/process.hpp>
@@ -40,15 +42,15 @@
 
 #include <gtest/gtest.h>
 
-#include <fmt/ostream.h>
-#include <fmt/ranges.h>
-
 #include <range/v3/view/iota.hpp>
 #include <range/v3/view/take.hpp>
 #include <range/v3/view/transform.hpp>
 
+#include <ranges>
+
 using namespace std::chrono_literals;
-namespace bp = boost::process::v1;
+namespace bp = boost::process::v2;
+
 using namespace boost::asio;
 namespace asio = boost::asio;
 using namespace boost::asio::experimental::awaitable_operators;
@@ -87,15 +89,16 @@ class Empty : public testing::Test
 TEST_F(Empty, Hello)
 {
    boost::process::filesystem::path path{"."};
-   std::cout << "Hello, World!" << '\n';
-   std::cout << "Path: " << path << '\n';
+   std::println("Hello, World!");
+   std::println("Path: {}", path.string());
 }
 
 TEST_F(Empty, Path)
 {
    bp::filesystem::path path("/usr/bin/echo");
-   std::cout << "spawn: " << path.string() << '\n';
+   std::println("spawn: {}", path.string());
 }
+
 
 // =================================================================================================
 
@@ -233,30 +236,51 @@ TEST_P(Server, Stop)
 class External : public Server
 {
 protected:
-   awaitable<void> log(bp::async_pipe pipe)
+   auto split_lines(std::string_view lines)
    {
-      std::string buffer;
-      for (;;)
-      {
-         auto [ex, n] = co_await asio::async_read_until(pipe, asio::dynamic_buffer(buffer), '\n',
-                                                        as_tuple(deferred));
+      if (lines.ends_with('\n'))
+         lines.remove_suffix(1);
 
-         if (n)
-         {
-            auto sv = std::string_view(buffer).substr(0, n - 1);
-            logw("STDERR: \x1b[32m{}\x1b[0m", sv);
-            buffer.erase(0, n);
-         }
-
-         if (ex)
-            break;
-      }
-
-      if (!buffer.empty())
-         logw("STDERR: \x1b[32m{}\x1b[0m", buffer);
+      return lines | std::views::split('\n') |
+             std::views::transform([](auto range) { return std::string_view(range); });
    }
 
-   awaitable<std::string> consume(bp::async_pipe pipe)
+   awaitable<void> log(std::string prefix, readable_pipe& pipe)
+   {
+      std::string buffer;
+      auto print = [&](std::string_view line)
+      {
+         if (line.ends_with('\r'))
+            line.remove_suffix(1);
+         // print trailing '…' if there is more data in the buffer after this line
+         const auto continuation = (line.size() + 1 == buffer.size()) ? "" : "…";
+         std::println("{}: \x1b[32m{}\x1b[0m{}", prefix, line, continuation);
+      };
+
+      auto cs = co_await this_coro::cancellation_state;
+      try
+      {
+         for (;;)
+         {
+            auto n = co_await async_read_until(pipe, dynamic_buffer(buffer), '\n');
+            print(std::string_view(buffer).substr(0, n - 1));
+            buffer.erase(0, n);
+         }
+      }
+      catch (const boost::system::system_error& ec)
+      {
+         if (cs.cancelled() != cancellation_type::none)
+            std::println("CANCELLED");
+         for (auto line : split_lines(buffer))
+            print(line);
+         if (ec.code() == error::eof)
+            co_return;
+         std::println("{}: {}", prefix, ec.code().message());
+         throw;
+      }
+   }
+
+   awaitable<std::string> consume(readable_pipe pipe)
    {
       std::string result;
       std::vector<char> buf(1460);
@@ -274,22 +298,24 @@ protected:
 
    awaitable<std::string> spawn_process(bp::filesystem::path path, std::vector<std::string> args)
    {
-      logi("spawn: {} {}", path.generic_string(), fmt::join(args, " "));
+      logi("spawn: {} {}", path.generic_string(), boost::algorithm::join(args, " "));
 
-      auto env = bp::environment();
-      env["LD_LIBRARY_PATH"] = "/usr/local/lib";
+      auto executor = co_await this_coro::executor;
+
+      // auto env = bp::environment();
+      // env["LD_LIBRARY_PATH"] = "/usr/local/lib";
       // env["LD_LIBRARY_PATH"] = "/workspaces/nghttp2/install/lib";
       // env["LD_LIBRARY_PATH"] = "/workspaces/nghttp2/install/lib:/usr/local/lib";
-      bp::async_pipe out(context), err(context);
-      bp::child child(
-         path, env, std::move(args), bp::std_out > out, bp::std_err > err,
-         bp::on_exit = [](int exit, const std::error_code& ec) { //
-            fmt::println("exit={}, ec={}", exit, ec.message());
-         });
+      readable_pipe out(context), err(context);
+      bp::process child(executor, path, args, bp::process_stdio{.out = out, .err = err});
+      //    path, env, std::move(args), bp::std_out > out, bp::std_err > err,
+      //    bp::on_exit = [](int exit, const std::error_code& ec) { //
+      //       std::println("exit={}, ec={}", exit, ec.message());
+      //    });
 
       logi("spawn: starting to communicate...");
 #if 1
-      auto result = co_await (log(std::move(err)) && consume(std::move(out)));
+      auto result = co_await (log("STDERR", err) && consume(std::move(out)));
 #else
       co_await (log(std::move(err)) && log(std::move(out)));
       auto result = std::string();
@@ -343,7 +369,7 @@ TEST_P(External, nghttp2)
    if (GetParam() == anyhttp::Protocol::http11)
       GTEST_SKIP(); // no --nghttp2-prior-knowledge for 'nghttp', re-enable when ALPN works
 
-   auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    auto future = spawn("/usr/local/bin/nghttp", {"-d", testFile.string(), url});
    run();
 
@@ -354,8 +380,8 @@ using Args = std::vector<std::string>;
 
 TEST_P(External, curl)
 {
-   auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "--data-binary", fmt::format("@{}", testFile.string()), url};
+   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url};
 
    if (GetParam() == anyhttp::Protocol::h2)
       args.insert(args.begin(), "--http2-prior-knowledge");
@@ -373,8 +399,8 @@ TEST_P(External, curl_many)
 
    for (size_t i = 0; i < futures.capacity(); ++i)
    {
-      auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-      Args args = {"-sS", "-v", "--data-binary", fmt::format("@{}", testFile.string()), url};
+      auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+      Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url};
 
       if (GetParam() == anyhttp::Protocol::h2)
          args.insert(args.begin(), "--http2-prior-knowledge");
@@ -390,8 +416,8 @@ TEST_P(External, curl_many)
 
 TEST_P(External, curl_https)
 {
-   auto url = fmt::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "-k", "--data-binary", fmt::format("@{}", testFile.string()), url};
+   auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
+   Args args = {"-sS", "-v", "-k", "--data-binary", std::format("@{}", testFile.string()), url};
 
    if (GetParam() == anyhttp::Protocol::h2)
       args.insert(args.begin(), "--http2");
@@ -406,8 +432,8 @@ TEST_P(External, curl_https)
 
 TEST_P(External, curl_multiple)
 {
-   auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "--data-binary", fmt::format("@{}", testFile.string()), url, url};
+   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url, url};
 
    if (GetParam() == anyhttp::Protocol::h2)
       args.insert(args.begin(), "--http2-prior-knowledge");
@@ -421,8 +447,8 @@ TEST_P(External, curl_multiple)
 
 TEST_P(External, curl_multiple_https)
 {
-   auto url = fmt::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "-k", "--data-binary", fmt::format("@{}", testFile.string()),
+   auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
+   Args args = {"-sS", "-v", "-k", "--data-binary", std::format("@{}", testFile.string()),
                 url,   url};
 
    if (GetParam() == anyhttp::Protocol::h2)
@@ -464,7 +490,7 @@ TEST_P(External, h2spec)
 TEST_P(External, h2load)
 {
    const size_t n = 100;
-   auto url = fmt::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-d", "64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3", url};
 
    if (GetParam() == anyhttp::Protocol::http11)
@@ -709,7 +735,7 @@ TEST_P(ClientAsync, IgnoreRequestAndResponse)
    {
       auto request = co_await session.async_submit(url.set_path("custom"), {}, deferred);
       auto res = co_await (send(request, 0) && try_read_response(request));
-      std::cout << res.error().message() << std::endl;
+      std::println("{}", res.error().message());
    };
    run();
 }
@@ -792,10 +818,10 @@ TEST_P(ClientAsync, Backpressure)
       // auto buf = co_await response.async_read_some(as_tuple(asio::deferred));
       // co_await sleep(500ms);
       // auto received = co_await (sendEOF(request) && try_receive(response));
-      fmt::println("receiving....");
+      std::println("receiving....");
       boost::system::error_code ec;
       auto received = co_await try_receive(response, ec);
-      fmt::println("receiving... done, got {} bytes ({})", received, ec.message());
+      std::println("receiving... done, got {} bytes ({})", received, ec.message());
       EXPECT_GT(received, 0);
       // FIXME: we should be able to receive the remainders that already have been buffered
    };
@@ -822,7 +848,7 @@ TEST_P(ClientAsync, CancellationContentLength)
 
          boost::system::error_code ec;
          auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
-         fmt::println("received {} bytes ({}, yielded {})", std::get<1>(received), ec.message(), i);
+         std::println("received {} bytes ({}, yielded {})", std::get<1>(received), ec.message(), i);
          EXPECT_LT(std::get<1>(received), length);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
       }
@@ -856,7 +882,7 @@ TEST_P(ClientAsync, Cancellation)
 
          boost::system::error_code ec;
          auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
-         fmt::println("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
+         std::println("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
          EXPECT_LT(std::get<1>(received), length);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
       }
@@ -884,7 +910,7 @@ TEST_P(ClientAsync, CancellationRange)
 
          boost::system::error_code ec;
          auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
-         fmt::println("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
+         std::println("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
          co_await client->async_connect(deferred);
       }

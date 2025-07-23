@@ -14,7 +14,7 @@ std::string to_string(Protocol protocol)
    case Protocol::h2:
       return "HTTP2";
    default:
-      return fmt::format("UNKNOWN ({})", std::to_underlying(protocol));
+      return std::format("UNKNOWN ({})", std::to_underlying(protocol));
    }
 }
 
@@ -45,10 +45,7 @@ asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint)
 
 // =================================================================================================
 
-std::string what(const boost::system::error_code ec)
-{
-   return ec.message();
-}
+std::string what(const boost::system::error_code ec) { return ec.message(); }
 
 std::string what(const std::exception_ptr& ptr)
 {
@@ -62,11 +59,11 @@ std::string what(const std::exception_ptr& ptr)
       }
       catch (boost::system::system_error& ex)
       {
-         return fmt::format("exception: {}", ex.code().message());
+         return std::format("exception: {}", ex.code().message());
       }
       catch (std::exception& ex)
       {
-         return fmt::format("exception: {}", ex.what());
+         return std::format("exception: {}", ex.what());
       }
    }
 }
@@ -76,22 +73,20 @@ std::string what(const std::exception_ptr& ptr)
 /// Format according to HTTP date spec (RFC 7231)
 std::string format_http_date(std::chrono::system_clock::time_point tp)
 {
-   using namespace std::chrono;
+   // get current system time and convert to UTC
+   std::time_t time = std::chrono::system_clock::to_time_t(tp);
+   std::tm tm;
+   gmtime_r(&time, &tm);
 
-#if 1
-   // cet current system time and convert to UTC
-   std::time_t time = system_clock::to_time_t(tp);
-   std::tm tm = *std::gmtime(&time);
-
+   constexpr auto weekdays = std::array{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
    constexpr auto months = std::array{"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
-   return fmt::format("{:02d}, {:02d} {} {:04d} {:02d}:{:02d}:{:02d} GMT", tm.tm_wday, tm.tm_mday,
-                      months[tm.tm_mon], tm.tm_year + 1900, tm.tm_hour, tm.tm_min, tm.tm_sec);
-#else
-   auto utc_time = floor<seconds>(tp);
-   return fmt::format("{:%a, %d %b %Y %H:%M:%S} GMT", utc_time);
-#endif
+   assert(tm.tm_wday < weekdays.size());   
+   assert(tm.tm_mon < months.size());
+   return std::format("{:s}, {:02d} {:s} {:04d} {:02d}:{:02d}:{:02d} GMT", weekdays[tm.tm_wday],
+                      tm.tm_mday, months[tm.tm_mon], tm.tm_year + 1900, tm.tm_hour, tm.tm_min,
+                      tm.tm_sec);
 }
 
 // =================================================================================================

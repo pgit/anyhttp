@@ -16,8 +16,6 @@
 #include <range/v3/view/iota.hpp>
 #include <range/v3/view/transform.hpp>
 
-#include <fmt/ostream.h>
-
 using namespace anyhttp;
 using namespace anyhttp::client;
 using namespace boost::asio;
@@ -58,7 +56,7 @@ awaitable<void> do_request(Session& session, boost::urls::url url)
 {
    const std::string hello = "Hello, World!\r\n";
 #if 0
-   auto request = co_await session.async_submit(url, {{"Content-Length", fmt::format("{}", hello.size())}}, deferred);
+   auto request = co_await session.async_submit(url, {{"Content-Length", std::format("{}", hello.size())}}, deferred);
 #else
    auto request = co_await session.async_submit(url, {{"X-Custom-Header", "Value"}}, deferred);
 #endif
@@ -96,7 +94,7 @@ int main(int argc, char* argv[])
 {
    if (argc < 2)
    {
-      fmt::println("Usage: {} URL", argv[0]);
+      std::println("Usage: {} URL", argv[0]);
       return 1;
    }
 

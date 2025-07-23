@@ -39,12 +39,12 @@ The asynchronous operations exposed by server and client are [ASIO asynchronous 
 The implementation is hidden behind [any_completion_handler](https://www.boost.org/doc/libs/1_86_0/doc/html/boost_asio/reference/any_completion_handler.html) so that it can be compiled separately.
 
 
-This work is partly inspired by [asio-grpc](https://github.com/Tradias/asio-grpc), which takes the idea even one step further and also supports the upcomming sender/receiver model of execution.
+This work is partly inspired by [asio-grpc](https://github.com/Tradias/asio-grpc), which takes the idea even one step further and also supports the upcoming sender/receiver model of execution.
 
 
 ## Links
 
-For now, this section contains just a set of random links collected during delevopment.
+For now, this section contains just a set of random links collected during development.
 
 * [Beast Example using Type Erasure](https://www.boost.org/doc/libs/develop/boost/beast/http/message_generator.hpp)
 * [asio-grpc](https://github.com/Tradias/asio-grpc)

@@ -1,18 +1,18 @@
 #include "anyhttp/request_handlers.hpp"
 #include "anyhttp/client.hpp"
+#include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/server.hpp"
 
-#include <boost/algorithm/string/replace.hpp>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/use_awaitable.hpp>
-#include <boost/system/detail/error_code.hpp>
 
-#include <fmt/format.h>
-#include <fmt/ostream.h>
+#include <boost/algorithm/string/replace.hpp>
+#include <boost/system/detail/error_code.hpp>
 
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/iota.hpp>
 #include <range/v3/view/transform.hpp>
+
 #include <sstream>
 
 using namespace std::chrono_literals;
@@ -27,18 +27,18 @@ struct EscapedString
 };
 
 template <>
-struct fmt::formatter<EscapedString> : fmt::formatter<std::string>
+struct std::formatter<EscapedString> : std::formatter<std::string>
 {
-   auto format(const EscapedString& esc, fmt::format_context& ctx) const
-      -> fmt::format_context::iterator
+   template <typename FormatContext>
+   auto format(const EscapedString& esc, FormatContext& ctx) const
    {
       std::string result;
       for (unsigned char ch : esc.str)
          if (ch < 32 || ch >= 127)
-            fmt::format_to(std::back_inserter(result), "\x1b[33m%\x1b[34;1m{:02X}\x1b[0m", ch);
+            std::format_to(std::back_inserter(result), "\x1b[33m%\x1b[34;1m{:02X}\x1b[0m", ch);
          else
             result.push_back(ch);
-      return fmt::formatter<std::string>::format(result, ctx);
+      return std::formatter<std::string>::format(result, ctx);
    }
 };
 
@@ -59,21 +59,21 @@ awaitable<void> dump(server::Request request, server::Response response)
    auto url = request.url();
 
    std::stringstream str;
-   fmt::println(str, "RAW URL: {}", url.buffer());
-   fmt::println(str, "authority: {} ({})", url.authority(), url.encoded_authority());
-   fmt::println(str, "path: {} ({})", url.path(), url.encoded_path());
+   std::println(str, "RAW URL: {}", url.buffer());
+   std::println(str, "authority: {} ({})", url.authority(), url.encoded_authority());
+   std::println(str, "path: {} ({})", url.path(), url.encoded_path());
    for (auto segment : url.segments())
-      fmt::println(str, "  {}", EscapedString(segment));
+      std::println(str, "  {}", EscapedString(segment));
 
-   fmt::println(str, "query: {}", EscapedString(url.query()));
-   fmt::println(str, "query: {} (encoded)", url.encoded_query());
+   std::println(str, "query: {}", EscapedString(url.query()));
+   std::println(str, "query: {} (encoded)", url.encoded_query());
    for (auto [key, value, _] : url.params())
-      fmt::println(str, "  {}={} ({})", key, EscapedString(value), _);
-   fmt::println(str, "fragment: {} ({})", url.fragment(), url.encoded_fragment());
+      std::println(str, "  {}={} ({})", key, EscapedString(value), _);
+   std::println(str, "fragment: {} ({})", url.fragment(), url.encoded_fragment());
 
    auto buf = str.str();
    co_await response.async_submit(200,
-                                  {{"Content-Length", fmt::format("{}", buf.size())}, //
+                                  {{"Content-Length", std::format("{}", buf.size())}, //
                                    {"Content-Type", "text/plain"}},
                                   deferred);
    co_await response.async_write(asio::buffer(str.str()), deferred);
@@ -151,6 +151,7 @@ awaitable<void> detach(server::Request request, server::Response response)
 {
    asio::steady_timer timer(co_await asio::this_coro::executor);
    timer.expires_after(100ms);
+   co_await timer.async_wait();
    // co_await eat_request(std::move(request), std::move(response));
 }
 

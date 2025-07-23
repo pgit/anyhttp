@@ -1,7 +1,8 @@
 
 #include "anyhttp/server.hpp"
-#include <boost/asio/buffer.hpp>
 #include "anyhttp/server_impl.hpp"
+
+#include <boost/asio/buffer.hpp>
 
 namespace anyhttp::server
 {
@@ -59,6 +60,7 @@ Response::~Response()
 
       auto temp = impl.get();
       temp->destroy(std::move(impl)); // give implementation a chance for cancellation
+      assert(!impl);
    }
 }
 

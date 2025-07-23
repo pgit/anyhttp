@@ -3,7 +3,7 @@
 # separately. This image can be pushed to the HUB, speeding up codespace creation considerably.
 #
 # FROM docker.io/psedoc/anyhttp:latest
-FROM anyhttp:1.0
+FROM anyhttp:1.1
 # FROM anyhttp:nghttp2-v1.64.0
 
 #

@@ -32,7 +32,7 @@ protected:
 public:
    ~BeastSession() override;
 
-   const std::string& logPrefix() const { return m_logPrefix; }
+   std::string_view logPrefix() const { return m_logPrefix; }
    const auto& executor() const { return m_executor; }
 
    // ----------------------------------------------------------------------------------------------

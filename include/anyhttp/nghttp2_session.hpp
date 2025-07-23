@@ -54,7 +54,7 @@ public:
    std::string logPrefix(int stream_id) const
    {
       if (stream_id)
-         return fmt::format("{}.{}", logPrefix(), stream_id);
+         return std::format("{}.{}", logPrefix(), stream_id);
       else
          return logPrefix();
    }
