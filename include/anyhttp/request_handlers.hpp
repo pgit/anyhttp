@@ -7,7 +7,9 @@
 
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/awaitable.hpp>
+#include <boost/asio/co_spawn.hpp>
 #include <boost/asio/deferred.hpp>
+#include <boost/asio/this_coro.hpp>
 
 #include <boost/system/detail/error_code.hpp>
 
@@ -143,6 +145,7 @@ boost::asio::awaitable<void> send(client::Request& request, Range range)
 template <typename Range>
 boost::asio::awaitable<void> sendAndForceEOF(client::Request& request, Range range)
 {
+   /*
    try
    {
       co_await send(request, range);
@@ -151,8 +154,15 @@ boost::asio::awaitable<void> sendAndForceEOF(client::Request& request, Range ran
    {
       loge("sendAndForceEOF: {}", ec.code().message());
    }
+   */
+   using namespace asio;
+   auto ex = co_await this_coro::executor;
+   if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
+   {
+      loge("sendAndForceEOF: {}", what(ep));
+      co_await this_coro::reset_cancellation_state();
+   }
 
-   co_await asio::this_coro::reset_cancellation_state();
    co_await sendEOF(request);
 }
 
