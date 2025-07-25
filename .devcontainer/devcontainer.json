@@ -22,7 +22,13 @@
 				"lldb.showDisassembly": "never",
 				"[cpp]": {
 					"editor.defaultFormatter": "xaver.clang-format"
-			  }		 
+			   },
+				"testMate.cpp.test.advancedExecutables": [
+					{
+						"pattern": "build/test/test_*",
+						"cwd": "${workspaceDirectory}"
+					}
+				]
 			},
 
 			// Add the IDs of extensions you want installed when the container is created.
