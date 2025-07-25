@@ -8,6 +8,7 @@
 #include <boost/logic/tribool.hpp>
 
 #include <cstring>
+#include "anyhttp/common.hpp"
 
 namespace anyhttp::server
 {
@@ -21,7 +22,8 @@ template <typename T>
 concept ConstBufferSequence = boost::asio::is_const_buffer_sequence<T>::value;
 
 template <ConstBufferSequence ConstBufferSequence>
-boost::tribool buffer_sequence_starts_with(const ConstBufferSequence& buffers, std::string_view prefix)
+boost::tribool buffer_sequence_starts_with(const ConstBufferSequence& buffers,
+                                           std::string_view prefix)
 {
    if (prefix.empty()) // corner case
       return true;
@@ -65,9 +67,10 @@ using boost::beast::detail::is_tls_client_hello;
 //
 // https://www.boost.org/doc/libs/1_84_0/doc/html/boost_asio/reference/experimental__co_composed.html
 //
-template <typename AsyncReadStream, typename DynamicBuffer, typename CompletionToken>
+template <typename AsyncReadStream, typename DynamicBuffer,
+          typename CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
 auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& buffer,
-                                       CompletionToken&& token)
+                                       CompletionToken&& token = CompletionToken())
 {
    static_assert(boost::beast::is_async_read_stream<AsyncReadStream>::value,
                  "AsyncReadStream type requirements not met");
@@ -113,9 +116,10 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
 
 // -------------------------------------------------------------------------------------------------
 
-template <typename AsyncReadStream, typename DynamicBuffer, typename CompletionToken>
+template <typename AsyncReadStream, typename DynamicBuffer,
+          typename CompletionToken = DefaultCompletionToken>
 auto async_detect_ssl_awaitable(AsyncReadStream& stream, DynamicBuffer& buffer,
-                                CompletionToken&& token)
+                                CompletionToken&& token = CompletionToken())
 {
    static_assert(boost::beast::is_async_read_stream<AsyncReadStream>::value,
                  "AsyncReadStream type requirements not met");

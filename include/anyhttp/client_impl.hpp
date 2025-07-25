@@ -16,7 +16,7 @@ public:
    Impl() noexcept;
    virtual ~Impl();
 
-   virtual void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) = 0;
+   virtual void async_submit(WriteHandler&& handler, unsigned int status_code, const Fields& headers) = 0;
    virtual void async_get_response(GetResponseHandler&& handler) = 0;
 
    using ReaderOrWriter = impl::Writer;

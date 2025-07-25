@@ -60,7 +60,7 @@ Session::~Session()
    }
 }
 
-void Session::async_submit_any(SubmitHandler&& handler, boost::urls::url url, Fields headers)
+void Session::async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
 {
    m_impl->async_submit(std::move(handler), url, std::move(headers));
 }

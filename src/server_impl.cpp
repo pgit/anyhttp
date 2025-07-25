@@ -290,7 +290,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    //
    // detect HTTP2 client preface
    //
-   else if (co_await async_detect_http2_client_preface(socket, buffer, deferred))
+   else if (co_await async_detect_http2_client_preface(socket, buffer))
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
 #if 1

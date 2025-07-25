@@ -28,11 +28,13 @@ public:
    class Impl;
    explicit Response(std::unique_ptr<Impl> impl);
    Response(Response&& other) noexcept;
+   Response& operator=(Response&& other) noexcept;
    ~Response();
 
 public:
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
-   auto async_read_some(boost::asio::mutable_buffer buffer, CompletionToken&& token)
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
+   auto async_read_some(boost::asio::mutable_buffer buffer,
+                        CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadSome>(
          [&](ReadSomeHandler handler, asio::mutable_buffer buffer) { //
@@ -54,18 +56,19 @@ public:
    class Impl;
    explicit Request(std::unique_ptr<Impl> impl);
    Request(Request&& other) noexcept;
+   Request& operator=(Request&& other) noexcept;
    ~Request();
 
    const asio::any_io_executor& executor() const;
-   
+
 public:
    using GetResponse = void(boost::system::error_code, Response);
    using GetResponseHandler = asio::any_completion_handler<GetResponse>;
 
    using executor_type = asio::any_io_executor;
 
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken>
-   auto async_get_response(CompletionToken&& token)
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken = DefaultCompletionToken>
+   auto async_get_response(CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, GetResponse>(
          [&](GetResponseHandler handler) { //
@@ -75,8 +78,8 @@ public:
    }
 
 public:
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken>
-   auto async_write(asio::const_buffer buffer, CompletionToken&& token)
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
+   auto async_write(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
          [](WriteHandler handler, Request* self, asio::const_buffer buffer) { //
@@ -125,9 +128,8 @@ public:
 
    const asio::any_io_executor& executor() const;
 
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken>
-   auto async_connect(CompletionToken&& token =
-        asio::default_completion_token_t<asio::any_io_executor>())
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken = DefaultCompletionToken>
+   auto async_connect(CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, Connect>(
          [&](ConnectHandler&& handler) { //

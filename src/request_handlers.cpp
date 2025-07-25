@@ -71,12 +71,11 @@ awaitable<void> dump(server::Request request, server::Response response)
       std::println(str, "  {}={} ({})", key, EscapedString(value), _);
    std::println(str, "fragment: {} ({})", url.fragment(), url.encoded_fragment());
 
-   auto buf = str.str();
-   co_await response.async_submit(200,
-                                  {{"Content-Length", std::format("{}", buf.size())}, //
-                                   {"Content-Type", "text/plain"}},
-                                  deferred);
-   co_await response.async_write(asio::buffer(str.str()), deferred);
+   Fields fields;
+   fields.set("Content-Length", std::format("{}", str.str().size()));
+   fields.set("Content-Type", "text/plain");
+   co_await response.async_submit(200, fields);
+   co_await response.async_write(asio::buffer(str.str()));
    co_await response.async_write({}, deferred);
 }
 
@@ -85,13 +84,13 @@ awaitable<void> echo(server::Request request, server::Response response)
    if (request.content_length())
       response.content_length(request.content_length().value());
 
-   co_await response.async_submit(200, {}, deferred);
+   co_await response.async_submit(200, {});
 
    std::array<uint8_t, 64 * 1024> buffer;
    for (;;)
    {
-      size_t n = co_await request.async_read_some(asio::buffer(buffer), deferred);
-      co_await response.async_write(asio::buffer(buffer, n), deferred);
+      size_t n = co_await request.async_read_some(asio::buffer(buffer));
+      co_await response.async_write(asio::buffer(buffer, n));
       if (n == 0)
          break;
    }
@@ -99,22 +98,22 @@ awaitable<void> echo(server::Request request, server::Response response)
 
 awaitable<void> not_found(server::Response response)
 {
-   co_await response.async_submit(404, {}, deferred);
-   co_await response.async_write({}, deferred);
+   co_await response.async_submit(404, {});
+   co_await response.async_write({});
 }
 
 awaitable<void> not_found(server::Request, server::Response response)
 {
-   co_await response.async_submit(404, {}, deferred);
-   co_await response.async_write({}, deferred);
+   co_await response.async_submit(404, {});
+   co_await response.async_write({});
 }
 
 awaitable<void> eat_request(server::Request request, server::Response response)
 {
    logi("eat_request: going to eat {} bytes", request.content_length().value_or(-1));
 
-   co_await response.async_submit(200, {}, deferred);
-   co_await response.async_write({}, deferred);
+   co_await response.async_submit(200, {});
+   co_await response.async_write({});
 
    size_t bytes = 0;
    try
@@ -122,7 +121,7 @@ awaitable<void> eat_request(server::Request request, server::Response response)
       std::array<uint8_t, 1024> buffer;
       for (;;)
       {
-         size_t n = co_await request.async_read_some(asio::buffer(buffer), deferred);
+         size_t n = co_await request.async_read_some(asio::buffer(buffer));
          if (n == 0)
             break;
 
@@ -142,17 +141,13 @@ awaitable<void> eat_request(server::Request request, server::Response response)
 
 awaitable<void> delayed(server::Request request, server::Response response)
 {
-   asio::steady_timer timer(co_await asio::this_coro::executor);
-   timer.expires_after(100ms);
+   co_await sleep(100ms);
    co_await eat_request(std::move(request), std::move(response));
 }
 
 awaitable<void> detach(server::Request request, server::Response response)
 {
-   asio::steady_timer timer(co_await asio::this_coro::executor);
-   timer.expires_after(100ms);
-   co_await timer.async_wait();
-   // co_await eat_request(std::move(request), std::move(response));
+   co_await sleep(100ms);
 }
 
 awaitable<void> discard(server::Request request, server::Response response) { co_return; }
@@ -166,12 +161,11 @@ awaitable<void> send(client::Request& request, size_t bytes)
 
 awaitable<size_t> receive(client::Response& response)
 {
-
    size_t bytes = 0;
    std::array<uint8_t, 1024> buffer;
    for (;;)
    {
-      size_t n = co_await response.async_read_some(asio::buffer(buffer), deferred);
+      size_t n = co_await response.async_read_some(asio::buffer(buffer));
       if (n == 0)
          break;
 
@@ -192,7 +186,7 @@ awaitable<size_t> try_receive(client::Response& response, boost::system::error_c
    {
       for (;;)
       {
-         size_t n = co_await response.async_read_some(asio::buffer(buffer), deferred);
+         size_t n = co_await response.async_read_some(asio::buffer(buffer));
          if (n == 0)
             break;
 
@@ -219,7 +213,7 @@ awaitable<size_t> try_receive(client::Response& response, boost::system::error_c
 
 awaitable<size_t> read_response(client::Request& request)
 {
-   auto response = co_await request.async_get_response(asio::deferred);
+   auto response = co_await request.async_get_response();
    co_return co_await receive(response);
 }
 

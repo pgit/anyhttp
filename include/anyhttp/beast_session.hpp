@@ -37,11 +37,6 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   void async_read_some(ReadSomeHandler&& handler);
-   void async_write(WriteHandler&& handler, asio::const_buffer buffer);
-
-   // ----------------------------------------------------------------------------------------------
-
    void destroy(std::shared_ptr<Session::Impl>) override;
 
    // ----------------------------------------------------------------------------------------------
@@ -82,7 +77,7 @@ class ServerSession : public ServerSessionBase, public BeastSession<Stream>
 public:
    ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
 
-   void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) override;
+   void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers) override;
    awaitable<void> do_session(Buffer&& data) override;
 };
 
@@ -115,17 +110,8 @@ class ClientSession : public ClientSessionBase, public BeastSession<Stream>
 public:
    ClientSession(client::Client::Impl& parent, any_io_executor executor, Stream&& stream);
 
-   void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) override;
+   void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers) override;
    awaitable<void> do_session(Buffer&& data) override;
-
-   client::Client::Impl& client()
-   {
-      assert(m_client);
-      return *m_client;
-   }
-
-private:
-   client::Client::Impl* m_client = nullptr;
 };
 
 // =================================================================================================

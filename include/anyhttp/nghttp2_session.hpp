@@ -1,5 +1,6 @@
 #pragma once
 
+#include "anyhttp/common.hpp"
 #include "client_impl.hpp"
 #include "nghttp2_stream.hpp"
 #include "server_impl.hpp"
@@ -50,7 +51,7 @@ public:
 
    const auto& executor() const { return m_executor; }
    const std::string& logPrefix() const { return m_logPrefix; }
-   
+
    std::string logPrefix(int stream_id) const
    {
       if (stream_id)
@@ -58,7 +59,7 @@ public:
       else
          return logPrefix();
    }
-   
+
    inline std::string logPrefix(const nghttp2_frame* frame) const
    {
       return logPrefix(frame->hd.stream_id);
@@ -66,7 +67,7 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) override;
+   void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers) override;
 
    // ----------------------------------------------------------------------------------------------
 
@@ -77,8 +78,8 @@ public:
    ResumeHandler m_send_handler;
 
    // Wait to be resumed via `start_write()`, called from within `send_loop()`.
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Resume) CompletionToken>
-   auto async_wait_send(CompletionToken&& token)
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Resume) CompletionToken = DefaultCompletionToken>
+   auto async_wait_send(CompletionToken&& token = CompletionToken())
    {
       return asio::async_initiate<CompletionToken, Resume>(
          [&](ResumeHandler handler)
@@ -180,7 +181,8 @@ class ServerSession : public ServerReference, public NGHttp2SessionImpl<Stream>
 public:
    ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
 
-   // void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) override;
+   // void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
+   // override;
    awaitable<void> do_session(Buffer&& data) override;
 };
 
@@ -218,7 +220,8 @@ class ClientSession : public ClientReference, public NGHttp2SessionImpl<Stream>
 public:
    ClientSession(client::Client::Impl& parent, any_io_executor executor, Stream&& stream);
 
-   // void async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers) override;
+   // void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
+   // override;
    awaitable<void> do_session(Buffer&& data) override;
 };
 

@@ -41,6 +41,50 @@ The implementation is hidden behind [any_completion_handler](https://www.boost.o
 
 This work is partly inspired by [asio-grpc](https://github.com/Tradias/asio-grpc), which takes the idea even one step further and also supports the upcoming sender/receiver model of execution.
 
+```mermaid
+classDiagram
+
+Response --|> Reader
+Request_Impl --|> Writer
+
+namespace client {
+   class Response {
+      async_read_some(buffer)
+   }
+   class Request {
+      async_get_response()
+      async_write(buffer)
+   }
+   class Client {
+      async_connect()
+   }
+
+   class Request_Impl {
+
+   }
+}
+
+namespace impl {
+   class Reader {
+      executor()
+      content_length()
+      async_read_some(buffer)
+      detach()
+      destroy()
+   }
+   class Writer {
+      executor()
+      content_length(optional<size_t>)
+      async_write(buffer)
+      detach()
+      destroy()
+   }
+   class Client {
+      executor()
+   }
+}
+```
+
 
 ## Links
 

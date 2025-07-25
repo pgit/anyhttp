@@ -202,6 +202,8 @@ public:
          return;
       }
 
+      logd("async_write: {} bytes", buffer.size());
+
       assert(!writing);
       writing = true;
 
@@ -295,7 +297,7 @@ public:
       message.body().data = nullptr;
 
       for (auto&& header : headers)
-         message.set(header.first, header.second);
+         message.set(header.name_string(), header.value());
 
       if (!message.has_content_length())
          message.chunked(true);
@@ -337,7 +339,7 @@ public:
          super::message.content_length(boost::none);
    }
 
-   void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
+   void async_submit(WriteHandler&& handler, unsigned int status_code, const Fields& headers) override
    {
       super::message.result(status_code);
 
@@ -391,7 +393,7 @@ public:
          super::message.content_length(boost::none);
    }
 
-   void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers) override
+   void async_submit(WriteHandler&& handler, unsigned int status_code, const Fields& headers) override
    {
       super::submit_headers(headers);
       message.method(http::verb::post);
@@ -642,6 +644,9 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    // For pipelining support, we need to have a queue of pending responses and read into the
    // serializer of the front element.
    //
+   // But even for cancellation only, when the client is destroyed while there is still a pending
+   // request, we need to have a way to inform the request that the session is gone.
+   //
 
    //
    // TODO: There should be something that keeps the session alive. We are just waiting for
@@ -664,14 +669,14 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 
 template <typename Stream>
 void ServerSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::url url,
-                                         Fields headers)
+                                         const Fields& headers)
 {
    assert(false);
 }
 
 template <typename Stream>
 void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::url url,
-                                         Fields headers)
+                                         const Fields& headers)
 {
    mlogd("submit: {}", url.buffer());
 
@@ -682,7 +687,7 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
    request.method(http::verb::post);
    request.set(http::field::user_agent, "anyhttp");
    for (auto&& header : headers)
-      request.set(header.first, header.second);
+      request.set(header.name_string(), header.value());
    if (!request.has_content_length())
       request.chunked(true);
 

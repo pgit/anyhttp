@@ -49,7 +49,7 @@ public:
    // virtual void detach() = 0;
    // virtual void destroy(std::unique_ptr<Impl> self) { /* delete self */ }
 
-   virtual void async_submit(WriteHandler&& handler, unsigned int status_code, Fields fields) = 0;
+   virtual void async_submit(WriteHandler&& handler, unsigned int status_code, const Fields& fields) = 0;
 
    using ReaderOrWriter = impl::Writer;
 };

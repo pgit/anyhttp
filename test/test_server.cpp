@@ -99,7 +99,6 @@ TEST_F(Empty, Path)
    std::println("spawn: {}", path.string());
 }
 
-
 // =================================================================================================
 
 class ClientConnect : public testing::Test
@@ -539,7 +538,7 @@ protected:
    }
 
 protected:
-   boost::urls::url url{"http://127.0.0.2"};
+   boost::urls::url url{"http://127.0.0.2/custom"};
    std::optional<client::Client> client;
 };
 
@@ -651,6 +650,19 @@ TEST_P(ClientAsync, WHEN_server_discards_request_delayed_THEN_error_500)
       auto request = co_await session.async_submit(url.set_path("detach"), {}, deferred);
       co_await send(request, 1024);
       auto response = co_await request.async_get_response(asio::deferred);
+      EXPECT_THROW(co_await receive(response), boost::system::system_error);
+   };
+   run();
+}
+
+TEST_P(ClientAsync, WHEN_server_discards_request_with_body_delayed_THEN_error_500)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("detach"), {});
+      co_await send(request, rv::iota(0));
+      co_await(yield(5));
+      auto response = co_await request.async_get_response();
       auto received = co_await receive(response);
    };
    run();
@@ -660,8 +672,9 @@ TEST_P(ClientAsync, WHEN_invalid_port_in_host_header_THEN_reports_error)
 {
    test = [&](Session session) -> awaitable<void>
    {
-      auto request =
-         co_await session.async_submit(url.set_path("echo"), {{"Host", "host:12345x"}}, deferred);
+      Fields fields;
+      fields.set("Host", "host:12345x");
+      auto request = co_await session.async_submit(url.set_path("echo"), fields, deferred);
       auto response = co_await (sendEOF(request) && read_response(request));
    };
    run();
@@ -720,8 +733,9 @@ TEST_P(ClientAsync, IgnoreRequest)
    };
    test = [&](Session session) -> awaitable<void>
    {
-      auto request =
-         co_await session.async_submit(url.set_path("custom"), {{"content-length", "0"}}, deferred);
+      Fields fields;
+      fields.set("content-length", "0");
+      auto request = co_await session.async_submit(url.set_path("custom"), fields, deferred);
       auto res = co_await (send(request, 0) && read_response(request));
    };
    run();
@@ -840,8 +854,9 @@ TEST_P(ClientAsync, CancellationContentLength)
       for (size_t i = 0; i <= 20; ++i)
       {
          const size_t length = 5ul * 1024 * 1024;
-         auto request = co_await session.async_submit(
-            url.set_path("echo"), {{"content-length", std::to_string(length)}}, deferred);
+         Fields fields;
+         fields.set("content-length", std::to_string(length));
+         auto request = co_await session.async_submit(url.set_path("echo"), fields, deferred);
          auto response = co_await request.async_get_response(asio::deferred);
          std::vector<char> buffer(length);
          auto sender = sendAndForceEOF(request, std::string_view(buffer));
@@ -949,8 +964,9 @@ TEST_P(ClientAsync, SendMoreThanContentLength)
 {
    test = [&](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url.set_path("eat_request"),
-                                                   {{"content-length", "1024"}}, deferred);
+      Fields fields;
+      fields.set("content-length", "1024");
+      auto request = co_await session.async_submit(url.set_path("eat_request"), fields, deferred);
       auto response = co_await request.async_get_response(asio::deferred);
       co_await receive(response);
       co_await send(request, rv::iota(uint8_t(0)) | rv::take(10 * 1024 + 1));
@@ -1023,7 +1039,7 @@ TEST_P(ClientAsync, SpawnAndForget)
          [request = std::move(request)]() mutable -> awaitable<void>
          { //
             std::println("- - SPAWNED - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
-            co_await yield();
+            co_await yield(5);
             std::println("- - SPAWNED, sending  - - - - - - - - - - - - - - - - - - - - - - - - -");
             co_await send(request, rv::iota(uint8_t(0)));
          },

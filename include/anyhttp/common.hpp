@@ -43,15 +43,17 @@ std::ostream& operator<<(std::ostream& str, Protocol protocol);
 
 // =================================================================================================
 
-using Fields = std::map<std::string, std::string>;
-// using Fields = boost::beast::http::fields;
-// static_assert(boost::beast::http::is_fields<Fields>::value);
+// using Fields = std::map<std::string, std::string>;
+using Fields = boost::beast::http::fields;
+static_assert(boost::beast::http::is_fields<Fields>::value);
 
 using ReadSome = void(boost::system::error_code, size_t);
 using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
 
 using Write = void(boost::system::error_code);
 using WriteHandler = asio::any_completion_handler<Write>;
+
+using DefaultCompletionToken = asio::default_completion_token_t<asio::any_io_executor>;
 
 // =================================================================================================
 

@@ -1,6 +1,7 @@
 #include "anyhttp/nghttp2_stream.hpp"
 
 #include "anyhttp/common.hpp"
+#include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/nghttp2_common.hpp"
 #include "anyhttp/nghttp2_session.hpp"
 #include "anyhttp/request_handlers.hpp" // IWYU pragma: keep
@@ -186,20 +187,19 @@ void NGHttp2Writer<Base>::content_length(std::optional<size_t> content_length)
 
 template <typename Base>
 void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int status_code,
-                                       Fields headers)
+                                       const Fields& headers)
 {
    if (!stream)
    {
       logw("[] async_submit: stream already gone");
-      using namespace boost::system;
-      std::move(handler)(errc::make_error_code(errc::operation_canceled));
+      std::move(handler)(boost::asio::error::basic_errors::connection_aborted);
       return;
    }
 
    logd("[{}] async_submit: {}", stream->logPrefix, status_code);
 
    auto nva = std::vector<nghttp2_nv>();
-   nva.reserve(3 + headers.size());
+   // nva.reserve(3 + headers.size());
 
    std::string status_code_str = std::format("{}", status_code);
    nva.push_back(make_nv_ls(":status", status_code_str));
@@ -210,10 +210,10 @@ void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int stat
    {
       // FIXME: why should content length be invalid?
       // if (boost::iequals(item.first, "content-length") || item.first.starts_with(':'))
-      if (item.first.starts_with(':'))
-         logw("[{}] async_submit: invalid header '{}'", stream->logPrefix, item.first);
+      if (item.name_string().starts_with(':'))
+         logw("[{}] async_submit: invalid header '{}'", stream->logPrefix, item.name_string());
 
-      nva.push_back(make_nv_ls(item.first, item.second));
+      nva.push_back(make_nv_ls(item.name_string(), item.value()));
    }
 
    std::string length_str;
@@ -244,7 +244,10 @@ template <typename Base>
 void NGHttp2Writer<Base>::async_write(WriteHandler&& handler, asio::const_buffer buffer)
 {
    if (!stream)
+   {
+      logw("[] async_write: stream already gone");
       std::move(handler)(boost::asio::error::basic_errors::connection_aborted);
+   }
    else
       stream->async_write(std::move(handler), buffer);
 }
@@ -252,7 +255,14 @@ void NGHttp2Writer<Base>::async_write(WriteHandler&& handler, asio::const_buffer
 template <typename Base>
 void NGHttp2Writer<Base>::async_get_response(client::Request::GetResponseHandler&& handler)
 {
-   stream->async_get_response(std::move(handler));
+   if (!stream)
+   {
+      logw("[] async_get_response: stream already gone");
+      std::move(handler)(boost::asio::error::basic_errors::connection_aborted,
+                         client::Response{nullptr});
+   }
+   else
+      stream->async_get_response(std::move(handler));
 }
 
 // =================================================================================================

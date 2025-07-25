@@ -2,6 +2,7 @@
 
 #include <boost/asio/ip/tcp.hpp>
 
+#include <boost/beast/http/field.hpp>
 #include <boost/core/detail/string_view.hpp>
 #include <boost/system/system_error.hpp>
 #include <boost/url/authority_view.hpp>
@@ -52,6 +53,18 @@ struct std::formatter<boost::asio::ip::tcp::endpoint>
    auto format(const boost::asio::ip::tcp::endpoint& endpoint, FormatContext& ctx) const
    {
       return std::format_to(ctx.out(), "{}:{}", endpoint.address().to_string(), endpoint.port());
+   }
+};
+
+template <>
+struct std::formatter<boost::beast::http::field>
+{
+   constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+
+   template <typename FormatContext>
+   auto format(const boost::beast::http::field& field, FormatContext& ctx) const
+   {
+      return std::format_to(ctx.out(), "{}", to_string(field));
    }
 };
 

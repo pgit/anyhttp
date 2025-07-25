@@ -20,7 +20,6 @@ Request::~Request()
    if (impl) // may be moved-from
    {
       logd("\x1b[35mServer::Request: dtor\x1b[0m");
-
       auto temp = impl.get();
       temp->destroy(std::move(impl)); // give implementation a chance for cancellation
    }
@@ -70,7 +69,7 @@ void Response::content_length(std::optional<size_t> content_length)
    impl->content_length(content_length);
 }
 
-void Response::async_submit_any(WriteHandler&& handler, unsigned int status_code, Fields headers)
+void Response::async_submit_any(WriteHandler&& handler, unsigned int status_code, const Fields& headers)
 {
    assert(impl);
    impl->async_submit(std::move(handler), status_code, std::move(headers));
@@ -90,6 +89,8 @@ Server::Server(boost::asio::any_io_executor executor, Config config)
    impl->start();
 }
 
+Server::~Server() { impl->destroy(); }
+
 void Server::setRequestHandler(RequestHandler&& handler)
 {
    impl->setRequestHandler(std::move(handler));
@@ -104,7 +105,6 @@ const asio::any_io_executor& Server::executor() const { return impl->executor();
 
 asio::ip::tcp::endpoint Server::local_endpoint() const { return impl->local_endpoint(); }
 
-Server::~Server() { impl->destroy(); }
 
 // =================================================================================================
 

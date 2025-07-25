@@ -33,8 +33,9 @@ public:
    std::optional<size_t> content_length() const noexcept;
 
 public:
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
-   auto async_read_some(boost::asio::mutable_buffer buffer, CompletionToken&& token)
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
+   auto async_read_some(boost::asio::mutable_buffer buffer,
+                        CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadSome>(
          [&](ReadSomeHandler handler, asio::mutable_buffer buffer) { //
@@ -62,18 +63,19 @@ public:
    void content_length(std::optional<size_t> content_length);
 
 public:
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken>
-   auto async_submit(unsigned int status_code, Fields headers, CompletionToken&& token)
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
+   auto async_submit(unsigned int status_code, const Fields& headers,
+                     CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
-         [this](WriteHandler handler, unsigned int status_code, Fields headers) { //
+         [this](WriteHandler handler, unsigned int status_code, const Fields& headers) { //
             async_submit_any(std::move(handler), status_code, headers);
          },
          token, status_code, headers);
    }
 
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken>
-   auto async_write(asio::const_buffer buffer, CompletionToken&& token)
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
+   auto async_write(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
          [this](WriteHandler handler, asio::const_buffer buffer) { //
@@ -83,7 +85,7 @@ public:
    }
 
 private:
-   void async_submit_any(WriteHandler&& handler, unsigned int status_code, Fields headers);
+   void async_submit_any(WriteHandler&& handler, unsigned int status_code, const Fields& headers);
    void async_write_any(WriteHandler&& handler, asio::const_buffer buffer);
 
    std::unique_ptr<Impl> impl;

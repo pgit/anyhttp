@@ -55,7 +55,7 @@ public:
    void async_write(WriteHandler&& handler, asio::const_buffer buffer) override;
    void detach() override;
 
-   void async_submit(WriteHandler&& handler, unsigned int status_code, Fields headers);
+   void async_submit(WriteHandler&& handler, unsigned int status_code, const Fields& headers);
    void async_get_response(client::Request::GetResponseHandler&& handler);
 
    NGHttp2Stream* stream;
@@ -88,7 +88,7 @@ public:
     * the first pending read buffer that has not been delivered, yet.
     *
     * If (and only if) the list of pending read buffers is empty, \c m_read_buffer may be empty as
-    * well. While in \c call_read_handler(), it may be vieweing the newly received data that has not
+    * well. While in \c call_read_handler(), it may be viewing the newly received data that has not
     * been added to the pending read buffers, yet.
     */
    asio::const_buffer m_read_buffer;

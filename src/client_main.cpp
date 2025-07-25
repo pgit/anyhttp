@@ -58,7 +58,9 @@ awaitable<void> do_request(Session& session, boost::urls::url url)
 #if 0
    auto request = co_await session.async_submit(url, {{"Content-Length", std::format("{}", hello.size())}}, deferred);
 #else
-   auto request = co_await session.async_submit(url, {{"X-Custom-Header", "Value"}}, deferred);
+   Fields fields;
+   fields.set("X-Custom-Header", "value");
+   auto request = co_await session.async_submit(url, fields, deferred);
 #endif
 #if 0
    size_t bytes = 64 * 1024 - 1;

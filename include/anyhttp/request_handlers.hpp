@@ -111,21 +111,27 @@ boost::asio::awaitable<void> send(client::Request& request, Range range)
       auto end = std::ranges::copy(chunk, buffer.data()).out;
       bytes += end - buffer.data();
 #if 1
+#if defined(NDEBUG)
+      co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()));
+#else
       //
       // FIXME: With as_tuple<>, testcase h2spec fails, very sporadically.
       //
       //        This is also influenced by the logging level: With INFO only for the server,
       //        it happens more often than with DEBUG.
       //
-      auto result = co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()),
+      auto [ec] = co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()),
                                                  asio::as_tuple);
-      if (auto ec = std::get<0>(result))
+      if (ec)
       {
          loge("send: (range) \x1b[1;31m{}\x1b[0m after {} bytes", what(ec), bytes);
-         co_return;
+         throw boost::system::system_error(ec);
+         // co_return;
       }
+#endif
 #else
-      try
+
+   try
       {
          co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()),
                                       asio::deferred);

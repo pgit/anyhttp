@@ -62,7 +62,7 @@ static std::string_view frameType(uint8_t type)
    case NGHTTP2_ORIGIN:
       return "ORIGIN";
    case NGHTTP2_PRIORITY_UPDATE:
-      return "PRIOIRTY_UPDATE";
+      return "PRIORITY_UPDATE";
    default:
       return "UNKNOWN";
    }
@@ -422,7 +422,7 @@ NGHttp2Session::~NGHttp2Session()
 
 // =================================================================================================
 
-void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url, Fields headers)
+void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
 {
    mlogi("submit: {}", url.buffer());
 
@@ -448,13 +448,13 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    //
    // Submit request, full headers and producer callback for the body.
    //
-   auto view = boost::urls::parse_uri(url);
+   auto view = boost::urls::parse_uri_reference(url);
    std::string method("POST");
    std::string scheme(view->scheme());
    std::string path(view->path());
    std::string authority(view->host_address());
    auto nva = std::vector<nghttp2_nv>();
-   nva.reserve(4 + headers.size());
+   // nva.reserve(4 + headers.size());
    nva.push_back(make_nv_ls(":method", method));
    nva.push_back(make_nv_ls(":scheme", scheme));
    nva.push_back(make_nv_ls(":path", path));
@@ -464,10 +464,11 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    {
       // FIXME: why should content length be invalid?
       // if (boost::iequals(item.first, "content-length") || item.first.starts_with(':'))
-      if (item.first.starts_with(':'))
-         logw("[{}] async_submit: invalid header '{}'", stream->logPrefix, item.first);
+      if (item.name_string().starts_with(':'))
+         logw("[{}] async_submit: invalid header '{}'", stream->logPrefix, item.name_string());
 
-      nva.push_back(make_nv_ls(item.first, item.second));
+      logi("[{}] async_submit: {}: {}", stream->logPrefix, item.name_string(), item.value());
+      nva.push_back(make_nv_ls(item.name_string(), item.value()));
    }
 
    auto id = nghttp2_submit_request(session, nullptr, nva.data(), nva.size(), &prd, this);
