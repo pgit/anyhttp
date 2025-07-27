@@ -51,7 +51,10 @@ boost::asio::awaitable<void> yield(size_t count)
 {
    auto ex = co_await asio::this_coro::executor;
    for (size_t i = 0; i < count; ++i)
+   {
       co_await post(ex, asio::deferred);
+      // std::println("yielding {}/{}", i, count);
+   }
 }
 
 awaitable<void> dump(server::Request request, server::Response response)

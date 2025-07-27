@@ -38,7 +38,7 @@ public:
     *       client. But in general, it may be better to separate them.
     */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Submit) CompletionToken = DefaultCompletionToken>
-   auto async_submit(boost::urls::url url, const Fields& headers,
+   auto async_submit(boost::urls::url url, const Fields& headers = {},
                      CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, Submit>(

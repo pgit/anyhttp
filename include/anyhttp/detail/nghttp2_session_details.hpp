@@ -243,7 +243,7 @@ template <typename Stream>
 awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
-   // get_socket(m_stream).set_option(ip::tcp::no_delay(true));
+   get_socket(m_stream).set_option(ip::tcp::no_delay(true));
    auto callbacks = super::setup_callbacks();
 
    //

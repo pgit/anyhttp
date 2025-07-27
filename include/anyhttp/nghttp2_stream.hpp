@@ -121,7 +121,12 @@ public:
    bool is_writer_done = false;
 
    client::Request::GetResponseHandler responseHandler;
+   
+   /// Set to true after on_response(), which is invoked after the first headers have been received.
    bool has_response = false;
+
+   /// Set to true after responseHandler has been invoked, to make sure that this happens only once.
+   bool response_delivered = false;
 
    std::string logPrefix;
    std::string method;

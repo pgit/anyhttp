@@ -200,7 +200,6 @@ int on_invalid_frame_recv_callback(nghttp2_session* session, const nghttp2_frame
 
 /**
  * This generic callback is invoked after the more specific ones, e.g. on_header_callback().
- *
  */
 int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
 {
@@ -212,7 +211,7 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
       logw("[{}] on_frame_recv_callback: {}, but no stream found (id={})", handler->logPrefix(),
            frameType(frame->hd.type), frame->hd.stream_id);
 
-      // fixes h2sepc http/5.1/7
+      // fixes h2spec http/5.1/7
       nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
                                 NGHTTP2_STREAM_CLOSED);
       return 0;
@@ -422,7 +421,8 @@ NGHttp2Session::~NGHttp2Session()
 
 // =================================================================================================
 
-void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
+void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
+                                  const Fields& headers)
 {
    mlogi("submit: {}", url.buffer());
 
@@ -538,12 +538,36 @@ std::shared_ptr<NGHttp2Stream> NGHttp2Session::close_stream(int32_t stream_id)
    std::shared_ptr<NGHttp2Stream> stream;
    if (auto it = m_streams.find(stream_id); it != std::end(m_streams))
    {
-      stream = std::move(it->second);
+      stream = it->second;
       stream->closed = true;
+
+      if (stream->sendHandler)
+      {
+         using namespace boost::system;
+         swap_and_invoke(stream->sendHandler, errc::make_error_code(errc::operation_canceled));
+      }
+
+      //
+      // IF the stream is closed before a response object has been handed out to the user,
+      // we might have to delay deletion of the stream.
+      //
+      if (!stream->response_delivered)
+      {
+         //
+         // If we have seen a response from the peer, the user could still request it. This may
+         // also happen during normal operation, if the server delivers a response before the
+         // client calls async_get_response().
+         //
+         if (stream->has_response)
+         {
+            logd("[{}] close_stream: response not delivered yet", logPrefix(stream_id));
+            it->second->call_read_handler();
+            return nullptr;
+         }
+      }
       m_streams.erase(it);
    }
-
-   if (!stream)
+   else
    {
       logd("[{}] close_stream: stream already gone", logPrefix(stream_id));
       return nullptr;

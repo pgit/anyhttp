@@ -98,6 +98,11 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
       return;
    }
 
+   //
+   // Given an empty buffer, we can't do anything. This includes signalling EOF, because that is
+   // done using an empty buffer as well. TODO: That design doesn't match the way ASIO usually
+   // signals EOF, which is using asio::error::eof. We should do it like that, too.
+   //
    if (asio::buffer_size(buffer) == 0)
    {
       std::move(handler)(boost::system::error_code{}, 0);
@@ -544,6 +549,12 @@ void NGHttp2Stream::resume()
 void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& handler)
 {
    assert(!responseHandler);
+   if (response_delivered)
+   {
+      std::move(handler)(asio::error::basic_errors::already_started, client::Response{nullptr});
+      return;
+   }
+
    responseHandler = std::move(handler);
    if (has_response)
       call_on_response();
@@ -617,17 +628,17 @@ ssize_t NGHttp2Stream::read_callback(uint8_t* buf, size_t length, uint32_t* data
 void NGHttp2Stream::call_on_response()
 {
    logd("[{}] call_on_response:", logPrefix);
+   has_response = true;
 
    if (responseHandler)
    {
+      response_delivered = true;
       auto impl = client::Response{std::make_unique<NGHttp2Reader<client::Response::Impl>>(*this)};
-      std::move(responseHandler)(boost::system::error_code{}, std::move(impl));
-      responseHandler = nullptr;
+      swap_and_invoke(responseHandler, boost::system::error_code{}, std::move(impl));
    }
    else
    {
       logw("[{}] call_on_response: not waiting for a response, yet", logPrefix);
-      has_response = true;
    }
 }
 
@@ -688,7 +699,7 @@ void NGHttp2Stream::delete_reader()
          logd("[{}] delete_reader: discarding {} pending bytes in {} buffers", logPrefix, pending,
               m_pending_read_buffers.size());
 
-         nghttp2_session_consume_stream(parent.session, id, pending);
+         // Don't re-open the stream window here, or the peer will re-start sending data to us.
          m_read_buffer = asio::const_buffer{};
          m_pending_read_buffers.clear();
       }
@@ -701,9 +712,9 @@ void NGHttp2Stream::delete_reader()
          logw("[{}] delete_reader: not done yet, keeping stream open", logPrefix);
          // if we do this, we have to close the stream later, see below
 #else
-         logw("[{}] delete_reader: not done yet, submitting RST with STREAM_CLOSED", logPrefix);
+         logw("[{}] delete_reader: not done yet, submitting RST with NGHTTP2_CANCEL", logPrefix);
          // nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id,
-         // NGHTTP2_FLOW_CONTROL_ERROR);
+         //   NGHTTP2_FLOW_CONTROL_ERROR);
          nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
          parent.start_write();
 #endif

@@ -34,8 +34,6 @@ public:
 
    iterator begin() const { return iterator(); }
    std::default_sentinel_t end() const { return std::default_sentinel; }
-
-   // iterator end() const { return iterator(true); }
 };
 
 static_assert(std::ranges::range<TimerRange<>>);

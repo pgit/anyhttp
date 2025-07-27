@@ -115,7 +115,7 @@ public:
          reading = false;
          if (deleting)
          {
-            (std::move(handler))(errc::make_error_code(errc::operation_canceled), 0);
+            std::move(handler)(errc::make_error_code(errc::operation_canceled), 0);
             deleting.reset();
             return;
          }
@@ -258,6 +258,8 @@ public:
             // been written, but only part of the data.
             //
             // So the only sensible thing to do here is to close the socket.
+            //
+            // TODO: We can try to support partial cancellation.
             //
             mlogw("async_write: canceled after writing {} of {} bytes", n, expected);
             cancelled = true;
