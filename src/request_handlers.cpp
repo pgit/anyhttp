@@ -14,12 +14,16 @@
 #include <range/v3/view/transform.hpp>
 
 #include <sstream>
+#include <tuple>
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
 using namespace anyhttp;
 using namespace anyhttp::server;
+using boost::system::error_code;
 namespace rv = ranges::views;
+
+// =================================================================================================
 
 struct EscapedString
 {
@@ -180,8 +184,26 @@ awaitable<size_t> receive(client::Response& response)
    co_return bytes;
 }
 
-awaitable<size_t> try_receive(client::Response& response, boost::system::error_code& ec)
+awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response)
 {
+   size_t bytes = 0;
+   std::array<uint8_t, 16 * 1024> buffer;
+   for (;;)
+   {
+      auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
+      co_await yield();
+      bytes += n;
+      if (ec || n == 0)
+         co_return std::make_tuple(bytes, ec);
+   }
+}
+
+awaitable<size_t> try_receive(client::Response& response, error_code& ec)
+{
+#if 0
+   size_t bytes;
+   std::tie(bytes, ec) = co_await try_receive(response);
+#else   
    ec = {};
    size_t bytes = 0, count = 0;
    std::array<uint8_t, 16 * 1024> buffer;
@@ -194,8 +216,9 @@ awaitable<size_t> try_receive(client::Response& response, boost::system::error_c
             break;
 
          // do NOT 'respawn' read handler in first round, see NGHttp2Stream::call_handler_loop()
-         if (count == 0)
-            co_await yield();
+         // if (count++ == 0)
+         //    co_await yield();
+         co_await yield();
 
          bytes += n;
          logd("receive: {}, total {}", n, bytes);
@@ -212,6 +235,7 @@ awaitable<size_t> try_receive(client::Response& response, boost::system::error_c
 
    logi("receive: EOF after reading {} bytes", bytes);
    co_return bytes;
+#endif   
 }
 
 awaitable<size_t> read_response(client::Request& request)

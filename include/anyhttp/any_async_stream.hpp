@@ -2,8 +2,6 @@
 
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/associated_cancellation_slot.hpp>
-#include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -25,13 +23,8 @@ namespace anyhttp
 using ReadWrite = void(boost::system::error_code, std::size_t);
 using ReadWriteHandler = asio::any_completion_handler<ReadWrite>;
 
-#if 0
-using ConstBufferVector = std::vector<asio::const_buffer>;
-using MutableBufferVector = std::vector<asio::mutable_buffer>;
-#else
 using ConstBufferVector = boost::container::small_vector<asio::const_buffer, 4>;
 using MutableBufferVector = boost::container::small_vector<asio::mutable_buffer, 4>;
-#endif
 
 /**
  * Attempt to create a type-erased async stream.

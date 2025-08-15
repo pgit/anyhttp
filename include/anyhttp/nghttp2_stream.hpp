@@ -69,13 +69,13 @@ class NGHttp2Stream : public std::enable_shared_from_this<NGHttp2Stream>
 {
 public:
    size_t bytesRead = 0;
-   size_t bytesWritten = 0;
-   size_t pending = 0;
-   size_t unhandled = 0;
+   size_t bytesWritten = 0; // TODO: not used, yet
+   size_t pending = 0; // TODO: not used, yet
+   size_t unhandled = 0; // TODO: not used, yet
 
    /**
-    * True after we have received an EOF flag from the peer. Note that there might be still some
-    * buffers left to deliver to the user. But after EOF, no more buffers will be added.
+    * True after we have received an EOF flag from the peer. After this, no more buffers will be
+    * added. But the might be still some buffers left to be deliver to the user.
     */
    bool eof_received = false;
 
@@ -95,18 +95,25 @@ public:
    using Buffer = std::vector<uint8_t>;
    std::deque<Buffer> m_pending_read_buffers;
 
-   inline Buffer make_buffer(asio::const_buffer b)
+   inline Buffer make_buffer(asio::const_buffer buffer)
    {
-      return Buffer(static_cast<const uint8_t*>(b.data()),
-                    static_cast<const uint8_t*>(b.data()) + asio::buffer_size(b));
+      return Buffer(static_cast<const uint8_t*>(buffer.data()),
+                    static_cast<const uint8_t*>(buffer.data()) + asio::buffer_size(buffer));
    }
 
-   static inline bool is_empty(const asio::const_buffer& view)
+   static inline bool is_empty(asio::const_buffer buffer)
    {
-      return asio::buffer_size(view) == 0;
+      return asio::buffer_size(buffer) == 0;
    }
 
-   inline bool reading_finished() const { return eof_received && is_empty(m_read_buffer); }
+   /**
+    * Returns true if all data has been read by the user.
+    * This is true if there was an EOF flag and all buffers have been consumed.
+    */
+   inline bool reading_finished() const { return !reader || eof_received && is_empty(m_read_buffer); }
+
+   /// Returns true if the user has submitted EOF and this has been delivered to nghttp2.
+   inline bool writing_finished() const { return !writer || eof_submitted; };
 
    /**
     * Returns the number of bytes left to read. This is the remaining part of the first buffer
@@ -114,14 +121,19 @@ public:
     */
    size_t read_buffers_size() const;
 
-   asio::const_buffer sendBuffer;
-   WriteHandler sendHandler;
-   // asio::cancellation_slot slot;
+   //
+   // async_write()
+   //
+   asio::const_buffer write_buffer;
+   WriteHandler write_handler;
    bool is_deferred = false;
-   bool is_writer_done = false;
+   bool eof_submitted = false;
 
-   client::Request::GetResponseHandler responseHandler;
-   
+   //
+   // async_get_response()
+   //
+   client::Request::GetResponseHandler response_handler;
+
    /// Set to true after on_response(), which is invoked after the first headers have been received.
    bool has_response = false;
 
@@ -145,7 +157,7 @@ public:
    /// This function is called after handling a header or data frame, if the EOF flag is set.
    void on_eof(nghttp2_session* session, int32_t id_);
 
-   // ==============================================================================================
+   // =================================================================================================
 
    ReadSomeHandler m_read_handler;
    boost::asio::mutable_buffer m_read_handler_buffer;
@@ -230,18 +242,20 @@ public:
 
    void async_get_response(client::Request::GetResponseHandler&& handler);
 
-   // ==============================================================================================
+   // =================================================================================================
 
-   ssize_t read_callback(uint8_t* buf, size_t length, uint32_t* data_flags);
+   ssize_t producer_callback(uint8_t* buf, size_t length, uint32_t* data_flags);
 
-   void call_on_response();
-   void call_on_request();
+   void on_response();
+   void deliver_response();
+   void on_request();
 
    impl::Reader* reader = nullptr;
    impl::Writer* writer = nullptr;
 
    void delete_reader();
    void delete_writer();
+   void maybe_close_stream();
 
    const asio::any_io_executor& executor() const;
 

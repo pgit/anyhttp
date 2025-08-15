@@ -258,6 +258,11 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       asio::ssl::context ctx{asio::ssl::context::tlsv13};
       SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, NULL);
       SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, NULL);
+      
+      //
+      // TODO: This is a testing key only. Still, we might want to remove it from the repository
+      //       to avoid flagging repository scanners.
+      //
       ctx.use_certificate_chain_file("etc/darkbase-chain.pem");
       ctx.use_private_key_file("etc/darkbase-key.pem", asio::ssl::context::pem);
 

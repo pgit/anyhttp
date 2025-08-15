@@ -3,6 +3,7 @@
 #include "anyhttp/client.hpp"
 #include "anyhttp/server.hpp"
 
+#include <exception>
 #include <expected>
 
 #include <boost/asio/as_tuple.hpp>
@@ -21,17 +22,18 @@ using namespace std::chrono_literals;
 
 namespace anyhttp
 {
+using error_code = boost::system::error_code;
 template <typename T>
 using expected = std::expected<T, boost::system::error_code>;
 
 // =================================================================================================
 
 template <typename T>
-boost::asio::awaitable<void> sleep(T duration)
+awaitable<void> sleep(T duration)
 {
    using namespace asio;
 
-#if 1
+#if 0
 #if 1
    as_tuple_t<deferred_t>::as_default_on_t<steady_timer> timer(co_await this_coro::executor);
    timer.expires_after(duration);
@@ -39,7 +41,7 @@ boost::asio::awaitable<void> sleep(T duration)
 #else
    steady_timer timer(co_await this_coro::executor);
    timer.expires_after(duration);
-   auto [ec] = co_await timer.async_wait(as_tuple(deferred));
+   auto [ec] = co_await timer.async_wait(as_tuple);
 #endif
    if (ec)
       loge("sleep: {}", ec.what());
@@ -48,7 +50,7 @@ boost::asio::awaitable<void> sleep(T duration)
    timer.expires_after(duration);
    try
    {
-      co_await timer.async_wait(deferred);
+      co_await timer.async_wait();
       logi("sleep: done");
    }
    catch (const boost::system::system_error& ec)
@@ -58,27 +60,27 @@ boost::asio::awaitable<void> sleep(T duration)
 #endif
 }
 
-boost::asio::awaitable<void> yield(size_t count = 1);
-boost::asio::awaitable<void> not_found(server::Response response);
-boost::asio::awaitable<void> not_found(server::Request request, server::Response response);
-boost::asio::awaitable<void> dump(server::Request request, server::Response response);
-boost::asio::awaitable<void> echo(server::Request request, server::Response response);
-boost::asio::awaitable<void> echo_buffer(server::Request request, server::Response response);
-boost::asio::awaitable<void> eat_request(server::Request request, server::Response response);
+awaitable<void> yield(size_t count = 1);
+awaitable<void> not_found(server::Response response);
+awaitable<void> not_found(server::Request request, server::Response response);
+awaitable<void> dump(server::Request request, server::Response response);
+awaitable<void> echo(server::Request request, server::Response response);
+awaitable<void> echo_buffer(server::Request request, server::Response response);
+awaitable<void> eat_request(server::Request request, server::Response response);
 
-boost::asio::awaitable<void> delayed(server::Request request, server::Response response);
-boost::asio::awaitable<void> detach(server::Request request, server::Response response);
-boost::asio::awaitable<void> discard(server::Request request, server::Response response);
+awaitable<void> delayed(server::Request request, server::Response response);
+awaitable<void> detach(server::Request request, server::Response response);
+awaitable<void> discard(server::Request request, server::Response response);
 
 // =================================================================================================
 
-boost::asio::awaitable<void> send(client::Request& request, size_t bytes);
-boost::asio::awaitable<size_t> receive(client::Response& response);
-boost::asio::awaitable<size_t> try_receive(client::Response& response,
-                                           boost::system::error_code& ec);
-boost::asio::awaitable<size_t> read_response(client::Request& request);
-boost::asio::awaitable<expected<size_t>> try_read_response(client::Request& request);
-boost::asio::awaitable<void> sendEOF(client::Request& request);
+awaitable<void> send(client::Request& request, size_t bytes);
+awaitable<size_t> receive(client::Response& response);
+awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response);
+awaitable<size_t> try_receive(client::Response& response, boost::system::error_code& ec);
+awaitable<size_t> read_response(client::Request& request);
+awaitable<expected<size_t>> try_read_response(client::Request& request);
+awaitable<void> sendEOF(client::Request& request);
 
 // =================================================================================================
 
@@ -88,11 +90,11 @@ boost::asio::awaitable<void> sendEOF(client::Request& request);
 //
 template <typename Range>
    requires ranges::borrowed_range<Range> && ranges::contiguous_range<Range>
-boost::asio::awaitable<void> send(client::Request& request, Range range)
+awaitable<void> send(client::Request& request, Range range)
 {
-   logi("send: (continuous range)...");
-   co_await request.async_write(asio::buffer(range.data(), range.size()), asio::deferred);
-   logi("send: (continuous range)... done");
+   logi("send: (contiguous range)...");
+   co_await request.async_write(asio::buffer(range.data(), range.size()));
+   logi("send: (contiguous range)... done");
 }
 
 //
@@ -100,7 +102,7 @@ boost::asio::awaitable<void> send(client::Request& request, Range range)
 //
 template <typename Range>
    requires ranges::borrowed_range<Range> && (!ranges::contiguous_range<Range>)
-boost::asio::awaitable<void> send(client::Request& request, Range range)
+awaitable<void> send(client::Request& request, Range range)
 {
    logi("send:");
    size_t bytes = 0;
@@ -110,7 +112,7 @@ boost::asio::awaitable<void> send(client::Request& request, Range range)
    {
       auto end = std::ranges::copy(chunk, buffer.data()).out;
       bytes += end - buffer.data();
-#if 1
+#if 0
 #if defined(NDEBUG)
       co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()));
 #else
@@ -121,25 +123,22 @@ boost::asio::awaitable<void> send(client::Request& request, Range range)
       //        it happens more often than with DEBUG.
       //
       auto [ec] = co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()),
-                                                 asio::as_tuple);
+                                               asio::as_tuple);
       if (ec)
       {
          loge("send: (range) \x1b[1;31m{}\x1b[0m after {} bytes", what(ec), bytes);
          throw boost::system::system_error(ec);
-         // co_return;
       }
 #endif
 #else
-
-   try
+      try
       {
-         co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()),
-                                      asio::deferred);
+         co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()));
       }
       catch (const boost::system::system_error& ec)
       {
-         loge("send: (range) {}, sent {} bytes", ec.code().message(), bytes);
-         break;
+         loge("send: (range) \x1b[1;31m{}\x1b[0m after {} bytes", ec.code().message(), bytes);
+         throw;
       }
 #endif
    }
@@ -149,9 +148,36 @@ boost::asio::awaitable<void> send(client::Request& request, Range range)
 // -------------------------------------------------------------------------------------------------
 
 template <typename Range>
-boost::asio::awaitable<void> sendAndForceEOF(client::Request& request, Range range)
+   requires ranges::borrowed_range<Range>
+awaitable<void> sendAndDrop(client::Request request, Range range)
 {
-   /*
+#if 0
+   try
+   {
+      co_return co_await send(request, std::move(range));
+   }
+   catch (const boost::system::system_error& ec)
+   {
+      loge("sendAndDrop: (range) {}", ec.code().message());
+      throw;
+   }
+#else
+   using namespace asio;
+   auto ex = co_await this_coro::executor;
+   if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
+   {
+      loge("sendAndDrop: {}", what(ep));
+      std::rethrow_exception(ep);
+   }
+#endif
+}
+
+// -------------------------------------------------------------------------------------------------
+
+template <typename Range>
+awaitable<void> sendAndForceEOF(client::Request& request, Range range)
+{
+#if 0
    try
    {
       co_await send(request, range);
@@ -160,21 +186,22 @@ boost::asio::awaitable<void> sendAndForceEOF(client::Request& request, Range ran
    {
       loge("sendAndForceEOF: {}", ec.code().message());
    }
-   */
+   co_await asio::this_coro::reset_cancellation_state();
+#else
    using namespace asio;
    auto ex = co_await this_coro::executor;
    if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
    {
       loge("sendAndForceEOF: {}", what(ep));
-      co_await this_coro::reset_cancellation_state();
+      co_await asio::this_coro::reset_cancellation_state();
    }
-
+#endif
    co_await sendEOF(request);
 }
 
 // -------------------------------------------------------------------------------------------------
 
-boost::asio::awaitable<void> h2spec(server::Request request, server::Response response);
+awaitable<void> h2spec(server::Request request, server::Response response);
 
 // =================================================================================================
 

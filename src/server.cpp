@@ -15,15 +15,16 @@ Request::Request(std::unique_ptr<Request::Impl> impl) : impl(std::move(impl))
 }
 Request::Request(Request&&) noexcept = default;
 Request& Request::operator=(Request&& other) noexcept = default;
-Request::~Request()
+void Request::reset() noexcept
 {
-   if (impl) // may be moved-from
+   if (impl)
    {
       logd("\x1b[35mServer::Request: dtor\x1b[0m");
       auto temp = impl.get();
       temp->destroy(std::move(impl)); // give implementation a chance for cancellation
    }
 }
+Request::~Request() { reset(); }
 
 boost::url_view Request::url() const
 {
@@ -51,17 +52,17 @@ Response::Response(std::unique_ptr<Response::Impl> impl) : impl(std::move(impl))
 }
 Response::Response(Response&&) noexcept = default;
 Response& Response::operator=(Response&& other) noexcept = default;
-Response::~Response()
+void Response::reset() noexcept
 {
-   if (impl) // may be moved-from
+   if (impl)
    {
       logd("\x1b[35mServer::Response: dtor\x1b[0m");
-
       auto temp = impl.get();
       temp->destroy(std::move(impl)); // give implementation a chance for cancellation
       assert(!impl);
    }
 }
+Response::~Response() { reset(); }
 
 void Response::content_length(std::optional<size_t> content_length)
 {
@@ -69,7 +70,8 @@ void Response::content_length(std::optional<size_t> content_length)
    impl->content_length(content_length);
 }
 
-void Response::async_submit_any(WriteHandler&& handler, unsigned int status_code, const Fields& headers)
+void Response::async_submit_any(WriteHandler&& handler, unsigned int status_code,
+                                const Fields& headers)
 {
    assert(impl);
    impl->async_submit(std::move(handler), status_code, std::move(headers));
@@ -104,7 +106,6 @@ void Server::setRequestHandlerCoro(RequestHandlerCoro&& handler)
 const asio::any_io_executor& Server::executor() const { return impl->executor(); }
 
 asio::ip::tcp::endpoint Server::local_endpoint() const { return impl->local_endpoint(); }
-
 
 // =================================================================================================
 

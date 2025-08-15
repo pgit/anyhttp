@@ -26,23 +26,23 @@ using namespace boost::asio::experimental::awaitable_operators;
 awaitable<void> send(Request& request, std::string_view hello)
 {
    logd("send: sending string of {} bytes...", hello.size());
-   co_await request.async_write(asio::buffer(hello), deferred);
+   co_await request.async_write(asio::buffer(hello));
    logd("send: sending string of {} bytes... done, sending EOF...", hello.size());
-   co_await request.async_write({}, deferred);
+   co_await request.async_write({});
    logd("send: sending string of {} bytes... done, sending EOF... done", hello.size());
 }
 
 awaitable<size_t> read_response(Request& request)
 {
    logd("receive: waiting for response...");
-   auto response = co_await request.async_get_response(deferred);
+   auto response = co_await request.async_get_response();
    logd("receive: waiting for response... done");
    size_t total = 0;
    std::array<uint8_t, 1024> buffer;
    for (;;)
    {
       logd("receive: async_read_some...");
-      size_t n = co_await response.async_read_some(asio::buffer(buffer), deferred);
+      size_t n = co_await response.async_read_some(asio::buffer(buffer));
       logd("receive: async_read_some... done, read {} bytes", n);
       if (n == 0)
          break;

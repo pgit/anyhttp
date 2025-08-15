@@ -22,11 +22,11 @@
 #include <spdlog/spdlog.h>
 
 #include <chrono>
-#include <map>
 
 namespace anyhttp
 {
 namespace asio = boost::asio;
+using asio::awaitable;
 
 // =================================================================================================
 

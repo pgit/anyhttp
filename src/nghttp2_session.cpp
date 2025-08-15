@@ -86,76 +86,65 @@ int on_begin_headers_callback(nghttp2_session*, const nghttp2_frame* frame, void
 //
 // TODO: there is on_header_callback2, which can help in avoiding copying strings
 //
-int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, const uint8_t* name,
-                       size_t namelen, const uint8_t* value, size_t valuelen, uint8_t flags,
+int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, const uint8_t* name_,
+                       size_t namelen_, const uint8_t* value_, size_t valuelen_, uint8_t flags,
                        void* user_data)
 {
    std::ignore = session;
    std::ignore = flags;
 
    auto handler = static_cast<NGHttp2Session*>(user_data);
-   auto namesv = make_string_view(name, namelen);
-   auto valuesv = make_string_view(value, valuelen);
-   logd("[{}] on_header_callback: {}: {}", handler->logPrefix(frame), namesv, valuesv);
+   auto name = make_string_view(name_, namelen_);
+   auto value = make_string_view(value_, valuelen_);
+   logd("[{}] on_header_callback: {}: {}", handler->logPrefix(frame), name, value);
 
    auto stream = handler->find_stream(frame->hd.stream_id);
    assert(stream);
 
    try
    {
-      if (namesv == ":method")
-         stream->method = valuesv;
-      else if (namesv == ":path")
+      if (name == ":method")
+         stream->method = value;
+      else if (name == ":path")
       {
-         if (auto url = boost::urls::parse_relative_ref(valuesv); url.has_value())
+         if (auto url = boost::urls::parse_relative_ref(value); url.has_value())
          {
             stream->url.set_path(url->path());
             stream->url.set_query(url->query());
             stream->url.set_fragment(url->fragment());
          }
       }
-      else if (namesv == ":scheme")
-         stream->url.set_scheme(valuesv);
-      else if (namesv == ":authority")
+      else if (name == ":scheme")
+         stream->url.set_scheme(value);
+      else if (name == ":authority")
       {
-         stream->url.set_encoded_authority(valuesv);
+         stream->url.set_encoded_authority(value);
       }
-      else if (namesv == ":host")
+      else if (name == ":host")
       {
-         stream->url.set_host(valuesv);
+         stream->url.set_host(value);
       }
-      else if (namesv == "content-length")
+      else if (name == "content-length")
       {
          stream->content_length.emplace();
-         std::from_chars(valuesv.begin(), valuesv.end(), *stream->content_length);
+         std::from_chars(value.begin(), value.end(), *stream->content_length);
       }
    }
    catch (std::exception& ex)
    {
-      logw("[{}] ignoring invalid host header: {} ({})", handler->logPrefix(frame), valuesv,
+      logw("[{}] ignoring invalid host header: {} ({})", handler->logPrefix(frame), value,
            ex.what());
    }
 
    return 0;
 }
 
-// https://github.com/nghttp2/nghttp2-asio/blob/e877868abe06a83ed0a6ac6e245c07f6f20866b5/lib/asio_server_http2_handler.cc#L222
 int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
                                int lib_error_code, void* user_data)
 {
-   std::ignore = lib_error_code;
-   std::ignore = user_data;
-
    const auto handler = static_cast<NGHttp2Session*>(user_data);
    logw("[{}] on_frame_not_send_callback: {} {}", handler->logPrefix(frame),
         frameType(frame->hd.type), nghttp2_strerror(lib_error_code));
-
-   // Issue RST_STREAM so that stream does not hang around.
-#if 0   
-   loge("[{}] on_frame_not_send_callback: resetting stream", handler->logPrefix());
-   nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
-                             NGHTTP2_INTERNAL_ERROR);
-#endif
 
    return 0;
 }
@@ -220,6 +209,7 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
    switch (frame->hd.type)
    {
    case NGHTTP2_DATA:
+      assert(stream);
       logd("[{}] on_frame_recv_callback: DATA len={} flags={}", handler->logPrefix(frame),
            frame->hd.length, frame->hd.flags);
 
@@ -230,10 +220,11 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
 
    case NGHTTP2_HEADERS:
    {
+      assert(stream);
       if (frame->headers.cat == NGHTTP2_HCAT_REQUEST)
-         stream->call_on_request();
+         stream->on_request();
       else if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE)
-         stream->call_on_response();
+         stream->on_response();
 
       // no body?
       if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)
@@ -310,53 +301,7 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
         sessionWrapper->logPrefix(stream_id), nghttp2_http2_strerror(error_code), error_code,
         local_close, remote_close);
 
-#if 0        
-   // h2spec http2/5.1 and several others but breaks generic/3.4, http2/7 and a few more
-   if (error_code == NGHTTP2_FLOW_CONTROL_ERROR)
-   {
-      nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, stream_id, NGHTTP2_NO_ERROR, nullptr, 0);
-      return 0;
-   }
-#endif
-
-   auto stream = sessionWrapper->close_stream(stream_id);
-   if (!stream)
-   {
-      logw("[{}] stream already closed", sessionWrapper->logPrefix(stream_id));
-      return 0;
-   }
-
-   //
-   // This callback is invoked in two situations:
-   // 1) We receive a RST frame from the peer
-   // 2) We submit a RST frame ourselves
-   // In both situations, this stream is deleted. It seems that this may happen multiple times...
-   //
-   assert(stream);
-
-   stream->is_writer_done = true;
-   if (stream->m_read_handler)
-   {
-      logd("[{}] stream closed while reading, raising 'partial_message'",
-           sessionWrapper->logPrefix(stream_id));
-      swap_and_invoke(stream->m_read_handler, boost::beast::http::error::partial_message, 0);
-   }
-
-   if (stream->responseHandler)
-   {
-      using namespace boost::system;
-      swap_and_invoke(stream->responseHandler, errc::make_error_code(errc::io_error), // FIXME:
-                      client::Response{nullptr});
-   }
-
-   if (stream->sendHandler)
-   {
-      using namespace boost::system;
-      // FIXME: proper error code -- this could be e.g. NGHTTP2_STREAM_CLOSED which is NOT cancel
-      swap_and_invoke(stream->sendHandler, errc::make_error_code(errc::operation_canceled));
-   }
-
-   post(stream->executor(), [stream]() { /* deferred delete */ });
+   sessionWrapper->close_stream(stream_id);
    return 0;
 }
 
@@ -389,17 +334,17 @@ nghttp2_unique_ptr<nghttp2_session_callbacks> NGHttp2Session::setup_callbacks()
    // At a minimum, send and receive callbacks need to be specified.
    //
    auto cbs = callbacks.get();
-   nghttp2_session_callbacks_set_on_frame_recv_callback(cbs, on_frame_recv_callback);
+   // clang-format off
+   nghttp2_session_callbacks_set_on_frame_recv_callback     (cbs, on_frame_recv_callback);
    nghttp2_session_callbacks_set_on_data_chunk_recv_callback(cbs, on_data_chunk_recv_callback);
-   nghttp2_session_callbacks_set_on_frame_send_callback(cbs, on_frame_send_callback);
-   nghttp2_session_callbacks_set_on_stream_close_callback(cbs, on_stream_close_callback);
-   nghttp2_session_callbacks_set_on_begin_headers_callback(cbs, on_begin_headers_callback);
-   nghttp2_session_callbacks_set_on_header_callback(cbs, on_header_callback);
-   nghttp2_session_callbacks_set_on_frame_not_send_callback(cbs, on_frame_not_send_callback);
-   nghttp2_session_callbacks_set_error_callback2(cbs, on_error_callback);
+   nghttp2_session_callbacks_set_on_frame_send_callback     (cbs, on_frame_send_callback);
+   nghttp2_session_callbacks_set_on_stream_close_callback   (cbs, on_stream_close_callback);
+   nghttp2_session_callbacks_set_on_begin_headers_callback  (cbs, on_begin_headers_callback);
+   nghttp2_session_callbacks_set_on_header_callback         (cbs, on_header_callback);
+   nghttp2_session_callbacks_set_on_frame_not_send_callback (cbs, on_frame_not_send_callback);
+   nghttp2_session_callbacks_set_error_callback2            (cbs, on_error_callback);
    nghttp2_session_callbacks_set_on_invalid_header_callback2(cbs, on_invalid_header_callback);
-   nghttp2_session_callbacks_set_on_invalid_frame_recv_callback(cbs,
-                                                                on_invalid_frame_recv_callback);
+   // clang-format on
    return callbacks;
 }
 
@@ -430,6 +375,33 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    stream->url = url;
 
    //
+   // Submit request, full headers and producer callback for the body.
+   //
+   std::string method("POST");
+   std::string scheme(url.scheme());
+   std::string path(url.path());
+   std::string authority(url.host_address());
+   auto nva = std::vector<nghttp2_nv>();
+   // nva.reserve(4 + headers.size());
+   nva.push_back(make_nv_ls(":method", method));
+   nva.push_back(make_nv_ls(":scheme", scheme));
+   nva.push_back(make_nv_ls(":path", path));
+   nva.push_back(make_nv_ls(":authority", authority));
+
+   for (auto&& item : headers)
+   {
+      if (item.name_string().starts_with(':'))
+         logw("[{}] async_submit: invalid header '{}'", stream->logPrefix, item.name_string());
+
+      logi("[{}] async_submit: {}: {}", stream->logPrefix, item.name_string(), item.value());
+      nva.push_back(make_nv_ls(item.name_string(), item.value()));
+   }
+
+   for (auto nv : nva)
+      mlogd("submit: {}: {}", std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen),
+            std::string_view(reinterpret_cast<const char*>(nv.value), nv.valuelen));
+
+   //
    // https://nghttp2.org/documentation/types.html#c.nghttp2_data_source_read_callback
    //
    // This callback is invoked by nghttp2 when it is ready to accept more data to be sent.
@@ -442,42 +414,12 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
       auto stream = static_cast<NGHttp2Stream*>(source->ptr);
       assert(stream);
       assert(stream->id == stream_id);
-      return stream->read_callback(buf, length, data_flags);
+      return stream->producer_callback(buf, length, data_flags);
    };
-
-   //
-   // Submit request, full headers and producer callback for the body.
-   //
-   auto view = boost::urls::parse_uri_reference(url);
-   std::string method("POST");
-   std::string scheme(view->scheme());
-   std::string path(view->path());
-   std::string authority(view->host_address());
-   auto nva = std::vector<nghttp2_nv>();
-   // nva.reserve(4 + headers.size());
-   nva.push_back(make_nv_ls(":method", method));
-   nva.push_back(make_nv_ls(":scheme", scheme));
-   nva.push_back(make_nv_ls(":path", path));
-   nva.push_back(make_nv_ls(":authority", authority));
-
-   for (auto&& item : headers)
-   {
-      // FIXME: why should content length be invalid?
-      // if (boost::iequals(item.first, "content-length") || item.first.starts_with(':'))
-      if (item.name_string().starts_with(':'))
-         logw("[{}] async_submit: invalid header '{}'", stream->logPrefix, item.name_string());
-
-      logi("[{}] async_submit: {}: {}", stream->logPrefix, item.name_string(), item.value());
-      nva.push_back(make_nv_ls(item.name_string(), item.value()));
-   }
 
    auto id = nghttp2_submit_request(session, nullptr, nva.data(), nva.size(), &prd, this);
    stream->id = id;
    stream->logPrefix = std::format("{}.{}", logPrefix(), id);
-
-   for (auto nv : nva)
-      mlogd("submit: {}: {}", std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen),
-            std::string_view(reinterpret_cast<const char*>(nv.value), nv.valuelen));
 
    if (id < 0)
    {
@@ -485,6 +427,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
       using namespace boost::system;
       std::move(handler)(errc::make_error_code(errc::invalid_argument), client::Request{nullptr});
    }
+
+   m_last_id = id;
 
    logd("submit: stream={}", id);
    m_streams.emplace(id, stream);
@@ -533,48 +477,75 @@ NGHttp2Stream* NGHttp2Session::find_stream(int32_t stream_id)
       return nullptr;
 }
 
-std::shared_ptr<NGHttp2Stream> NGHttp2Session::close_stream(int32_t stream_id)
+void NGHttp2Session::delete_stream(int32_t stream_id) { m_streams.erase(stream_id); }
+
+void NGHttp2Session::close_stream(int32_t stream_id)
 {
-   std::shared_ptr<NGHttp2Stream> stream;
-   if (auto it = m_streams.find(stream_id); it != std::end(m_streams))
-   {
-      stream = it->second;
-      stream->closed = true;
-
-      if (stream->sendHandler)
-      {
-         using namespace boost::system;
-         swap_and_invoke(stream->sendHandler, errc::make_error_code(errc::operation_canceled));
-      }
-
-      //
-      // IF the stream is closed before a response object has been handed out to the user,
-      // we might have to delay deletion of the stream.
-      //
-      if (!stream->response_delivered)
-      {
-         //
-         // If we have seen a response from the peer, the user could still request it. This may
-         // also happen during normal operation, if the server delivers a response before the
-         // client calls async_get_response().
-         //
-         if (stream->has_response)
-         {
-            logd("[{}] close_stream: response not delivered yet", logPrefix(stream_id));
-            it->second->call_read_handler();
-            return nullptr;
-         }
-      }
-      m_streams.erase(it);
-   }
-   else
+   auto it = m_streams.find(stream_id);
+   if (it == std::end(m_streams))
    {
       logd("[{}] close_stream: stream already gone", logPrefix(stream_id));
-      return nullptr;
+      return;
    }
 
-   logd("[{}] close_stream: found 0x{}, {} streams left", logPrefix(stream_id), (void*)stream.get(),
+   std::shared_ptr<NGHttp2Stream> stream = it->second;
+   stream->closed = true;
+
+   //
+   // Cancel pending send.
+   //
+   if (stream->write_handler)
+   {
+      using namespace boost::system;
+      swap_and_invoke(stream->write_handler, asio::error::basic_errors::connection_aborted);
+   }
+
+   //
+   // If the stream is closed before the response has been requested by the user, we might have
+   // to delay the deletion of the stream until the user does.
+   //
+   if (!stream->response_delivered)
+   {
+      //
+      // If we have seen a response from the peer, the user could still request it. This may
+      // also happen during normal operation, if the server delivers a response before the
+      // client calls async_get_response().
+      //
+      if (stream->has_response)
+      {
+         logd("[{}] close_stream: response not delivered yet", logPrefix(stream_id));
+         it->second->call_read_handler();
+         return;
+      }
+   }
+
+   //
+   // Finally, erase stream from our map.
+   //
+   m_streams.erase(it);
+
+   logd("[{}] close_stream: found {}, {} streams left", logPrefix(stream_id), (void*)stream.get(),
         m_streams.size());
+
+   //
+   // This callback is invoked in two situations:
+   // 1) We receive a RST frame from the peer
+   // 2) We submit a RST frame ourselves
+   // In both situations, this stream is deleted. It seems that this may happen multiple times...
+   //
+   assert(stream);
+
+   if (stream->m_read_handler)
+   {
+      logd("[{}] stream closed while reading, raising 'partial_message'", logPrefix(stream_id));
+      swap_and_invoke(stream->m_read_handler, boost::beast::http::error::partial_message, 0);
+   }
+   if (stream->response_handler)
+   {
+      using namespace boost::system;
+      swap_and_invoke(stream->response_handler, errc::make_error_code(errc::io_error), // FIXME:
+                      client::Response{nullptr});
+   }
 
    //
    // FIXME: We can't just terminate the session after the last request -- what if the user wants
@@ -587,12 +558,14 @@ std::shared_ptr<NGHttp2Stream> NGHttp2Session::close_stream(int32_t stream_id)
    if (auto client = dynamic_cast<ClientReference*>(this) && m_streams.empty())
    {
       // nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
-      logi("[{}] last stream closed (id={}), submitting GOAWAY...", m_logPrefix, stream_id);
-      int32_t lastStreamId = 1; // FIXME: should be max stream ID
-      nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, lastStreamId, NGHTTP2_NO_ERROR, nullptr, 0);
+      logi("[{}] last stream closed (id={}), submitting GOAWAY (last stream ID: {})...",
+           m_logPrefix, stream_id, m_last_id);
+      nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, m_last_id, NGHTTP2_NO_ERROR, nullptr, 0);
    }
 
-   return stream;
+   // see NGHttp2Stream::call_read_handler() why this is needed
+   if (stream)
+      post(executor(), [stream]() { /* deferred delete */ });
 }
 
 void NGHttp2Session::start_write()

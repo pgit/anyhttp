@@ -29,6 +29,7 @@ public:
    explicit Response(std::unique_ptr<Impl> impl);
    Response(Response&& other) noexcept;
    Response& operator=(Response&& other) noexcept;
+   void reset() noexcept;
    ~Response();
 
 public:
@@ -57,6 +58,7 @@ public:
    explicit Request(std::unique_ptr<Impl> impl);
    Request(Request&& other) noexcept;
    Request& operator=(Request&& other) noexcept;
+   void reset() noexcept;
    ~Request();
 
    const asio::any_io_executor& executor() const;

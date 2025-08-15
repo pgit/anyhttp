@@ -19,6 +19,7 @@ Request::Request(std::unique_ptr<Request::Impl> impl_) : impl(std::move(impl_))
 }
 Request::Request(Request&&) noexcept = default;
 Request& Request::operator=(Request&& other) noexcept = default;
+void Request::reset() noexcept { impl.reset(); }
 Request::~Request()
 {
    if (impl)
@@ -60,6 +61,7 @@ Response::Response(std::unique_ptr<Response::Impl> impl_) : impl(std::move(impl_
 }
 Response::Response(Response&&) noexcept = default;
 Response& Response::operator=(Response&& other) noexcept = default;
+void Response::reset() noexcept { impl.reset(); }
 Response::~Response()
 {
    if (impl)
@@ -67,6 +69,7 @@ Response::~Response()
       logd("\x1b[34mClient::Response: dtor\x1b[0m");
       auto temp = impl.get();
       temp->destroy(std::move(impl)); // give implementation a chance for graceful cancellation
+      assert(!impl);
    }
 }
 

@@ -1,10 +1,12 @@
 {
     "words": [
         "64kminus1",
+        "ALTSVC",
         "anyhttp",
         "ASAN",
         "ASIO",
         "coro",
+        "darkbase",
         "Eisenlohr",
         "epoll",
         "GOAWAY",
@@ -25,6 +27,7 @@
         "ngtcp",
         "pynghttp",
         "QUIC",
+        "rcbuf",
         "RECVTOS",
         "respawn",
         "RESPAWNED",

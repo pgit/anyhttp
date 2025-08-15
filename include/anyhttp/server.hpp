@@ -26,6 +26,7 @@ public:
    explicit Request(std::unique_ptr<Impl> impl);
    Request(Request&& other) noexcept;
    Request& operator=(Request&& other) noexcept;
+   void reset() noexcept;
    ~Request();
 
 public:
@@ -58,6 +59,7 @@ public:
    explicit Response(std::unique_ptr<Impl> impl);
    Response(Response&& other) noexcept;
    Response& operator=(Response&& other) noexcept;
+   void reset() noexcept;
    ~Response();
 
    void content_length(std::optional<size_t> content_length);
