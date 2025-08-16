@@ -96,7 +96,7 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
    auto handler = static_cast<NGHttp2Session*>(user_data);
    auto name = make_string_view(name_, namelen_);
    auto value = make_string_view(value_, valuelen_);
-   logd("[{}] on_header_callback: {}: {}", handler->logPrefix(frame), name, value);
+   logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", handler->logPrefix(frame), name, value);
 
    auto stream = handler->find_stream(frame->hd.stream_id);
    assert(stream);

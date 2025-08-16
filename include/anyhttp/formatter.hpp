@@ -32,13 +32,12 @@ ENABLE_FMT_OSTREAM(boost::urls::authority_view);
 // -------------------------------------------------------------------------------------------------
 
 template <>
-struct std::formatter<boost::core::string_view, char> : std::formatter<std::string_view, char>
+struct std::formatter<boost::core::string_view> : public std::formatter<std::string_view>
 {
    template <typename FormatContext>
-   auto format(boost::core::string_view sv, FormatContext& ctx) const
+   constexpr auto format(boost::core::string_view sv, FormatContext& ctx) const
    {
-      auto temp = std::string_view{sv.data(), sv.size()};
-      return std::formatter<std::string_view, char>::format(temp, ctx);
+      return std::formatter<std::string_view>::format(std::string_view{sv.data(), sv.size()}, ctx);
    }
 };
 

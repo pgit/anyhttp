@@ -1,7 +1,8 @@
 #include "anyhttp/beast_session.hpp"
 #include "anyhttp/any_async_stream.hpp"
-#include "anyhttp/server.hpp"
 #include "anyhttp/common.hpp"
+#include "anyhttp/formatter.hpp" // IWYU pragma: keep
+#include "anyhttp/server.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
@@ -62,7 +63,6 @@ public:
    inline BeastReader(BeastSession<Stream>& session_, Stream& stream_, Buffer& buffer_)
       : session(&session_), stream(stream_), buffer(buffer_)
    {
-      logd("BeastReader: ctor");
       parser.body_limit(std::numeric_limits<uint64_t>::max());
    }
 
@@ -72,11 +72,7 @@ public:
          this->deleting = std::move(self);
    }
 
-   ~BeastReader() override
-   {
-      logd("BeastReader: dtor");
-      assert(!reading);
-   }
+   ~BeastReader() override { assert(!reading); }
    void detach() override { session = nullptr; }
 
    boost::url_view url() const override { return m_url; }
@@ -179,11 +175,7 @@ public:
          this->deleting = std::move(self);
    }
 
-   ~WriterBase() override
-   {
-      logd("WriterBase: dtor");
-      assert(!writing);
-   }
+   ~WriterBase() override { assert(!writing); }
 
    inline auto logPrefix() const { return session->logPrefix(); }
 
@@ -341,7 +333,8 @@ public:
          super::message.content_length(boost::none);
    }
 
-   void async_submit(WriteHandler&& handler, unsigned int status_code, const Fields& headers) override
+   void async_submit(WriteHandler&& handler, unsigned int status_code,
+                     const Fields& headers) override
    {
       super::message.result(status_code);
 
@@ -395,7 +388,8 @@ public:
          super::message.content_length(boost::none);
    }
 
-   void async_submit(WriteHandler&& handler, unsigned int status_code, const Fields& headers) override
+   void async_submit(WriteHandler&& handler, unsigned int status_code,
+                     const Fields& headers) override
    {
       super::submit_headers(headers);
       message.method(http::verb::post);
@@ -537,9 +531,10 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       requestCounter++;
 
       auto& request = parser.get();
+      bool need_eof = request.need_eof();
       mlogd("{} {} (need_eof={})", request.method_string(), request.target(), request.need_eof());
       for (auto& header : request)
-         mlogd("  {}: {}", header.name_string(), header.value());
+         mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
 
       // if (auto url = boost::urls::parse_relative_ref(request.target()); url.has_value())
       if (auto url = boost::urls::parse_uri_reference(request.target()); url.has_value())
@@ -593,24 +588,25 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          }
       }
 
-      //
-      // FIXME: We need to wait for request and response
-      //
       mlogd("request handler finished (size={} capacity={})", m_buffer.size(), m_buffer.capacity());
 
-      continue;
-      // FIXME: this is UB as request may be deleted already
-      if (request.need_eof())
+      //
+      // Honor 'Connection: close'
+      //
+      if (need_eof)
       {
          mlogd("request needs EOF, closing connection");
          break;
       }
 
+      /*
+      // FIXME: this is UB as request/response may be deleted already
       if (response.need_eof())
       {
          mlogd("response needs EOF, closing connection");
          break;
       }
+         */
    }
 
    mlogi("closing stream, served {} requests", requestCounter);
