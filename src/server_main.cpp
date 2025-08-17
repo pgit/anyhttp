@@ -110,7 +110,7 @@ int main(int argc, char* argv[])
             return dump(std::move(request), std::move(response));
          else if (path == "/eat_request")
             return eat_request(std::move(request), std::move(response));
-         else if (path == "/")
+         else if (path == "/" || path == "/h2spec")
             return h2spec(std::move(request), std::move(response));
          else
             return not_found(std::move(response));

@@ -42,8 +42,8 @@
 
 #include <future>
 #include <random>
-#include <regex>
 #include <ranges>
+#include <regex>
 #include <unordered_map>
 
 using namespace std::chrono_literals;
@@ -173,6 +173,8 @@ protected:
                return eat_request(std::move(request), std::move(response));
             else if (request.url().path() == "/discard")
                return discard(std::move(request), std::move(response));
+            else if (request.url().path() == "/h2spec")
+               return h2spec(std::move(request), std::move(response));
             else if (request.url().path() == "/detach")
             {
                co_spawn(server->executor(), detach(std::move(request), std::move(response)),
@@ -320,7 +322,7 @@ protected:
 #if 1
       auto result = co_await (log("STDERR", err) && consume(std::move(out)));
 #else
-      co_await (log(std::move(err)) && log(std::move(out)));
+      co_await (log("STDERR", err) && log("STDOUT", out));
       auto result = std::string();
 #endif
       logi("spawn: starting to communicate... done");
@@ -465,16 +467,28 @@ TEST_P(External, curl_multiple_https)
    EXPECT_EQ(future.get().size(), testFileSize * 2);
 }
 
+TEST_P(External, nc_crazy_chunked)
+{
+   if (GetParam() == anyhttp::Protocol::h2)
+      GTEST_SKIP();
+
+   auto cmd = std::format("nc 127.0.0.2 {} <crazy-chunked.txt", server->local_endpoint().port());
+   auto future = spawn("/usr/bin/bash", {"-c", cmd});
+   run();
+
+   auto out = future.get();
+   EXPECT_GT(out.size(), 0);
+   EXPECT_TRUE(out.contains("Hello, World!\n"));
+}
+
 TEST_P(External, h2spec)
 {
    if (GetParam() != anyhttp::Protocol::h2)
       GTEST_SKIP();
 
-   custom = h2spec;
-
    auto future = spawn("bin/h2spec", {"--host", server->local_endpoint().address().to_string(),
                                       "--port", std::to_string(server->local_endpoint().port()),
-                                      "--path", "/custom", "--timeout", "1", "--verbose"});
+                                      "--path", "/h2spec", "--timeout", "1", "--verbose"});
    run();
 
    const std::string output = future.get();

@@ -1,4 +1,4 @@
-POST / HTTP/1.1
+POST /h2spec HTTP/1.1
 Host: localhost
 Connection: close
 Trailer: Expires, Content-MD5, Missing
