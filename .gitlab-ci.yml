@@ -1,0 +1,62 @@
+stages:
+  - build
+  - test
+
+variables:
+  BUILD_DIR: build
+
+before_script:
+  # - apt-get update && apt-get install -y cmake g++ ninja-build pkg-config libboost-all-dev libfmt-dev libspdlog-dev libgtest-dev
+  - rm -rf $BUILD_DIR && mkdir $BUILD_DIR
+
+build:
+  stage: build
+  script:
+    - cd $BUILD_DIR
+    - cmake -G Ninja ..
+    - ninja
+  artifacts:
+    stages:
+      - build
+      - test
+
+    variables:
+      BUILD_DIR: build
+
+    before_script:
+      # - apt-get update && apt-get install -y cmake g++ ninja-build pkg-config libboost-all-dev libfmt-dev libspdlog-dev libgtest-dev
+      - rm -rf $BUILD_DIR && mkdir $BUILD_DIR
+
+
+    # Use the devcontainer Dockerfile for CI to match the development environment
+    image:
+      # name: $CI_REGISTRY_IMAGE/ci-devcontainer:latest
+      name: docker.io/psedoc/anyhttp:1.1
+      entrypoint: [""]
+
+  stage: test
+  script:
+    - cd $BUILD_DIR
+    - ./test/test_all --gtest_output=xml:gtest-results.xml || ./test/test_all --gtest_output=xml:gtest-results.xml
+  artifacts:
+    when: always
+    paths:
+      - $BUILD_DIR/gtest-results.xml
+
+
+    test:
+      stage: test
+      script:
+        - cd build && ctest --output-on-failure --no-compress-output -T Test
+        # Run Google Test directly for XML output
+        - |
+          if [ -f test/test_all ]; then
+            ./test/test_all --gtest_output=xml:test-results/test_all.xml || true
+          fi
+      artifacts:
+        when: always
+        paths:
+          - build/Testing/
+          - build/test-results/
+        reports:
+          junit: build/test-results/test_all.xml

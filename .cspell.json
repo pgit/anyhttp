@@ -25,6 +25,7 @@
         "mlogi",
         "mlogw",
         "ngtcp",
+        "psedoc",
         "pynghttp",
         "QUIC",
         "rcbuf",
