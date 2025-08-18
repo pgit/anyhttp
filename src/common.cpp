@@ -45,7 +45,7 @@ asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint)
 
 // =================================================================================================
 
-std::string what(const boost::system::error_code ec) { return ec.message(); }
+std::string what(const boost::system::error_code& ec) { return ec.message(); }
 
 std::string what(const std::exception_ptr& ptr)
 {
@@ -82,8 +82,11 @@ std::string format_http_date(std::chrono::system_clock::time_point tp)
    constexpr auto months = std::array{"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
-   assert(tm.tm_wday < weekdays.size());   
-   assert(tm.tm_mon < months.size());
+   static_assert(weekdays.size() == 7 && months.size() == 12);
+
+   assert(tm.tm_wday >= 0 && static_cast<size_t>(tm.tm_wday) < weekdays.size());
+   assert(tm.tm_mon >= 0 && static_cast<size_t>(tm.tm_mon) < months.size());
+
    return std::format("{:s}, {:02d} {:s} {:04d} {:02d}:{:02d}:{:02d} GMT", weekdays[tm.tm_wday],
                       tm.tm_mday, months[tm.tm_mon], tm.tm_year + 1900, tm.tm_hour, tm.tm_min,
                       tm.tm_sec);

@@ -124,6 +124,11 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
       {
          stream->url.set_host(value);
       }
+      else if (name == ":status")
+      {
+         stream->status_code.emplace();
+         std::from_chars(value.begin(), value.end(), *stream->status_code);
+      }
       else if (name == "content-length")
       {
          stream->content_length.emplace();

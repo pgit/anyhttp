@@ -23,6 +23,7 @@ using namespace std::chrono_literals;
 namespace anyhttp
 {
 using error_code = boost::system::error_code;
+
 template <typename T>
 using expected = std::expected<T, boost::system::error_code>;
 

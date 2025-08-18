@@ -124,8 +124,8 @@ void Client::Impl::async_connect(ConnectHandler handler)
             // With TLS and ALPN, HTTP protocol negotiation can be automatic as well.
             //
             // FIXME: How to handle upgrades? This is a top-level responsibility of the client.
-            // There are
-            //        different types of upgrades:
+            //
+            // There are different types of upgrades:
             //
             // 1) HTTP/1.1 to HTTP/2 via Connection: upgrade header
             // 2) HTTP/1.1 to HTTP/3 via Alt-Svc header

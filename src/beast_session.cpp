@@ -75,6 +75,13 @@ public:
    ~BeastReader() override { assert(!reading); }
    void detach() override { session = nullptr; }
 
+   unsigned int status_code() const noexcept override
+   {
+      if constexpr (typename Parser::is_request())
+         return 0;
+      else
+         return parser.get().result_int();
+   }
    boost::url_view url() const override { return m_url; }
    std::optional<size_t> content_length() const noexcept override
    {
@@ -148,6 +155,7 @@ public:
    Stream& stream;
    Buffer& buffer;
    Parser parser;
+   std::optional<unsigned int> m_status_code = 0;
    boost::url m_url;
    bool reading = false;
    std::unique_ptr<typename Parent::ReaderOrWriter> deleting;
@@ -524,8 +532,8 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       else if (ec == http::error::end_of_stream)
          mlogd("async_read_header: end of stream");
       else
-         mlogw("async_read_header: len={} size={} capacity={} ec={}", len, m_buffer.size(),
-               m_buffer.capacity(), ec.message());
+         mlogw("async_read_header: len={} size={} capacity={} ec=\x1b[1;31m{}\x1b[0m", len,
+               m_buffer.size(), m_buffer.capacity(), ec.message());
       if (ec)
          break;
       requestCounter++;

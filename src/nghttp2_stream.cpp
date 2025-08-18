@@ -7,6 +7,7 @@
 #include "anyhttp/request_handlers.hpp" // IWYU pragma: keep
 
 #include <boost/algorithm/string/predicate.hpp>
+
 #include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/error.hpp>
@@ -58,6 +59,13 @@ const asio::any_io_executor& NGHttp2Reader<Base>::executor() const
 {
    assert(stream);
    return stream->executor();
+}
+
+template <typename Base>
+unsigned int NGHttp2Reader<Base>::status_code() const noexcept
+{
+   assert(stream);
+   return stream->status_code.value_or(0);
 }
 
 template <typename Base>
@@ -400,7 +408,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
          // deleted. This is because invoking the read handler eventually continues a coroutine,
          // which might drop request and response and by extension, the stream.
          //
-         // To avoid this, deleting the stream is post()ed
+         // To avoid this, deleting the stream is post()ed in on_stream_close_callback()
          //
          logd("[{}] read_callback: delivering EOF... done", logPrefix);
          return;

@@ -73,6 +73,11 @@ Response::~Response()
    }
 }
 
+int Response::status_code() const noexcept
+{
+   return impl->status_code();
+}
+
 void Response::async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler)
 {
    if (impl)

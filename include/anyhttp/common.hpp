@@ -104,9 +104,9 @@ public:
 // =================================================================================================
 
 template <class T>
-constexpr auto make_string_view(const T* data, size_t len)
+constexpr std::string_view make_string_view(const T* data, size_t len)
 {
-   return std::string_view(static_cast<const char*>(static_cast<const void*>(data)), len);
+   return {static_cast<const char*>(static_cast<const void*>(data)), len};
 }
 
 // inspired by <http://blog.korfuri.fr/post/go-defer-in-cpp/>, but our
@@ -135,9 +135,11 @@ asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint);
 
 // -------------------------------------------------------------------------------------------------
 
-/// Get error message from exception pointer, as returned by \c co_spawn().
+/// Get error message from exception pointer, as used in the completion signature of \c co_spawn().
 std::string what(const std::exception_ptr& ptr);
-std::string what(const boost::system::error_code ec);
+
+/// Get error message from \c boost::system::error_code, used by ASIO.
+std::string what(const boost::system::error_code& ec);
 
 // -------------------------------------------------------------------------------------------------
 

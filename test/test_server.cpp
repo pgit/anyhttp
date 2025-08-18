@@ -327,7 +327,7 @@ protected:
 #endif
       logi("spawn: starting to communicate... done");
 
-      child.wait(); // FIXME: this is sync
+      co_await child.async_wait();
       if (child.exit_code())
          logw("exit_code={}", child.exit_code());
       else
@@ -630,9 +630,10 @@ TEST_P(ClientAsync, WHEN_post_without_path_THEN_error_404)
 {
    test = [&](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url, {}, deferred);
+      auto request = co_await session.async_submit(url.set_path(""), {}, deferred);
       co_await send(request, 1024);
       auto response = co_await request.async_get_response(asio::deferred);
+      EXPECT_EQ(response.status_code(), 404);
       auto received = co_await receive(response);
    };
    run();
@@ -645,6 +646,7 @@ TEST_P(ClientAsync, WHEN_post_to_unknown_path_THEN_error_404)
       auto request = co_await session.async_submit(url.set_path("unknown"), {}, deferred);
       co_await send(request, 1024 * 1024);
       auto response = co_await request.async_get_response(asio::deferred);
+      EXPECT_EQ(response.status_code(), 404);
       auto received = co_await receive(response);
    };
    run();
@@ -657,6 +659,7 @@ TEST_P(ClientAsync, WHEN_server_discards_request_THEN_error_500)
       auto request = co_await session.async_submit(url.set_path("discard"), {}, deferred);
       co_await send(request, 1024);
       auto response = co_await request.async_get_response(asio::deferred);
+      EXPECT_EQ(response.status_code(), 500);
       auto received = co_await receive(response);
    };
    run();
@@ -669,6 +672,7 @@ TEST_P(ClientAsync, WHEN_server_discards_request_delayed_THEN_error_500)
       auto request = co_await session.async_submit(url.set_path("detach"), {}, deferred);
       co_await send(request, 1024);
       auto response = co_await request.async_get_response(asio::deferred);
+      EXPECT_EQ(response.status_code(), 500);
       EXPECT_THROW(co_await receive(response), boost::system::system_error);
    };
    run();

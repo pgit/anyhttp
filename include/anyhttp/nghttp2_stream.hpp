@@ -13,6 +13,7 @@
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <boost/system/detail/system_category.hpp>
+
 #include <boost/url/url.hpp>
 
 #include <deque>
@@ -35,7 +36,8 @@ public:
    std::optional<size_t> content_length() const noexcept override;
    void async_read_some(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler) override;
    void detach() override;
-
+   
+   unsigned int status_code() const noexcept override;
    boost::url_view url() const override;
 
    NGHttp2Stream* stream;
@@ -72,6 +74,8 @@ public:
    size_t bytesWritten = 0; // TODO: not used, yet
    size_t pending = 0; // TODO: not used, yet
    size_t unhandled = 0; // TODO: not used, yet
+
+   // ----------------------------------------------------------------------------------------------
 
    /**
     * True after we have received an EOF flag from the peer. After this, no more buffers will be
@@ -121,6 +125,8 @@ public:
     */
    size_t read_buffers_size() const;
 
+   // ----------------------------------------------------------------------------------------------
+
    //
    // async_write()
    //
@@ -143,6 +149,7 @@ public:
    std::string logPrefix;
    std::string method;
    boost::urls::url url;
+   std::optional<unsigned int> status_code;
    std::optional<size_t> content_length;
 
    bool closed = false; // set to true after on_stream_close_callback
@@ -242,7 +249,7 @@ public:
 
    void async_get_response(client::Request::GetResponseHandler&& handler);
 
-   // =================================================================================================
+   // ----------------------------------------------------------------------------------------------
 
    ssize_t producer_callback(uint8_t* buf, size_t length, uint32_t* data_flags);
 

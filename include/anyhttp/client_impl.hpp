@@ -30,6 +30,7 @@ public:
    Impl() noexcept;
    virtual ~Impl();
 
+   virtual unsigned int status_code() const noexcept = 0;
    virtual boost::url_view url() const = 0;
 
    using ReaderOrWriter = impl::Reader;
