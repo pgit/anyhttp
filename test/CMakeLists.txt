@@ -8,7 +8,7 @@ add_executable(test_all ${SRC_FILES})
 target_link_libraries(test_all PRIVATE GTest::GTest anyhttp)
 target_link_libraries(test_all PRIVATE spdlog::spdlog_header_only)
 
-# include(CTest)
+include(CTest)
 # Fetch Google Test
 # include(FetchContent)
 # FetchContent_Declare(
