@@ -11,6 +11,48 @@ None of those protocols are implemented from scratch. Instead, it is a wrapper a
 * nghttp2
 * nghttp3 - not done yet.
 
+## Building and Testing
+
+This project uses CMake with Ninja for building and Google Test for testing.
+
+### Prerequisites
+
+The project has complex dependencies including C++23, Boost, OpenSSL, nghttp2, and others. A development container with all dependencies is available at `docker.io/psedoc/anyhttp:1.1`.
+
+### Building
+
+```bash
+mkdir build && cd build
+cmake -G Ninja ..
+ninja
+```
+
+### Running Tests
+
+Tests can be run using CTest:
+
+```bash
+cd build
+ctest --output-on-failure
+```
+
+Or by running the test executable directly:
+
+```bash
+cd build
+./test/test_all
+```
+
+### Continuous Integration
+
+The project uses GitHub Actions for CI/CD, which automatically:
+- Builds the project using the same Docker environment as development
+- Runs all tests using both CTest and direct GTest execution
+- Generates test reports and artifacts
+- Publishes test results for PR reviews
+
+The CI workflow is triggered on pushes and pull requests to main branches.
+
 ## Synopsis
 
 ```C++
