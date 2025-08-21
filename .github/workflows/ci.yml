@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/psedoc/anyhttp:1.1
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Create build directory
+      run: |
+        rm -rf build
+        mkdir build
+    
+    - name: Configure with CMake
+      run: |
+        cd build
+        cmake -G Ninja ..
+    
+    - name: Build project
+      run: |
+        cd build
+        ninja
+    
+    - name: Run tests with CTest
+      run: |
+        cd build
+        ctest --output-on-failure --no-compress-output -T Test
+    
+    - name: Run GTest directly for XML output
+      run: |
+        cd build
+        mkdir -p test-results
+        if [ -f test/test_all ]; then
+          ./test/test_all --gtest_output=xml:test-results/test_all.xml || true
+        fi
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: |
+          build/Testing/
+          build/test-results/
+    
+    - name: Publish test results
+      uses: dorny/test-reporter@v1
+      if: always()
+      with:
+        name: GTest Results
+        path: 'build/test-results/test_all.xml'
+        reporter: java-junit
+        fail-on-error: true
