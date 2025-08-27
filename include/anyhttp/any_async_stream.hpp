@@ -11,8 +11,6 @@
 #include <boost/beast/core/buffer_traits.hpp>
 #include <boost/beast/core/stream_traits.hpp>
 
-#include <range/v3/view/any_view.hpp>
-
 namespace asio = boost::asio;
 namespace ip = asio::ip;
 
@@ -28,6 +26,10 @@ using MutableBufferVector = boost::container::small_vector<asio::mutable_buffer,
 
 /**
  * Attempt to create a type-erased async stream.
+ *
+ * The difficult part here is to type-erase the buffer sequences. For starters, the buffers are
+ * copied into a small vector that can hold up to 4 buffers without allocation. This seems to work
+ * reasonably well.
  */
 class AnyAsyncStream
 {
@@ -45,8 +47,10 @@ public:
       virtual void async_read_impl(ReadWriteHandler handler, MutableBufferVector buffer) = 0;
    };
 
-public:
+protected:
    std::unique_ptr<Impl> impl;
+
+public:
    AnyAsyncStream(std::unique_ptr<Impl> impl_) : impl(std::move(impl_)) {}
 
    inline executor_type get_executor() noexcept { return impl->get_executor(); }
@@ -81,6 +85,10 @@ public:
                                                      asio::buffer_sequence_end(buffers)});
          },
          token, buffers);
+
+         asio::const_buffer b;
+         asio::buffer_sequence_begin(b);
+         asio::buffer_sequence_end(b);
    }
 
    //

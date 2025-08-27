@@ -118,7 +118,7 @@ int main(int argc, char* argv[])
 
    auto threads = rv::iota(0) | rv::take(config->threads > 0 ? config->threads - 1 : 0) |
                   rv::transform([&](size_t) { return std::thread([&] { context.run(); }); }) |
-                  ranges::to<std::vector>();
+                  std::ranges::to<std::vector>();
 
    if (config->verbose && config->threads == 1)
       run(context);

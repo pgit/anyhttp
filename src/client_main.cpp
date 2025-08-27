@@ -12,10 +12,6 @@
 #include <boost/asio/signal_set.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
-#include <range/v3/range/conversion.hpp>
-#include <range/v3/view/iota.hpp>
-#include <range/v3/view/transform.hpp>
-
 using namespace anyhttp;
 using namespace anyhttp::client;
 using namespace boost::asio;

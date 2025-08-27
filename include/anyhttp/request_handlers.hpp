@@ -14,9 +14,7 @@
 
 #include <boost/system/detail/error_code.hpp>
 
-#include <range/v3/range/conversion.hpp>
 #include <range/v3/view/chunk.hpp>
-#include <range/v3/view/iota.hpp>
 
 using namespace std::chrono_literals;
 
@@ -90,7 +88,7 @@ awaitable<void> sendEOF(client::Request& request);
 //        the coroutine frame, so we do not need to worry about it's lifetime.
 //
 template <typename Range>
-   requires ranges::borrowed_range<Range> && ranges::contiguous_range<Range>
+   requires std::ranges::borrowed_range<Range> && std::ranges::contiguous_range<Range>
 awaitable<void> send(client::Request& request, Range range)
 {
    logi("send: (contiguous range)...");
@@ -102,9 +100,9 @@ awaitable<void> send(client::Request& request, Range range)
 // For a non-contiguous range, we need to copy into a buffer first.
 //
 template <typename Range>
-   requires ranges::borrowed_range<Range> && (!ranges::contiguous_range<Range>)
+   requires std::ranges::borrowed_range<Range> && (!std::ranges::contiguous_range<Range>)
 awaitable<void> send(client::Request& request, Range range)
-{
+{  
    logi("send:");
    size_t bytes = 0;
    // std::array<uint8_t, 1460> buffer;
@@ -149,7 +147,7 @@ awaitable<void> send(client::Request& request, Range range)
 // -------------------------------------------------------------------------------------------------
 
 template <typename Range>
-   requires ranges::borrowed_range<Range>
+   requires std::ranges::borrowed_range<Range>
 awaitable<void> sendAndDrop(client::Request request, Range range)
 {
 #if 0

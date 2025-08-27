@@ -4,5 +4,6 @@ gtest-parallel-logs
 report.xml
 build
 secrets
+Testing
 *.pcap
 *.junit

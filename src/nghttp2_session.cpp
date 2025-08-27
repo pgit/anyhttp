@@ -28,10 +28,10 @@
 
 using namespace boost::asio::experimental::awaitable_operators;
 
+// =================================================================================================
+
 namespace anyhttp::nghttp2
 {
-
-// =================================================================================================
 
 static std::string_view frameType(uint8_t type)
 {
@@ -137,8 +137,7 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
    }
    catch (std::exception& ex)
    {
-      logw("[{}] ignoring invalid host header: {} ({})", handler->logPrefix(frame), value,
-           ex.what());
+      logw("[{}] ignoring invalid header: {} ({})", handler->logPrefix(frame), value, ex.what());
    }
 
    return 0;
@@ -301,12 +300,12 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
    bool local_close = nghttp2_session_get_stream_local_close(session, stream_id);
    bool remote_close = nghttp2_session_get_stream_remote_close(session, stream_id);
 
-   auto sessionWrapper = static_cast<NGHttp2Session*>(user_data);
+   auto handler = static_cast<NGHttp2Session*>(user_data);
    logd("[{}] on_stream_close_callback: {} ({}) (local={}, remote={})",
-        sessionWrapper->logPrefix(stream_id), nghttp2_http2_strerror(error_code), error_code,
-        local_close, remote_close);
+        handler->logPrefix(stream_id), nghttp2_http2_strerror(error_code), error_code, local_close,
+        remote_close);
 
-   sessionWrapper->close_stream(stream_id);
+   handler->close_stream(stream_id);
    return 0;
 }
 
@@ -403,8 +402,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    }
 
    for (auto nv : nva)
-      mlogd("submit: {}: {}", std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen),
-            std::string_view(reinterpret_cast<const char*>(nv.value), nv.valuelen));
+      mlogd("submit: {}", nv);
 
    //
    // https://nghttp2.org/documentation/types.html#c.nghttp2_data_source_read_callback
@@ -422,10 +420,10 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
       return stream->producer_callback(buf, length, data_flags);
    };
 
+   //
+   // finally, submit request
+   //
    auto id = nghttp2_submit_request(session, nullptr, nva.data(), nva.size(), &prd, this);
-   stream->id = id;
-   stream->logPrefix = std::format("{}.{}", logPrefix(), id);
-
    if (id < 0)
    {
       mloge("submit: nghttp2_submit_request: ERROR: {}", id);
@@ -433,6 +431,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
       std::move(handler)(errc::make_error_code(errc::invalid_argument), client::Request{nullptr});
    }
 
+   stream->id = id;
+   stream->logPrefix = std::format("{}.{}", logPrefix(), id);
    m_last_id = id;
 
    logd("submit: stream={}", id);
@@ -441,6 +441,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)});
    start_write();
 }
+
+// -------------------------------------------------------------------------------------------------
 
 void NGHttp2Session::handle_buffer_contents()
 {

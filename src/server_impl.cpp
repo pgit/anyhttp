@@ -404,7 +404,7 @@ awaitable<void> Server::Impl::listen_loop()
             return handleConnection(std::move(socket));
          },
 #endif
-               [&](const std::exception_ptr& ex) mutable
+               [&, ep](const std::exception_ptr& ex) mutable
                {
                   auto lock = std::lock_guard(m_sessionMutex);
                   --sessionCounter;

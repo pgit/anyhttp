@@ -14,16 +14,13 @@
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/beast/http/error.hpp>
 
-#include <range/v3/numeric/accumulate.hpp>
-#include <range/v3/view/drop.hpp>
-#include <range/v3/view/transform.hpp>
-
 #include <nghttp2/nghttp2.h>
 
+#include <ranges>
 #include <utility>
 
 using namespace boost::asio::experimental::awaitable_operators;
-namespace rv = ranges::views;
+namespace rv = std::ranges::views;
 
 namespace anyhttp::nghttp2
 {
@@ -275,10 +272,19 @@ NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int id_)
 
 size_t NGHttp2Stream::read_buffers_size() const
 {
-   return asio::buffer_size(m_read_buffer) + // this is a view of m_pending_read_buffers[0]
-          ranges::accumulate(m_pending_read_buffers | rv::drop(1) |
-                                rv::transform([](const auto& buffer) { return buffer.size(); }),
-                             size_t(0));
+   auto tail_sizes = m_pending_read_buffers | std::views::drop(1) |
+                     std::views::transform([](const auto& buffer) { return buffer.size(); });
+
+   auto sum_tail = std::ranges::fold_left(
+      m_pending_read_buffers | std::views::drop(1) |
+         std::views::transform([](const auto& buffer) { return buffer.size(); }),
+      size_t{0}, [](size_t a, size_t b) { return a + b; });
+
+   return asio::buffer_size(m_read_buffer) +
+          std::ranges::fold_left(
+             m_pending_read_buffers | std::views::drop(1) |
+                std::views::transform([](const auto& buffer) { return buffer.size(); }),
+             size_t{0}, [](size_t a, size_t b) { return a + b; });
 }
 
 void NGHttp2Stream::call_read_handler(asio::const_buffer view)
@@ -401,6 +407,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    {
       if (eof_received && m_read_handler)
       {
+         
          logd("[{}] read_callback: delivering EOF...", logPrefix);
          swap_and_invoke(m_read_handler, boost::system::error_code{}, 0);
          //

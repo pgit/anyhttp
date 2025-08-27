@@ -34,10 +34,6 @@
 
 #include <gtest/gtest.h>
 
-#include <range/v3/view/iota.hpp>
-#include <range/v3/view/take.hpp>
-#include <range/v3/view/transform.hpp>
-
 #include <nghttp2/nghttp2ver.h>
 
 #include <future>
@@ -45,6 +41,7 @@
 #include <ranges>
 #include <regex>
 #include <unordered_map>
+#include <ranges>
 
 using namespace std::chrono_literals;
 namespace bp = boost::process::v2;
@@ -59,7 +56,7 @@ using asio::awaitable;
 using asio::co_spawn;
 using asio::deferred;
 
-namespace rv = ranges::views;
+namespace rv = std::ranges::views;
 
 using namespace anyhttp;
 

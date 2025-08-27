@@ -9,19 +9,16 @@
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/system/detail/error_code.hpp>
 
-#include <range/v3/range/conversion.hpp>
-#include <range/v3/view/iota.hpp>
-#include <range/v3/view/transform.hpp>
-
 #include <sstream>
 #include <tuple>
+#include <ranges>
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
 using namespace anyhttp;
 using namespace anyhttp::server;
 using boost::system::error_code;
-namespace rv = ranges::views;
+namespace rv = std::ranges::views;
 
 // =================================================================================================
 
