@@ -1,0 +1,36 @@
+name: ASAN Build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/psedoc/anyhttp:1.1
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure CMake with ASAN
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests (if available)
+        run: |
+          if [ -f build/test/test_all ]; then
+            ASAN_OPTIONS=detect_leaks=1 build/test/test_all || exit 1
+          else
+            echo "No test binary found."
+          fi
