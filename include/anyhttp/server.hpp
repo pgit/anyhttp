@@ -26,10 +26,14 @@ public:
    explicit Request(std::unique_ptr<Impl> impl);
    Request(Request&& other) noexcept;
    Request& operator=(Request&& other) noexcept;
-   void reset() noexcept;
    ~Request();
+   
+   /// This is a PIMPL'ed class that can be in a 'null' state without an #impl.
+   constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
+   
+   /// Stop reading the request body and reset the implementation.
+   void reset() noexcept;
 
-public:
    boost::url_view url() const;
    std::optional<size_t> content_length() const noexcept;
 
@@ -106,8 +110,8 @@ public:
    ~Server();
 
    Server(const Server& other) = delete;
-   Server& operator=(const Server& other) = delete;
    Server(Server&& other) = default;
+   Server& operator=(const Server& other) = delete;
    Server& operator=(Server&& other) = default;
 
    const asio::any_io_executor& executor() const;
@@ -117,7 +121,7 @@ public:
    asio::ip::tcp::endpoint local_endpoint() const;
 
 private:
-   std::shared_ptr<Impl> impl;
+   std::unique_ptr<Impl> impl;
 };
 
 // =================================================================================================
