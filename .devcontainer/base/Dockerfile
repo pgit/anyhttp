@@ -2,7 +2,7 @@
 # https://github.com/microsoft/vscode-dev-containers/tree/main/containers/debian
 # https://github.com/pgit/cpp-devcontainer
 #
-FROM docker.io/psedoc/cpp-devcontainer:0.15
+FROM docker.io/psedoc/cpp-devcontainer:0.17
 
 #
 # GDB libc++ pretty printer (works for string, but not for map with llvm-18)
@@ -73,7 +73,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib
 #     cmake .. -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_INSTALL_PREFIX=/opt/boringssl && \
 #     make -j$(nproc) && make install && \
 #     cd ../.. && rm -rf boringssl
-ARG AWS_LC_VERSION=v1.55.0
+ARG AWS_LC_VERSION=v1.60.0
 RUN git clone --depth 1 -b ${AWS_LC_VERSION} https://github.com/aws/aws-lc && \
     cd aws-lc && \
     cmake -B build -DDISABLE_GO=ON --install-prefix=/opt/boringssl && \
@@ -82,7 +82,7 @@ RUN git clone --depth 1 -b ${AWS_LC_VERSION} https://github.com/aws/aws-lc && \
     cd .. && \
     rm -rf aws-lc
 
-ARG NGHTTP3_VERSION=v1.10.1
+ARG NGHTTP3_VERSION=v1.11.0
 RUN git clone --recursive --depth 1 --branch ${NGHTTP3_VERSION} https://github.com/ngtcp2/nghttp3 && \
     cd nghttp3 && \
     autoreconf -i && \
@@ -90,7 +90,7 @@ RUN git clone --recursive --depth 1 --branch ${NGHTTP3_VERSION} https://github.c
     make -j$(nproc) check && make install && \
     cd .. && rm -rf nghttp3
 
-ARG NGTCP2_VERSION=v1.13.0
+ARG NGTCP2_VERSION=v1.15.1
 RUN git clone --recursive --depth 1 --branch ${NGTCP2_VERSION} https://github.com/ngtcp2/ngtcp2 && \
     cd ngtcp2 && \
     autoreconf -i && \
@@ -119,7 +119,7 @@ RUN git clone --recursive --depth 1 --branch ${NGTCP2_VERSION} https://github.co
 # FIXME: try to add --enable-http3 (for nghttx and h2load only)
 # Seems like OpenSSL gets in the way of BoringSSL (aws-lc) somehow.
 #
-ARG NGHTTP2_VERSION=v1.66.0
+ARG NGHTTP2_VERSION=v1.67.0
 RUN git clone --recursive --depth 1 --branch ${NGHTTP2_VERSION} https://github.com/nghttp2/nghttp2.git && \
     cd nghttp2 && \
     autoreconf -i && \
