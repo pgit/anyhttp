@@ -1,4 +1,4 @@
-name: ASAN Build
+name: Debug (ASAN)
 
 on:
   push:
