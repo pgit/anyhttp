@@ -40,7 +40,7 @@ add_compile_options(-Wno-inconsistent-missing-override)
 # find boost
 # https://github.com/madmongo1/blog-december-2020/blob/master/CMakeLists.txt
 #
-find_package(Boost 1.78 COMPONENTS system thread atomic coroutine url filesystem program_options process REQUIRED)
+find_package(Boost 1.88 COMPONENTS thread atomic url filesystem process program_options OPTIONAL_COMPONENTS system REQUIRED)
 find_package(OpenSSL)
 find_package(Threads)
 

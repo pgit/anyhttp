@@ -17,7 +17,7 @@ target_sources(anyhttp PRIVATE ngtcp2/shared.cc)
 
 target_link_libraries(anyhttp PRIVATE Threads::Threads)
 target_link_libraries(anyhttp PRIVATE OpenSSL::SSL)
-target_link_libraries(anyhttp PRIVATE Boost::system Boost::thread Boost::atomic Boost::url Boost::filesystem)
+target_link_libraries(anyhttp PRIVATE Boost::thread Boost::atomic Boost::url Boost::filesystem)
 target_link_libraries(anyhttp PRIVATE spdlog::spdlog_header_only)
 target_link_libraries(anyhttp PRIVATE PkgConfig::NGHTTP2)
 
