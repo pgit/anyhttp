@@ -1,5 +1,8 @@
+
 # Overview
-Low-level C++ HTTP client and server library, based on ASIO.
+[![CI](https://github.com/pgit/anyhttp/actions/workflows/ci.yml/badge.svg)](https://github.com/pgit/anyhttp/actions/workflows/ci.yml)
+
+Low-level C++ HTTP client and server library, based on ASIO and its asynchronous model.
 
 ** THIS REPOSITORY IS PURELY EXPERIMENTAL **
 
