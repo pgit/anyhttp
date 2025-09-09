@@ -121,7 +121,7 @@ public:
    asio::ip::tcp::endpoint local_endpoint() const;
 
 private:
-   std::unique_ptr<Impl> impl;
+   std::shared_ptr<Impl> impl;
 };
 
 // =================================================================================================
