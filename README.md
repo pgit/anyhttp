@@ -15,7 +15,7 @@ None of those protocols are implemented from scratch. Instead, it is a wrapper a
 * nghttp3 - not done yet.
 
 ## Synopsis
-
+### Server
 ```C++
 awaitable<void> echo(server::Request request, server::Response response)
 {
@@ -34,7 +34,15 @@ awaitable<void> echo(server::Request request, server::Response response)
    }
 }
 ```
-
+### Client
+```c++
+awaitable<void> do_session(Client& client, boost::urls::url url)
+{
+   auto session = co_await client.async_connect();
+   auto request = co_await session.async_submit(url, {});
+   auto response = co_await request.async_get_response();   
+}
+```
 # Implementation
 
 The asynchronous operations exposed by server and client are [ASIO asynchronous operations](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/asynchronous_operations.html). As such, they support a range of [completion tokens](https://think-async.com/Asio/asio-1.30.2/doc/asio/overview/model/completion_tokens.html) like [use_awaitable](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/use_awaitable.html) or plain callbacks.
