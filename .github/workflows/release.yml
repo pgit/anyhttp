@@ -27,16 +27,12 @@ jobs:
     - name: Build
       run: cmake --build build --parallel
       
-    - name: Run tests with CTest
-      run: ctest --test-dir build --output-on-failure
-
     - name: Run tests (if available)
       run: |
         ASAN_OPTIONS=detect_leaks=1 build/test/test_all
 
   asan:
     name: ASAN
-    needs: release
     runs-on: ubuntu-latest
     container:
       image: docker.io/psedoc/anyhttp:0.17
@@ -55,3 +51,24 @@ jobs:
       - name: Run tests (if available)
         run: |
           ASAN_OPTIONS=detect_leaks=1 build/test/test_all
+
+  tsan:
+    name: TSAN
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/psedoc/anyhttp:0.17
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure CMake with TSAN
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests (if available)
+        run: |
+          TSAN_OPTIONS=report_signal_unsafe=0 build/test/test_all
