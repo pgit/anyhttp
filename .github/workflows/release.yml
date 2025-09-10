@@ -11,7 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
+  test:
+    name: Build and run tests
     runs-on: ubuntu-latest
     container:
       image: docker.io/psedoc/anyhttp:0.17
@@ -28,19 +29,28 @@ jobs:
       
     - name: Run tests with CTest
       run: ctest --test-dir build --output-on-failure
-      
-    - name: Run test_all for JUnit XML (optional)
+
+    - name: Run tests (if available)
       run: |
-        if [ -f build/test/test_all ]; then
-          mkdir -p build/test-results
-          build/test/test_all --gtest_output=xml:build/test-results/test_all.xml || true
-        fi
-      
-    - name: Upload test artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: test-results
-        path: |
-          build/Testing/
-          build/test-results/
+        ASAN_OPTIONS=detect_leaks=1 build/test/test_all
+
+  asan:
+    name: Build and run tests (ASAN)
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/psedoc/anyhttp:0.17
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure CMake with ASAN
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests (if available)
+        run: |
+          ASAN_OPTIONS=detect_leaks=1 build/test/test_all
