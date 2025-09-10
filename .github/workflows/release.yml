@@ -36,6 +36,7 @@ jobs:
 
   asan:
     name: ASAN
+    needs: release
     runs-on: ubuntu-latest
     container:
       image: docker.io/psedoc/anyhttp:0.17
