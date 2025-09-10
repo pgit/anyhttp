@@ -120,22 +120,19 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    auto cs = asio::get_associated_cancellation_slot(handler);
    if (cs.is_connected() && !cs.has_handler())
    {
-      cs.assign(
-         [this](asio::cancellation_type_t ct)
+      cs.assign([this](asio::cancellation_type_t ct)
+      {
+         logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m ({})",
+              stream->logPrefix, "cancelled", int(ct));
+
+         if (stream->m_read_handler)
          {
-            logd("[{}] async_read_some: \x1b[1;31m"
-                 "cancelled"
-                 "\x1b[0m ({})",
-                 stream->logPrefix, int(ct));
+            swap_and_invoke(stream->m_read_handler, errc::make_error_code(errc::operation_canceled),
+                            0);
+         }
 
-            if (stream->m_read_handler)
-            {
-               swap_and_invoke(stream->m_read_handler,
-                               errc::make_error_code(errc::operation_canceled), 0);
-            }
-
-            // stream->delete_writer();
-         });
+         // stream->delete_writer();
+      });
    }
 #endif
 
@@ -502,10 +499,21 @@ NGHttp2Stream::~NGHttp2Stream()
    }
    if (response_handler)
    {
-      logd("Stream: dtor... cancelling async_get_response()", logPrefix);
+      logw("Stream: dtor... cancelling async_get_response()", logPrefix);
       swap_and_invoke(response_handler, errc::make_error_code(errc::operation_canceled),
                       client::Response{nullptr});
    }
+   if (m_read_handler)
+   {
+      logw("Stream: dtor... cancelling async_read_some()", logPrefix);
+      swap_and_invoke(m_read_handler, boost::beast::http::error::partial_message, 0);
+   }
+   if (write_handler)
+   {
+      logw("Stream: dtor... cancelling async_write()", logPrefix);
+      swap_and_invoke(write_handler, errc::make_error_code(errc::operation_canceled));
+   }
+
    logd("[{}] \x1b[33mStream: dtor... done\x1b[0m", logPrefix);
 }
 
@@ -531,18 +539,17 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
    auto slot = asio::get_associated_cancellation_slot(write_handler);
    if (slot.is_connected() && !slot.has_handler())
    {
-      slot.assign(
-         [this](asio::cancellation_type_t ct)
-         {
-            logd("[{}] async_write: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", int(ct));
-            // delete_writer();
+      slot.assign([this](asio::cancellation_type_t ct)
+      {
+         logd("[{}] async_write: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", int(ct));
+         // delete_writer();
 
-            if (write_handler)
-            {
-               using namespace boost::system::errc;
-               swap_and_invoke(write_handler, make_error_code(operation_canceled));
-            }
-         });
+         if (write_handler)
+         {
+            using namespace boost::system::errc;
+            swap_and_invoke(write_handler, make_error_code(operation_canceled));
+         }
+      });
    }
 
    resume();

@@ -375,6 +375,13 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
 {
    mlogi("submit: {}", url.buffer());
 
+   if (!session)
+   {
+      mloge("submit: session already gone!");
+      std::move(handler)(errc::make_error_code(errc::operation_canceled), client::Request{nullptr});
+      return;
+   }
+
    auto stream = std::make_shared<NGHttp2Stream>(*this, 0);
    stream->url = url;
 

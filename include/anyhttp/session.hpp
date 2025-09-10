@@ -36,16 +36,21 @@ public:
     * TODO: There is only a single Session interface for both server and client. This even might
     *       make sense for HTTP/2, where the server can also (sort of) submit a push promise to the
     *       client. But in general, it may be better to separate them.
+    *
+    * TODO: Look at https://www.boost.org/doc/libs/latest/doc/html/boost_asio/example/cpp20/operations/composed_5.cpp
+    *       and fully implement all requirements for asynchronous operations.
+    *
     */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Submit) CompletionToken = DefaultCompletionToken>
    auto async_submit(boost::urls::url url, const Fields& headers = {},
                      CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, Submit>(
+
          [](SubmitHandler handler, Session* self, boost::urls::url url, const Fields& headers) { //
             self->async_submit_any(std::move(handler), std::move(url), std::move(headers));
          },
-         token, this, url, headers);
+         token, this, std::move(url), headers);
    }
 
 private:

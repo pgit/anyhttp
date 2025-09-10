@@ -951,6 +951,9 @@ TEST_P(ClientAsync, Backpressure)
 //
 // Any short write of a body with known content length should result in a 'partial message' error.
 //
+// FIXME: With nghttp2 1.67, the partial message results in a GOAWAY, so that only one request
+//        can be made. The following request should throw an exception.
+//
 TEST_P(ClientAsync, CancellationContentLength)
 {
    test = [&](Session session) -> awaitable<void>
@@ -960,7 +963,7 @@ TEST_P(ClientAsync, CancellationContentLength)
          const size_t length = 5ul * 1024 * 1024;
          Fields fields;
          fields.set("content-length", std::to_string(length));
-         auto request = co_await session.async_submit(url.set_path("echo"), fields, deferred);
+         auto request = co_await session.async_submit(url.set_path("echo"), fields);
          auto response = co_await request.async_get_response(asio::deferred);
          std::vector<char> buffer(length);
          auto sender = sendAndForceEOF(request, std::string_view(buffer));
@@ -970,6 +973,7 @@ TEST_P(ClientAsync, CancellationContentLength)
          LOG("received {} bytes ({}, yielded {})", std::get<1>(received), ec.message(), i);
          EXPECT_LT(std::get<1>(received), length);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
+         co_await yield(5);
       }
    };
    run();

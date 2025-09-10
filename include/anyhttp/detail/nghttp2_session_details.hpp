@@ -1,6 +1,6 @@
 
-#include "anyhttp/nghttp2_session.hpp"
 #include "anyhttp/any_async_stream.hpp"
+#include "anyhttp/nghttp2_session.hpp"
 #include "anyhttp/session.hpp"
 
 #include <boost/asio/basic_stream_socket.hpp>
@@ -175,8 +175,8 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
    }
 
    nghttp2_session_terminate_session(session, reason);
-
    start_write();
+
    mlogi("recv loop: done, served {} requests", m_requestCounter);
 }
 
@@ -205,7 +205,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    // pynghttp2 does also disable "HTTP messaging semantics", but we don't
    //
    auto options = nghttp2_option_new();
-   nghttp2_option_set_no_http_messaging(options.get(), 0);  // h2spec: 
+   nghttp2_option_set_no_http_messaging(options.get(), 0); // h2spec: fails ~16 tests if 1
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
 
    if (auto rv = nghttp2_session_server_new2(&session, callbacks.get(), this, options.get()))
@@ -226,6 +226,10 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    co_await (send_loop() && recv_loop());
 
    mlogd("server session done");
+
+   nghttp2_session_del(session);
+   session = nullptr;
+   mlogd("server session deleted");
 }
 
 // =================================================================================================
@@ -277,6 +281,10 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    co_await (send_loop() && recv_loop());
 
    mlogd("client session done");
+
+   nghttp2_session_del(session);
+   session = nullptr;
+   mlogd("client session deleted");
 }
 
 // =================================================================================================
