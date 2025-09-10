@@ -92,7 +92,7 @@ int main(int argc, char* argv[])
 {
    if (argc < 2)
    {
-      std::println("Usage: {} URL", argv[0]);
+      LOG("Usage: {} URL", argv[0]);
       return 1;
    }
 

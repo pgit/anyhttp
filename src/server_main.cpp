@@ -53,7 +53,7 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
    }
    catch (const po::error& error)
    {
-      std::println(stderr, "{}", error.what());
+      std::println(std::cerr, "{}", error.what());
       return std::unexpected(-1);
    }
 
@@ -66,7 +66,7 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
    size_t num_threads = vm["threads"].as<size_t>();
    if (num_threads == 0)
    {
-      std::println(stderr, "number of threads must be greater than 0");
+      std::println(std::cerr, "number of threads must be greater than 0");
       return std::unexpected(1);
    }
 
@@ -93,7 +93,7 @@ int main(int argc, char* argv[])
    signals.async_wait(
       [&](boost::system::error_code error, auto signal)
       {
-         std::println(" INTERRUPTED (signal {})", signal);
+         LOG(" INTERRUPTED (signal {})", signal);
          logw("interrupt");
          server.reset();
       });

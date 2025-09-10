@@ -12,6 +12,7 @@
 #include <sstream>
 #include <tuple>
 #include <ranges>
+#include <iostream>
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
@@ -43,10 +44,10 @@ struct std::formatter<EscapedString> : std::formatter<std::string>
    }
 };
 
+// =================================================================================================
+
 namespace anyhttp
 {
-
-// =================================================================================================
 
 boost::asio::awaitable<void> yield(size_t count)
 {
@@ -54,7 +55,7 @@ boost::asio::awaitable<void> yield(size_t count)
    for (size_t i = 0; i < count; ++i)
    {
       co_await post(ex, asio::deferred);
-      // std::println("yielding {}/{}", i, count);
+      // LOG("yielding {}/{}", i, count);
    }
 }
 

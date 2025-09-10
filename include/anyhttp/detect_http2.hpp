@@ -101,7 +101,7 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
             {
                boost::tribool result = detail::is_http2_client_preface(buffer.data());
                if (!boost::indeterminate(result))
-                  co_return {{}, static_cast<bool>(result)};
+                  co_return std::make_tuple(boost::system::error_code{}, static_cast<bool>(result));
 
                auto prepared = buffer.prepare(1460);
                auto [ec, n] = co_await stream.async_read_some(prepared, as_tuple);
@@ -137,7 +137,7 @@ auto async_detect_ssl_awaitable(AsyncReadStream& stream, DynamicBuffer& buffer,
             {
                boost::tribool result = detail::is_tls_client_hello(buffer.data());
                if (!boost::indeterminate(result))
-                  co_return {{}, static_cast<bool>(result)};
+                  co_return std::make_tuple(boost::system::error_code{}, static_cast<bool>(result));
 
                auto prepared = buffer.prepare(1460);
                auto [ec, n] = co_await stream.async_read_some(prepared, as_tuple);

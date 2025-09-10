@@ -489,19 +489,19 @@ awaitable<void> Server::Impl::udp_receive_loop()
             if (cmsg->cmsg_type == IP_TOS)
             {
                int tos = *reinterpret_cast<int*>(CMSG_DATA(cmsg));
-               std::println("Received TOS: {:x}", tos);
+               LOG("Received TOS: {:x}", tos);
             }
             else if (cmsg->cmsg_type == IP_TTL)
             {
                int ttl = *reinterpret_cast<int*>(CMSG_DATA(cmsg));
-               std::println("Received TTL: {}", ttl);
+               LOG("Received TTL: {}", ttl);
             }
          }
          else if (cmsg->cmsg_level == SOL_UDP && cmsg->cmsg_type == UDP_GRO)
          {
             int gso_size = 0;
             memcpy(&gso_size, CMSG_DATA(cmsg), sizeof(gso_size));
-            std::println("Received UDP GRO {}", gso_size);
+            LOG("Received UDP GRO {}", gso_size);
             break;
          }
       }

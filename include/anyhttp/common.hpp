@@ -22,6 +22,14 @@
 #include <spdlog/spdlog.h>
 
 #include <chrono>
+#include <iostream>
+
+// =================================================================================================
+
+#define LOG(FMT, ...) std::println(FMT __VA_OPT__(, ) __VA_ARGS__)
+// #define LOG(FMT, ...) std::println(std::cout, FMT __VA_OPT__(, ) __VA_ARGS__)
+
+// =================================================================================================
 
 namespace anyhttp
 {

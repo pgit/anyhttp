@@ -1,3 +1,4 @@
+#include "anyhttp/common.hpp"
 #include "anyhttp/utils.hpp"
 
 #include <format>
@@ -19,9 +20,9 @@ size_t run(boost::asio::io_context& context)
       t0 = t1;
       // clang-format off
       if (dt < 10ms)
-         std::println("--- {} ------------------------------------------------------------------------", i);
+         LOG("--- {} ------------------------------------------------------------------------", i);
       else
-         std::println("\x1b[1;31m--- {} ({}) ----------------------------------------------------------------\x1b[0m", i, dt);
+         LOG("\x1b[1;31m--- {} ({}) ----------------------------------------------------------------\x1b[0m", i, dt);
       // clang-format off
    }
    return i;

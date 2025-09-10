@@ -41,7 +41,6 @@
 #include <ranges>
 #include <regex>
 #include <unordered_map>
-#include <ranges>
 
 using namespace std::chrono_literals;
 namespace bp = boost::process::v2;
@@ -84,14 +83,14 @@ class Empty : public testing::Test
 TEST_F(Empty, Hello)
 {
    boost::process::filesystem::path path{"."};
-   std::println("Hello, World!");
-   std::println("Path: {}", path.string());
+   LOG("Hello, World!");
+   LOG("Path: {}", path.string());
 }
 
 TEST_F(Empty, Path)
 {
    bp::filesystem::path path("/usr/bin/echo");
-   std::println("spawn: {}", path.string());
+   LOG("spawn: {}", path.string());
 }
 
 // =================================================================================================
@@ -107,12 +106,11 @@ TEST_F(ClientConnect, DISABLED_ErrorResolve)
    client::Client client(context.get_executor(), config);
    // TODO: test per-operation cancellation
    // https://live.boost.org/doc/libs/1_86_0/doc/html/boost_asio/reference/co_composed.html
-   client.async_connect(
-      [&](boost::system::error_code ec, Session session)
-      {
-         loge("ERROR: {}", ec.message());
-         EXPECT_TRUE(ec);
-      });
+   client.async_connect([&](boost::system::error_code ec, Session session)
+   {
+      loge("ERROR: {}", ec.message());
+      EXPECT_TRUE(ec);
+   });
    context.run();
 }
 
@@ -121,12 +119,11 @@ TEST_F(ClientConnect, ErrorNetworkUnreachable)
    boost::asio::io_context context;
    client::Config config{.url = boost::urls::url("http://255.255.255.255:12345")};
    client::Client client(context.get_executor(), config);
-   client.async_connect(
-      [&](boost::system::error_code ec, Session session)
-      {
-         loge("ERROR: {}", ec.message());
-         EXPECT_TRUE(ec);
-      });
+   client.async_connect([&](boost::system::error_code ec, Session session)
+   {
+      loge("ERROR: {}", ec.message());
+      EXPECT_TRUE(ec);
+   });
    context.run();
 }
 
@@ -162,28 +159,28 @@ protected:
       server.emplace(context.get_executor(), config);
       server->setRequestHandlerCoro(
          [this](server::Request request, server::Response response) -> awaitable<void>
+      {
+         logd("{}", request.url().path());
+         if (request.url().path() == "/echo")
+            return echo(std::move(request), std::move(response));
+         else if (request.url().path() == "/eat_request")
+            return eat_request(std::move(request), std::move(response));
+         else if (request.url().path() == "/discard")
+            return discard(std::move(request), std::move(response));
+         else if (request.url().path() == "/h2spec")
+            return h2spec(std::move(request), std::move(response));
+         else if (request.url().path() == "/detach")
          {
-            logd("{}", request.url().path());
-            if (request.url().path() == "/echo")
-               return echo(std::move(request), std::move(response));
-            else if (request.url().path() == "/eat_request")
-               return eat_request(std::move(request), std::move(response));
-            else if (request.url().path() == "/discard")
-               return discard(std::move(request), std::move(response));
-            else if (request.url().path() == "/h2spec")
-               return h2spec(std::move(request), std::move(response));
-            else if (request.url().path() == "/detach")
-            {
-               co_spawn(server->executor(), detach(std::move(request), std::move(response)),
-                        [&](const std::exception_ptr&) { logi("client finished"); });
-               return []() mutable -> awaitable<void> { co_return; }();
-            }
-            else if (request.url().path() == "/custom")
-               return custom(std::move(request), std::move(response));
-            else
-               return not_found(std::move(request), std::move(response));
-            // return not_found(std::move(response)); // discard request
-         });
+            co_spawn(server->executor(), detach(std::move(request), std::move(response)),
+                     [&](const std::exception_ptr&) { logi("client finished"); });
+            return []() mutable -> awaitable<void> { co_return; }();
+         }
+         else if (request.url().path() == "/custom")
+            return custom(std::move(request), std::move(response));
+         else
+            return not_found(std::move(request), std::move(response));
+         // return not_found(std::move(response)); // discard request
+      });
    }
 
    void run()
@@ -251,7 +248,7 @@ protected:
 
          // print trailing '…' if there is more data in the buffer after this line
          const auto continuation = (line.size() + 1 == buffer.size()) ? "" : "…";
-         std::println("{}: \x1b[32m{}\x1b[0m{}", prefix, line, continuation);
+         LOG("{}: \x1b[32m{}\x1b[0m{}", prefix, line, continuation);
       };
 
       auto cs = co_await this_coro::cancellation_state;
@@ -267,7 +264,7 @@ protected:
       catch (const boost::system::system_error& ec)
       {
          if (cs.cancelled() != cancellation_type::none)
-            std::println("CANCELLED");
+            LOG("CANCELLED");
 
          for (auto line : split_lines(buffer))
             print(line);
@@ -275,7 +272,7 @@ protected:
          if (ec.code() == error::eof)
             co_return;
 
-         std::println("{}: {}", prefix, ec.code().message());
+         LOG("{}: {}", prefix, ec.code().message());
          throw;
       }
    }
@@ -296,7 +293,7 @@ protected:
 
          if (ec)
          {
-            std::println("consume: {}", ec.message());
+            LOG("consume: {}", ec.message());
             break;
          }
       }
@@ -344,14 +341,14 @@ protected:
       future = promise.get_future();
       co_spawn(context, spawn_process(std::move(path), std::move(args)),
                [promise = std::move(promise)](const std::exception_ptr& ex, std::string str) mutable
-               {
-                  if (ex)
-                  {
-                     str = what(ex);
-                     loge("{}", str);
-                  }
-                  promise.set_value(std::move(str));
-               });
+      {
+         if (ex)
+         {
+            str = what(ex);
+            loge("{}", str);
+         }
+         promise.set_value(std::move(str));
+      });
       return std::move(future);
    }
 
@@ -497,7 +494,15 @@ TEST_P(External, h2spec)
 
    // https://github.com/nghttp2/nghttp2/issues/2278
    // https://github.com/nghttp2/nghttp2/issues/2365
-   const int expected_ok = NGHTTP2_VERSION_NUM >= 0x004100 ? 139 : 145;
+   const int expected_ok = std::invoke([]
+   {
+      if (NGHTTP2_VERSION_NUM >= 0x004200) // 1.66
+         return 138;
+      else if (NGHTTP2_VERSION_NUM == 0x004100) // 1.65
+         return 139;
+      else
+         return 145;
+   });
    EXPECT_EQ(std::stoi(match[3].str()), expected_ok) << output;
 }
 
@@ -580,24 +585,21 @@ public:
       //
       // Spawn the testcase coroutine on the client's strand so that access to it is serialized.
       //
-      co_spawn(
-         client->executor(),
-         [&]() -> awaitable<void>
+      co_spawn(client->executor(), [&]() -> awaitable<void>
+      {
+         auto session = co_await client->async_connect(asio::deferred);
+         try
          {
-            auto session = co_await client->async_connect(asio::deferred);
-            try
-            {
-               logd("running test...");
-               co_await test(std::move(session));
-               logd("running test... done");
-            }
-            catch (const boost::system::system_error& ex)
-            {
-               logd("running test: {}", ex.code().message());
-               throw;
-            }
-         },
-         completion_handler());
+            logd("running test...");
+            co_await test(std::move(session));
+            logd("running test... done");
+         }
+         catch (const boost::system::system_error& ex)
+         {
+            logd("running test: {}", ex.code().message());
+            throw;
+         }
+      }, completion_handler());
    }
 
 public:
@@ -846,7 +848,7 @@ TEST_P(ClientAsync, IgnoreRequestAndResponse)
    {
       auto request = co_await session.async_submit(url.set_path("custom"), {}, deferred);
       auto res = co_await (send(request, 0) && try_read_response(request));
-      std::println("{}", res.error().message());
+      LOG("{}", res.error().message());
    };
    run();
 }
@@ -933,10 +935,10 @@ TEST_P(ClientAsync, Backpressure)
       // So instead, we start doing this in background, to be resumed as soon as the window reopens.
       co_spawn(co_await this_coro::executor, sendEOF(request), detached); // FIXME: join
 
-      std::println("receiving....");
+      LOG("receiving....");
       boost::system::error_code ec;
       auto received = co_await try_receive(response, ec);
-      std::println("receiving... done, got {} bytes ({})", received, ec.message());
+      LOG("receiving... done, got {} bytes ({})", received, ec.message());
       EXPECT_GT(received, 0);
       // FIXME: we should be able to receive the remainders that already have been buffered
       // FIXME: in the end, this must be the same as the the bytes sent above
@@ -965,7 +967,7 @@ TEST_P(ClientAsync, CancellationContentLength)
 
          boost::system::error_code ec;
          auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
-         std::println("received {} bytes ({}, yielded {})", std::get<1>(received), ec.message(), i);
+         LOG("received {} bytes ({}, yielded {})", std::get<1>(received), ec.message(), i);
          EXPECT_LT(std::get<1>(received), length);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
       }
@@ -1001,7 +1003,7 @@ TEST_P(ClientAsync, Cancellation)
 
          boost::system::error_code ec;
          auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
-         std::println("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
+         LOG("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
          EXPECT_LT(std::get<1>(received), length);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
       }
@@ -1037,7 +1039,7 @@ TEST_P(ClientAsync, CancellationRange)
 
          boost::system::error_code ec;
          auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
-         std::println("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
+         LOG("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
          co_await client->async_connect(deferred);
       }
@@ -1058,13 +1060,13 @@ TEST_P(ClientAsync, PerOperationCancellation)
       // auto buf = co_await (response.async_read_some(deferred) || sleep(10ms));
       asio::steady_timer timer(co_await asio::this_coro::executor, 110ms);
       timer.async_wait([&](const boost::system::error_code& ec)
-                       { cancel.emit(asio::cancellation_type::terminal); });
+      { cancel.emit(asio::cancellation_type::terminal); });
       std::array<uint8_t, 1024> buffer;
       size_t n = co_await response.async_read_some(
          asio::buffer(buffer), asio::bind_cancellation_slot(cancel.slot(), deferred));
-      std::println("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+      LOG("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
       co_await yield();
-      std::println("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+      LOG("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
    };
    run();
 }
@@ -1111,19 +1113,19 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
       std::future<std::exception_ptr> future;
       co_spawn(request.executor(), send(request, rv::iota(uint8_t(0))), error_future(future));
 
-      std::println("=============================================================================");
+      LOG("=============================================================================");
       for (size_t i = 0; i < 10; ++i)
       {
-         std::println("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", i);
+         LOG("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", i);
          co_await yield();
       }
 
-      std::println("=============================================================================");
+      LOG("=============================================================================");
       server.reset();
 
       for (size_t i = 0; i < 10; ++i)
       {
-         std::println("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", i);
+         LOG("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", i);
          co_await yield();
       }
 
@@ -1148,17 +1150,15 @@ TEST_P(ClientAsync, SpawnAndForget)
       auto response = co_await request.async_get_response(asio::deferred);
       co_await yield();
 
-      std::println("- - spawning - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ");
-      co_spawn(
-         context,
-         [request = std::move(request)]() mutable -> awaitable<void>
-         { //
-            std::println("- - SPAWNED - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
-            co_await yield(5);
-            std::println("- - SPAWNED, sending  - - - - - - - - - - - - - - - - - - - - - - - - -");
-            co_await send(request, rv::iota(uint8_t(0)));
-         },
-         detached);
+      LOG("- - spawning - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ");
+      co_spawn(context,
+               [request = std::move(request)]() mutable -> awaitable<void>
+      { //
+         LOG("- - SPAWNED - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+         co_await yield(5);
+         LOG("- - SPAWNED, sending  - - - - - - - - - - - - - - - - - - - - - - - - -");
+         co_await send(request, rv::iota(uint8_t(0)));
+      }, detached);
    };
    run();
 }
