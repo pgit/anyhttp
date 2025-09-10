@@ -1,7 +1,6 @@
 
 # Overview
-[![RelWithDebInfo](https://github.com/pgit/anyhttp/actions/workflows/release.yml/badge.svg)](https://github.com/pgit/anyhttp/actions/workflows/release.yml)
-[![Debug (ASAN)](https://github.com/pgit/anyhttp/actions/workflows/asan.yml/badge.svg)](https://github.com/pgit/anyhttp/actions/workflows/asan.yml)
+[![Build and run tests](https://github.com/pgit/anyhttp/actions/workflows/release.yml/badge.svg)](https://github.com/pgit/anyhttp/actions/workflows/release.yml)
 
 Low-level C++ HTTP client and server library, based on ASIO and its asynchronous model.
 
