@@ -1,5 +1,6 @@
 #include "anyhttp/nghttp2_stream.hpp"
 
+#include "anyhttp/client.hpp"
 #include "anyhttp/common.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/nghttp2_common.hpp"
@@ -21,6 +22,8 @@
 
 using namespace boost::asio::experimental::awaitable_operators;
 namespace rv = std::ranges::views;
+
+namespace errc = boost::system::errc;
 
 namespace anyhttp::nghttp2
 {
@@ -127,7 +130,6 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
 
             if (stream->m_read_handler)
             {
-               using namespace boost::system;
                swap_and_invoke(stream->m_read_handler,
                                errc::make_error_code(errc::operation_canceled), 0);
             }
@@ -407,7 +409,6 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    {
       if (eof_received && m_read_handler)
       {
-         
          logd("[{}] read_callback: delivering EOF...", logPrefix);
          swap_and_invoke(m_read_handler, boost::system::error_code{}, 0);
          //
@@ -499,6 +500,12 @@ NGHttp2Stream::~NGHttp2Stream()
       logd("Stream: dtor... detaching writer", logPrefix);
       writer->detach();
    }
+   if (response_handler)
+   {
+      logd("Stream: dtor... cancelling async_get_response()", logPrefix);
+      swap_and_invoke(response_handler, errc::make_error_code(errc::operation_canceled),
+                      client::Response{nullptr});
+   }
    logd("[{}] \x1b[33mStream: dtor... done\x1b[0m", logPrefix);
 }
 
@@ -509,7 +516,6 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
    if (closed)
    {
       logw("[{}] async_write: stream already closed", logPrefix);
-      using namespace boost::system;
       std::move(handler)(errc::make_error_code(errc::operation_canceled));
       return;
    }
