@@ -466,7 +466,8 @@ TEST_P(External, nc_crazy_chunked)
    if (GetParam() == anyhttp::Protocol::h2)
       GTEST_SKIP();
 
-   auto cmd = std::format("nc 127.0.0.2 {} <crazy-chunked.txt", server->local_endpoint().port());
+   auto cmd =
+      std::format("nc 127.0.0.2 {} <test/data/crazy-chunked.txt", server->local_endpoint().port());
    auto future = spawn("/usr/bin/bash", {"-c", cmd});
    run();
 
@@ -497,7 +498,7 @@ TEST_P(External, h2spec)
    const int expected_ok = std::invoke([]
    {
       if (NGHTTP2_VERSION_NUM >= 0x004200) // 1.66
-         return 138;
+         return 138; // 6.9.1
       else if (NGHTTP2_VERSION_NUM == 0x004100) // 1.65
          return 139;
       else
@@ -510,7 +511,7 @@ TEST_P(External, h2load)
 {
    const size_t n = 100;
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-d", "64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3", url};
+   Args args = {"-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3", url};
 
    if (GetParam() == anyhttp::Protocol::http11)
       args.insert(args.begin(), "--h1");

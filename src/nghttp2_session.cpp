@@ -110,8 +110,10 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
          if (auto url = boost::urls::parse_relative_ref(value); url.has_value())
          {
             stream->url.set_path(url->path());
-            stream->url.set_query(url->query());
-            stream->url.set_fragment(url->fragment());
+            if (url->has_query())
+               stream->url.set_query(url->query());
+            if (url->has_fragment())
+               stream->url.set_fragment(url->fragment());
          }
       }
       else if (name == ":scheme")
