@@ -29,7 +29,7 @@ jobs:
       
     - name: Run tests (if available)
       run: |
-        ASAN_OPTIONS=detect_leaks=1 build/test/test_all
+        build/test/test_all
 
   asan:
     name: ASAN

@@ -26,6 +26,7 @@
 #include <boost/beast/http/write.hpp>
 #include <boost/beast/ssl/ssl_stream.hpp>
 #include <boost/beast/version.hpp>
+#include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <boost/system/errc.hpp>
 
@@ -148,7 +149,7 @@ public:
                                           asio::bind_cancellation_slot(cs, std::move(cb)));
    }
 
-   const asio::any_io_executor& executor() const override { return session->executor(); }
+   asio::any_io_executor get_executor() const noexcept { return session->get_executor(); }
    inline auto logPrefix() const { return session->logPrefix(); }
 
    BeastSession<Stream>* session;
@@ -189,7 +190,7 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   const asio::any_io_executor& executor() const override { return session->executor(); }
+   asio::any_io_executor get_executor() const noexcept override { return session->get_executor(); }
 
    void detach() override { session = nullptr; }
 
@@ -259,7 +260,8 @@ public:
             //
             // So the only sensible thing to do here is to close the socket.
             //
-            // TODO: We can try to support partial cancellation.
+            // TODO: We could try to support partial cancellation, but that would only work
+            //       at chunk boundaries.
             //
             mlogw("async_write: canceled after writing {} of {} bytes", n, expected);
             cancelled = true;
@@ -358,7 +360,7 @@ public:
       // TODO: For bundling writing the header and body, we should just post the writing here,
       //       giving an async_write the change to add a body to the message first.
       //
-      // post(executor(), [this](){write);
+      // post(get_executor(), [this](){write);
       async_write_header(
          super::stream, super::serializer,
          [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
@@ -424,21 +426,23 @@ public:
             *session, stream, buffer);
       http::response_parser<http::buffer_body>& parser = reader->parser;
 
-      mlogd("waiting for response (size={} capacity={})", buffer.size(), buffer.capacity());
-      async_read_header(
-         stream, buffer, parser,
-         [reader = std::move(reader), handler = std::move(handler),
-          this](boost::system::error_code ec, size_t len) mutable
+      auto slot = get_associated_cancellation_slot(handler);
+      auto intermediate = [reader = std::move(reader), handler = std::move(handler),
+                           this](boost::system::error_code ec, size_t len) mutable
+      {
+         if (!ec)
          {
-            if (!ec)
-            {
-               http::response_parser<http::buffer_body>::value_type& msg = reader->parser.get();
-               mlogd("async_read_header: len={} {} {}", len, msg.result_int(), msg.reason());
-            }
-            else
-               mlogw("async_read_header: {} len={}", ec.message(), len);
-            std::move(handler)(ec, client::Response(std::move(reader)));
-         });
+            http::response_parser<http::buffer_body>::value_type& msg = reader->parser.get();
+            mlogd("async_read_header: len={} {} {}", len, msg.result_int(), msg.reason());
+         }
+         else
+            mlogw("async_read_header: {} len={}", ec.message(), len);
+         std::move(handler)(ec, client::Response(std::move(reader)));
+      };
+
+      mlogd("waiting for response (size={} capacity={})", buffer.size(), buffer.capacity());
+      async_read_header(stream, buffer, parser,
+                        bind_cancellation_slot(slot, std::move(intermediate)));
    }
 
    client::Request::GetResponseHandler responseHandler;
@@ -477,7 +481,7 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_execut
 template <typename Stream>
 void BeastSession<Stream>::destroy(std::shared_ptr<Session::Impl> self)
 {
-   // post(executor(), [this, self]() mutable {
+   // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
    std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
    logwi(ec, "[{}] destroy: socket shutdown: {}", m_logPrefix, ec.message());

@@ -33,11 +33,12 @@ public:
    ~BeastSession() override;
 
    std::string_view logPrefix() const { return m_logPrefix; }
-   const auto& executor() const { return m_executor; }
-
+   
    // ----------------------------------------------------------------------------------------------
-
+   
    void destroy(std::shared_ptr<Session::Impl>) override;
+   
+   boost::asio::any_io_executor get_executor() const noexcept override { return m_executor; }
 
    // ----------------------------------------------------------------------------------------------
 

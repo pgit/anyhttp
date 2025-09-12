@@ -88,7 +88,7 @@ class Reader
 {
 public:
    virtual ~Reader() = default;
-   virtual const asio::any_io_executor& executor() const = 0;
+   virtual asio::any_io_executor get_executor() const noexcept = 0;
    virtual std::optional<size_t> content_length() const noexcept = 0;
    virtual void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) = 0;
    virtual void detach() = 0;
@@ -100,7 +100,7 @@ class Writer
 {
 public:
    virtual ~Writer() = default;
-   virtual const asio::any_io_executor& executor() const = 0;
+   virtual asio::any_io_executor get_executor() const noexcept = 0;
    virtual void content_length(std::optional<size_t> content_length) = 0;
    virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
    virtual void detach() = 0;

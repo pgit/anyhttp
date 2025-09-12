@@ -39,7 +39,7 @@ inline auto& get_socket(AnyAsyncStream& stream) { return stream.get_socket(); }
 template <typename Stream>
 void NGHttp2SessionImpl<Stream>::destroy(std::shared_ptr<Session::Impl> self)
 {
-   // post(executor(), [this, self]() mutable {
+   // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
    std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
    logwi(ec, "[{}] destroy: socket shutdown: {}", m_logPrefix, ec.message());
@@ -56,7 +56,7 @@ void NGHttp2SessionImpl<Stream>::destroy(std::shared_ptr<Session::Impl> self)
 // of work and then needs to wait on a channel to be activated again. Doing this with
 // a normal, callback-based completion handler is probably easier.
 //
-// This would also allow easier customization with thirdparty stream objects by not requiring
+// This would also allow easier customization with third party stream objects by not requiring
 // coroutines for compilation.
 //
 // This function calls nghttp2_session_mem_send() and collects the retrieved data in a send buffer,

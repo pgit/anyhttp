@@ -7,6 +7,7 @@
 #include <boost/asio.hpp>
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/bind_cancellation_slot.hpp>
+#include <boost/asio/cancellation_signal.hpp>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
@@ -163,6 +164,15 @@ protected:
          logd("{}", request.url().path());
          if (request.url().path() == "/echo")
             return echo(std::move(request), std::move(response));
+         else if (request.url().path() == "/echo_delayed")
+         {
+            return std::invoke(
+               [](server::Request request, server::Response response) -> awaitable<void>
+            {
+               co_await sleep(1s);
+               co_return co_await echo(std::move(request), std::move(response));
+            }, std::move(request), std::move(response));
+         }
          else if (request.url().path() == "/eat_request")
             return eat_request(std::move(request), std::move(response));
          else if (request.url().path() == "/discard")
@@ -171,7 +181,7 @@ protected:
             return h2spec(std::move(request), std::move(response));
          else if (request.url().path() == "/detach")
          {
-            co_spawn(server->executor(), detach(std::move(request), std::move(response)),
+            co_spawn(server->get_executor(), detach(std::move(request), std::move(response)),
                      [&](const std::exception_ptr&) { logi("client finished"); });
             return []() mutable -> awaitable<void> { co_return; }();
          }
@@ -586,7 +596,7 @@ public:
       //
       // Spawn the testcase coroutine on the client's strand so that access to it is serialized.
       //
-      co_spawn(client->executor(), [&]() -> awaitable<void>
+      co_spawn(client->get_executor(), [&]() -> awaitable<void>
       {
          auto session = co_await client->async_connect(asio::deferred);
          try
@@ -1076,6 +1086,27 @@ TEST_P(ClientAsync, PerOperationCancellation)
    run();
 }
 
+TEST_P(ClientAsync, CancelAfter)
+{
+   test = [&](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("echo_delayed"), {});
+      auto [ec, response] = co_await request.async_get_response(cancel_after(250ms, as_tuple));
+      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+
+      std::tie(ec, response) = co_await request.async_get_response(cancel_after(0ms, as_tuple));
+      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+
+      std::tie(ec, response) = co_await request.async_get_response(as_tuple);
+      EXPECT_FALSE(ec);
+      
+      co_await request.async_write(asio::buffer("Hello, Client!"));
+      co_await request.async_write({});
+      auto received = co_await receive(response);
+   };
+   run();
+}
+
 //
 // Send more than content length allows.
 //
@@ -1085,8 +1116,8 @@ TEST_P(ClientAsync, SendMoreThanContentLength)
    {
       Fields fields;
       fields.set("content-length", "1024");
-      auto request = co_await session.async_submit(url.set_path("eat_request"), fields, deferred);
-      auto response = co_await request.async_get_response(asio::deferred);
+      auto request = co_await session.async_submit(url.set_path("eat_request"), fields);
+      auto response = co_await request.async_get_response();
       co_await receive(response);
       co_await send(request, rv::iota(uint8_t(0)) | rv::take(10 * 1024 + 1));
    };
@@ -1116,7 +1147,7 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
 
       // co_spawn(context, send(request, rv::iota(uint8_t(0))), detached);
       std::future<std::exception_ptr> future;
-      co_spawn(request.executor(), send(request, rv::iota(uint8_t(0))), error_future(future));
+      co_spawn(request.get_executor(), send(request, rv::iota(uint8_t(0))), error_future(future));
 
       LOG("=============================================================================");
       for (size_t i = 0; i < 10; ++i)

@@ -24,7 +24,7 @@ public:
    Impl() noexcept;
    virtual ~Impl();
 
-   // virtual const asio::any_io_executor& executor() const = 0;
+   // virtual const asio::any_io_executor& get_executor() const = 0;
    // virtual std::optional<size_t> content_length() const noexcept = 0;
    // virtual void async_read_some(ReadSomeHandler&& handler) = 0;
    // virtual void detach() = 0;
@@ -45,7 +45,7 @@ public:
    Impl() noexcept;
    virtual ~Impl();
 
-   // virtual const asio::any_io_executor& executor() const = 0;
+   // virtual const asio::any_io_executor& get_executor() const = 0;
    // virtual void content_length(std::optional<size_t> content_length) = 0;
    // virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
    // virtual void detach() = 0;
@@ -71,7 +71,7 @@ public:
    void listen_udp();
 
    const Config& config() const { return m_config; }
-   const boost::asio::any_io_executor& executor() const { return m_executor; }
+   boost::asio::any_io_executor get_executor() const noexcept { return m_executor; }
 
    asio::awaitable<void> listen_loop();
    asio::awaitable<void> handleConnection(asio::ip::tcp::socket socket);

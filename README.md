@@ -77,21 +77,21 @@ namespace client {
 
 namespace impl {
    class Reader {
-      executor()
+      get_executor()
       content_length()
       async_read_some(buffer)
       detach()
       destroy()
    }
    class Writer {
-      executor()
+      get_executor()
       content_length(optional<size_t>)
       async_write(buffer)
       detach()
       destroy()
    }
    class Client {
-      executor()
+      get_executor()
    }
 }
 ```

@@ -44,7 +44,7 @@ public:
    explicit Impl(asio::any_io_executor executor, Config config);
    ~Impl();
 
-   const boost::asio::any_io_executor& executor() const { return m_executor; }
+   boost::asio::any_io_executor get_executor() const noexcept { return m_executor; }
 
    void async_connect(ConnectHandler handler);
 

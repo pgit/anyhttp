@@ -32,7 +32,7 @@ public:
    explicit NGHttp2Reader(NGHttp2Stream& stream);
    ~NGHttp2Reader() override;
 
-   const asio::any_io_executor& executor() const override;
+   asio::any_io_executor get_executor() const noexcept override;
    std::optional<size_t> content_length() const noexcept override;
    void async_read_some(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler) override;
    void detach() override;
@@ -52,7 +52,7 @@ public:
    explicit NGHttp2Writer(NGHttp2Stream& stream);
    ~NGHttp2Writer() override;
 
-   const asio::any_io_executor& executor() const override;
+   asio::any_io_executor get_executor() const noexcept override;
    void content_length(std::optional<size_t> content_length) override;
    void async_write(WriteHandler&& handler, asio::const_buffer buffer) override;
    void detach() override;
@@ -264,7 +264,7 @@ public:
    void delete_writer();
    void maybe_close_stream();
 
-   const asio::any_io_executor& executor() const;
+   asio::any_io_executor get_executor() const noexcept;
 
 public:
    NGHttp2Session& parent;

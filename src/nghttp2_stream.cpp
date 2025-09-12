@@ -10,9 +10,11 @@
 #include <boost/algorithm/string/predicate.hpp>
 
 #include <boost/asio/associated_cancellation_slot.hpp>
+#include <boost/asio/associated_executor.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
+#include <boost/asio/this_coro.hpp>
 #include <boost/beast/http/error.hpp>
 
 #include <nghttp2/nghttp2.h>
@@ -55,10 +57,10 @@ void NGHttp2Reader<Base>::detach()
 // -------------------------------------------------------------------------------------------------
 
 template <typename Base>
-const asio::any_io_executor& NGHttp2Reader<Base>::executor() const
+asio::any_io_executor NGHttp2Reader<Base>::get_executor() const noexcept
 {
    assert(stream);
-   return stream->executor();
+   return stream->get_executor();
 }
 
 template <typename Base>
@@ -78,6 +80,8 @@ boost::url_view NGHttp2Reader<Base>::url() const
 template <typename Base>
 std::optional<size_t> NGHttp2Reader<Base>::content_length() const noexcept
 {
+   if (!stream)
+      return std::nullopt;
    assert(stream);
    return stream->content_length;
 }
@@ -122,8 +126,8 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    {
       cs.assign([this](asio::cancellation_type_t ct)
       {
-         logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m ({})",
-              stream->logPrefix, "cancelled", int(ct));
+         logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m ({})", stream->logPrefix, "cancelled",
+              int(ct));
 
          if (stream->m_read_handler)
          {
@@ -170,10 +174,10 @@ void NGHttp2Writer<Base>::detach()
 // -------------------------------------------------------------------------------------------------
 
 template <typename Base>
-const asio::any_io_executor& NGHttp2Writer<Base>::executor() const
+asio::any_io_executor NGHttp2Writer<Base>::get_executor() const noexcept
 {
    assert(stream);
-   return stream->executor();
+   return stream->get_executor();
 }
 
 template <typename Base>
@@ -577,11 +581,34 @@ void NGHttp2Stream::resume()
 
 void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& handler)
 {
+   logd("[{}] async_get_response:", logPrefix);
+
    assert(!response_handler);
    if (response_delivered)
    {
-      std::move(handler)(asio::error::basic_errors::already_started, client::Response{nullptr});
+      auto ec = asio::error::basic_errors::already_started;
+      logw("[{}] async_get_response: \x1b[1;31m{}\x1b[0m", logPrefix, what(ec));
+      std::move(handler)(ec, client::Response{nullptr});
       return;
+   }
+
+   auto cs = handler.get_cancellation_slot();
+   if (cs.is_connected())
+   {
+      cs.assign([this](asio::cancellation_type_t ct)
+      {
+         logd("[{}] async_get_response: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", int(ct));
+
+         if (response_handler)
+         {
+            // auto executor = get_associated_executor(response_handler, get_executor());
+            post(get_executor(), [handler = std::move(response_handler)]() mutable
+            {
+               std::move(handler)(errc::make_error_code(errc::operation_canceled),
+                                  client::Response{nullptr});
+            });
+         }
+      });
    }
 
    response_handler = std::move(handler);
@@ -698,17 +725,17 @@ void NGHttp2Stream::on_request()
 
    auto& server = dynamic_cast<ServerReference&>(parent).server();
    if (auto& handler = server.requestHandlerCoro())
-      co_spawn(executor(), handler(std::move(request), std::move(response)), detached);
+      co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
    else if (auto& handler = server.requestHandler())
       server.requestHandler()(std::move(request), std::move(response));
    else
    {
       loge("[{}] on_request: no request handler!", logPrefix);
-      co_spawn(executor(), not_found(std::move(response)), detached);
+      co_spawn(get_executor(), not_found(std::move(response)), detached);
    }
 }
 
-const asio::any_io_executor& NGHttp2Stream::executor() const { return parent.executor(); }
+asio::any_io_executor NGHttp2Stream::get_executor() const noexcept { return parent.get_executor(); }
 
 // =================================================================================================
 

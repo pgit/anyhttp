@@ -114,7 +114,7 @@ public:
    Server& operator=(const Server& other) = delete;
    Server& operator=(Server&& other) = default;
 
-   const asio::any_io_executor& executor() const;
+   asio::any_io_executor get_executor() const noexcept;
    void setRequestHandler(RequestHandler&& handler);
    void setRequestHandlerCoro(RequestHandlerCoro&& handler);
 

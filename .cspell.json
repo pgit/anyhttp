@@ -24,6 +24,8 @@
         "mloge",
         "mlogi",
         "mlogw",
+        "mylogd",
+        "nghttp",
         "ngtcp",
         "psedoc",
         "pynghttp",

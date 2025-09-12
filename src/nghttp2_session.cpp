@@ -411,7 +411,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    }
 
    for (auto nv : nva)
-      mlogd("submit: {}", nv);
+      mlogd("  {}", nv);
 
    //
    // https://nghttp2.org/documentation/types.html#c.nghttp2_data_source_read_callback
@@ -444,10 +444,14 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    stream->logPrefix = std::format("{}.{}", logPrefix(), id);
    m_last_id = id;
 
-   logd("submit: stream={}", id);
+   logd("[{}] submit: new stream ID: {}", stream->logPrefix, id);
    m_streams.emplace(id, stream);
-   auto writer = std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream);
-   std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)});
+   post(get_executor(),
+        [handler = std::move(handler),
+         writer = std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)]() mutable
+   {
+      std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)}); //
+   });
    start_write();
 }
 
@@ -581,7 +585,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
 
    // see NGHttp2Stream::call_read_handler() why this is needed
    if (stream)
-      post(executor(), [stream]() { /* deferred delete */ });
+      post(get_executor(), [stream]() { /* deferred delete */ });
 }
 
 void NGHttp2Session::start_write()

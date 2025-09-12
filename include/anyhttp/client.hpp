@@ -64,7 +64,7 @@ public:
    void reset() noexcept;
    ~Request();
 
-   const asio::any_io_executor& executor() const;
+   asio::any_io_executor get_executor() const noexcept;
 
 public:
    using GetResponse = void(boost::system::error_code, Response);
@@ -75,11 +75,17 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken = DefaultCompletionToken>
    auto async_get_response(CompletionToken&& token = CompletionToken())
    {
-      return boost::asio::async_initiate<CompletionToken, GetResponse>(
-         [&](GetResponseHandler handler) { //
-            async_get_response_any(std::move(handler));
-         },
-         token);
+      struct initiation
+      {
+         Request* self;
+         using executor_type = boost::asio::any_io_executor;
+         executor_type get_executor() const noexcept { return self->get_executor(); }
+         auto operator()(GetResponseHandler handler)
+         {
+            self->async_get_response_any(std::move(handler));
+         }
+      };
+      return boost::asio::async_initiate<CompletionToken, GetResponse>(initiation{this}, token);
    }
 
 public:
@@ -111,7 +117,7 @@ public:
    Client(asio::any_io_executor executor, Config config);
    ~Client();
 
-   const asio::any_io_executor& executor() const;
+   asio::any_io_executor get_executor() const noexcept;
 
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken = DefaultCompletionToken>
    auto async_connect(CompletionToken&& token = CompletionToken())

@@ -8,25 +8,6 @@ namespace anyhttp
 
 // =================================================================================================
 
-class SessionWrapper
-{
-public:
-   SessionWrapper(std::shared_ptr<Session::Impl> impl) : impl(impl)
-   {
-      logw("SessionWrapper: ctor");
-   }
-
-   ~SessionWrapper()
-   {
-      logw("SessionWrapper: dtor");
-      impl->destroy(std::move(impl));
-   }
-
-   std::shared_ptr<Session::Impl> impl;
-};
-
-// =================================================================================================
-
 Session::Session(std::shared_ptr<Session::Impl> impl) : m_impl(std::move(impl))
 {
    // logd("Session::ctor: use_count={}", m_impl.use_count());
@@ -58,6 +39,11 @@ Session::~Session()
       m_impl->destroy(std::move(m_impl));
       m_impl.reset();
    }
+}
+
+boost::asio::any_io_executor Session::get_executor() const noexcept
+{
+   return m_impl->get_executor();
 }
 
 void Session::async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)

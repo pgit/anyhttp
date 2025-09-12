@@ -103,7 +103,7 @@ void Server::setRequestHandlerCoro(RequestHandlerCoro&& handler)
    impl->setRequestHandler(std::move(handler));
 }
 
-const asio::any_io_executor& Server::executor() const { return impl->executor(); }
+asio::any_io_executor Server::get_executor() const noexcept { return impl->get_executor(); }
 
 asio::ip::tcp::endpoint Server::local_endpoint() const { return impl->local_endpoint(); }
 

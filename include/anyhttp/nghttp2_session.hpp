@@ -49,7 +49,7 @@ public:
    NGHttp2Session(std::string_view prefix, any_io_executor executor);
    virtual ~NGHttp2Session();
 
-   const auto& executor() const { return m_executor; }
+   boost::asio::any_io_executor get_executor() const noexcept override { return m_executor; }
    const std::string& logPrefix() const { return m_logPrefix; }
 
    std::string logPrefix(int stream_id) const

@@ -46,10 +46,10 @@ void Request::async_get_response_any(Request::GetResponseHandler&& handler)
       std::move(handler)(boost::asio::error::bad_descriptor, Response{nullptr});
 }
 
-const asio::any_io_executor& Request::executor() const
+asio::any_io_executor Request::get_executor() const noexcept
 {
    assert(impl);
-   return impl->executor();
+   return impl->get_executor();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -99,7 +99,7 @@ void Client::async_connect_any(ConnectHandler&& handler)
    impl->async_connect(std::move(handler));
 }
 
-const asio::any_io_executor& Client::executor() const { return impl->executor(); }
+asio::any_io_executor Client::get_executor() const noexcept { return impl->get_executor(); }
 
 // =================================================================================================
 

@@ -83,7 +83,7 @@ awaitable<void> do_session(Client& client, boost::urls::url url)
       co_await do_request(session, url);   
 #else
    for (size_t i = 0; i < 3; ++i)
-      co_spawn(client.executor(), do_requests(client.executor(), session, url), detached);
+      co_spawn(client.get_executor(), do_requests(client.get_executor(), session, url), detached);
 #endif
    logi("do_requests: done");
 }
