@@ -214,7 +214,8 @@ public:
          mlogd("async_write: {} bytes (chunked={} content_length={})", buffer.size(),
                message.chunked(), message.has_content_length());
 
-      message.body().data = const_cast<void*>(buffer.data()); // FIXME: do we really have to cast?
+      // make sure to set 'nullptr' on empty size, otherwise beast may serialize an empty chunk
+      message.body().data = buffer.size() ? const_cast<void*>(buffer.data()) : nullptr;
       message.body().size = buffer.size();
       message.body().more = buffer.size() != 0; // empty buffer --> EOF
 
@@ -388,7 +389,7 @@ public:
    {
    }
 
-   ~RequestWriter() override { logw("RequestWriter: dtor"); }
+   ~RequestWriter() = default;
 
    void content_length(std::optional<size_t> content_length) override
    {
@@ -585,6 +586,9 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
       //
       // Call user-provided request handler.
+      //
+      // Unlike HTTP2, the request handler is not co_spawn()ed as a separate thread of execution,
+      // because HTTP/1.1 does not du multiplexing.
       //
       if (auto& handler = server().requestHandlerCoro())
       {
