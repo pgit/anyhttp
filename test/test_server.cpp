@@ -738,12 +738,13 @@ TEST_P(ClientAsync, YieldFuzz)
    bool done = false;
    custom = [&](server::Request request, server::Response response) -> awaitable<void>
    {
+      constexpr auto msg = "Hello, Client!"sv;
       co_await yield(dist(gen));
       Fields fields;
-      fields.set("Content-Length", "15");
+      fields.set("Content-Length", std::to_string(msg.size()));
       co_await response.async_submit(200, fields);
       co_await yield(dist(gen));
-      co_await response.async_write(asio::buffer("Hello, Client!"sv));
+      co_await response.async_write(asio::buffer(msg));
       co_await yield(dist(gen));
       co_await response.async_write({});
       co_await yield(dist(gen));
