@@ -163,33 +163,25 @@ protected:
       {
          logd("{}", request.url().path());
          if (request.url().path() == "/echo")
-            return echo(std::move(request), std::move(response));
+            co_await echo(std::move(request), std::move(response));
          else if (request.url().path() == "/echo_delayed")
          {
-            return std::invoke(
-               [](server::Request request, server::Response response) -> awaitable<void>
-            {
-               co_await sleep(1s);
-               co_return co_await echo(std::move(request), std::move(response));
-            }, std::move(request), std::move(response));
+            co_await sleep(1s);
+            co_return co_await echo(std::move(request), std::move(response));
          }
          else if (request.url().path() == "/eat_request")
-            return eat_request(std::move(request), std::move(response));
+            co_await eat_request(std::move(request), std::move(response));
          else if (request.url().path() == "/discard")
-            return discard(std::move(request), std::move(response));
+            co_return;
          else if (request.url().path() == "/h2spec")
-            return h2spec(std::move(request), std::move(response));
+            co_await h2spec(std::move(request), std::move(response));
          else if (request.url().path() == "/detach")
-         {
             co_spawn(server->get_executor(), detach(std::move(request), std::move(response)),
                      [&](const std::exception_ptr&) { logi("client finished"); });
-            return []() mutable -> awaitable<void> { co_return; }();
-         }
          else if (request.url().path() == "/custom")
-            return custom(std::move(request), std::move(response));
+            co_await custom(std::move(request), std::move(response));
          else
-            return not_found(std::move(request), std::move(response));
-         // return not_found(std::move(response)); // discard request
+            co_await not_found(std::move(request), std::move(response));
       });
    }
 
