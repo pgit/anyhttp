@@ -45,6 +45,27 @@ asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint)
 
 // =================================================================================================
 
+boost::system::error_code code(const std::exception_ptr& ptr)
+{
+   if (!ptr)
+      return {};
+   else
+   {
+      try
+      {
+         std::rethrow_exception(ptr);
+      }
+      catch (boost::asio::multiple_exceptions& mex)
+      {
+         return code(mex.first_exception());
+      }
+      catch (boost::system::system_error& ex)
+      {
+         return ex.code();
+      }
+   }
+}
+
 std::string what(const boost::system::error_code& ec) { return ec.message(); }
 
 std::string what(const std::exception_ptr& ptr)

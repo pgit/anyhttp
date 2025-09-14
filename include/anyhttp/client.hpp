@@ -32,6 +32,8 @@ public:
    void reset() noexcept;
    ~Response();
 
+   constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
+
 public:
    int status_code() const noexcept;
 
@@ -63,6 +65,8 @@ public:
    Request& operator=(Request&& other) noexcept;
    void reset() noexcept;
    ~Request();
+
+   constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
 
    asio::any_io_executor get_executor() const noexcept;
 

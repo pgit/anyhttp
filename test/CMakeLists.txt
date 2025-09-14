@@ -5,7 +5,7 @@ link_libraries(Boost::atomic Boost::url Boost::filesystem Boost::process)
 
 file(GLOB SRC_FILES test_*.cpp)
 add_executable(test_all ${SRC_FILES})
-target_link_libraries(test_all PRIVATE GTest::GTest anyhttp)
+target_link_libraries(test_all PRIVATE GTest::GTest GTest::gmock anyhttp)
 target_link_libraries(test_all PRIVATE spdlog::spdlog_header_only)
 
 # include(CTest)

@@ -9,10 +9,8 @@
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/system/detail/error_code.hpp>
 
-#include <sstream>
-#include <tuple>
 #include <ranges>
-#include <iostream>
+#include <tuple>
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
@@ -50,12 +48,13 @@ namespace anyhttp
 {
 
 boost::asio::awaitable<void> yield(size_t count)
-{
+{   
    auto ex = co_await asio::this_coro::executor;
    for (size_t i = 0; i < count; ++i)
    {
+      std::println("\x1b[1;33m--- YIELDING #{}/{} ----------------------------------------\x1b[0m",
+                   i + 1, count);
       co_await post(ex, asio::deferred);
-      // LOG("yielding {}/{}", i, count);
    }
 }
 
@@ -153,6 +152,8 @@ awaitable<void> delayed(server::Request request, server::Response response)
 awaitable<void> detach(server::Request request, server::Response response)
 {
    co_await sleep(100ms);
+   std::ignore = request;
+   std::ignore = response;
 }
 
 awaitable<void> discard(server::Request request, server::Response response) { co_return; }
@@ -189,7 +190,7 @@ awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response
    for (;;)
    {
       auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
-      co_await yield();
+      // co_await yield();
       bytes += n;
       if (ec || n == 0)
          co_return std::make_tuple(bytes, ec);
@@ -201,7 +202,7 @@ awaitable<size_t> try_receive(client::Response& response, error_code& ec)
 #if 0
    size_t bytes;
    std::tie(bytes, ec) = co_await try_receive(response);
-#else   
+#else
    ec = {};
    size_t bytes = 0, count = 0;
    std::array<uint8_t, 16 * 1024> buffer;
@@ -216,7 +217,7 @@ awaitable<size_t> try_receive(client::Response& response, error_code& ec)
          // do NOT 'respawn' read handler in first round, see NGHttp2Stream::call_handler_loop()
          // if (count++ == 0)
          //    co_await yield();
-         co_await yield();
+         // co_await yield();
 
          bytes += n;
          logd("receive: {}, total {}", n, bytes);
@@ -225,7 +226,7 @@ awaitable<size_t> try_receive(client::Response& response, error_code& ec)
    catch (const boost::system::system_error& ex)
    {
       ec = ex.code();
-      loge("receive: {} after reading {} bytes", ex.code().message(), bytes);
+      loge("receive: \x1b[1;31n{}\x1b[0m after reading {} bytes", ex.code().message(), bytes);
       co_return bytes;
    }
 
@@ -233,7 +234,7 @@ awaitable<size_t> try_receive(client::Response& response, error_code& ec)
 
    logi("receive: EOF after reading {} bytes", bytes);
    co_return bytes;
-#endif   
+#endif
 }
 
 awaitable<size_t> read_response(client::Request& request)
@@ -259,7 +260,7 @@ awaitable<void> sendEOF(client::Request& request)
 {
    logi("send: finishing request...");
    auto [ec] = co_await request.async_write({}, as_tuple(deferred));
-   logi("send: finishing request... done ({})", ec.what());
+   logi("send: finishing request... done ({})", ec.message());
 }
 
 awaitable<void> h2spec(server::Request request, server::Response response)

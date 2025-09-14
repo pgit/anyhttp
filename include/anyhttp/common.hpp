@@ -143,6 +143,8 @@ asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint);
 
 // -------------------------------------------------------------------------------------------------
 
+boost::system::error_code code(const std::exception_ptr& ptr);
+
 /// Get error message from exception pointer, as used in the completion signature of \c co_spawn().
 std::string what(const std::exception_ptr& ptr);
 

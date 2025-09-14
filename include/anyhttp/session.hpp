@@ -21,7 +21,10 @@ public:
    explicit Session(std::shared_ptr<Impl> impl);
    Session(Session&& other) noexcept;
    Session& operator=(Session&& other) noexcept;
+   void reset() noexcept;
    ~Session();
+
+   constexpr operator bool() const noexcept { return static_cast<bool>(m_impl); }
 
 public:
    /**

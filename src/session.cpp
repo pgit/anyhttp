@@ -30,16 +30,18 @@ Session& Session::operator=(Session&& other) noexcept
    return *this;
 }
 
-// -------------------------------------------------------------------------------------------------
-
-Session::~Session()
+void Session::reset() noexcept
 {
    if (m_impl)
    {
-      m_impl->destroy(std::move(m_impl));
-      m_impl.reset();
+      auto temp = m_impl.get();
+      temp->destroy(std::move(m_impl));
    }
 }
+
+Session::~Session() { reset(); }
+
+// -------------------------------------------------------------------------------------------------
 
 boost::asio::any_io_executor Session::get_executor() const noexcept
 {

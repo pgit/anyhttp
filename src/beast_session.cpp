@@ -69,6 +69,8 @@ public:
 
    void destroy(std::unique_ptr<typename Parent::ReaderOrWriter> self) override
    {
+      if (!parser.is_done())
+         logw("destroy: reader destroyed, but parser not done yet!");
       if (reading)
          this->deleting = std::move(self);
    }
@@ -232,8 +234,8 @@ public:
       {
          // async op result 'n' is the number of bytes written to the stream,
          // not the number of bytes read from the buffer
-         mlogd("async_write: n={} ({}) done={} (body {})", n, ec.message(), serializer.is_done(),
-               serializer.get().body().size);
+         mlogd("async_write: n={} (\x1b[1;31m{}\x1b[0m) done={} (body {})", n, ec.message(),
+               serializer.is_done(), serializer.get().body().size);
 
          writing = false;
          if (deleting)
@@ -604,6 +606,13 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          }
       }
 
+      //
+      // FIXME: Maybe we shouldn't hand out put the parser object to the request handler. If the
+      //        request gets dropped, we don't know anything about the stream's state any more and
+      //        whether or not we can try to read a new request.
+      //
+      //        We should have a parser here, and call is_done() on it.
+      //
       mlogd("request handler finished (size={} capacity={})", m_buffer.size(), m_buffer.capacity());
 
       //
