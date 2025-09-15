@@ -109,8 +109,8 @@ public:
    ~Server();
 
    Server(const Server& other) = delete;
-   Server(Server&& other) = default;
    Server& operator=(const Server& other) = delete;
+   Server(Server&& other) = default;
    Server& operator=(Server&& other) = default;
 
    asio::any_io_executor get_executor() const noexcept;

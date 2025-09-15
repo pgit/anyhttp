@@ -85,10 +85,6 @@ public:
                                                      asio::buffer_sequence_end(buffers)});
          },
          token, buffers);
-
-         asio::const_buffer b;
-         asio::buffer_sequence_begin(b);
-         asio::buffer_sequence_end(b);
    }
 
    //

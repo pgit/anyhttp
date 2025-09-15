@@ -24,12 +24,6 @@ public:
    Impl() noexcept;
    virtual ~Impl();
 
-   // virtual const asio::any_io_executor& get_executor() const = 0;
-   // virtual std::optional<size_t> content_length() const noexcept = 0;
-   // virtual void async_read_some(ReadSomeHandler&& handler) = 0;
-   // virtual void detach() = 0;
-   // virtual void destroy(std::unique_ptr<Impl> self) { /* delete self */ }
-
    // FIXME: doesn't make sense to have a status_code() for a server request, but keeps beast happy
    virtual unsigned int status_code() const noexcept = 0;
    virtual boost::url_view url() const = 0;
@@ -44,12 +38,6 @@ class Response::Impl : public impl::Writer
 public:
    Impl() noexcept;
    virtual ~Impl();
-
-   // virtual const asio::any_io_executor& get_executor() const = 0;
-   // virtual void content_length(std::optional<size_t> content_length) = 0;
-   // virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
-   // virtual void detach() = 0;
-   // virtual void destroy(std::unique_ptr<Impl> self) { /* delete self */ }
 
    virtual void async_submit(WriteHandler&& handler, unsigned int status_code, const Fields& fields) = 0;
 

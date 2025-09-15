@@ -17,7 +17,7 @@ class Session::Impl
 {
 public:
    virtual ~Impl() {}
-   virtual void destroy(std::shared_ptr<Impl> self) = 0;
+   virtual void destroy(std::shared_ptr<Impl> self) noexcept = 0;
 
    virtual boost::asio::any_io_executor get_executor() const noexcept = 0;
 

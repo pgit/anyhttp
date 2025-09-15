@@ -67,7 +67,7 @@ public:
       parser.body_limit(std::numeric_limits<uint64_t>::max());
    }
 
-   void destroy(std::unique_ptr<typename Parent::ReaderOrWriter> self) override
+   void destroy(std::unique_ptr<typename Parent::ReaderOrWriter> self) noexcept override
    {
       if (!parser.is_done())
          logw("destroy: reader destroyed, but parser not done yet!");
@@ -180,7 +180,7 @@ public:
    {
    }
 
-   virtual void destroy(std::unique_ptr<typename Parent::ReaderOrWriter> self) override
+   virtual void destroy(std::unique_ptr<typename Parent::ReaderOrWriter> self) noexcept override
    {
       if (writing)
          this->deleting = std::move(self);
@@ -482,7 +482,7 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_execut
 }
 
 template <typename Stream>
-void BeastSession<Stream>::destroy(std::shared_ptr<Session::Impl> self)
+void BeastSession<Stream>::destroy(std::shared_ptr<Session::Impl> self) noexcept
 {
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;

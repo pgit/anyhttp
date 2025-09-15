@@ -93,7 +93,7 @@ public:
    virtual void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) = 0;
    virtual void detach() = 0;
 
-   virtual void destroy(std::unique_ptr<Reader> self) { /* delete self */ }
+   virtual void destroy(std::unique_ptr<Reader> self) noexcept { /* delete self */ }
 };
 
 class Writer
@@ -105,7 +105,7 @@ public:
    virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
    virtual void detach() = 0;
 
-   virtual void destroy(std::unique_ptr<Writer> self) { /* delete self */ }
+   virtual void destroy(std::unique_ptr<Writer> self) noexcept { /* delete self */ }
 };
 } // namespace impl
 

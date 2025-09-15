@@ -50,13 +50,17 @@ public:
    auto async_submit(boost::urls::url url, const Fields& headers = {},
                      CompletionToken&& token = CompletionToken())
    {
+      //
+      // A custom callable like this that provides a get_executor() function enables the use of
+      // the cancel_{at,after} completion token adapters.
+      //
       struct initiation
       {
          Session* self;
          using executor_type = boost::asio::any_io_executor;
          executor_type get_executor() const noexcept {return self->get_executor();}
 
-         auto operator()(SubmitHandler handler, boost::urls::url url, const Fields& headers)
+         auto operator()(SubmitHandler handler, boost::urls::url url, const Fields& headers) const
          {
             self->async_submit_any(std::move(handler), std::move(url), std::move(headers));
          };

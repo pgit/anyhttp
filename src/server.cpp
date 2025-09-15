@@ -13,8 +13,10 @@ Request::Request(std::unique_ptr<Request::Impl> impl) : impl(std::move(impl))
 {
    logd("\x1b[1;35mServer::Request: ctor\x1b[0m");
 }
+
 Request::Request(Request&&) noexcept = default;
 Request& Request::operator=(Request&& other) noexcept = default;
+
 void Request::reset() noexcept
 {
    if (impl)
@@ -24,7 +26,10 @@ void Request::reset() noexcept
       temp->destroy(std::move(impl)); // give implementation a chance for cancellation
    }
 }
+
 Request::~Request() { reset(); }
+
+// -------------------------------------------------------------------------------------------------
 
 boost::url_view Request::url() const
 {
@@ -50,8 +55,10 @@ Response::Response(std::unique_ptr<Response::Impl> impl) : impl(std::move(impl))
 {
    logd("\x1b[1;35mServer::Response: ctor\x1b[0m");
 }
+
 Response::Response(Response&&) noexcept = default;
 Response& Response::operator=(Response&& other) noexcept = default;
+
 void Response::reset() noexcept
 {
    if (impl)
@@ -59,10 +66,12 @@ void Response::reset() noexcept
       logd("\x1b[35mServer::Response: dtor\x1b[0m");
       auto temp = impl.get();
       temp->destroy(std::move(impl)); // give implementation a chance for cancellation
-      assert(!impl);
    }
 }
+
 Response::~Response() { reset(); }
+
+// -------------------------------------------------------------------------------------------------
 
 void Response::content_length(std::optional<size_t> content_length)
 {

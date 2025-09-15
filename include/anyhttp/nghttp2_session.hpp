@@ -142,7 +142,7 @@ public:
 
    awaitable<void> send_loop() override;
    awaitable<void> recv_loop() override;
-   void destroy(std::shared_ptr<Session::Impl>) override;
+   void destroy(std::shared_ptr<Session::Impl>) noexcept override;
 
 public:
    Stream m_stream;

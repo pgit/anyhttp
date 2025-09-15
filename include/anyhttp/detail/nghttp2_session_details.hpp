@@ -37,7 +37,7 @@ inline auto& get_socket(AnyAsyncStream& stream) { return stream.get_socket(); }
 // =================================================================================================
 
 template <typename Stream>
-void NGHttp2SessionImpl<Stream>::destroy(std::shared_ptr<Session::Impl> self)
+void NGHttp2SessionImpl<Stream>::destroy(std::shared_ptr<Session::Impl> self) noexcept
 {
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;

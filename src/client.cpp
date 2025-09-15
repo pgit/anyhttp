@@ -17,10 +17,11 @@ Request::Request(std::unique_ptr<Request::Impl> impl_) : impl(std::move(impl_))
    if (impl)
       logd("\x1b[1;34mClient::Request: ctor\x1b[0m");
 }
+
 Request::Request(Request&&) noexcept = default;
 Request& Request::operator=(Request&& other) noexcept = default;
-void Request::reset() noexcept { impl.reset(); }
-Request::~Request()
+
+void Request::reset() noexcept
 {
    if (impl)
    {
@@ -29,6 +30,10 @@ Request::~Request()
       temp->destroy(std::move(impl)); // give implementation a chance for graceful cancellation
    }
 }
+
+Request::~Request() { reset(); }
+
+// -------------------------------------------------------------------------------------------------
 
 void Request::async_write_any(WriteHandler&& handler, asio::const_buffer buffer)
 {
@@ -52,31 +57,32 @@ asio::any_io_executor Request::get_executor() const noexcept
    return impl->get_executor();
 }
 
-// -------------------------------------------------------------------------------------------------
+// =================================================================================================
 
 Response::Response(std::unique_ptr<Response::Impl> impl_) : impl(std::move(impl_))
 {
    if (impl)
       logd("\x1b[1;34mClient::Response: ctor\x1b[0m");
 }
+
 Response::Response(Response&&) noexcept = default;
 Response& Response::operator=(Response&& other) noexcept = default;
-void Response::reset() noexcept { impl.reset(); }
-Response::~Response()
+
+void Response::reset() noexcept
 {
    if (impl)
    {
       logd("\x1b[34mClient::Response: dtor\x1b[0m");
       auto temp = impl.get();
       temp->destroy(std::move(impl)); // give implementation a chance for graceful cancellation
-      assert(!impl);
    }
 }
 
-int Response::status_code() const noexcept
-{
-   return impl->status_code();
-}
+Response::~Response() { reset(); }
+
+// -------------------------------------------------------------------------------------------------
+
+int Response::status_code() const noexcept { return impl->status_code(); }
 
 void Response::async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler)
 {
