@@ -13,6 +13,7 @@
 #include <tuple>
 
 using namespace std::chrono_literals;
+using namespace std::string_view_literals;
 using namespace boost::asio;
 using namespace anyhttp;
 using namespace anyhttp::server;
@@ -47,15 +48,11 @@ struct std::formatter<EscapedString> : std::formatter<std::string>
 namespace anyhttp
 {
 
-boost::asio::awaitable<void> yield(size_t count)
-{   
-   auto ex = co_await asio::this_coro::executor;
+awaitable<void> yield(size_t count)
+{
+   auto executor = co_await asio::this_coro::executor;
    for (size_t i = 0; i < count; ++i)
-   {
-      std::println("\x1b[1;33m--- YIELDING #{}/{} ----------------------------------------\x1b[0m",
-                   i + 1, count);
-      co_await post(ex, asio::deferred);
-   }
+      co_await post(executor, asio::deferred);
 }
 
 awaitable<void> dump(server::Request request, server::Response response)
@@ -247,7 +244,7 @@ awaitable<expected<size_t>> try_read_response(client::Request& request)
 {
    try
    {
-      auto response = co_await request.async_get_response(asio::deferred);
+      auto response = co_await request.async_get_response();
       co_return co_await receive(response);
    }
    catch (const boost::system::system_error& ex)
@@ -271,8 +268,7 @@ awaitable<void> h2spec(server::Request request, server::Response response)
    co_await yield(); // ok
    co_await response.async_submit(200, {}, deferred);
    co_await yield(); // ok
-   const char* literal = "Hello, World!\n";
-   co_await response.async_write(asio::const_buffer(literal, std::strlen(literal)), deferred);
+   co_await response.async_write(asio::buffer("Hello, World!\n"sv), deferred);
    co_await yield(); // ok
    co_await response.async_write({}, deferred);
    co_await yield(); // ok
