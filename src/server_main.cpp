@@ -90,31 +90,32 @@ int main(int argc, char* argv[])
    auto server = std::make_optional<server::Server>(executor, config->server);
 
    signal_set signals(context, SIGINT, SIGTERM);
-   signals.async_wait(
-      [&](boost::system::error_code error, auto signal)
-      {
-         LOG(" INTERRUPTED (signal {})", signal);
-         logw("interrupt");
-         server.reset();
-      });
+   signals.async_wait([&](boost::system::error_code error, auto signal)
+   {
+      LOG(" INTERRUPTED (signal {})", signal);
+      logw("interrupt");
+      server.reset();
+   });
 
    server->setRequestHandlerCoro(
       [](server::Request request, server::Response response) -> awaitable<void>
-      {
-         std::string path = request.url().path();
-         if (path == "/echo")
-            return echo(std::move(request), std::move(response));
-         else if (path == "/dump")
-            return dump(std::move(request), std::move(response));
-         else if (path == "/dump space")
-            return dump(std::move(request), std::move(response));
-         else if (path == "/eat_request")
-            return eat_request(std::move(request), std::move(response));
-         else if (path == "/" || path == "/h2spec")
-            return h2spec(std::move(request), std::move(response));
-         else
-            return not_found(std::move(response));
-      });
+   {
+      std::string path = request.url().path();
+      if (path == "/echo")
+         co_await echo(std::move(request), std::move(response));
+      else if (path == "/dump")
+         co_await dump(std::move(request), std::move(response));
+      else if (path == "/dump space")
+         co_await dump(std::move(request), std::move(response));
+      else if (path == "/discard")
+         co_return;
+      else if (path == "/eat_request")
+         co_await eat_request(std::move(request), std::move(response));
+      else if (path == "/" || path == "/h2spec")
+         co_await h2spec(std::move(request), std::move(response));
+      else
+         co_await not_found(std::move(response));
+   });
 
    auto threads = rv::iota(0) | rv::take(config->threads > 0 ? config->threads - 1 : 0) |
                   rv::transform([&](size_t) { return std::thread([&] { context.run(); }); }) |
