@@ -9,6 +9,7 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 add_library(anyhttp)
 file(GLOB anyhttp_sources CONFIGURE_DEPENDS *.cpp)
 list(FILTER anyhttp_sources EXCLUDE REGEX "_main\.cpp$")
+list(FILTER anyhttp_sources EXCLUDE REGEX "_issue_[0-9]+\.cpp$")
 target_sources(anyhttp PRIVATE ${anyhttp_sources})
 target_include_directories(anyhttp PUBLIC ../include)
 
@@ -35,6 +36,12 @@ target_link_libraries(server PRIVATE Boost::program_options)
 add_executable(client)
 target_sources(client PRIVATE "client_main.cpp")
 target_link_libraries(client PRIVATE anyhttp)
+
+#
+# beast_issue_3032
+#
+add_executable(beast_issue_3032)
+target_sources(beast_issue_3032 PRIVATE "beast_issue_3032.cpp")
 
 #
 # ngtcp-test
