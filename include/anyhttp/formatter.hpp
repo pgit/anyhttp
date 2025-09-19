@@ -2,6 +2,7 @@
 
 #include <nghttp2/nghttp2.h>
 
+#include <boost/asio/cancellation_type.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
 #include <boost/beast/http/field.hpp>
@@ -13,6 +14,7 @@
 #include <thread>
 
 #include <ranges>
+#include <format>
 
 namespace rv = std::ranges::views;
 
@@ -74,6 +76,44 @@ struct std::formatter<boost::beast::http::field>
    auto format(const boost::beast::http::field& field, FormatContext& ctx) const
    {
       return std::format_to(ctx.out(), "{}", to_string(field));
+   }
+};
+
+// =================================================================================================
+
+template <>
+struct std::formatter<boost::asio::cancellation_type> : std::formatter<std::string_view>
+{
+   auto format(boost::asio::cancellation_type type, auto& ctx) const
+   {
+      using ct = boost::asio::cancellation_type;
+      using enum ct;
+
+      if (type == none)
+         return std::formatter<std::string_view>::format("none", ctx);
+
+      if (type == all)
+         return std::formatter<std::string_view>::format("all", ctx);
+
+      bool first = true;
+      auto append_if = [&](boost::asio::cancellation_type flag, std::string_view name)
+      {
+         if ((type & flag) == flag)
+         {
+            std::format_to(ctx.out(), "{}{}", first ? "" : "|", name);
+            first = false;
+            type = type & ~flag;
+         }
+      };
+
+      append_if(terminal, "terminal");
+      append_if(partial, "partial");
+      append_if(total, "total");
+
+      if (type != none)
+         std::format_to(ctx.out(), "{}0x{:x}", first ? "" : "|", to_underlying(type));
+
+      return ctx.out();
    }
 };
 
