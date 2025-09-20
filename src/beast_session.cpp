@@ -717,7 +717,8 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
    //
    // TODO: make writer shared? put into queue
    //
-   async_write_header(m_stream, writer->serializer,
+   auto& serializer = writer->serializer;
+   async_write_header(m_stream, serializer,
                       [handler = std::move(handler), writer = std::move(writer), this](
                          boost::system::error_code ec, size_t n) mutable { //
                          std::move(handler)(std::move(ec),
