@@ -2,7 +2,7 @@
 # The dependencies of this project have been moved into another Dockerfile that can be built
 # separately. This image can be pushed to the HUB, speeding up codespace creation considerably.
 #
-FROM docker.io/psedoc/anyhttp:0.17
+FROM docker.io/psedoc/anyhttp:0.18
 
 #
 # enable persistent bash history in container

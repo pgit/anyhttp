@@ -5,6 +5,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS On)
 set(CMAKE_CXX_STANDARD 23)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
+    # https://www.boost.org/doc/libs/1_88_0/doc/html/boost_asio/overview/core/buffers.html#boost_asio.overview.core.buffers.buffer_debugging
     # add_compile_definitions(BOOST_ASIO_ENABLE_BUFFER_DEBUGGING)
 
     # ASIO handler tracking output (very noisy)
@@ -24,6 +25,9 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
 endif()
 add_compile_options(-stdlib=libc++)
 add_link_options(-stdlib=libc++ -lstdc++fs)
+
+# use std::filesystem instead of boost::filesystem
+add_compile_definitions(BOOST_PROCESS_USE_STD_FS)
 
 # needed for ranges/v3 starting with clang 19
 add_compile_options(-Wno-deprecated-declarations)
@@ -57,7 +61,8 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2)
 
 #
-# range-v3
+# range-v3 -- FIXME: needed only for views:chunked(),
+#                    as the libc++ version doesn't seem to be available, yet
 #
 include_directories(/usr/local/include/range-v3)
 
