@@ -3,6 +3,7 @@
 #include "common.hpp" // IWYU pragma: keep
 
 #include <boost/asio/buffer.hpp>
+#include <boost/beast/core/stream_traits.hpp>
 #include <boost/url.hpp>
 
 namespace anyhttp
@@ -34,6 +35,9 @@ public:
 
    constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
 
+   using executor_type = asio::any_io_executor;
+   executor_type get_executor() const noexcept;
+
 public:
    int status_code() const noexcept;
 
@@ -54,6 +58,9 @@ private:
    std::unique_ptr<Impl> impl;
 };
 
+// FIXME: async_read_some needs to support BufferSequence for this... need AnyBufferSequence?
+// static_assert(boost::beast::is_async_read_stream<Response>::value);
+
 // -------------------------------------------------------------------------------------------------
 
 class Request
@@ -68,13 +75,12 @@ public:
 
    constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
 
-   asio::any_io_executor get_executor() const noexcept;
+   using executor_type = asio::any_io_executor;
+   executor_type get_executor() const noexcept;
 
 public:
    using GetResponse = void(boost::system::error_code, Response);
    using GetResponseHandler = asio::any_completion_handler<GetResponse>;
-
-   using executor_type = asio::any_io_executor;
 
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken = DefaultCompletionToken>
    auto async_get_response(CompletionToken&& token = CompletionToken())
@@ -121,7 +127,8 @@ public:
    Client(asio::any_io_executor executor, Config config);
    ~Client();
 
-   asio::any_io_executor get_executor() const noexcept;
+   using executor_type = asio::any_io_executor;
+   executor_type get_executor() const noexcept;
 
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken = DefaultCompletionToken>
    auto async_connect(CompletionToken&& token = CompletionToken())
@@ -134,7 +141,6 @@ public:
 
 private:
    void async_connect_any(ConnectHandler&& handler);
-
    std::unique_ptr<Impl> impl;
 };
 

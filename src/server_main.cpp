@@ -16,6 +16,7 @@
 #include <expected>
 #include <iostream>
 #include <ranges>
+#include <print>
 
 namespace rv = std::ranges::views;
 
@@ -92,7 +93,7 @@ int main(int argc, char* argv[])
    signal_set signals(context, SIGINT, SIGTERM);
    signals.async_wait([&](boost::system::error_code error, auto signal)
    {
-      LOG(" INTERRUPTED (signal {})", signal);
+      std::println(" INTERRUPTED (signal {})", signal);
       logw("interrupt");
       server.reset();
    });

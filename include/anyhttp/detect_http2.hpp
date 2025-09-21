@@ -79,7 +79,7 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
 
    using namespace boost::asio;
    return async_initiate<CompletionToken, void(boost::system::error_code, size_t)>(
-      experimental::co_composed<void(boost::system::error_code, bool)>(
+      co_composed<void(boost::system::error_code, bool)>(
          [](auto state, DynamicBuffer& buffer, AsyncReadStream& stream) -> void
          {
             //
@@ -128,7 +128,7 @@ auto async_detect_ssl_awaitable(AsyncReadStream& stream, DynamicBuffer& buffer,
 
    using namespace boost::asio;
    return async_initiate<CompletionToken, void(boost::system::error_code, size_t)>(
-      experimental::co_composed<void(boost::system::error_code, bool)>(
+      co_composed<void(boost::system::error_code, bool)>(
          [](auto state, AsyncReadStream& stream, DynamicBuffer& buffer) -> void
          {
             state.reset_cancellation_state(enable_terminal_cancellation());

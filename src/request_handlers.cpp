@@ -162,7 +162,25 @@ awaitable<void> send(client::Request& request, size_t bytes)
    return sendAndForceEOF(request, rv::iota(0) | rv::take(bytes));
 }
 
-awaitable<size_t> receive(client::Response& response)
+awaitable<std::string> read(client::Response& response)
+{
+   std::string body;
+   std::array<char, 1024> buffer;
+   for (;;)
+   {
+      size_t n = co_await response.async_read_some(asio::buffer(buffer));
+      if (n == 0)
+         break;
+
+      body += std::string_view(buffer.data(), n);
+      logd("read: {}, total {}", n, body.size());
+   }
+
+   logi("read: EOF after reading {} bytes", body.size());
+   co_return body;
+}
+
+awaitable<size_t> count(client::Response& response)
 {
    size_t bytes = 0;
    std::array<uint8_t, 1024> buffer;
@@ -173,10 +191,10 @@ awaitable<size_t> receive(client::Response& response)
          break;
 
       bytes += n;
-      logd("receive: {}, total {}", n, bytes);
+      logd("count: {}, total {}", n, bytes);
    }
 
-   logi("receive: EOF after reading {} bytes", bytes);
+   logi("count: EOF after reading {} bytes", bytes);
    co_return bytes;
 }
 
@@ -237,7 +255,7 @@ awaitable<size_t> try_receive(client::Response& response, error_code& ec)
 awaitable<size_t> read_response(client::Request& request)
 {
    auto response = co_await request.async_get_response();
-   co_return co_await receive(response);
+   co_return co_await count(response);
 }
 
 awaitable<expected<size_t>> try_read_response(client::Request& request)
@@ -245,7 +263,7 @@ awaitable<expected<size_t>> try_read_response(client::Request& request)
    try
    {
       auto response = co_await request.async_get_response();
-      co_return co_await receive(response);
+      co_return co_await count(response);
    }
    catch (const boost::system::system_error& ex)
    {
@@ -253,7 +271,7 @@ awaitable<expected<size_t>> try_read_response(client::Request& request)
    }
 }
 
-awaitable<void> sendEOF(client::Request& request)
+awaitable<void> send_eof(client::Request& request)
 {
    logi("send: finishing request...");
    auto [ec] = co_await request.async_write({}, as_tuple(deferred));
@@ -264,15 +282,27 @@ awaitable<void> h2spec(server::Request request, server::Response response)
 {
    co_await yield(10);
    std::array<uint8_t, 1024> buffer;
-   size_t n = co_await request.async_read_some(asio::buffer(buffer), deferred);
+   size_t n = co_await request.async_read_some(asio::buffer(buffer));
+   co_await response.async_submit(200, {});
+   co_await response.async_write(asio::buffer("Hello, World!\n"sv));
+   co_await response.async_write({});
+   while (co_await request.async_read_some(asio::buffer(buffer)) > 0)
+      ;
+}
+
+awaitable<void> h2spec_delayed(server::Request request, server::Response response)
+{
+   co_await yield(10);
+   std::array<uint8_t, 1024> buffer;
+   size_t n = co_await request.async_read_some(asio::buffer(buffer));
    co_await yield(); // ok
-   co_await response.async_submit(200, {}, deferred);
+   co_await response.async_submit(200, {});
    co_await yield(); // ok
-   co_await response.async_write(asio::buffer("Hello, World!\n"sv), deferred);
+   co_await response.async_write(asio::buffer("Hello, World!\n"sv));
    co_await yield(); // ok
-   co_await response.async_write({}, deferred);
+   co_await response.async_write({});
    co_await yield(); // ok
-   while (co_await request.async_read_some(asio::buffer(buffer), deferred) > 0)
+   while (co_await request.async_read_some(asio::buffer(buffer)) > 0)
       ;
 }
 

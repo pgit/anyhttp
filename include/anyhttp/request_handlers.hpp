@@ -74,12 +74,13 @@ awaitable<void> discard(server::Request request, server::Response response);
 // =================================================================================================
 
 awaitable<void> send(client::Request& request, size_t bytes);
-awaitable<size_t> receive(client::Response& response);
+awaitable<std::string> read(client::Response& response);
+awaitable<size_t> count(client::Response& response);
 awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response);
 awaitable<size_t> try_receive(client::Response& response, boost::system::error_code& ec);
 awaitable<size_t> read_response(client::Request& request);
 awaitable<expected<size_t>> try_read_response(client::Request& request);
-awaitable<void> sendEOF(client::Request& request);
+awaitable<void> send_eof(client::Request& request);
 
 // =================================================================================================
 
@@ -195,7 +196,7 @@ awaitable<void> sendAndForceEOF(client::Request& request, Range range)
       co_await asio::this_coro::reset_cancellation_state();
    }
 #endif
-   co_await sendEOF(request);
+   co_await send_eof(request);
 }
 
 // -------------------------------------------------------------------------------------------------

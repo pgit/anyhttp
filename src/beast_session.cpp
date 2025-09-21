@@ -70,7 +70,15 @@ public:
    void destroy(std::unique_ptr<typename Parent::ReaderOrWriter> self) noexcept override
    {
       if (!parser.is_done())
-         logw("destroy: reader destroyed, but parser not done yet!");
+      {
+         logw("destroy: reader destroyed, but parser not done yet... closing socket");
+         //
+         // We could still try to send an error response here.
+         // This breaks WHEN_server_discards_request_THEN_is_still_able_to_deliver_response.
+         //
+         // error_code ec;
+         // get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send, ec);
+      }
       if (reading)
          this->deleting = std::move(self);
    }
@@ -234,8 +242,9 @@ public:
       {
          // async op result 'n' is the number of bytes written to the stream,
          // not the number of bytes read from the buffer
-         mlogd("async_write: n={} (\x1b[1;31m{}\x1b[0m) done={} (body {})", n, ec.message(),
-               serializer.is_done(), serializer.get().body().size);
+         mlogd("async_write: n={} (\x1b[1;{}m{}\x1b[0m) done={} (body {})", n,
+               ec == beast::http::error::need_buffer ? 33 : 31, // need_buffer in yellow only
+               ec.message(), serializer.is_done(), serializer.get().body().size);
 
          writing = false;
          if (deleting)
@@ -706,11 +715,13 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
    auto writer = std::make_unique<RequestWriter<Stream>>(*this, m_stream);
    auto& request = writer->message;
 
-   request.base().target(url.path());
+   request.base().target(url.encoded_target());
    request.method(http::verb::post);
    request.set(http::field::user_agent, "anyhttp");
    for (auto&& header : headers)
       request.set(header.name_string(), header.value());
+   if (request.find(http::field::host) == request.end())
+      request.set(http::field::host, url.encoded_authority());
    if (!request.has_content_length())
       request.chunked(true);
 

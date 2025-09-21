@@ -12,6 +12,8 @@
 #include <boost/asio/signal_set.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
+#include <print>
+
 using namespace anyhttp;
 using namespace anyhttp::client;
 using namespace boost::asio;
@@ -92,7 +94,7 @@ int main(int argc, char* argv[])
 {
    if (argc < 2)
    {
-      LOG("Usage: {} URL", argv[0]);
+      std::println("Usage: {} URL", argv[0]);
       return 1;
    }
 

@@ -17,6 +17,8 @@
 #include <boost/asio/this_coro.hpp>
 #include <boost/beast/http/error.hpp>
 
+#include <boost/system/detail/errc.hpp>
+#include <boost/system/errc.hpp>
 #include <nghttp2/nghttp2.h>
 
 #include <ranges>

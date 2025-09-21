@@ -73,6 +73,8 @@ Response::~Response() { reset(); }
 
 // -------------------------------------------------------------------------------------------------
 
+asio::any_io_executor Response::get_executor() const noexcept { return impl->get_executor(); }
+
 void Response::content_length(std::optional<size_t> content_length)
 {
    assert(impl);

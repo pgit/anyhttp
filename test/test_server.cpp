@@ -1,4 +1,5 @@
 #include "anyhttp/client.hpp"
+#include "anyhttp/formatter.hpp"
 #include "anyhttp/request_handlers.hpp"
 #include "anyhttp/server.hpp"
 #include "anyhttp/session.hpp"
@@ -23,6 +24,9 @@
 
 #include <boost/filesystem/path.hpp>
 
+#include <boost/lexical_cast.hpp>
+#include <boost/lexical_cast/bad_lexical_cast.hpp>
+
 #include <boost/process/v2/environment.hpp>
 #include <boost/process/v2/process.hpp>
 #include <boost/process/v2/stdio.hpp>
@@ -33,15 +37,19 @@
 
 #include <boost/url/url.hpp>
 
+#include <nghttp2/nghttp2ver.h>
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <nghttp2/nghttp2ver.h>
+#include <chrono>
+#include <cstddef>
 
 #include <future>
 #include <random>
 #include <ranges>
 #include <regex>
+#include <print>
 
 using namespace std::string_view_literals;
 using namespace std::chrono_literals;
@@ -72,14 +80,14 @@ class Empty : public testing::Test
 TEST_F(Empty, Hello)
 {
    boost::process::filesystem::path path{"."};
-   LOG("Hello, World!");
-   LOG("Path: {}", path.string());
+   std::println("Hello, World!");
+   std::println("Path: {}", path.string());
 }
 
 TEST_F(Empty, Path)
 {
    bp::filesystem::path path("/usr/bin/echo");
-   LOG("spawn: {}", path.string());
+   std::println("spawn: {}", path.string());
 }
 
 // =================================================================================================
@@ -149,7 +157,23 @@ protected:
       server->setRequestHandlerCoro(
          [this](server::Request request, server::Response response) -> awaitable<void>
       {
-         logd("{}", request.url().path());
+         logd("{} ({})", request.url().path(), request.url().buffer());
+         
+         auto params = request.url().params();
+         if (auto it = params.find("delay"); it != params.end())
+         {
+            try
+            {
+               using ms = std::chrono::milliseconds;
+               auto delay_ms = boost::lexical_cast<ms::rep>((*it).value);
+               co_await sleep(ms{delay_ms});
+            }
+            catch (boost::bad_lexical_cast&)
+            {
+               loge("invalid number: {}", (*it).value);
+            }
+         }
+
          if (request.url().path() == "/echo")
             co_await echo(std::move(request), std::move(response));
          else if (request.url().path() == "/echo_delayed")
@@ -238,7 +262,7 @@ protected:
 
          // print trailing '…' if there is more data in the buffer after this line
          const auto continuation = (line.size() + 1 == buffer.size()) ? "" : "…";
-         LOG("{}: \x1b[32m{}\x1b[0m{}", prefix, line, continuation);
+         std::println("{}: \x1b[32m{}\x1b[0m{}", prefix, line, continuation);
       };
 
       auto cs = co_await this_coro::cancellation_state;
@@ -253,8 +277,9 @@ protected:
       }
       catch (const boost::system::system_error& ec)
       {
+         std::println("{}: {}", prefix, ec.code().message());
          if (cs.cancelled() != cancellation_type::none)
-            LOG("CANCELLED");
+            std::println("{}: CANCELLED ({})", prefix, cs.cancelled());
 
          for (auto line : split_lines(buffer))
             print(line);
@@ -262,7 +287,6 @@ protected:
          if (ec.code() == error::eof)
             co_return;
 
-         LOG("{}: {}", prefix, ec.code().message());
          throw;
       }
    }
@@ -283,7 +307,7 @@ protected:
 
          if (ec)
          {
-            LOG("consume: {}", ec.message());
+            std::println("consume: {}", ec.message());
             break;
          }
       }
@@ -640,7 +664,7 @@ TEST_P(ClientAsync, WHEN_post_to_unknown_path_THEN_error_404)
       co_await send(request, 1024 * 1024);
       auto response = co_await request.async_get_response();
       EXPECT_EQ(response.status_code(), 404);
-      auto received = co_await receive(response);
+      auto received = co_await count(response);
    };
 }
 
@@ -686,7 +710,7 @@ TEST_P(ClientAsync, WHEN_invalid_port_in_host_header_THEN_reports_error)
       Fields fields;
       fields.set("Host", "host:12345x");
       auto request = co_await session.async_submit(url.set_path("echo"), fields);
-      auto response = co_await (sendEOF(request) && read_response(request));
+      auto response = co_await (send_eof(request) && read_response(request));
    };
 }
 
@@ -700,22 +724,36 @@ TEST_P(ClientAsync, WHEN_get_response_is_called_twice_THEN_reports_error)
    };
 }
 
-TEST_P(ClientAsync, WHEN_server_discards_request_THEN_is_still_able_to_deliver_response)
+TEST_P(ClientAsync, WHEN_server_discards_request_while_writing_THEN_connection_is_reset)
 {
    custom = [this](server::Request request, server::Response response) -> awaitable<void>
    {
       co_await sleep(150ms);
       request.reset();
-      co_await response.async_submit(200, {});
-      co_await response.async_write({});
    };
    test = [this](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url);
+      auto request = co_await session.async_submit(url.set_path("custom"));
       auto executor = co_await this_coro::executor;
-      // auto [ec] = co_await co_spawn(executor, send(request, rv::iota(uint8_t(0))), as_tuple);
-      EXPECT_THROW(co_await send(request, rv::iota(uint8_t(0))), boost::system::system_error);
-      auto response = co_await request.async_get_response();
+      auto [ec] = co_await co_spawn(executor, send(request, rv::iota(uint8_t(0))), as_tuple);
+      EXPECT_EQ(code(ec), boost::system::errc::connection_reset);
+   };
+}
+
+TEST_P(ClientAsync, WHEN_server_discards_request_and_response_THEN_completes_anyway)
+{
+   custom = [this](server::Request request, server::Response response) -> awaitable<void>
+   {
+      std::ignore = request;
+      std::ignore = response;
+      co_return;
+   };
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("custom"));
+      auto [ec, _] = co_await request.async_get_response(as_tuple);
+      EXPECT_EQ(ec, boost::beast::http::error::end_of_stream);
+      // EXPECT_EQ(ec, std::errc::connection_reset);
    };
 }
 
@@ -749,7 +787,7 @@ TEST_P(ClientAsync, YieldFuzz)
       std::uniform_int_distribution<> dist(0, 10);
       for (size_t i = 0; i < 100; ++i)
       {
-         LOG("=== {} =========================================================================", i);
+         std::println("=== {} =========================================================================", i);
          co_await yield(dist(gen));
          Fields fields;
          if (GetParam() == anyhttp::Protocol::http11)
@@ -761,6 +799,25 @@ TEST_P(ClientAsync, YieldFuzz)
          co_await yield(dist(gen));
          co_await read_response(request);
       }
+   };
+}
+
+TEST_P(ClientAsync, HelloWorld)
+{
+   static const auto hello = "Hello, World!"sv;
+   custom = [this](server::Request request, server::Response response) -> awaitable<void>
+   {
+      co_await response.async_submit(200, {});
+      co_await response.async_write_eof(asio::buffer(hello));
+      // co_await response.async_write({});
+   };
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url);
+      co_await request.async_write({});
+      auto response = co_await request.async_get_response();
+      auto body = co_await read(response);
+      EXPECT_EQ(body, hello);
    };
 }
 
@@ -825,12 +882,14 @@ TEST_P(ClientAsync, IgnoreRequest)
 TEST_P(ClientAsync, IgnoreRequestAndResponse)
 {
    custom = [this](server::Request request, server::Response response) -> awaitable<void>
-   { co_return; };
+   {
+      co_return; //
+   };
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("custom"), {});
       auto res = co_await (send(request, 0) && try_read_response(request));
-      LOG("{}", res.error().message());
+      std::println("{}", res.error().message());
    };
 }
 
@@ -847,7 +906,7 @@ TEST_P(ClientAsync, PostRange)
       // auto sender = send(request, std::string_view("blah"));
       // auto sender = send(request, std::string(10ul * 1024 * 1024, 'a'));
       auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1 * 1024 * 1024));
-      auto received = co_await (std::move(sender) && receive(response));
+      auto received = co_await (std::move(sender) && count(response));
       loge("received: {}", received);
       EXPECT_GT(received, 0);
    };
@@ -875,7 +934,7 @@ TEST_P(ClientAsync, WHEN_request_is_sent_THEN_response_is_received_before_body_i
       auto response = co_await request.async_get_response();
       constexpr size_t bytes = 1024;
       co_await send(request, bytes);
-      EXPECT_EQ(co_await receive(response), bytes);
+      EXPECT_EQ(co_await count(response), bytes);
    };
 }
 
@@ -901,10 +960,10 @@ TEST_P(ClientAsync, WHEN_multiple_request_are_made_THEN_responses_are_received_i
       co_await request2.async_write({});
 
       auto response1 = co_await request1.async_get_response();
-      EXPECT_EQ(co_await receive(response1), 17);
+      EXPECT_EQ(co_await count(response1), 17);
 
       auto response2 = co_await request2.async_get_response();
-      EXPECT_EQ(co_await receive(response2), 21);
+      EXPECT_EQ(co_await count(response2), 21);
    };
 }
 
@@ -917,7 +976,7 @@ TEST_P(ClientAsync, EatRequest)
       auto request = co_await session.async_submit(url.set_path("eat_request"), {});
       co_await send(request, 1024);
       auto response = co_await request.async_get_response();
-      auto received = co_await receive(response);
+      auto received = co_await count(response);
       EXPECT_EQ(received, 0);
    };
 }
@@ -936,15 +995,15 @@ TEST_P(ClientAsync, Backpressure)
       // FIXME: or even use asio::async_write() on top of a async_write_some() implementation
 
       // Now that the flow control window is 0, we can't even send an EOF any more:
-      // co_await sendEOF(request);
+      // co_await send_eof(request);
 
       // So instead, we start doing this in background, to be resumed as soon as the window reopens.
-      co_spawn(co_await this_coro::executor, sendEOF(request), detached); // FIXME: join
+      co_spawn(co_await this_coro::executor, send_eof(request), detached); // FIXME: join
 
-      LOG("receiving....");
+      std::println("receiving....");
       boost::system::error_code ec;
       auto received = co_await try_receive(response, ec);
-      LOG("receiving... done, got {} bytes ({})", received, ec.message());
+      std::println("receiving... done, got {} bytes ({})", received, ec.message());
       EXPECT_GT(received, 0);
       // FIXME: we should be able to receive the remainders that already have been buffered
       // FIXME: in the end, this must be the same as the the bytes sent above
@@ -983,7 +1042,7 @@ TEST_P(ClientAsync, CancellationContentLength)
 
          boost::system::error_code ec;
          auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
-         LOG("received {} bytes (\x1b[1;31m{}\x1b[0m, yielded {})", std::get<1>(received),
+         std::println("received {} bytes (\x1b[1;31m{}\x1b[0m, yielded {})", std::get<1>(received),
              ec.message(), i);
          EXPECT_LT(std::get<1>(received), length);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
@@ -1023,7 +1082,7 @@ TEST_P(ClientAsync, Cancellation)
 
          boost::system::error_code ec;
          auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
-         LOG("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
+         std::println("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
          EXPECT_LT(std::get<1>(received), length);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
 
@@ -1062,7 +1121,7 @@ TEST_P(ClientAsync, CancellationRange)
 
          boost::system::error_code ec;
          auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
-         LOG("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
+         std::println("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
          co_await client->async_connect();
       }
@@ -1093,7 +1152,8 @@ TEST_P(ClientAsync, CancelAfter)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url.set_path("echo_delayed"), {});
+      auto request =
+         co_await session.async_submit(url.set_path("echo").set_params({{"delay", "1000"}}), {});
       auto [ec, response] = co_await request.async_get_response(cancel_after(250ms, as_tuple));
       EXPECT_EQ(ec, boost::system::errc::operation_canceled);
 
@@ -1105,7 +1165,7 @@ TEST_P(ClientAsync, CancelAfter)
 
       co_await request.async_write(asio::buffer("Hello, Client!"sv));
       co_await request.async_write({});
-      auto received = co_await receive(response);
+      auto received = co_await count(response);
    };
 }
 
@@ -1120,7 +1180,7 @@ TEST_P(ClientAsync, SendMoreThanContentLength)
       fields.set("content-length", "1024");
       auto request = co_await session.async_submit(url.set_path("eat_request"), fields);
       auto response = co_await request.async_get_response();
-      co_await receive(response);
+      co_await count(response);
       co_await send(request, rv::iota(uint8_t(0)) | rv::take(10 * 1024 + 1));
    };
 }
@@ -1148,19 +1208,19 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
       auto future = co_spawn(request.get_executor(), send(request, rv::iota(uint8_t(0))),
                              use_future(as_tuple));
 
-      LOG("=============================================================================");
+      std::println("=============================================================================");
       for (size_t i = 0; i < 10; ++i)
       {
-         LOG("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", i);
+         std::println("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", i);
          co_await yield();
       }
 
-      LOG("=============================================================================");
+      std::println("=============================================================================");
       server.reset();
 
       for (size_t i = 0; i < 10; ++i)
       {
-         LOG("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", i);
+         std::println("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", i);
          co_await yield();
       }
 
@@ -1184,13 +1244,13 @@ TEST_P(ClientAsync, SpawnAndForget)
       auto response = co_await request.async_get_response();
       co_await yield();
 
-      LOG("- - spawning - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ");
+      std::println("- - spawning - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ");
       co_spawn(context,
                [request = std::move(request)]() mutable -> awaitable<void>
       { //
-         LOG("- - SPAWNED - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+         std::println("- - SPAWNED - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
          co_await yield(5);
-         LOG("- - SPAWNED, sending  - - - - - - - - - - - - - - - - - - - - - - - - -");
+         std::println("- - SPAWNED, sending  - - - - - - - - - - - - - - - - - - - - - - - - -");
          co_await send(request, rv::iota(uint8_t(0)));
       }, detached);
    };

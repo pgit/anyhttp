@@ -58,7 +58,7 @@ public:
       {
          Session* self;
          using executor_type = boost::asio::any_io_executor;
-         executor_type get_executor() const noexcept {return self->get_executor();}
+         executor_type get_executor() const noexcept { return self->get_executor(); }
 
          auto operator()(SubmitHandler handler, boost::urls::url url, const Fields& headers) const
          {

@@ -73,41 +73,33 @@ void Client::Impl::async_connect(ConnectHandler handler)
              se = make_scope_exit([]
    { loge("******** closure deleted************"); })]() mutable -> awaitable<void>
    {
-      auto se2 = make_scope_exit([] { loge("******** closure completed************"); });
-      // const auto ex = m_executor;
+      auto se2 = make_scope_exit([] { loge("******** closure deleted************"); });
+      const auto ex = m_executor;
       // auto ex = state.get_io_executor();  // FAILS to register work properly
       // auto token = bind_executor(ex, as_tuple(deferred));  // not needed
-      // constexpr auto token = as_tuple(deferred);
+      constexpr auto token = as_tuple(deferred);
 
-      //
-      // Extract host and port from URL.
-      //
       std::string host = config().url.host_address();
       std::string port = config().url.port();
 
-      std::vector<ip::tcp::endpoint> endpoints;
       logd("Client: resolving {}:{} ...", host, port);
+      auto flags = ip::tcp::resolver::numeric_service;
+      auto [ec, endpoints] = co_await m_resolver->async_resolve(host, port, flags, token);
+      if (ec)
       {
-         auto flags = ip::tcp::resolver::numeric_service;
-         auto [ec, eps] = co_await m_resolver->async_resolve(host, port, flags, as_tuple);
-         if (ec)
-         {
-            loge("Client: resolving {}:{}: {}", host, port, ec.message());
-            std::move(handler)(ec, Session(nullptr));
-         }
-
-         for (auto&& elem : eps)
-         {
-            logd("Client: {}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
-            endpoints.push_back(std::move(elem));
-         }
+         loge("Client: resolving {}:{}:", host, port, ec.message());
+         std::move(handler)(ec, Session(nullptr));
       }
 
-      //
-      // Connect
-      //
-      ip::tcp::socket socket(m_executor);
-      auto [ec, endpoint] = co_await asio::async_connect(socket, endpoints, as_tuple);
+      for (auto&& elem : endpoints)
+         logd("Client: {}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
+
+      // ip::tcp::socket socket(make_strand(ex));
+      // asio::deferred_t::as_default_on_t<ip::tcp::socket> socket(executor);
+      ip::tcp::socket socket(ex);
+      ip::tcp::endpoint endpoint;
+      std::tie(ec, endpoint) = co_await asio::async_connect(socket, endpoints, token);
+
       if (ec)
       {
          loge("Client: {}", ec.message());
@@ -149,11 +141,11 @@ void Client::Impl::async_connect(ConnectHandler handler)
       {
       case Protocol::http11:
          impl = std::make_shared<beast_impl::ClientSession<boost::beast::tcp_stream>>(
-            *this, m_executor, boost::beast::tcp_stream(std::move(socket)));
+            *this, ex, boost::beast::tcp_stream(std::move(socket)));
          break;
 
       case Protocol::h2:
-         impl = std::make_shared<nghttp2::ClientSession<asio::ip::tcp::socket>>(*this, m_executor,
+         impl = std::make_shared<nghttp2::ClientSession<asio::ip::tcp::socket>>(*this, ex,
                                                                                 std::move(socket));
          break;
 
@@ -172,7 +164,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
       //        of the user-facing "Session" object. So we should use only the "impl" internally.
       //
 #if 1
-      co_spawn(m_executor, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable
+      co_spawn(ex, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable
       {
          if (ex)
             logw("client run: {}", what(ex));
@@ -195,7 +187,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
       // std::move(handler)(boost::system::error_code{}, Session{std::move(impl)});
       std::move(handler)(boost::system::error_code{}, Session{std::move(impl)});
    },
-            [](const std::exception_ptr& ep) { loge("client async_connect: {}", what(ep)); });
+            detached);
 }
 
 // =================================================================================================

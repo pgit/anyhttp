@@ -3,7 +3,12 @@
 #include "common.hpp" // IWYU pragma: keep
 
 #include <boost/asio/awaitable.hpp>
+#include <boost/asio/co_composed.hpp>
+#include <boost/asio/co_spawn.hpp>
+
 #include <boost/url/urls.hpp>
+
+using namespace std::chrono_literals;
 
 namespace anyhttp::server
 {
@@ -28,9 +33,9 @@ public:
    Request& operator=(Request&& other) noexcept;
    void reset() noexcept;
    ~Request();
-   
+
    constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
-   
+
    boost::url_view url() const;
    std::optional<size_t> content_length() const noexcept;
 
@@ -53,6 +58,15 @@ private:
 
 // -------------------------------------------------------------------------------------------------
 
+template <typename T>
+awaitable<void> sleep(T duration)
+{
+   using namespace asio;
+   steady_timer timer(co_await this_coro::executor);
+   timer.expires_after(duration);
+   co_await timer.async_wait();
+}
+
 class Response
 {
 public:
@@ -64,6 +78,9 @@ public:
    ~Response();
 
    constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
+
+   using executor_type = asio::any_io_executor;
+   executor_type get_executor() const noexcept;
 
    void content_length(std::optional<size_t> content_length);
 
@@ -87,6 +104,25 @@ public:
             async_write_any(std::move(handler), buffer);
          },
          token, buffer);
+   }
+
+   // https://github.com/chriskohlhoff/asio/blob/231cb29bab30f82712fcd54faaea42424cc6e710/asio/src/tests/unit/co_composed.cpp#L45
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
+   auto async_write_eof(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
+   {
+      return asio::async_initiate<CompletionToken, Write>(
+         asio::co_composed<Write>(
+            [this](auto state, asio::const_buffer buffer,
+                   asio::any_io_executor executor) mutable -> void { //
+               co_await asio::co_spawn(executor, sleep(100ms), asio::deferred);
+               co_await async_write(buffer);
+               // co_await sleep(100ms);
+               co_await async_write({});
+               // co_await sleep(100ms);
+               co_return {boost::system::error_code{}};
+            },
+            get_executor()),
+         token, buffer, get_executor());
    }
 
 private:

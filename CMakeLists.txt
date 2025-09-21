@@ -29,11 +29,11 @@ add_link_options(-stdlib=libc++ -lstdc++fs)
 # use std::filesystem instead of boost::filesystem
 add_compile_definitions(BOOST_PROCESS_USE_STD_FS)
 
+# we don't use fmtlib any more
+add_compile_definitions(SPDLOG_USE_STD_FORMAT)
+
 # needed for ranges/v3 starting with clang 19
 add_compile_options(-Wno-deprecated-declarations)
-
-# we don't use fmtlib any more
-add_compile_options(-DSPDLOG_USE_STD_FORMAT)
 
 # FIXME: nghttp2 reader/writer needs this ATM
 add_compile_options(-Wno-inconsistent-missing-override)

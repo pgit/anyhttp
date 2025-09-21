@@ -16,6 +16,7 @@
 #include <boost/beast/core/static_buffer.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/http/error.hpp>
+#include <boost/beast/http/impl/error.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
 #include <boost/url/format.hpp>
@@ -390,21 +391,25 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    //
    // Submit request, full headers and producer callback for the body.
    //
+   // TODO: CONNECT
+   //       https://datatracker.ietf.org/doc/html/rfc7540#section-8.3
+   //
    std::string method("POST");
    std::string scheme(url.scheme());
-   std::string path(url.path());
+   std::string target(url.encoded_target());
    std::string authority(url.host_address());
    auto nva = std::vector<nghttp2_nv>();
    // nva.reserve(4 + headers.size());
    nva.push_back(make_nv_ls(":method", method));
    nva.push_back(make_nv_ls(":scheme", scheme));
-   nva.push_back(make_nv_ls(":path", path));
+   nva.push_back(make_nv_ls(":path", target));
    nva.push_back(make_nv_ls(":authority", authority));
 
    for (auto&& item : headers)
    {
       if (item.name_string().starts_with(':'))
-         logw("[{}] async_submit: invalid header '{}'", stream->logPrefix, item.name_string());
+         logw("[{}] async_submit: invalid header '{}': setting pseudo headers is not allowed",
+              stream->logPrefix, item.name_string());
 
       logi("[{}] async_submit: {}: {}", stream->logPrefix, item.name_string(), item.value());
       nva.push_back(make_nv_ls(item.name_string(), item.value()));
@@ -512,12 +517,12 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    stream->closed = true;
 
    //
-   // Cancel pending send.
+   // Cancel pending write.
    //
    if (stream->write_handler)
    {
-      using namespace boost::system;
-      swap_and_invoke(stream->write_handler, asio::error::basic_errors::connection_aborted);
+      // Use the same error code as reported by the underlying TCP connection used in HTTP/1.1.
+      swap_and_invoke(stream->write_handler, asio::error::basic_errors::connection_reset);
    }
 
    //
@@ -560,11 +565,12 @@ void NGHttp2Session::close_stream(int32_t stream_id)
       logd("[{}] stream closed while reading, raising 'partial_message'", logPrefix(stream_id));
       swap_and_invoke(stream->m_read_handler, boost::beast::http::error::partial_message, 0);
    }
+
    if (stream->response_handler)
    {
-      using namespace boost::system;
-      swap_and_invoke(stream->response_handler, errc::make_error_code(errc::io_error), // FIXME:
-                      client::Response{nullptr});
+      auto ec = http::make_error_code(http::error::end_of_stream); // be compatible with beast
+      //   ec = errc::make_error_code(errc::connection_reset);
+      swap_and_invoke(stream->response_handler, ec, client::Response{nullptr});
    }
 
    //
@@ -585,7 +591,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
 
    // see NGHttp2Stream::call_read_handler() why this is needed
    if (stream)
-      post(get_executor(), [stream]() { /* deferred delete */ });
+      post(get_executor(), [stream = std::move(stream)]() { /* deferred delete */ });
 }
 
 void NGHttp2Session::start_write()
