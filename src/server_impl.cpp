@@ -415,6 +415,9 @@ awaitable<void> Server::Impl::listen_loop()
                });
    }
 
+   //
+   // FIXME: implement a better waiting mechanism using async promises or just a condition variable.
+   //
    auto lock = std::unique_lock(m_sessionMutex);
    const auto waitingFor = sessionCounter;
    logi("listen loop terminated, waiting for {} sessions...", waitingFor);

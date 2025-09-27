@@ -464,6 +464,14 @@ public:
          }
          else
             mlogw("async_read_header: {} len={}", ec.message(), len);
+
+         //
+         // If reading the headers was cancelled before receiving anything, we can allow another
+         // attempt. TODO: If we move the parser into the session, we can even relax this further.
+         //
+         if (ec == errc::operation_canceled && !reader->parser.got_some())
+            response_requested = false;
+
          std::move(handler)(ec, client::Response(std::move(reader)));
       };
 
