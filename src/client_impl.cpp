@@ -55,9 +55,9 @@ Client::Impl::Impl(asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_resolver(m_executor)
 {
 #if !defined(NDEBUG)
-   spdlog::set_level(spdlog::level::debug);
+   // spdlog::set_level(spdlog::level::debug);
 #else
-   spdlog::set_level(spdlog::level::info);
+   // spdlog::set_level(spdlog::level::info);
 #endif
    spdlog::info("Client: ctor");
 }

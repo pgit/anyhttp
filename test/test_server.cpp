@@ -50,6 +50,7 @@
 #include <random>
 #include <ranges>
 #include <regex>
+#include <spdlog/common.h>
 
 using namespace std::string_view_literals;
 using namespace std::chrono_literals;
@@ -139,10 +140,12 @@ class Server : public testing::TestWithParam<anyhttp::Protocol>
 protected:
    void SetUp() override
    {
-#if !defined(NDEBUG) && !defined(GITHUB_ACTIONS)
-      spdlog::set_level(spdlog::level::debug);
-#else
+#if defined(GITHUB_ACTIONS)
+      spdlog::set_level(spdlog::level::warn);
+#elif defined(NDEBUG)
       spdlog::set_level(spdlog::level::info);
+#else
+      spdlog::set_level(spdlog::level::debug);
 #endif
 
       auto config = server::Config{.listen_address = "127.0.0.2", .port = 0};

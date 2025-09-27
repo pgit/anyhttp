@@ -1,4 +1,3 @@
-#include "anyhttp/common.hpp"
 #include "anyhttp/utils.hpp"
 
 #include <print>
@@ -7,7 +6,9 @@
 
 size_t run(boost::asio::io_context& context)
 {
-#if defined(NDEBUG)
+#if defined(GITHUB_ACTIONS)
+   return context.run();
+#elif defined(NDEBUG) 
    return context.run();
 #else
    size_t i = 0;
