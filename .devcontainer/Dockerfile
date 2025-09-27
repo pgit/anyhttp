@@ -25,4 +25,13 @@ RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhisto
 
 RUN echo "export LESS=RS" >/etc/profile.d/less.sh
 
+#
+# Copy .bash_aliases from .devcontainer to user's home
+#
+ARG USERNAME=vscode
+COPY .bash_aliases /home/${USERNAME}/.bash_aliases
+RUN chown $USERNAME:$USERNAME /home/${USERNAME}/.bash_aliases
+
+# --------------------------------------------------------------------------------------------------
+
 SHELL ["/bin/bash", "-c"]
