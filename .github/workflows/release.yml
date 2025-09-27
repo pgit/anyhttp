@@ -18,13 +18,15 @@ jobs:
       image: docker.io/psedoc/anyhttp:0.19
     
     steps:
-    - name: Checkout code
+    - &checkout
+      name: Checkout code
       uses: actions/checkout@v4
       
     - name: Configure CMake
       run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
       
-    - name: Build
+    - &build
+      name: Build
       run: cmake --build build --parallel
       
     - name: Run tests (if available)
@@ -38,15 +40,13 @@ jobs:
       image: docker.io/psedoc/anyhttp:0.19
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - *checkout
 
       - name: Configure CMake with ASAN
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
 
-      - name: Build
-        run: cmake --build build --parallel
+      - *build
 
       - name: Run tests (if available)
         run: |
@@ -59,15 +59,13 @@ jobs:
       image: docker.io/psedoc/anyhttp:0.19
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - *checkout
 
       - name: Configure CMake with TSAN
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
 
-      - name: Build
-        run: cmake --build build --parallel
+      - *build
 
       - name: Run tests (if available)
         run: |
