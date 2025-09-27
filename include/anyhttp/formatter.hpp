@@ -13,8 +13,8 @@
 
 #include <thread>
 
-#include <ranges>
 #include <format>
+#include <ranges>
 
 namespace rv = std::ranges::views;
 

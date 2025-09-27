@@ -46,6 +46,7 @@ public:
    std::string m_logPrefix;
    asio::any_io_executor m_executor;
    stream_type m_stream;
+   bool m_closed = false;
    Buffer m_buffer;
 };
 
@@ -74,6 +75,7 @@ class ServerSession : public ServerSessionBase, public BeastSession<Stream>
    using super::logPrefix;
    using super::m_buffer;
    using super::m_stream;
+   using super::m_closed;
 
 public:
    ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);

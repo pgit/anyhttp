@@ -719,8 +719,11 @@ TEST_P(ClientAsync, WHEN_get_response_is_called_twice_THEN_reports_error)
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("echo"));
-      auto response = co_await request.async_get_response();
-      EXPECT_THROW(co_await request.async_get_response(), boost::system::system_error);
+      auto [ec, response] = co_await request.async_get_response(as_tuple);
+      // EXPECT_THROW(co_await request.async_get_response(), boost::system::system_error);
+      std::tie(ec, response) = co_await request.async_get_response(as_tuple);
+      EXPECT_EQ(ec, boost::system::errc::connection_already_in_progress);
+      EXPECT_EQ(ec, asio::error::basic_errors::already_started);
    };
 }
 
@@ -742,8 +745,8 @@ TEST_P(ClientAsync, WHEN_server_discards_request_while_writing_THEN_connection_i
 
 TEST_P(ClientAsync, WHEN_server_discards_request_and_response_THEN_completes_anyway)
 {
-   if (GetParam() == anyhttp::Protocol::http11)
-      GTEST_SKIP(); // FIXME: timeout
+   // if (GetParam() == anyhttp::Protocol::http11)
+   //    GTEST_SKIP(); // FIXME: timeout
 
    custom = [this](server::Request request, server::Response response) -> awaitable<void>
    {

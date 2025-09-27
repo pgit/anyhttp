@@ -76,8 +76,12 @@ public:
          // We could still try to send an error response here.
          // This breaks WHEN_server_discards_request_THEN_is_still_able_to_deliver_response.
          //
-         // error_code ec;
+         error_code ec;
          // get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send, ec);
+         get_socket(stream).shutdown(boost::asio::socket_base::shutdown_receive, ec);
+         session->m_closed = true;
+         if (ec)
+            logw("destroy: shutdown: {}", what(ec));
       }
       if (reading)
          this->deleting = std::move(self);
@@ -330,6 +334,7 @@ public:
    Serializer serializer{message};
    bool writing = false;
    bool cancelled = false;
+   bool response_requested = false;
    std::unique_ptr<typename Parent::ReaderOrWriter> deleting;
 };
 
@@ -391,6 +396,7 @@ class RequestWriter
 public:
    using super::logPrefix;
    using super::message;
+   using super::response_requested;
    using super::serializer;
    using super::session;
    using super::stream;
@@ -429,6 +435,15 @@ public:
 
    void async_get_response(client::Request::GetResponseHandler&& handler) override
    {
+      if (response_requested)
+      {
+         auto ec = asio::error::basic_errors::already_started;
+         loge("async_get_response: {}", what(ec));
+         std::move(handler)(ec, client::Response{nullptr});
+         return;
+      }
+      response_requested = true;
+
       auto& buffer = session->m_buffer;
       // auto& stream = session->m_stream;
 
@@ -531,7 +546,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    beast::error_code ec;
 
    size_t requestCounter = 0;
-   for (;;)
+   while (!m_closed)
    {
       auto reader =
          std::make_unique<BeastReader<server::Request::Impl, decltype(m_stream), decltype(m_buffer),
@@ -541,7 +556,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
       logd("");
       mlogd("waiting for request (size={} capacity={})", m_buffer.size(), m_buffer.capacity());
-      auto [ec, len] = co_await async_read_header(m_stream, m_buffer, parser, as_tuple(deferred));
+      auto [ec, len] = co_await async_read_header(m_stream, m_buffer, parser, as_tuple);
       if (!ec)
          mlogd("async_read_header: len={} size={} capacity={} ec={}", len, m_buffer.size(),
                m_buffer.capacity(), ec.message());
