@@ -139,7 +139,7 @@ class Server : public testing::TestWithParam<anyhttp::Protocol>
 protected:
    void SetUp() override
    {
-#if !defined(NDEBUG)
+#if !defined(NDEBUG) && !defined(CI)
       spdlog::set_level(spdlog::level::debug);
 #else
       spdlog::set_level(spdlog::level::info);

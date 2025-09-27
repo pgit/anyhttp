@@ -4,6 +4,10 @@ project(asio_anyhttp VERSION 0.0.1)
 set(CMAKE_EXPORT_COMPILE_COMMANDS On)
 set(CMAKE_CXX_STANDARD 23)
 
+if (DEFINED ENV{CI})
+    add_compile_definitions(CI)
+endif()
+
 if (CMAKE_BUILD_TYPE MATCHES Debug)
     # https://www.boost.org/doc/libs/1_88_0/doc/html/boost_asio/overview/core/buffers.html#boost_asio.overview.core.buffers.buffer_debugging
     # add_compile_definitions(BOOST_ASIO_ENABLE_BUFFER_DEBUGGING)
