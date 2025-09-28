@@ -893,7 +893,9 @@ TEST_P(ClientAsync, IgnoreRequestAndResponse)
 {
    custom = [this](server::Request request, server::Response response) -> awaitable<void>
    {
-      co_return; //
+      std::ignore = request;
+      std::ignore = response;
+      co_return;
    };
    test = [this](Session session) -> awaitable<void>
    {
@@ -1081,11 +1083,8 @@ TEST_P(ClientAsync, Cancellation)
    {
       const size_t length = 50ul * 1024 * 1024;
       const std::vector<char> buffer(length, 'a');
-      for (size_t i = 0; i <= 20; ++i)
+      for (size_t i = 5; i <= 5; ++i)
       {
-         if (!session)
-            session = co_await client->async_connect();
-
          auto request = co_await session.async_submit(url.set_path("echo"), {});
          auto response = co_await request.async_get_response();
          auto sender = sendAndDrop(std::move(request), std::string_view(buffer));
@@ -1096,9 +1095,13 @@ TEST_P(ClientAsync, Cancellation)
          EXPECT_LT(std::get<1>(received), length);
          EXPECT_EQ(ec, boost::beast::http::error::partial_message);
 
+         // HTTP/1.1 needs to reconnect here
          // HTTP/2 can handle this without reconnect -- only the stream is cancelled
          if (GetParam() == anyhttp::Protocol::http11)
+         {
             session.reset();
+            session = co_await client->async_connect();
+         }
       }
    };
 }

@@ -516,6 +516,12 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_execut
 template <typename Stream>
 void BeastSession<Stream>::destroy(std::shared_ptr<Session::Impl> self) noexcept
 {
+   //
+   // FIXME: ClientAsync.Cancellation runs into a heap-use-after-free here, when the session is
+   //        deleted. This is because the request and response may outlive the session and are
+   //        not properly detached.
+   //
+
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
    std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
@@ -578,7 +584,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       requestCounter++;
 
       auto& request = parser.get();
-      bool need_eof = request.need_eof();
+      const bool need_eof = request.need_eof();
       mlogd("{} {} (need_eof={})", request.method_string(), request.target(), request.need_eof());
       for (auto& header : request)
          mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
@@ -622,7 +628,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       // Call user-provided request handler.
       //
       // Unlike HTTP2, the request handler is not co_spawn()ed as a separate thread of execution,
-      // because HTTP/1.1 does not du multiplexing.
+      // because HTTP/1.1 does not do multiplexing.      
       //
       if (auto& handler = server().requestHandlerCoro())
       {
