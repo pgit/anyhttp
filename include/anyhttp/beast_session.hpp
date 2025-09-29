@@ -24,10 +24,8 @@ namespace anyhttp::beast_impl
 template <typename Stream>
 class BeastSession : public ::anyhttp::Session::Impl
 {
-   using stream_type = Stream;
-
 protected:
-   BeastSession(std::string_view logPrefix, any_io_executor executor, stream_type&& stream);
+   BeastSession(std::string_view logPrefix, any_io_executor executor, Stream&& stream);
 
 public:
    ~BeastSession() override;
@@ -45,9 +43,15 @@ public:
 public:
    std::string m_logPrefix;
    asio::any_io_executor m_executor;
-   stream_type m_stream;
-   bool m_closed = false;
+   Stream m_stream;
    Buffer m_buffer;
+   bool m_closed = false;
+   
+   /// Non-owning pointer to the currently active reader, detach()ed when this is destroyed.
+   impl::Reader* rx = nullptr;
+
+   /// Non-owning pointer to the currently active writer, detach()ed when this is destroyed.
+   impl::Writer* wx = nullptr;
 };
 
 // =================================================================================================
@@ -76,6 +80,8 @@ class ServerSession : public ServerSessionBase, public BeastSession<Stream>
    using super::m_buffer;
    using super::m_stream;
    using super::m_closed;
+   using super::rx;
+   using super::wx;
 
 public:
    ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
@@ -109,6 +115,8 @@ class ClientSession : public ClientSessionBase, public BeastSession<Stream>
    using super::logPrefix;
    using super::m_buffer;
    using super::m_stream;
+   using super::wx;
+   using super::rx;
 
 public:
    ClientSession(client::Client::Impl& parent, any_io_executor executor, Stream&& stream);

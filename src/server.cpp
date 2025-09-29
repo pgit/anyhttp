@@ -49,7 +49,7 @@ void Request::async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&&
    impl->async_read_some(buffer, std::move(handler));
 }
 
-// -------------------------------------------------------------------------------------------------
+// =================================================================================================
 
 Response::Response(std::unique_ptr<Response::Impl> impl) : impl(std::move(impl))
 {

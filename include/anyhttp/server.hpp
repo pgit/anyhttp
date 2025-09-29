@@ -2,11 +2,13 @@
 
 #include "common.hpp" // IWYU pragma: keep
 
+#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/co_composed.hpp>
 #include <boost/asio/co_spawn.hpp>
 
 #include <boost/url/urls.hpp>
+#include <type_traits>
 
 using namespace std::chrono_literals;
 
@@ -128,7 +130,6 @@ public:
 private:
    void async_submit_any(WriteHandler&& handler, unsigned int status_code, const Fields& headers);
    void async_write_any(WriteHandler&& handler, asio::const_buffer buffer);
-
    std::unique_ptr<Impl> impl;
 };
 
@@ -144,12 +145,12 @@ public:
    Server(asio::any_io_executor executor, Config config);
    ~Server();
 
-   Server(const Server& other) = delete;
-   Server& operator=(const Server& other) = delete;
    Server(Server&& other) = default;
    Server& operator=(Server&& other) = default;
 
-   asio::any_io_executor get_executor() const noexcept;
+   using executor_type = asio::any_io_executor;
+   executor_type get_executor() const noexcept;
+
    void setRequestHandler(RequestHandler&& handler);
    void setRequestHandlerCoro(RequestHandlerCoro&& handler);
 

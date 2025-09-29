@@ -57,8 +57,8 @@ inline auto& get_socket(AnyAsyncStream& stream) { return stream.get_socket(); }
 
 // =================================================================================================
 
-template <typename Parent, typename Stream, typename Buffer, typename Parser>
-class BeastReader : public Parent
+template <typename Interface, typename Stream, typename Buffer, typename Parser>
+class BeastReader : public Interface
 {
 public:
    inline BeastReader(BeastSession<Stream>& session_, Stream& stream_, Buffer& buffer_)
@@ -67,9 +67,9 @@ public:
       parser.body_limit(std::numeric_limits<uint64_t>::max());
    }
 
-   void destroy(std::unique_ptr<typename Parent::ReaderOrWriter> self) noexcept override
+   void destroy(std::unique_ptr<typename Interface::ReaderOrWriter> self) noexcept override
    {
-      if (!parser.is_done())
+      if (!parser.is_done() && session)
       {
          logw("destroy: reader destroyed, but parser not done yet... closing socket");
          //
@@ -87,8 +87,17 @@ public:
          this->deleting = std::move(self);
    }
 
-   ~BeastReader() override { assert(!reading); }
-   void detach() override { session = nullptr; }
+   ~BeastReader() override
+   {
+      assert(!reading);
+      if (session)
+         session->rx = nullptr;
+   }
+   void detach() override
+   {
+      mlogw("detach");
+      session = nullptr;
+   }
 
    unsigned int status_code() const noexcept override
    {
@@ -173,7 +182,7 @@ public:
    std::optional<unsigned int> m_status_code = 0;
    boost::url m_url;
    bool reading = false;
-   std::unique_ptr<typename Parent::ReaderOrWriter> deleting;
+   std::unique_ptr<typename Interface::ReaderOrWriter> deleting;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -198,7 +207,12 @@ public:
          this->deleting = std::move(self);
    }
 
-   ~WriterBase() override { assert(!writing); }
+   ~WriterBase() override
+   {
+      assert(!writing);
+      if (session)
+         session->wx = nullptr;
+   }
 
    inline auto logPrefix() const { return session->logPrefix(); }
 
@@ -206,7 +220,11 @@ public:
 
    asio::any_io_executor get_executor() const noexcept override { return session->get_executor(); }
 
-   void detach() override { session = nullptr; }
+   void detach() override
+   {
+      mlogw("detach");
+      session = nullptr;
+   }
 
    void async_write(WriteHandler&& handler, asio::const_buffer buffer) override
    {
@@ -451,6 +469,7 @@ public:
          std::make_unique<BeastReader<client::Response::Impl, std::decay_t<decltype(stream)>,
                                       decltype(buffer), http::response_parser<http::buffer_body>>>(
             *session, stream, buffer);
+      session->rx = reader.get();
       http::response_parser<http::buffer_body>& parser = reader->parser;
 
       auto slot = get_associated_cancellation_slot(handler);
@@ -497,6 +516,16 @@ template <typename Stream>
 BeastSession<Stream>::~BeastSession()
 {
    mlogd("session deleted");
+   if (wx)
+   {
+      mlogw("dtor: detaching writer");
+      wx->detach();
+   }
+   if (rx)
+   {
+      mlogw("dtor: detaching reader");
+      rx->detach();
+   }
 }
 
 template <typename Stream>
@@ -566,10 +595,13 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          std::make_unique<BeastReader<server::Request::Impl, decltype(m_stream), decltype(m_buffer),
                                       http::request_parser<http::buffer_body>>>(*this, m_stream,
                                                                                 m_buffer);
-      auto& parser = reader->parser;
+      if (rx)
+         rx->detach();
+      rx = reader.get();
 
       logd("");
       mlogd("waiting for request (size={} capacity={})", m_buffer.size(), m_buffer.capacity());
+      auto& parser = reader->parser;
       auto [ec, len] = co_await async_read_header(m_stream, m_buffer, parser, as_tuple);
       if (!ec)
          mlogd("async_read_header: len={} size={} capacity={} ec={}", len, m_buffer.size(),
@@ -613,23 +645,31 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          mlogw("ignoring invalid host header: {}", request[http::field::host]);
       }
 
-      server::Request request_wrapper(std::move(reader));
-
       //
       // Prepare response.
       //
       auto writer = std::make_unique<ResponseWriter<Stream>>(*this, m_stream);
-      auto& response = writer->message;
-      response.set(http::field::server, "anyhttp");
+      if (wx)
+         wx->detach();
+      wx = writer.get();
 
-      server::Response response_wrapper(std::move(writer));
+      http::response<http::buffer_body>& response = writer->message;
+      http::response_serializer<http::buffer_body>& serializer = writer->serializer;
+      response.set(http::field::server, "anyhttp");
 
       //
       // Call user-provided request handler.
       //
       // Unlike HTTP2, the request handler is not co_spawn()ed as a separate thread of execution,
-      // because HTTP/1.1 does not do multiplexing.      
+      // because HTTP/1.1 does not do multiplexing.
       //
+      // TODO: If we really want to attempt this, for pipelining, reading new requests and
+      //       serializing responses needs to be decoupled. Then, we would have a queue of
+      //       incoming requests and and another one of outgoing responses, which could make
+      //       progress independently (at least to a certain degree).
+      //
+      server::Request request_wrapper(std::move(reader));
+      server::Response response_wrapper(std::move(writer));
       if (auto& handler = server().requestHandlerCoro())
       {
          try
@@ -742,6 +782,7 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
    mlogd("submit: {}", url.buffer());
 
    auto writer = std::make_unique<RequestWriter<Stream>>(*this, m_stream);
+   wx = writer.get();
    auto& request = writer->message;
 
    request.base().target(url.encoded_target());
