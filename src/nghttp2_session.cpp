@@ -423,7 +423,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    //
    // This callback is invoked by nghttp2 when it is ready to accept more data to be sent.
    //
-   nghttp2_data_provider prd;
+   nghttp2_data_provider2 prd;
    prd.source.ptr = stream.get();
    prd.read_callback = [](nghttp2_session* session, int32_t stream_id, uint8_t* buf, size_t length,
                           uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t
@@ -437,7 +437,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    //
    // finally, submit request
    //
-   auto id = nghttp2_submit_request(session, nullptr, nva.data(), nva.size(), &prd, this);
+   auto id = nghttp2_submit_request2(session, nullptr, nva.data(), nva.size(), &prd, this);
    if (id < 0)
    {
       mloge("submit: nghttp2_submit_request: ERROR: {}", id);
@@ -485,7 +485,7 @@ void NGHttp2Session::handle_buffer_contents()
 
 // =================================================================================================
 
-NGHttp2Stream* NGHttp2Session::create_stream(int stream_id)
+NGHttp2Stream* NGHttp2Session::create_stream(int32_t stream_id)
 {
    auto [it, inserted] =
       m_streams.emplace(stream_id, std::make_shared<NGHttp2Stream>(*this, stream_id));

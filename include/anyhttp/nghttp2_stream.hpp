@@ -25,8 +25,8 @@ namespace anyhttp::nghttp2
 
 class NGHttp2Stream;
 
-template <typename Base>
-class NGHttp2Reader : public Base
+template <typename Interface>
+class NGHttp2Reader : public Interface
 {
 public:
    explicit NGHttp2Reader(NGHttp2Stream& stream);
@@ -268,7 +268,7 @@ public:
 
 public:
    NGHttp2Session& parent;
-   int id;
+   int32_t id;
 };
 
 // =================================================================================================

@@ -107,7 +107,7 @@ public:
 
    nghttp2_unique_ptr<nghttp2_session_callbacks> setup_callbacks();
 
-   NGHttp2Stream* create_stream(int stream_id);
+   NGHttp2Stream* create_stream(int32_t stream_id);
    NGHttp2Stream* find_stream(int32_t stream_id);
    void close_stream(int32_t stream_id);
    void delete_stream(int32_t stream_id);
@@ -117,8 +117,8 @@ public:
    boost::asio::any_io_executor m_executor;
 
    nghttp2_session* session = nullptr;
-   std::map<int, std::shared_ptr<NGHttp2Stream>> m_streams;
-   int m_last_id = 0;
+   std::map<int32_t, std::shared_ptr<NGHttp2Stream>> m_streams;
+   int32_t m_last_id = 0;
    size_t m_requestCounter = 0;
 
    Buffer m_buffer;

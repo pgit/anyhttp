@@ -25,7 +25,6 @@
 #include <utility>
 
 using namespace boost::asio::experimental::awaitable_operators;
-namespace rv = std::ranges::views;
 
 namespace errc = boost::system::errc;
 
@@ -225,7 +224,7 @@ void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int stat
    }
 
    // TODO: If we already know that there is no body, don't set a producer.
-   nghttp2_data_provider prd;
+   nghttp2_data_provider2 prd;
    prd.source.ptr = stream;
    prd.read_callback = [](nghttp2_session*, int32_t stream_id, uint8_t* buf, size_t length,
                           uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t
@@ -236,7 +235,7 @@ void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int stat
       return stream->producer_callback(buf, length, data_flags);
    };
 
-   nghttp2_submit_response(stream->parent.session, stream->id, nva.data(), nva.size(), &prd);
+   nghttp2_submit_response2(stream->parent.session, stream->id, nva.data(), nva.size(), &prd);
    stream->parent.start_write();
 
    std::move(handler)(boost::system::error_code{});
