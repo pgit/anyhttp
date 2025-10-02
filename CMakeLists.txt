@@ -92,6 +92,6 @@ check_include_file("linux/rtnetlink.h" HAVE_LINUX_RTNETLINK_H)
 
 # --------------------------------------------------------------------------------------------------
 
+enable_testing(false)
 add_subdirectory(src)
 add_subdirectory(test)
-enable_testing()

@@ -23,6 +23,7 @@
 				"[cpp]": {
 					"editor.defaultFormatter": "xaver.clang-format"
 			   },
+			   "cmake.ctest.testExplorerIntegrationEnabled": false,
 				"testMate.cpp.test.advancedExecutables": [
 					{
 						"pattern": "build/test/test_*",
