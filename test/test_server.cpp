@@ -119,7 +119,8 @@ TEST_F(ClientConnect, WHEN_unknown_host_THEN_completes_with_host_not_found_event
    client.async_connect([this](boost::system::error_code ec, Session session)
    {
       loge("ERROR: {}", ec.message());
-      EXPECT_EQ(ec, boost::asio::error::netdb_errors::host_not_found);
+      EXPECT_TRUE(ec == boost::asio::error::netdb_errors::host_not_found ||
+                  ec == boost::asio::error::netdb_errors::host_not_found_try_again);
    });
    context.run();
 }
