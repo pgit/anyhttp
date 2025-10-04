@@ -131,7 +131,6 @@ public:
       }
 
       reading = true;
-
       parser.get().body().data = body_buffer.data();
       parser.get().body().size = body_buffer.size();
 
@@ -366,6 +365,12 @@ class ResponseWriter
       WriterBase<server::Response::Impl, Stream, http::response_serializer<http::buffer_body>>;
 
 public:
+   using super::message;
+   using super::submit_headers;
+   using super::serializer;
+   using super::stream;
+
+public:
    inline ResponseWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_)
    {
    }
@@ -373,23 +378,23 @@ public:
    void content_length(std::optional<size_t> content_length) override
    {
       if (content_length)
-         super::message.content_length(*content_length);
+         message.content_length(*content_length);
       else
-         super::message.content_length(boost::none);
+         message.content_length(boost::none);
    }
 
    void async_submit(WriteHandler&& handler, unsigned int status_code,
                      const Fields& headers) override
    {
-      super::message.result(status_code);
+      message.result(status_code);
 
-      if (super::message.find(http::field::date) == super::message.end())
-         super::message.set(http::field::date, format_http_date(std::chrono::system_clock::now()));
+      if (message.find(http::field::date) == message.end())
+         message.set(http::field::date, format_http_date(std::chrono::system_clock::now()));
 
-      super::submit_headers(headers);
+      submit_headers(headers);
 
-      if (super::message.find(http::field::date) == super::message.end())
-         super::message.set(http::field::server, "anyhttp");
+      if (message.find(http::field::date) == message.end())
+         message.set(http::field::server, "anyhttp");
 
       //
       // TODO: For bundling writing the header and body, we should just post the writing here,
@@ -397,7 +402,7 @@ public:
       //
       // post(get_executor(), [this](){write);
       async_write_header(
-         super::stream, super::serializer,
+         stream, serializer,
          [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
             std::move(handler)(ec);
          });
@@ -418,6 +423,7 @@ public:
    using super::serializer;
    using super::session;
    using super::stream;
+   using super::submit_headers;
 
 public:
    inline RequestWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_)
@@ -429,15 +435,15 @@ public:
    void content_length(std::optional<size_t> content_length) override
    {
       if (content_length)
-         super::message.content_length(*content_length);
+         message.content_length(*content_length);
       else
-         super::message.content_length(boost::none);
+         message.content_length(boost::none);
    }
 
    void async_submit(WriteHandler&& handler, unsigned int status_code,
                      const Fields& headers) override
    {
-      super::submit_headers(headers);
+      submit_headers(headers);
       message.method(http::verb::post);
 
       //

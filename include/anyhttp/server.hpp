@@ -8,7 +8,6 @@
 #include <boost/asio/co_spawn.hpp>
 
 #include <boost/url/urls.hpp>
-#include <type_traits>
 
 using namespace std::chrono_literals;
 

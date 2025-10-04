@@ -9,7 +9,7 @@ if (DEFINED ENV{GITHUB_ACTIONS})
 endif()
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
-    # https://www.boost.org/doc/libs/1_88_0/doc/html/boost_asio/overview/core/buffers.html#boost_asio.overview.core.buffers.buffer_debugging
+    # https://www.boost.org/doc/libs/1_89_0/doc/html/boost_asio/overview/core/buffers.html#boost_asio.overview.core.buffers.buffer_debugging
     # add_compile_definitions(BOOST_ASIO_ENABLE_BUFFER_DEBUGGING)
 
     # ASIO handler tracking output (very noisy)
@@ -20,8 +20,8 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
     # add_link_options(-fsanitize=thread)
     
     # address sanitizer
-    # add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
-    # add_link_options(-fsanitize=address)
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
 
     # include(CodeCoverage)
     # append_coverage_compiler_flags()

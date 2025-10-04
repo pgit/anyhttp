@@ -11,6 +11,7 @@
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/as_single.hpp>
+#include <boost/asio/immediate.hpp>
 #include <boost/asio/ip/address_v6.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/context.hpp>
@@ -225,6 +226,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    const auto prefix = normalize(socket.remote_endpoint());
    logi("[{}] new connection", prefix);
 
+   // HTTP/2 is very slow without this
    socket.set_option(ip::tcp::no_delay(true));
 
    //
@@ -243,14 +245,13 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 #endif
 
    auto executor = co_await boost::asio::this_coro::executor;
-
    auto buffer = boost::beast::flat_buffer();
 
    //
    // detect TLS
    //
    std::shared_ptr<Session::Impl> session;
-   std::optional<asio::ssl::stream<asio::ip::tcp::socket>> sslStream;
+   std::optional<asio::ssl::stream<asio::ip::tcp::socket>> ssl_stream;
    if (co_await async_detect_ssl_awaitable(socket, buffer, deferred))
    {
       logi("[{}] detected TLS client hello, {} bytes in buffer", prefix, buffer.size());
@@ -266,8 +267,8 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       ctx.use_certificate_chain_file("etc/darkbase-chain.pem");
       ctx.use_private_key_file("etc/darkbase-key.pem", asio::ssl::context::pem);
 
-      sslStream.emplace(std::move(socket), ctx);
-      auto n = co_await sslStream->async_handshake(asio::ssl::stream_base::server, buffer.data());
+      ssl_stream.emplace(std::move(socket), ctx);
+      auto n = co_await ssl_stream->async_handshake(asio::ssl::stream_base::server, buffer.data());
       buffer.consume(n);
 
       //
@@ -277,7 +278,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       {
          const unsigned char* data;
          unsigned int len;
-         SSL_get0_alpn_selected(sslStream->native_handle(), &data, &len);
+         SSL_get0_alpn_selected(ssl_stream->native_handle(), &data, &len);
          if (data)
             alpn = std::string_view(reinterpret_cast<const char*>(data), len);
       }
@@ -285,11 +286,11 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       if (alpn == "h2")
          session =
             std::make_shared<nghttp2::ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>> //
-            (*this, executor, std::move(*sslStream));
+            (*this, executor, std::move(*ssl_stream));
       else if (alpn == "http/1.1")
          session =
             std::make_shared<beast_impl::ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>> //
-            (*this, executor, std::move(*sslStream));
+            (*this, executor, std::move(*ssl_stream));
    }
 
    //
@@ -478,7 +479,7 @@ awaitable<void> Server::Impl::udp_receive_loop()
    auto native_handle = m_udp_socket->native_handle();
    for (;;)
    {
-      co_await m_udp_socket->async_wait(boost::asio::socket_base::wait_read, deferred);
+      co_await m_udp_socket->async_wait(boost::asio::socket_base::wait_read);
 
       auto ec = recvmsg(native_handle, &msg, 0);
       logd("ec={} from={} tos={}", ec, sockaddr_to_endpoint(sender_addr),

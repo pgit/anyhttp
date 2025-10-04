@@ -31,6 +31,7 @@
 #include <boost/process/v2/process.hpp>
 #include <boost/process/v2/stdio.hpp>
 
+#include <boost/scope/scope_exit.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <boost/system/system_error.hpp>

@@ -2,8 +2,11 @@
 
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/associated_executor.hpp>
+#include <boost/asio/associated_immediate_executor.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
+#include <boost/asio/immediate.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
 #include <boost/container/small_vector.hpp>
@@ -23,6 +26,9 @@ using ReadWriteHandler = asio::any_completion_handler<ReadWrite>;
 
 using ConstBufferVector = boost::container::small_vector<asio::const_buffer, 4>;
 using MutableBufferVector = boost::container::small_vector<asio::mutable_buffer, 4>;
+
+using Shutdown = void(boost::system::error_code);
+using ShutdownHandler = asio::any_completion_handler<Shutdown>;
 
 /**
  * Attempt to create a type-erased async stream.
@@ -45,6 +51,13 @@ public:
       virtual ip::tcp::socket& get_socket() = 0;
       virtual void async_write_impl(ReadWriteHandler handler, ConstBufferVector buffer) = 0;
       virtual void async_read_impl(ReadWriteHandler handler, MutableBufferVector buffer) = 0;
+      virtual void async_shutdown_impl(ShutdownHandler handler)
+      {
+         auto ex = boost::asio::get_associated_executor(handler, get_executor());
+         boost::asio::dispatch(ex, [handler = std::move(handler)]() mutable { //
+            handler(boost::system::error_code());
+         });
+      }
    };
 
 protected:
@@ -65,10 +78,11 @@ public:
    // The requirements for ConstBufferSequence are defined here:
    // https://live.boost.org/doc/libs/1_88_0/doc/html/boost_asio/reference/ConstBufferSequence.html
    //
-   // The iterators returned by asio::buffer_sequence_{begin,end} must model:
-   // * https://en.cppreference.com/w/cpp/iterator/bidirectional_iterator
+   // The iterators returned by asio::buffer_sequence_{begin,end} must be 'bidirectional', but are
+   // not required to be 'contiguous'. So those iterators cannot be simply convereted to a span.
    //
-   // So those iterators cannot be simply modelled as a span.
+   // * https://en.cppreference.com/w/cpp/iterator/bidirectional_iterator
+   // * https://en.cppreference.com/w/cpp/iterator/contiguous_iterator.html
    //
    template <typename ConstBufferSequence,
              BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite) CompletionToken>
@@ -79,12 +93,11 @@ public:
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
          [this](ReadWriteHandler handler, const ConstBufferSequence& buffers)
-         {
-            impl->async_write_impl(std::move(handler),
-                                   ConstBufferVector{asio::buffer_sequence_begin(buffers),
-                                                     asio::buffer_sequence_end(buffers)});
-         },
-         token, buffers);
+      {
+         impl->async_write_impl(std::move(handler),
+                                ConstBufferVector{asio::buffer_sequence_begin(buffers),
+                                                  asio::buffer_sequence_end(buffers)});
+      }, token, buffers);
    }
 
    //
@@ -98,12 +111,11 @@ public:
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
          [this](ReadWriteHandler handler, const MutableBufferSequence& buffers)
-         {
-            impl->async_read_impl(std::move(handler),
-                                  MutableBufferVector{asio::buffer_sequence_begin(buffers),
-                                                      asio::buffer_sequence_end(buffers)});
-         },
-         token, buffers);
+      {
+         impl->async_read_impl(std::move(handler),
+                               MutableBufferVector{asio::buffer_sequence_begin(buffers),
+                                                   asio::buffer_sequence_end(buffers)});
+      }, token, buffers);
    }
 };
 
