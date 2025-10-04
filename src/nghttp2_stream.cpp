@@ -132,8 +132,9 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
 
          if (stream->m_read_handler)
          {
-            swap_and_invoke(stream->m_read_handler, errc::make_error_code(errc::operation_canceled),
-                            0);
+            post(get_executor(), [handler = std::move(stream->m_read_handler)] mutable { //
+               std::move(handler)(errc::make_error_code(errc::operation_canceled), 0);
+            });
          }
 
          // stream->delete_writer();
@@ -377,9 +378,17 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    // To apply back pressure, the stream is consumed AFTER the handler is invoked. As always, this
    // is accompanied by a start_write() because this might un-block flow control.
    //
+   // Note that nghttp2 may delay emitting WINDOW_UPDATE frame if only a few bytes have been
+   // consumed. Because of this, it is not possible to have exact control over backpressure.
+   //
+   // https://github.com/nghttp2/nghttp2/blob/a60e00c6285b5dd6a1aee80f70bce77d0c198288/lib/nghttp2_helper.c#L248
+   //
    if (consumed)
    {
       nghttp2_session_consume_stream(parent.session, id, consumed);
+      logd("[{}] consumed {} bytes, windows sizes: local {} / remote {}", logPrefix, consumed,
+           nghttp2_session_get_stream_local_window_size(parent.session, id),
+           nghttp2_session_get_stream_remote_window_size(parent.session, id));
       parent.start_write();
    }
 
@@ -546,13 +555,15 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
    {
       slot.assign([this](asio::cancellation_type_t ct)
       {
-         logd("[{}] async_write: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", int(ct));
+         logd("[{}] async_write: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", ct);
          // delete_writer();
 
          if (write_handler)
          {
-            using namespace boost::system::errc;
-            swap_and_invoke(write_handler, make_error_code(operation_canceled));
+            // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
+            post(get_executor(), [handler = std::move(write_handler)] mutable { //
+               std::move(handler)(errc::make_error_code(errc::operation_canceled));
+            });            
          }
       });
    }

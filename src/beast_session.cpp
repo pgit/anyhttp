@@ -126,7 +126,7 @@ public:
       if (parser.is_done())
       {
          deleting.reset();
-         swap_and_invoke(handler, boost::system::error_code{}, 0);
+         std::move(handler)(boost::system::error_code{}, 0);
          return;
       }
 

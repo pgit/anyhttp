@@ -294,26 +294,13 @@ protected:
       }
    }
 
-   awaitable<std::string> consume(readable_pipe pipe)
+   awaitable<std::string> read_all(readable_pipe pipe)
    {
       std::string result;
-      std::vector<char> buf(1460);
-      for (;;)
-      {
-         auto [ec, nread] = co_await asio::async_read(pipe, asio::buffer(buf), as_tuple);
-         result += std::string_view(buf.data(), nread);
-         if (nread)
-            logi("STDOUT: {} bytes", nread);
-
-         if (ec == error::eof)
-            co_return result;
-
-         if (ec)
-         {
-            std::println("consume: {}", ec.message());
-            break;
-         }
-      }
+      auto [ec, nread] = co_await asio::async_read(pipe, asio::dynamic_buffer(result), as_tuple);
+      logi("STDOUT: {} bytes ({})", nread, what(ec));
+      if (ec && ec != error::eof)
+         throw boost::system::system_error(ec);
       co_return result;
    }
 
@@ -328,7 +315,7 @@ protected:
 
       logi("spawn: starting to communicate...");
 #if 1
-      auto result = co_await (log("STDERR", err) && consume(std::move(out)));
+      auto result = co_await (log("STDERR", err) && read_all(std::move(out)));
 #else
       co_await (log("STDERR", err) && log("STDOUT", out));
       auto result = std::string();
@@ -523,7 +510,7 @@ TEST_P(External, h2spec)
 
 TEST_P(External, h2load)
 {
-   const size_t n = 100;
+   const size_t n = 100; // number of requests, echoing 65535 bytes each
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3", url};
 
@@ -550,7 +537,7 @@ TEST_P(External, h2load)
 
 TEST_P(External, echo)
 {
-   co_spawn(context.get_executor(), spawn_process("/usr/bin/echo", {}), detached);
+   co_spawn(context.get_executor(), spawn_process("/usr/bin/echo", {"Hello, World!"}), detached);
    run();
 }
 
@@ -608,7 +595,7 @@ public:
       Client::SetUp();
 
       //
-      // Spawn the testcase coroutine on the client's strand so that access to it is serialized.
+      // Spawn the testcase coroutine on the client's executor so that access to it is serialized.
       //
       co_spawn(client->get_executor(), [this]() -> awaitable<void>
       {
@@ -763,6 +750,33 @@ TEST_P(ClientAsync, WHEN_server_discards_request_and_response_THEN_completes_any
       auto [ec, _] = co_await request.async_get_response(as_tuple);
       EXPECT_EQ(ec, boost::beast::http::error::end_of_stream);
       // EXPECT_EQ(ec, std::errc::connection_reset);
+   };
+}
+
+TEST_P(ClientAsync, WHEN_client_cancels_write_THEN_can_resume)
+{
+   if (GetParam() == anyhttp::Protocol::http11)
+      GTEST_SKIP();  // a chunked body cannot be cancelled correctly --> disconnects
+
+   test = [this](Session session) -> awaitable<void>
+   {
+      co_await this_coro::throw_if_cancelled(false);
+      auto executor = co_await this_coro::executor;
+      auto request = co_await session.async_submit(url.set_path("echo"));
+      auto response = co_await request.async_get_response();
+
+      // send as much data as possible within 1s, should run into backpressure
+      auto [ep] = co_await co_spawn(executor, send(request, rv::iota(uint8_t(0))),
+                                    cancel_after(1s, as_tuple));
+      EXPECT_EQ(code(ep), boost::system::errc::operation_canceled);
+
+      // now, with a closed window, we cannot even end the upload
+      std::tie(ep) = co_await co_spawn(executor, send_eof(request), cancel_after(1ms, as_tuple));
+      EXPECT_EQ(code(ep), boost::system::errc::operation_canceled);
+
+      // as we have no control over when the send window is re-opened, wait for it in parallel
+      auto received = co_await (send_eof(request) && count(response));
+      EXPECT_GT(received, 0);
    };
 }
 

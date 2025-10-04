@@ -103,7 +103,7 @@ awaitable<void> send(client::Request& request, Range range)
 template <typename Range>
    requires std::ranges::borrowed_range<Range> && (!std::ranges::contiguous_range<Range>)
 awaitable<void> send(client::Request& request, Range range)
-{  
+{
    logi("send:");
    size_t bytes = 0;
    // std::array<uint8_t, 1460> buffer;
@@ -142,6 +142,7 @@ awaitable<void> send(client::Request& request, Range range)
       }
 #endif
    }
+
    logi("send: (range) sent {} bytes", bytes);
 }
 
@@ -196,7 +197,8 @@ awaitable<void> sendAndForceEOF(client::Request& request, Range range)
       co_await asio::this_coro::reset_cancellation_state();
    }
 #endif
-   co_await send_eof(request);
+   auto [ec] = co_await request.async_write({}, as_tuple(deferred));
+   // co_await send_eof(request);
 }
 
 // -------------------------------------------------------------------------------------------------

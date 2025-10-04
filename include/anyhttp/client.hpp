@@ -102,11 +102,18 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
    auto async_write(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
    {
-      return boost::asio::async_initiate<CompletionToken, Write>(
-         [](WriteHandler handler, Request* self, asio::const_buffer buffer) { //
+      struct initiation
+      {
+         Request* self;
+         asio::const_buffer buffer;
+         using executor_type = boost::asio::any_io_executor;
+         executor_type get_executor() const noexcept { return self->get_executor(); }
+         auto operator()(WriteHandler handler)
+         {
             self->async_write_any(std::move(handler), buffer);
-         },
-         token, this, buffer);
+         }
+      };
+      return boost::asio::async_initiate<CompletionToken, Write>(initiation{this, buffer}, token);
    }
 
 private:

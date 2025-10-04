@@ -130,7 +130,7 @@ public:
    //
    // async_write()
    //
-   asio::const_buffer write_buffer;
+   asio::const_buffer write_buffer;  // undefined unless write_handler is set
    WriteHandler write_handler;
    bool is_deferred = false;
    bool eof_submitted = false;

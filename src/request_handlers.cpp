@@ -273,9 +273,10 @@ awaitable<expected<size_t>> try_read_response(client::Request& request)
 
 awaitable<void> send_eof(client::Request& request)
 {
-   logi("send: finishing request...");
-   auto [ec] = co_await request.async_write({}, as_tuple(deferred));
-   logi("send: finishing request... done ({})", ec.message());
+   co_await request.async_write({});
+   // logi("send: finishing request...");
+   // auto [ec] = co_await request.async_write({}, as_tuple(deferred));
+   // logi("send: finishing request... done ({})", ec.message());
 }
 
 awaitable<void> h2spec(server::Request request, server::Response response)

@@ -16,8 +16,6 @@
 
 #include <nghttp2/nghttp2.h>
 
-#include <string>
-
 using namespace boost::asio::experimental::awaitable_operators;
 
 namespace anyhttp::nghttp2

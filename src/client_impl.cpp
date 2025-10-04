@@ -166,7 +166,8 @@ void Client::Impl::async_connect(ConnectHandler handler)
       //
       // FIXME: Do we really need to "run" a session here? For nghttp2, yes. For beast, not so much,
       //        as there is no communication outside the current request right now, but that may
-      //        still come with pipelining.
+      //        still come with pipelining or if it is refactored to have the parser and serializer
+      //        in the session object itself.
       //
       //        We do need a user interface to stop sessions, though. This should be the destructor
       //        of the user-facing "Session" object. So we should use only the "impl" internally.
@@ -177,7 +178,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
          if (ex)
             logw("client run: {}", what(ex));
          else
-            logi("client run: done");
+            logi("client run: done");         
          impl.reset();
       });
 #endif
@@ -188,11 +189,8 @@ void Client::Impl::async_connect(ConnectHandler handler)
       // start any request before that.
       //
       // FIXME: instead of executing a submit() directly, it should be queued and executed
-      // within
-      //        do_client_session(). This approach avoids the problem, and allows pipelining,
-      //        too.
+      // within do_client_session(). This approach avoids the problem, and allows pipelining, too
       //
-      // std::move(handler)(boost::system::error_code{}, Session{std::move(impl)});
       std::move(handler)(boost::system::error_code{}, Session{std::move(impl)});
    },
             [](const std::exception_ptr& ep) { loge("client async_connect: {}", what(ep)); });
