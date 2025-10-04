@@ -50,6 +50,7 @@ public:
 
 private:
    const Config& config() const { return m_config; }
+   awaitable<Session> async_connect();
 
 private:
    Config m_config;

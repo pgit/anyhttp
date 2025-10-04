@@ -1,7 +1,7 @@
 #include "anyhttp/client_impl.hpp"
 #include "anyhttp/beast_session.hpp"
 #include "anyhttp/common.hpp"
-#include "anyhttp/formatter.hpp"
+#include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/nghttp2_session.hpp"
 
 #include "anyhttp/detail/nghttp2_session_details.hpp"
@@ -27,7 +27,6 @@
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
-using boost::scope::make_scope_exit;
 
 namespace anyhttp::client
 {
@@ -66,134 +65,133 @@ Client::Impl::~Impl() { logi("Client: dtor"); }
 
 // -------------------------------------------------------------------------------------------------
 
+//
+//
 void Client::Impl::async_connect(ConnectHandler handler)
 {
-   co_spawn(m_executor,
-            [this, handler = std::move(handler),
-             se = make_scope_exit([]
-   { loge("******** closure deleted************"); })]() mutable -> awaitable<void>
+   //
+   // We have to forward cancellation from the passed handler to the coroutine here. This works
+   // by binding the cancellation slot from the handler to the intermediate completion handler
+   // for co_spawn() we create here (a lambda).
+   //
+   auto slot = get_associated_cancellation_slot(handler);
+   auto executor = get_associated_executor(handler);
+   auto completion =
+      [this, handler = std::move(handler)](std::exception_ptr ep, Session session) mutable
    {
-      auto se2 = make_scope_exit([] { loge("******** closure completed************"); });
-      // const auto ex = m_executor;
-      // auto ex = state.get_io_executor();  // FAILS to register work properly
-      // auto token = bind_executor(ex, as_tuple(deferred));  // not needed
-      // constexpr auto token = as_tuple(deferred);
+      if (ep)
+         loge("Client: async_connect: {}", what(ep));
+      std::move(handler)(code(ep), std::move(session));
+   };
 
-      //
-      // Extract host and port from URL.
-      //
-      std::string host = config().url.host_address();
-      std::string port = config().url.port();
+   co_spawn(get_executor(), [this] mutable -> awaitable<Session> {
+      co_return co_await async_connect();
+   }, bind_executor(executor, bind_cancellation_slot(slot, std::move(completion))));
+}
 
-      std::vector<ip::tcp::endpoint> endpoints;
-      logd("Client: resolving {}:{} ...", host, port);
+awaitable<Session> Client::Impl::async_connect()
+{
+   //
+   // Extract host and port from URL and resolve hostname.
+   //
+   std::string host = config().url.host_address();
+   std::string port = config().url.port();
+
+   std::vector<ip::tcp::endpoint> endpoints;
+   logd("Client: resolving {}:{} ...", host, port);
+   {
+      auto flags = ip::tcp::resolver::numeric_service;
+      for (auto&& elem : co_await m_resolver->async_resolve(host, port, flags)) // may throw
       {
-         auto flags = ip::tcp::resolver::numeric_service;
-         auto [ec, eps] = co_await m_resolver->async_resolve(host, port, flags, as_tuple);
-         if (ec)
-         {
-            loge("Client: resolving {}:{}: {}", host, port, ec.message());
-            std::move(handler)(ec, Session(nullptr));
-         }
-
-         for (auto&& elem : eps)
-         {
-            logd("Client: {}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
-            endpoints.push_back(std::move(elem));
-         }
+         logd("Client: {}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
+         endpoints.push_back(std::move(elem));
       }
+   }
 
-      //
-      // Connect
-      //
-      ip::tcp::socket socket(m_executor);
-      auto [ec, endpoint] = co_await asio::async_connect(socket, endpoints, as_tuple);
-      if (ec)
-      {
-         loge("Client: {}", ec.message());
-         std::move(handler)(ec, Session(nullptr));
-      }
+   //
+   // Initiate connection.
+   //
+   // TODO: TLS
+   //
+   ip::tcp::socket socket(m_executor);
+   auto endpoint = co_await asio::async_connect(socket, endpoints);
 
-      logi("Client: connected to {} ({})", socket.remote_endpoint(), ec.message());
+   logi("Client: connected to {}", socket.remote_endpoint());
 
-      //
-      // Playing with socket buffer sizes... Doesn't seem to do any good.
-      //
-      using sb = asio::socket_base;
-      sb::send_buffer_size send_buffer_size;
-      sb::receive_buffer_size receive_buffer_size;
-      socket.get_option(send_buffer_size);
-      socket.get_option(receive_buffer_size);
-      logd("Client: socket buffer sizes: send={} receive={}", send_buffer_size.value(),
-           receive_buffer_size.value());
+   //
+   // Playing with socket buffer sizes... Doesn't seem to do any good.
+   //
+   using sb = asio::socket_base;
+   sb::send_buffer_size send_buffer_size;
+   sb::receive_buffer_size receive_buffer_size;
+   socket.get_option(send_buffer_size);
+   socket.get_option(receive_buffer_size);
+   logd("Client: socket buffer sizes: send={} receive={}", send_buffer_size.value(),
+        receive_buffer_size.value());
+
+   // socket.set_option(sb::send_buffer_size(8192));
+   // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
+
+   //
+   // Select implementation, currently by configuration only.
+   // With TLS and ALPN, HTTP protocol negotiation can be automatic as well.
+   //
+   // FIXME: How to handle upgrades? This is a top-level responsibility of the client.
+   //
+   // There are different types of upgrades:
+   //
+   // 1) HTTP/1.1 to HTTP/2 via Connection: upgrade header
+   // 2) HTTP/1.1 to HTTP/3 via Alt-Svc header
+   // 3) Proactively connect using HTTP/1 (using TCP) and HTTP/3 (UDP) in parallel
+   // 4) Support DNS HTTPS RR (serving the same purpose as Alt-Svc)
+   //
+   std::shared_ptr<Session::Impl> impl;
+   switch (config().protocol)
+   {
+   case Protocol::http11:
+      impl = std::make_shared<beast_impl::ClientSession<boost::beast::tcp_stream>>(
+         *this, m_executor, boost::beast::tcp_stream(std::move(socket)));
+      break;
+
+   case Protocol::h2:
+      impl = std::make_shared<nghttp2::ClientSession<asio::ip::tcp::socket>>(*this, m_executor,
+                                                                             std::move(socket));
+      break;
+
+   case anyhttp::Protocol::h3:
+      using namespace boost::system;
+      throw system_error(errc::make_error_code(errc::invalid_argument));
+   };
+
+   //
+   // FIXME: Do we really need to "run" a session here? For nghttp2, yes. For beast, not so much,
+   //        as there is no communication outside the current request right now, but that may
+   //        still come with pipelining or if it is refactored to have the parser and serializer
+   //        in the session object itself.
+   //
+   //        We do need a user interface to stop sessions, though. This should be the destructor
+   //        of the user-facing "Session" object. So we should use only the "impl" internally.
+   //
 #if 1
-      // socket.set_option(sb::send_buffer_size(8192));
-      // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
+   co_spawn(m_executor, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable
+   {
+      if (ex)
+         logw("client run: {}", what(ex));
+      else
+         logi("client run: done");
+      impl.reset();
+   });
 #endif
 
-      //
-      // Select implementation, currently by configuration only.
-      // With TLS and ALPN, HTTP protocol negotiation can be automatic as well.
-      //
-      // FIXME: How to handle upgrades? This is a top-level responsibility of the client.
-      //
-      // There are different types of upgrades:
-      //
-      // 1) HTTP/1.1 to HTTP/2 via Connection: upgrade header
-      // 2) HTTP/1.1 to HTTP/3 via Alt-Svc header
-      // 3) Proactively connect using HTTP/1 (using TCP) and HTTP/3 (UDP) in parallel
-      // 4) Support DNS HTTPS RR (serving the same purpose as Alt-Svc)
-      //
-      std::shared_ptr<Session::Impl> impl;
-      switch (config().protocol)
-      {
-      case Protocol::http11:
-         impl = std::make_shared<beast_impl::ClientSession<boost::beast::tcp_stream>>(
-            *this, m_executor, boost::beast::tcp_stream(std::move(socket)));
-         break;
-
-      case Protocol::h2:
-         impl = std::make_shared<nghttp2::ClientSession<asio::ip::tcp::socket>>(*this, m_executor,
-                                                                                std::move(socket));
-         break;
-
-      case anyhttp::Protocol::h3:
-         namespace errc
-         = boost::system::errc;
-         std::move(handler)(errc::make_error_code(errc::invalid_argument), Session(nullptr));
-      };
-
-      //
-      // FIXME: Do we really need to "run" a session here? For nghttp2, yes. For beast, not so much,
-      //        as there is no communication outside the current request right now, but that may
-      //        still come with pipelining or if it is refactored to have the parser and serializer
-      //        in the session object itself.
-      //
-      //        We do need a user interface to stop sessions, though. This should be the destructor
-      //        of the user-facing "Session" object. So we should use only the "impl" internally.
-      //
-#if 1
-      co_spawn(m_executor, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable
-      {
-         if (ex)
-            logw("client run: {}", what(ex));
-         else
-            logi("client run: done");         
-         impl.reset();
-      });
-#endif
-
-      //
-      // It's important to call this handler AFTER spawning the session, because stream
-      // configuration happens in the beginning of do_client_session(), and we don't want to
-      // start any request before that.
-      //
-      // FIXME: instead of executing a submit() directly, it should be queued and executed
-      // within do_client_session(). This approach avoids the problem, and allows pipelining, too
-      //
-      std::move(handler)(boost::system::error_code{}, Session{std::move(impl)});
-   },
-            [](const std::exception_ptr& ep) { loge("client async_connect: {}", what(ep)); });
+   //
+   // It's important to call this handler AFTER spawning the session, because stream
+   // configuration happens in the beginning of do_client_session(), and we don't want to
+   // start any request before that.
+   //
+   // FIXME: instead of executing a submit() directly, it should be queued and executed
+   // within do_client_session(). This approach avoids the problem, and allows pipelining, too
+   //
+   co_return Session{std::move(impl)};
 }
 
 // =================================================================================================

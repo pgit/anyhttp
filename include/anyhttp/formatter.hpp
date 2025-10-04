@@ -63,7 +63,11 @@ struct std::formatter<boost::asio::ip::tcp::endpoint>
    template <typename FormatContext>
    auto format(const boost::asio::ip::tcp::endpoint& endpoint, FormatContext& ctx) const
    {
-      return std::format_to(ctx.out(), "{}:{}", endpoint.address().to_string(), endpoint.port());
+      const auto address = endpoint.address();
+      if (address.is_v6())
+         return std::format_to(ctx.out(), "[{}]:{}", address.to_string(), endpoint.port());
+      else
+         return std::format_to(ctx.out(), "{}:{}", address.to_string(), endpoint.port());
    }
 };
 

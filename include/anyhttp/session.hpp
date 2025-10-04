@@ -18,6 +18,7 @@ class Session
 {
 public:
    class Impl;
+   Session() = default;
    explicit Session(std::shared_ptr<Impl> impl);
    Session(Session&& other) noexcept;
    Session& operator=(Session&& other) noexcept;

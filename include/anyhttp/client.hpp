@@ -137,13 +137,29 @@ public:
    using executor_type = asio::any_io_executor;
    executor_type get_executor() const noexcept;
 
+   /**
+    * Connect to configured peer and establish a new session.
+    *
+    * This operation supports 'terminal' cancellation. When cancellation is requested, that may
+    * take some time to be executed. This is because the async resolver eventually calls
+    * \c getaddrinfo(), which is a blocking system call. This is done from a separate thread,
+    * so the users executor is not blocked, but this still means that the operation cannot be
+    * interrupted.
+    */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken = DefaultCompletionToken>
    auto async_connect(CompletionToken&& token = CompletionToken())
    {
-      return boost::asio::async_initiate<CompletionToken, Connect>(
-         [&](ConnectHandler&& handler) { //
-            async_connect_any(std::move(handler));
-         }, token);
+      struct initiation
+      {
+         Client* self;
+         using executor_type = boost::asio::any_io_executor;
+         executor_type get_executor() const noexcept { return self->get_executor(); }
+         auto operator()(ConnectHandler handler)
+         {
+            self->async_connect_any(std::move(handler));
+         }
+      };
+      return boost::asio::async_initiate<CompletionToken, Connect>(initiation{this}, token);
    }
 
 private:

@@ -73,6 +73,17 @@ std::string NameGenerator(const testing::TestParamInfo<anyhttp::Protocol>& info)
    return to_string(info.param);
 };
 
+static void setupLogging()
+{
+#if defined(GITHUB_ACTIONS)
+   spdlog::set_level(spdlog::level::warn);
+#elif defined(NDEBUG)
+   spdlog::set_level(spdlog::level::info);
+#else
+   spdlog::set_level(spdlog::level::debug);
+#endif
+}
+
 // =================================================================================================
 
 class Empty : public testing::Test
@@ -96,24 +107,39 @@ TEST_F(Empty, Path)
 
 class ClientConnect : public testing::Test
 {
+public:
+   void SetUp() override { setupLogging(); }
 };
 
-TEST_F(ClientConnect, DISABLED_ErrorResolve)
+TEST_F(ClientConnect, WHEN_unknown_host_THEN_completes_with_host_not_found_eventually)
 {
    boost::asio::io_context context;
    client::Config config{.url = boost::urls::url("http://this-domain-does-not-exist:12345")};
    client::Client client(context.get_executor(), config);
-   // TODO: test per-operation cancellation
-   // https://live.boost.org/doc/libs/1_86_0/doc/html/boost_asio/reference/co_composed.html
    client.async_connect([this](boost::system::error_code ec, Session session)
    {
       loge("ERROR: {}", ec.message());
-      EXPECT_TRUE(ec);
+      EXPECT_EQ(ec, boost::asio::error::netdb_errors::host_not_found);
    });
    context.run();
 }
 
-TEST_F(ClientConnect, ErrorNetworkUnreachable)
+TEST_F(ClientConnect, WHEN_async_connect_is_cancelled_THEN_returns_operation_aborted)
+{
+   boost::asio::io_context context;
+   client::Config config{.url = boost::urls::url("http://localhost:12345")};
+   client::Client client(context.get_executor(), config);
+   client.async_connect(cancel_after(0ms, [this](boost::system::error_code ec, Session session)
+   {
+      loge("ERROR: {}", ec.message());
+      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+   }));
+   ;
+
+   context.run();
+}
+
+TEST_F(ClientConnect, WHEN_connect_to_broadcast_ip_THEN_completes_with_network_unreachable)
 {
    boost::asio::io_context context;
    client::Config config{.url = boost::urls::url("http://255.255.255.255:12345")};
@@ -121,7 +147,7 @@ TEST_F(ClientConnect, ErrorNetworkUnreachable)
    client.async_connect([this](boost::system::error_code ec, Session session)
    {
       loge("ERROR: {}", ec.message());
-      EXPECT_TRUE(ec);
+      EXPECT_EQ(ec, boost::system::errc::network_unreachable);
    });
    context.run();
 }
@@ -141,13 +167,7 @@ class Server : public testing::TestWithParam<anyhttp::Protocol>
 protected:
    void SetUp() override
    {
-#if defined(GITHUB_ACTIONS)
-      spdlog::set_level(spdlog::level::warn);
-#elif defined(NDEBUG)
-      spdlog::set_level(spdlog::level::info);
-#else
-      spdlog::set_level(spdlog::level::debug);
-#endif
+      setupLogging();
 
       auto config = server::Config{.listen_address = "127.0.0.2", .port = 0};
 #if defined(MULTITHREADED)
@@ -757,7 +777,7 @@ TEST_P(ClientAsync, WHEN_server_discards_request_and_response_THEN_completes_any
 TEST_P(ClientAsync, WHEN_client_cancels_write_THEN_can_resume)
 {
    if (GetParam() == anyhttp::Protocol::http11)
-      GTEST_SKIP();  // a chunked body cannot be cancelled correctly --> disconnects
+      GTEST_SKIP(); // a chunked body cannot be cancelled correctly --> disconnects
 
    test = [this](Session session) -> awaitable<void>
    {
