@@ -2,8 +2,11 @@
 
 #include "common.hpp" // IWYU pragma: keep
 
+#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/buffer.hpp>
+
 #include <boost/beast/core/stream_traits.hpp>
+
 #include <boost/url.hpp>
 
 namespace anyhttp
@@ -43,10 +46,9 @@ public:
 
 public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
-   auto async_read_some(boost::asio::mutable_buffer buffer,
-                        CompletionToken&& token = CompletionToken())
+   auto async_read_some(asio::mutable_buffer buffer, CompletionToken&& token = CompletionToken())
    {
-      return boost::asio::async_initiate<CompletionToken, ReadSome>(
+      return asio::async_initiate<CompletionToken, ReadSome>(
          [&](ReadSomeHandler handler, asio::mutable_buffer buffer) { //
             async_read_some_any(buffer, std::move(handler));
          },
@@ -54,7 +56,7 @@ public:
    }
 
 private:
-   void async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler);
+   void async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler);
    std::unique_ptr<Impl> impl;
 };
 
@@ -85,35 +87,23 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken = DefaultCompletionToken>
    auto async_get_response(CompletionToken&& token = CompletionToken())
    {
-      struct initiation
-      {
-         Request* self;
-         using executor_type = boost::asio::any_io_executor;
-         executor_type get_executor() const noexcept { return self->get_executor(); }
-         auto operator()(GetResponseHandler handler)
-         {
-            self->async_get_response_any(std::move(handler));
-         }
-      };
-      return boost::asio::async_initiate<CompletionToken, GetResponse>(initiation{this}, token);
+      return asio::async_initiate<CompletionToken, GetResponse>(
+         asio::bind_executor(asio::get_associated_executor(token), [this](auto&& handler) { //
+            async_get_response_any(std::move(handler));
+         }),
+         token);
    }
 
 public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
    auto async_write(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
    {
-      struct initiation
-      {
-         Request* self;
-         asio::const_buffer buffer;
-         using executor_type = boost::asio::any_io_executor;
-         executor_type get_executor() const noexcept { return self->get_executor(); }
-         auto operator()(WriteHandler handler)
-         {
-            self->async_write_any(std::move(handler), buffer);
-         }
-      };
-      return boost::asio::async_initiate<CompletionToken, Write>(initiation{this, buffer}, token);
+      return asio::async_initiate<CompletionToken, Write>(
+         asio::bind_executor(asio::get_associated_executor(token),
+                             [this](auto&& handler, asio::const_buffer buffer) { //
+            async_write_any(std::move(handler), buffer);
+         }),
+         token, buffer);
    }
 
 private:
@@ -149,17 +139,10 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken = DefaultCompletionToken>
    auto async_connect(CompletionToken&& token = CompletionToken())
    {
-      struct initiation
-      {
-         Client* self;
-         using executor_type = boost::asio::any_io_executor;
-         executor_type get_executor() const noexcept { return self->get_executor(); }
-         auto operator()(ConnectHandler handler)
-         {
-            self->async_connect_any(std::move(handler));
-         }
-      };
-      return boost::asio::async_initiate<CompletionToken, Connect>(initiation{this}, token);
+      return asio::async_initiate<CompletionToken, Connect>(
+         bind_executor(asio::get_associated_executor(token), [&](auto&& handler) { 
+            async_connect_any(std::move(handler));
+         }), token);
    }
 
 private:

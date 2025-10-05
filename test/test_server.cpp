@@ -1,5 +1,5 @@
 #include "anyhttp/client.hpp"
-#include "anyhttp/formatter.hpp"
+#include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/request_handlers.hpp"
 #include "anyhttp/server.hpp"
 #include "anyhttp/session.hpp"
@@ -227,7 +227,7 @@ protected:
       auto threads =
          rv::iota(0) | rv::take(std::max(1u, std::thread::hardware_concurrency())) |
          rv::transform([this](int) { return std::thread([this] { ::run(context); }); }) |
-         ranges::to<std::vector>();
+         std::ranges::to<std::vector>();
 
       ::run(context);
 
@@ -351,7 +351,10 @@ protected:
          logi("exit_code={}", child.exit_code());
 
       if (--numSpawned <= 0)
+      {
+         co_await post(server->get_executor());
          server.reset();
+      }
 
       co_return result;
    }
@@ -362,7 +365,9 @@ protected:
       std::future<std::string> future;
       std::promise<std::string> promise;
       future = promise.get_future();
-      co_spawn(context, spawn_process(std::move(path), std::move(args)),
+      if (!strand)
+         strand = make_strand(context.get_executor());
+      co_spawn(*strand, spawn_process(std::move(path), std::move(args)),
                [promise = std::move(promise)](const std::exception_ptr& ex, std::string str) mutable
       {
          if (ex)
@@ -375,9 +380,10 @@ protected:
       return std::move(future);
    }
 
+   std::optional<any_io_executor> strand;
    bp::filesystem::path testFile{"CMakeLists.txt"};
    size_t testFileSize = file_size(testFile);
-   int numSpawned = 0;
+   std::atomic<int> numSpawned = 0;
 };
 
 INSTANTIATE_TEST_SUITE_P(External, External,
@@ -652,8 +658,8 @@ TEST_P(ClientAsync, WHEN_post_data_THEN_receive_echo)
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       size_t bytes = 1024; //  * 1024 * 1024;
-      auto res = co_await (send(request, bytes) && read_response(request));
-      EXPECT_EQ(bytes, res);
+      auto count = co_await (send(request, bytes) && read_response(request));
+      EXPECT_EQ(bytes, count);
    };
 }
 

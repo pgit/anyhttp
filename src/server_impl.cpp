@@ -27,7 +27,6 @@
 #include <spdlog/spdlog.h>
 
 #include <netinet/udp.h>
-// #include <netinet/ip.h>
 
 #include <print>
 
@@ -83,25 +82,24 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
  */
 void Server::Impl::start()
 {
-   co_spawn(m_executor, listen_loop(),
-            [self = shared_from_this()](const std::exception_ptr& ex)
-            {
-               if (ex)
-                  logw("TCP accept loop: {}", what(ex));
-               else
-                  logi("TCP accept loop: done");
-            });
+   co_spawn(m_executor, listen_loop(), [self = shared_from_this()](const std::exception_ptr& ex)
+   {
+      if (ex)
+         logw("TCP accept loop: {}", what(ex));
+      else
+         logi("TCP accept loop: done");
+   });
 
    if (m_udp_socket)
    {
       co_spawn(m_executor, udp_receive_loop(),
                [self = shared_from_this()](const std::exception_ptr& ex)
-               {
-                  if (ex)
-                     logw("UDP receive loop: {}", what(ex));
-                  else
-                     logi("UDP receive loop: done");
-               });
+      {
+         if (ex)
+            logw("UDP receive loop: {}", what(ex));
+         else
+            logi("UDP receive loop: done");
+      });
    }
 }
 
@@ -259,7 +257,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       asio::ssl::context ctx{asio::ssl::context::tlsv13};
       SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, NULL);
       SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, NULL);
-      
+
       //
       // TODO: This is a testing key only. Still, we might want to remove it from the repository
       //       to avoid flagging repository scanners.
@@ -394,26 +392,19 @@ awaitable<void> Server::Impl::listen_loop()
       //
       // Put each connection on a strand if needed.
       //
-      // TODO: This is slow. Consider multiple IO contexts instead,
+      // NOTE: This is slow. Consider multiple IO contexts instead,
       //       or explicit thread pools where really needed.
       //
       co_spawn(config().use_strand ? boost::asio::make_strand(executor) : executor,
-#if 1
-               handleConnection(std::move(socket)),
-#else      
-         [this, socket = std::move(socket)]() mutable { //
-            return handleConnection(std::move(socket));
-         },
-#endif
-               [&, ep](const std::exception_ptr& ex) mutable
-               {
-                  auto lock = std::lock_guard(m_sessionMutex);
-                  --sessionCounter;
-                  if (ex)
-                     logw("[{}] {}", ep, what(ex));
-                  else
-                     logi("[{}] session finished, {} sessions left", ep, sessionCounter);
-               });
+               handleConnection(std::move(socket)), [&, ep](const std::exception_ptr& ex) mutable
+      {
+         auto lock = std::lock_guard(m_sessionMutex);
+         --sessionCounter;
+         if (ex)
+            logw("[{}] {}", ep, what(ex));
+         else
+            logi("[{}] session finished, {} sessions left", ep, sessionCounter);
+      });
    }
 
    //
