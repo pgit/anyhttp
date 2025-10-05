@@ -3,7 +3,6 @@
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/as_tuple.hpp>
-#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/detached.hpp>

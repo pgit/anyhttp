@@ -135,7 +135,6 @@ TEST_F(ClientConnect, WHEN_async_connect_is_cancelled_THEN_returns_operation_abo
       loge("ERROR: {}", ec.message());
       EXPECT_EQ(ec, boost::system::errc::operation_canceled);
    }));
-   ;
 
    context.run();
 }

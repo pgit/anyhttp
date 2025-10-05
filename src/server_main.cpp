@@ -3,7 +3,6 @@
 #include "anyhttp/utils.hpp"
 
 #include <boost/asio/as_tuple.hpp>
-#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
