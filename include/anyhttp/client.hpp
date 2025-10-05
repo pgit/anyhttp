@@ -87,8 +87,9 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken = DefaultCompletionToken>
    auto async_get_response(CompletionToken&& token = CompletionToken())
    {
+      auto executor = asio::get_associated_executor(token, get_executor());
       return asio::async_initiate<CompletionToken, GetResponse>(
-         asio::bind_executor(asio::get_associated_executor(token), [this](auto&& handler) { //
+         asio::bind_executor(executor, [this](auto&& handler) { //
             async_get_response_any(std::move(handler));
          }),
          token);
@@ -98,9 +99,10 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
    auto async_write(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
    {
+      // FIXME: get_executor() breaks testcase SpawnAndForget because the impl is already gone there
+      auto executor = asio::get_associated_executor(token); // , get_executor());
       return asio::async_initiate<CompletionToken, Write>(
-         asio::bind_executor(asio::get_associated_executor(token),
-                             [this](auto&& handler, asio::const_buffer buffer) { //
+         asio::bind_executor(executor, [this](auto&& handler, asio::const_buffer buffer) { //
             async_write_any(std::move(handler), buffer);
          }),
          token, buffer);
@@ -139,10 +141,10 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken = DefaultCompletionToken>
    auto async_connect(CompletionToken&& token = CompletionToken())
    {
+      auto executor = asio::get_associated_executor(token, get_executor());
       return asio::async_initiate<CompletionToken, Connect>(
-         bind_executor(asio::get_associated_executor(token), [&](auto&& handler) { 
-            async_connect_any(std::move(handler));
-         }), token);
+         bind_executor(executor, [&](auto&& handler) { async_connect_any(std::move(handler)); }),
+         token);
    }
 
 private:

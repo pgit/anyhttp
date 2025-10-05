@@ -51,8 +51,9 @@ public:
    auto async_submit(boost::urls::url url, const Fields& headers = {},
                      CompletionToken&& token = CompletionToken())
    {
+      auto executor = asio::get_associated_executor(token, get_executor());
       return asio::async_initiate<CompletionToken, Submit>(
-         asio::bind_executor(asio::get_associated_executor(token),
+         asio::bind_executor(executor,
                              [this](auto&& handler, boost::urls::url url, const Fields& headers) {// 
             async_submit_any(std::move(handler), std::move(url), headers);
          }),
