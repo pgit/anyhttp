@@ -2,7 +2,7 @@
 # https://github.com/microsoft/vscode-dev-containers/tree/main/containers/debian
 # https://github.com/pgit/cpp-devcontainer
 #
-FROM docker.io/psedoc/cpp-devcontainer:testing
+FROM docker.io/psedoc/cpp-devcontainer:0.20
 
 #
 # GDB libc++ pretty printer (works for string, but not for map with llvm-18)
@@ -38,13 +38,6 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
     apt-get -y install libnghttp2-dev libev-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-
-RUN cd opt && \
-    git clone --depth 1 https://github.com/curl/curl.git && \
-    cd curl && autoreconf -fi && \
-    ./configure --with-openssl --without-libpsl --with-nghttp2 --prefix /usr/local && \
-    make -j$(nproc) && make install && \
-    cd .. && rm -rf curl
 
 #
 # spdlog
@@ -130,6 +123,16 @@ RUN git clone --recursive --depth 1 --branch ${NGHTTP2_VERSION} https://github.c
 #    ./configure --prefix=/usr/local --with-mruby --enable-http3 --with-libbpf \
 #        LIBNGTCP2_CRYPTO_BORINGSSL_CFLAGS="-I/opt/boringssl/include" \
 #        LIBNGTCP2_CRYPTO_BORINGSSL_LIBS="-L/opt/boringssl/lib -lssl -lcrypto" && \
+
+RUN cd opt && \
+    git clone --depth 1 https://github.com/curl/curl.git && \
+    cd curl && autoreconf -fi && \
+    ./configure --with-openssl --without-libpsl --with-nghttp2 \
+                --with-ngtcp2 --with-nghttp3 \
+                --prefix /usr/local && \
+    make -j$(nproc) && make install && \
+    cd .. && rm -rf curl
+RUN apt-get -y remove curl
 
 # ==================================================================================================
 
