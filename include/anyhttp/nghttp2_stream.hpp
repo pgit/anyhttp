@@ -158,10 +158,10 @@ public:
    NGHttp2Stream(NGHttp2Session& parent, int id);
    ~NGHttp2Stream();
 
-   /// This function is called from `nghttp2_on_data_chunk_recv_callback`.
+   /// This function is called on receiving a data frame `nghttp2_on_data_chunk_recv_callback`.
    void on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len);
 
-   /// This function is called after handling a header or data frame, if the EOF flag is set.
+   /// This function is called on receiving a header or data frame that has the EOF flag set.
    void on_eof(nghttp2_session* session, int32_t id_);
 
    // =================================================================================================

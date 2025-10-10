@@ -158,7 +158,7 @@ void Server::Impl::listen_udp()
    //
    // QUIC test -- open a UDP port
    //
-   m_udp_socket.emplace(m_executor, ip::udp::endpoint(ip::udp::v4(), config().port));
+   m_udp_socket.emplace(m_executor, ip::udp::endpoint(ip::udp::v6(), config().port));
    m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
    m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTTL>(1));
 }
@@ -473,7 +473,7 @@ awaitable<void> Server::Impl::udp_receive_loop()
       co_await m_udp_socket->async_wait(boost::asio::socket_base::wait_read);
 
       auto ec = recvmsg(native_handle, &msg, 0);
-      logd("ec={} from={} tos={}", ec, sockaddr_to_endpoint(sender_addr),
+      logd("{} bytes from={} ecn={}", ec, normalize(sockaddr_to_endpoint(sender_addr)),
            ngtcp2::msghdr_get_ecn(&msg, family));
 
       for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg); cmsg != nullptr;

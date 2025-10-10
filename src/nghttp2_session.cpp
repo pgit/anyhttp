@@ -233,7 +233,7 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
       else if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE)
          stream->on_response();
 
-      // no body?
+      // end of of stream already? --> no body
       if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)
          stream->on_eof(session, frame->hd.stream_id);
 
