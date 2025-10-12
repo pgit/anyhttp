@@ -62,11 +62,6 @@ Response::Impl::~Impl() = default;
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
-#if !defined(NDEBUG)
-   // spdlog::set_level(spdlog::level::debug);
-#else
-   // spdlog::set_level(spdlog::level::info);
-#endif
    logi("Server: ctor");
    listen_tcp();
    listen_udp();
