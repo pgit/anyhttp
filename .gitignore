@@ -1,5 +1,6 @@
 .cache
 .vscode
+pki/out
 docs/_build
 gtest-parallel-logs
 report.xml

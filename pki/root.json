@@ -1,0 +1,17 @@
+{
+   "CA": {
+      "expiry": "8760h",
+      "pathlen": 0
+   },
+   "CN": "Test Root CA",
+   "key": {
+      "algo": "ecdsa",
+      "size": 256
+   },
+   "names": [
+      {
+         "C": "DE",
+         "O": "AnyHTTP"
+      }
+   ]
+}
