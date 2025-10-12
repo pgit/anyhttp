@@ -250,8 +250,8 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       // TODO: This is a testing key only. Still, we might want to remove it from the repository
       //       to avoid flagging repository scanners.
       //
-      ctx.use_certificate_chain_file("etc/darkbase-chain.pem");
-      ctx.use_private_key_file("etc/darkbase-key.pem", asio::ssl::context::pem);
+      ctx.use_certificate_chain_file("pki/out/server.pem");
+      ctx.use_private_key_file("pki/out/server-key.pem", asio::ssl::context::pem);
 
       ssl_stream.emplace(std::move(socket), ctx);
       auto n = co_await ssl_stream->async_handshake(asio::ssl::stream_base::server, buffer.data());

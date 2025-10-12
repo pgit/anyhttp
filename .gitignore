@@ -1,6 +1,8 @@
 .cache
 .vscode
-pki/out
+pki/out/*
+!pki/out/server.pem
+!pki/out/server-key.pem
 docs/_build
 gtest-parallel-logs
 report.xml
