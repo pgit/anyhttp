@@ -59,8 +59,8 @@
  *
  * and undefine MESSAGE macro.
  */
-#define REMOTE_HOST "www.google.com"
-#define REMOTE_PORT "443"
+#define REMOTE_HOST "localhost"
+#define REMOTE_PORT "8080"
 #define ALPN "\x2h3"
 #undef MESSAGE
  
