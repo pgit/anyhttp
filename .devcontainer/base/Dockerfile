@@ -35,7 +35,7 @@ RUN cd /home/${USERNAME} && \
 #        replace that...
 #
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
-    apt-get -y install libnghttp2-dev libev-dev && \
+    apt-get -y install libnghttp2-dev libev-dev golang-cfssl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
