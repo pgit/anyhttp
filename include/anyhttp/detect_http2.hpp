@@ -1,14 +1,10 @@
 #pragma once
 #include <boost/asio.hpp>
-#include <boost/asio/deferred.hpp>
 #include <boost/asio/experimental/co_composed.hpp>
-#include <boost/beast/core/detect_ssl.hpp>
-#include <boost/beast/core/stream_traits.hpp>
-#include <boost/beast/core/tcp_stream.hpp>
-#include <boost/logic/tribool.hpp>
 
-#include <cstring>
-#include "anyhttp/common.hpp"
+#include <boost/beast/core/stream_traits.hpp>
+
+#include <boost/logic/tribool.hpp>
 
 namespace anyhttp::server
 {
@@ -57,8 +53,6 @@ boost::tribool is_http2_client_preface(const ConstBufferSequence& buffers)
 
    return buffer_sequence_starts_with(buffers, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
 }
-
-using boost::beast::detail::is_tls_client_hello;
 
 } // namespace detail
 
@@ -112,42 +106,6 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
          },
          stream),
       token, std::ref(buffer), std::ref(stream));
-}
-
-// -------------------------------------------------------------------------------------------------
-
-template <typename AsyncReadStream, typename DynamicBuffer,
-          typename CompletionToken = DefaultCompletionToken>
-auto async_detect_ssl_awaitable(AsyncReadStream& stream, DynamicBuffer& buffer,
-                                CompletionToken&& token = CompletionToken())
-{
-   static_assert(boost::beast::is_async_read_stream<AsyncReadStream>::value,
-                 "AsyncReadStream type requirements not met");
-   static_assert(asio::is_dynamic_buffer<DynamicBuffer>::value,
-                 "DynamicBuffer type requirements not met");
-
-   using namespace boost::asio;
-   return async_initiate<CompletionToken, void(boost::system::error_code, size_t)>(
-      co_composed<void(boost::system::error_code, bool)>(
-         [](auto state, AsyncReadStream& stream, DynamicBuffer& buffer) -> void
-         {
-            state.reset_cancellation_state(enable_terminal_cancellation());
-
-            for (;;)
-            {
-               boost::tribool result = detail::is_tls_client_hello(buffer.data());
-               if (!boost::indeterminate(result))
-                  co_return std::make_tuple(boost::system::error_code{}, static_cast<bool>(result));
-
-               auto prepared = buffer.prepare(1460);
-               auto [ec, n] = co_await stream.async_read_some(prepared, as_tuple);
-               if (ec)
-                  co_return {ec, false};
-               buffer.commit(n);
-            }
-         },
-         stream),
-      token, std::ref(stream), std::ref(buffer));
 }
 
 // =================================================================================================

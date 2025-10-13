@@ -5,6 +5,7 @@
 #include "anyhttp/beast_session.hpp"
 #include "anyhttp/detail/nghttp2_session_details.hpp"
 #include "anyhttp/detect_http2.hpp"
+#include "anyhttp/detect_ssl.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/nghttp2_session.hpp"
 
