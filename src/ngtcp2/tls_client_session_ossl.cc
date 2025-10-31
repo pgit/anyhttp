@@ -1,7 +1,7 @@
 /*
  * ngtcp2
  *
- * Copyright (c) 2021 ngtcp2 contributors
+ * Copyright (c) 2025 ngtcp2 contributors
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -22,13 +22,14 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include "tls_client_session_boringssl.h"
+#include "tls_client_session_ossl.h"
 
 #include <cassert>
 #include <iostream>
-#include <fstream>
 
-#include "tls_client_context_boringssl.h"
+#include <openssl/err.h>
+
+#include "tls_client_context_ossl.h"
 #include "client_base.h"
 #include "template.h"
 #include "util.h"
@@ -47,33 +48,41 @@ int TLSClientSession::init(bool &early_data_enabled,
 
   auto ssl_ctx = tls_ctx.get_native_handle();
 
-  ssl_ = SSL_new(ssl_ctx);
-  if (!ssl_) {
+  auto ssl = SSL_new(ssl_ctx);
+  if (!ssl) {
     std::cerr << "SSL_new: " << ERR_error_string(ERR_get_error(), nullptr)
               << std::endl;
     return -1;
   }
 
-  SSL_set_app_data(ssl_, client->conn_ref());
-  SSL_set_connect_state(ssl_);
+  ngtcp2_crypto_ossl_ctx_set_ssl(ossl_ctx_, ssl);
+
+  if (ngtcp2_crypto_ossl_configure_client_session(ssl) != 0) {
+    std::cerr << "ngtcp2_crypto_ossl_configure_client_session failed"
+              << std::endl;
+    return -1;
+  }
+
+  SSL_set_app_data(ssl, client->conn_ref());
+  SSL_set_connect_state(ssl);
 
   switch (app_proto) {
   case AppProtocol::H3:
-    SSL_set_alpn_protos(ssl_, H3_ALPN.data(), H3_ALPN.size());
+    SSL_set_alpn_protos(ssl, H3_ALPN.data(), H3_ALPN.size());
     break;
   case AppProtocol::HQ:
-    SSL_set_alpn_protos(ssl_, HQ_ALPN.data(), HQ_ALPN.size());
+    SSL_set_alpn_protos(ssl, HQ_ALPN.data(), HQ_ALPN.size());
     break;
   }
 
   if (!config.sni.empty()) {
-    SSL_set_tlsext_host_name(ssl_, config.sni.data());
+    SSL_set_tlsext_host_name(ssl, config.sni.data());
   } else if (util::numeric_host(remote_addr)) {
     // If remote host is numeric address, just send "localhost" as SNI
     // for now.
-    SSL_set_tlsext_host_name(ssl_, "localhost");
+    SSL_set_tlsext_host_name(ssl, "localhost");
   } else {
-    SSL_set_tlsext_host_name(ssl_, remote_addr);
+    SSL_set_tlsext_host_name(ssl, remote_addr);
   }
 
   if (config.session_file) {
@@ -88,60 +97,25 @@ int TLSClientSession::init(bool &early_data_enabled,
         std::cerr << "Could not read TLS session file " << config.session_file
                   << std::endl;
       } else {
-        if (!SSL_set_session(ssl_, session)) {
+        if (!SSL_set_session(ssl, session)) {
           std::cerr << "Could not set session" << std::endl;
         } else if (!config.disable_early_data &&
-                   SSL_SESSION_early_data_capable(session)) {
+                   SSL_SESSION_get_max_early_data(session)) {
           early_data_enabled = true;
-          SSL_set_early_data_enabled(ssl_, 1);
+          SSL_set_quic_tls_early_data_enabled(ssl, 1);
         }
+
         SSL_SESSION_free(session);
       }
     }
-  }
-
-  if (!config.ech_config_list.empty() &&
-      SSL_set1_ech_config_list(ssl_, config.ech_config_list.data(),
-                               config.ech_config_list.size()) != 1) {
-    std::cerr << "Could not set ECHConfigList: "
-              << ERR_error_string(ERR_get_error(), nullptr) << std::endl;
-    return -1;
   }
 
   return 0;
 }
 
 bool TLSClientSession::get_early_data_accepted() const {
-  return SSL_early_data_accepted(ssl_);
-}
+  auto ssl = ngtcp2_crypto_ossl_ctx_get_ssl(ossl_ctx_);
 
-bool TLSClientSession::get_ech_accepted() const {
-  return SSL_ech_accepted(ssl_);
-}
-
-int TLSClientSession::write_ech_config_list(const char *path) const {
-  const uint8_t *retry_configs;
-  size_t retry_configslen;
-
-  SSL_get0_ech_retry_configs(ssl_, &retry_configs, &retry_configslen);
-  if (retry_configslen == 0) {
-    std::cerr << "No ECH retry configs found" << std::endl;
-    return -1;
-  }
-
-  auto f = std::ofstream(path);
-
-  if (!f) {
-    return -1;
-  }
-
-  f.write(reinterpret_cast<const char *>(retry_configs),
-          static_cast<std::streamsize>(retry_configslen));
-  f.close();
-
-  if (!f) {
-    return -1;
-  }
-
-  return 0;
+  // SSL_get_early_data_status works after handshake completes.
+  return SSL_get_early_data_status(ssl) == SSL_EARLY_DATA_ACCEPTED;
 }

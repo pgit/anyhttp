@@ -30,10 +30,14 @@
 #endif // defined(HAVE_CONFIG_H)
 
 #include <optional>
+#include <string_view>
+#include <span>
 
 #include <ngtcp2/ngtcp2.h>
 
 #include "network.h"
+
+using namespace std::literals;
 
 namespace ngtcp2 {
 
@@ -42,15 +46,26 @@ enum class AppProtocol {
   HQ,
 };
 
-constexpr uint8_t HQ_ALPN[] = "\xahq-interop";
-constexpr uint8_t HQ_ALPN_V1[] = "\xahq-interop";
+template <size_t N>
+consteval std::span<const uint8_t> as_uint8_span(const uint8_t (&s)[N]) {
+  return {s, N - 1};
+}
 
-constexpr uint8_t H3_ALPN[] = "\x2h3";
-constexpr uint8_t H3_ALPN_V1[] = "\x2h3";
+inline constexpr uint8_t RAW_HQ_ALPN[] = "\xahq-interop";
+inline constexpr auto HQ_ALPN = as_uint8_span(RAW_HQ_ALPN);
+inline constexpr auto HQ_ALPN_V1 = as_uint8_span(RAW_HQ_ALPN);
+
+inline constexpr uint8_t RAW_H3_ALPN[] = "\x2h3";
+inline constexpr auto H3_ALPN = as_uint8_span(RAW_H3_ALPN);
+inline constexpr auto H3_ALPN_V1 = as_uint8_span(RAW_H3_ALPN);
+
+inline constexpr uint32_t TLS_ALERT_ECH_REQUIRED = 121;
+
+inline constexpr size_t MAX_RECV_PKTS = 64;
 
 // msghdr_get_ecn gets ECN bits from |msg|.  |family| is the address
 // family from which packet is received.
-unsigned int msghdr_get_ecn(msghdr *msg, int family);
+uint8_t msghdr_get_ecn(msghdr *msg, int family);
 
 // fd_set_recv_ecn sets socket option to |fd| so that it can receive
 // ECN bits.
@@ -72,7 +87,7 @@ std::optional<Address> msghdr_get_local_addr(msghdr *msg, int family);
 // not found, or UDP_GRO is not supported, this function returns 0.
 size_t msghdr_get_udp_gro(msghdr *msg);
 
-void set_port(Address &dst, Address &src);
+void set_port(Address &dst, const Address &src);
 
 // get_local_addr stores preferred local address (interface address)
 // in |iau| for a given destination address |remote_addr|.

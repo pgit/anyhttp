@@ -42,6 +42,8 @@
 #  include <arpa/inet.h>
 #endif // defined(HAVE_ARPA_INET_H)
 
+#include <netinet/ip.h>
+
 #include <array>
 
 #include <ngtcp2/ngtcp2.h>

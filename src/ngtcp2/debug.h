@@ -118,7 +118,13 @@ void print_http_response_headers(int64_t stream_id, const nghttp3_nv *nva,
 
 void print_http_settings(const nghttp3_settings *settings);
 
+void print_http_origin(const uint8_t *origin, size_t originlen);
+
+void print_http_end_origin();
+
 std::string_view secret_title(ngtcp2_encryption_level level);
+
+void print_conn_info(ngtcp2_conn *conn);
 
 } // namespace debug
 

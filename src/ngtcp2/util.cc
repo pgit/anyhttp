@@ -24,6 +24,7 @@
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "util.h"
+#include <boost/asio/ip/address.hpp>
 
 #ifdef HAVE_ARPA_INET_H
 #  include <arpa/inet.h>
@@ -32,9 +33,11 @@
 #  include <netinet/in.h>
 #endif // defined(HAVE_NETINET_IN_H)
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <sys/mman.h>
 
 #include <cassert>
 #include <cstring>
@@ -54,50 +57,22 @@ namespace ngtcp2 {
 
 namespace util {
 
-std::optional<std::string> read_pem(const std::string_view &filename,
-                                    const std::string_view &name,
-                                    const std::string_view &type);
+std::optional<HPKEPrivateKey>
+read_hpke_private_key_pem(const std::string_view &filename);
+
+std::optional<std::vector<uint8_t>> read_pem(const std::string_view &filename,
+                                             const std::string_view &name,
+                                             const std::string_view &type);
 
 int write_pem(const std::string_view &filename, const std::string_view &name,
               const std::string_view &type, std::span<const uint8_t> data);
 
-namespace {
-constexpr char LOWER_XDIGITS[] = "0123456789abcdef";
-} // namespace
-
-std::string format_hex(uint8_t c) {
-  std::string s;
-  s.resize(2);
-
-  s[0] = LOWER_XDIGITS[c >> 4];
-  s[1] = LOWER_XDIGITS[c & 0xf];
-
-  return s;
-}
-
-std::string format_hex(std::span<const uint8_t> s) {
-  std::string res;
-  res.resize(s.size() * 2);
-
-  auto p = std::begin(res);
-
-  for (auto c : s) {
-    *p++ = LOWER_XDIGITS[c >> 4];
-    *p++ = LOWER_XDIGITS[c & 0x0f];
-  }
-  return res;
-}
-
-std::string format_hex(const std::string_view &s) {
-  return format_hex({reinterpret_cast<const uint8_t *>(s.data()), s.size()});
-}
-
 std::string decode_hex(const std::string_view &s) {
   assert(s.size() % 2 == 0);
   std::string res(s.size() / 2, '0');
-  auto p = std::begin(res);
-  for (auto it = std::begin(s); it != std::end(s); it += 2) {
-    *p++ = (hex_to_uint(*it) << 4) | hex_to_uint(*(it + 1));
+  auto p = std::ranges::begin(res);
+  for (auto it = std::ranges::begin(s); it != std::ranges::end(s); it += 2) {
+    *p++ = static_cast<char>((hex_to_uint(*it) << 4) | hex_to_uint(*(it + 1)));
   }
   return res;
 }
@@ -134,7 +109,7 @@ uint64_t round2even(uint64_t n) {
 } // namespace
 
 std::string format_durationf(uint64_t ns) {
-  static constexpr const std::string_view units[] = {"us"sv, "ms"sv, "s"sv};
+  static constexpr std::string_view units[] = {"us"sv, "ms"sv, "s"sv};
   if (ns < 1000) {
     return format_uint(ns) + "ns";
   }
@@ -157,7 +132,7 @@ std::string format_durationf(uint64_t ns) {
   }
 
   auto res = format_uint(ns / 1000);
-  res += format_fraction2(ns % 1000);
+  res += format_fraction2(static_cast<uint32_t>(ns % 1000));
   res += units[unit];
 
   return res;
@@ -169,9 +144,17 @@ std::mt19937 make_mt19937() {
 }
 
 ngtcp2_tstamp timestamp() {
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(
-           std::chrono::steady_clock::now().time_since_epoch())
-    .count();
+  return static_cast<ngtcp2_tstamp>(
+    std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch())
+      .count());
+}
+
+ngtcp2_tstamp system_clock_now() {
+  return static_cast<ngtcp2_tstamp>(
+    std::chrono::floor<std::chrono::nanoseconds>(
+      std::chrono::system_clock::now().time_since_epoch())
+      .count());
 }
 
 bool numeric_host(const char *hostname) {
@@ -190,14 +173,7 @@ bool numeric_host(const char *hostname, int family) {
 namespace {
 uint8_t *hexdump_addr(uint8_t *dest, size_t addr) {
   // Lower 32 bits are displayed.
-  for (size_t i = 0; i < 4; ++i) {
-    auto a = (addr >> (3 - i) * 8) & 0xff;
-
-    *dest++ = LOWER_XDIGITS[a >> 4];
-    *dest++ = LOWER_XDIGITS[a & 0xf];
-  }
-
-  return dest;
+  return format_hex(static_cast<uint32_t>(addr), dest);
 }
 } // namespace
 
@@ -222,8 +198,7 @@ uint8_t *hexdump_ascii(uint8_t *dest, std::span<const uint8_t> data) {
 namespace {
 uint8_t *hexdump8(uint8_t *dest, std::span<const uint8_t> data) {
   for (auto c : data) {
-    *dest++ = LOWER_XDIGITS[c >> 4];
-    *dest++ = LOWER_XDIGITS[c & 0xf];
+    dest = format_hex(c, dest);
     *dest++ = ' ';
   }
 
@@ -296,37 +271,37 @@ int hexdump(FILE *out, const void *data, size_t datalen) {
 
   auto fd = fileno(out);
   std::array<uint8_t, 4096> buf;
+  auto input = std::span{reinterpret_cast<const uint8_t *>(data), datalen};
   auto last = buf.data();
-  auto in = reinterpret_cast<const uint8_t *>(data);
   auto repeated = false;
+  std::span<const uint8_t> s, last_s{};
 
-  for (size_t offset = 0; offset < datalen; offset += 16) {
-    auto n = datalen - offset;
-    auto s = in + offset;
+  for (; !input.empty(); input = input.subspan(s.size())) {
+    s = input;
 
-    if (n >= 16) {
-      n = 16;
+    if (s.size() >= 16) {
+      s = s.first(16);
 
-      if (offset > 0) {
-        if (std::equal(s - 16, s, s)) {
-          if (repeated) {
-            continue;
-          }
-
-          repeated = true;
-
-          *last++ = '*';
-          *last++ = '\n';
-
+      if (std::ranges::equal(last_s, s)) {
+        if (repeated) {
           continue;
         }
 
-        repeated = false;
+        repeated = true;
+
+        *last++ = '*';
+        *last++ = '\n';
+
+        continue;
       }
+
+      repeated = false;
     }
 
-    last = hexdump_line(last, {s, n}, offset);
+    last = hexdump_line(
+      last, s, as_unsigned(s.data() - reinterpret_cast<const uint8_t *>(data)));
     *last++ = '\n';
+    last_s = s;
 
     auto len = static_cast<size_t>(last - buf.data());
     if (len + min_space > buf.size()) {
@@ -349,13 +324,15 @@ int hexdump(FILE *out, const void *data, size_t datalen) {
   return 0;
 }
 
-std::string_view make_cid_key(const ngtcp2_cid *cid) {
-  return make_cid_key({cid->data, cid->datalen});
-}
+ngtcp2_cid make_cid_key(std::span<const uint8_t> cid) {
+  assert(cid.size() <= NGTCP2_MAX_CIDLEN);
 
-std::string_view make_cid_key(std::span<const uint8_t> cid) {
-  return std::string_view{reinterpret_cast<const char *>(cid.data()),
-                          cid.size()};
+  ngtcp2_cid res;
+
+  std::ranges::copy(cid, std::ranges::begin(res.data));
+  res.datalen = cid.size();
+
+  return res;
 }
 
 std::string straddr(const sockaddr *sa, socklen_t salen) {
@@ -432,19 +409,19 @@ read_mime_types(const std::string_view &filename) {
       continue;
     }
 
-    auto p = std::find_if(std::begin(line), std::end(line), rws);
-    if (p == std::begin(line) || p == std::end(line)) {
+    auto p = std::ranges::find_if(line, rws);
+    if (p == std::ranges::begin(line) || p == std::ranges::end(line)) {
       continue;
     }
 
-    auto media_type = std::string{std::begin(line), p};
+    auto media_type = std::string{std::ranges::begin(line), p};
     for (;;) {
-      auto ext = std::find_if_not(p, std::end(line), rws);
-      if (ext == std::end(line)) {
+      auto ext = std::ranges::find_if_not(p, std::ranges::end(line), rws);
+      if (ext == std::ranges::end(line)) {
         break;
       }
 
-      p = std::find_if(ext, std::end(line), rws);
+      p = std::ranges::find_if(ext, std::ranges::end(line), rws);
       dest.emplace(std::string{ext, p}, media_type);
     }
   }
@@ -482,11 +459,11 @@ parse_uint_internal(const std::string_view &s) {
 
   for (size_t i = 0; i < s.size(); ++i) {
     auto c = s[i];
-    if (c < '0' || '9' < c) {
+    if (!is_digit(c)) {
       return {{res, i}};
     }
 
-    auto d = c - '0';
+    auto d = static_cast<uint64_t>(c - '0');
     if (res > (std::numeric_limits<uint64_t>::max() - d) / 10) {
       return {};
     }
@@ -649,8 +626,8 @@ std::string normalize_path(const std::string_view &path) {
   std::array<char, 1024> res;
   auto p = res.data();
 
-  auto first = std::begin(path);
-  auto last = std::end(path);
+  auto first = std::ranges::begin(path);
+  auto last = std::ranges::end(path);
 
   *p++ = '/';
   ++first;
@@ -681,12 +658,12 @@ std::string normalize_path(const std::string_view &path) {
     if (*(p - 1) != '/') {
       p = eat_file(res.data(), p);
     }
-    auto slash = std::find(first, last, '/');
+    auto slash = std::ranges::find(first, last, '/');
     if (slash == last) {
-      p = std::copy(first, last, p);
+      p = std::ranges::copy(first, last, p).out;
       break;
     }
-    p = std::copy(first, slash + 1, p);
+    p = std::ranges::copy(first, slash + 1, p).out;
     first = slash + 1;
     for (; first != last && *first == '/'; ++first)
       ;
@@ -730,17 +707,18 @@ int create_nonblock_socket(int domain, int type, int protocol) {
 
 std::vector<std::string_view> split_str(const std::string_view &s, char delim) {
   size_t len = 1;
-  auto last = std::end(s);
+  auto last = std::ranges::end(s);
   std::string_view::const_iterator d;
-  for (auto first = std::begin(s); (d = std::find(first, last, delim)) != last;
+  for (auto first = std::ranges::begin(s);
+       (d = std::ranges::find(first, last, delim)) != last;
        ++len, first = d + 1)
     ;
 
   auto list = std::vector<std::string_view>(len);
 
   len = 0;
-  for (auto first = std::begin(s);; ++len) {
-    auto stop = std::find(first, last, delim);
+  for (auto first = std::ranges::begin(s);; ++len) {
+    auto stop = std::ranges::find(first, last, delim);
     // xcode clang does not understand std::string_view{first, stop}.
     list[len] = std::string_view{first, static_cast<size_t>(stop - first)};
     if (stop == last) {
@@ -752,45 +730,147 @@ std::vector<std::string_view> split_str(const std::string_view &s, char delim) {
 }
 
 std::optional<uint32_t> parse_version(const std::string_view &s) {
-  auto k = s;
-  if (!util::istarts_with(k, "0x"sv)) {
+  if (!util::istarts_with(s, "0x"sv)) {
     return {};
   }
-  k = k.substr(2);
+  auto k = s.substr(2);
+  auto k_last = k.data() + k.size();
   uint32_t v;
-  auto rv = std::from_chars(k.data(), k.data() + k.size(), v, 16);
-  if (rv.ptr != k.data() + k.size() || rv.ec != std::errc{}) {
+  auto rv = std::from_chars(k.data(), k_last, v, 16);
+  if (rv.ptr != k_last || rv.ec != std::errc{}) {
     return {};
   }
 
   return v;
 }
 
-std::optional<std::string> read_token(const std::string_view &filename) {
-  return read_pem(filename, "token", "QUIC TOKEN");
+std::optional<std::vector<uint8_t>>
+read_token(const std::string_view &filename) {
+  return read_pem(filename, "token"sv, "QUIC TOKEN"sv);
 }
 
 int write_token(const std::string_view &filename,
                 std::span<const uint8_t> token) {
-  return write_pem(filename, "token", "QUIC TOKEN", token);
+  return write_pem(filename, "token"sv, "QUIC TOKEN"sv, token);
 }
 
-std::optional<std::string>
+std::optional<std::vector<uint8_t>>
 read_transport_params(const std::string_view &filename) {
-  return read_pem(filename, "transport parameters",
-                  "QUIC TRANSPORT PARAMETERS");
+  return read_pem(filename, "transport parameters"sv,
+                  "QUIC TRANSPORT PARAMETERS"sv);
 }
 
 int write_transport_params(const std::string_view &filename,
                            std::span<const uint8_t> data) {
-  return write_pem(filename, "transport parameters",
-                   "QUIC TRANSPORT PARAMETERS", data);
+  return write_pem(filename, "transport parameters"sv,
+                   "QUIC TRANSPORT PARAMETERS"sv, data);
+}
+
+std::string percent_decode(const std::string_view &s) {
+  std::string result;
+  result.resize(s.size());
+  auto p = std::ranges::begin(result);
+  for (auto first = std::ranges::begin(s), last = std::ranges::end(s);
+       first != last; ++first) {
+    if (*first != '%') {
+      *p++ = *first;
+      continue;
+    }
+
+    if (first + 1 != last && first + 2 != last && is_hex_digit(*(first + 1)) &&
+        is_hex_digit(*(first + 2))) {
+      *p++ = static_cast<char>((hex_to_uint(*(first + 1)) << 4) +
+                               hex_to_uint(*(first + 2)));
+      first += 2;
+      continue;
+    }
+
+    *p++ = *first;
+  }
+  result.resize(as_unsigned(p - std::ranges::begin(result)));
+  return result;
+}
+
+std::optional<std::vector<uint8_t>> read_file(const std::string_view &path) {
+  auto fd = open(path.data(), O_RDONLY);
+  if (fd == -1) {
+    return {};
+  }
+
+  auto fd_d = defer(close, fd);
+
+  auto size = lseek(fd, 0, SEEK_END);
+  if (size == static_cast<off_t>(-1)) {
+    return {};
+  }
+
+  auto addr =
+    mmap(nullptr, static_cast<size_t>(size), PROT_READ, MAP_SHARED, fd, 0);
+  if (addr == MAP_FAILED) {
+    return {};
+  }
+
+  auto addr_d = defer(munmap, addr, static_cast<size_t>(size));
+
+  auto p = static_cast<uint8_t *>(addr);
+
+  return {{p, p + size}};
+}
+
+size_t clamp_buffer_size(ngtcp2_conn *conn, size_t buflen, size_t gso_burst) {
+  return std::min(gso_burst == 0
+                    ? ngtcp2_conn_get_send_quantum(conn)
+                    : ngtcp2_conn_get_path_max_tx_udp_payload_size(conn) *
+                        gso_burst,
+                  buflen);
+}
+
+bool recv_pkt_time_threshold_exceeded(bool time_sensitive, ngtcp2_tstamp start,
+                                      size_t pktcnt) {
+  return time_sensitive && pktcnt &&
+         util::timestamp() - start >= NGTCP2_MILLISECONDS;
+}
+
+std::optional<ECHServerConfig>
+read_ech_server_config(const std::string_view &path) {
+  auto pkey = read_hpke_private_key_pem(path);
+  if (!pkey) {
+    return {};
+  }
+
+  auto ech_config = read_pem(path, "ECH config"sv, "ECHCONFIG"sv);
+  if (!ech_config) {
+    return {};
+  }
+
+  return ECHServerConfig{
+    .private_key = std::move(*pkey),
+    .ech_config = std::move(*ech_config),
+  };
+}
+
+std::span<uint64_t, 2> generate_siphash_key() {
+  static auto key = []() {
+    std::array<uint64_t, 2> key;
+
+    auto rv = generate_secure_random(as_writable_uint8_span(std::span{key}));
+    if (rv != 0) {
+      assert(0);
+      abort();
+    }
+
+    return key;
+  }();
+
+  ++key[0];
+
+  return key;
 }
 
 } // namespace util
 
 std::ostream &operator<<(std::ostream &os, const ngtcp2_cid &cid) {
-  return os << "0x" << util::format_hex({cid.data, cid.datalen});
+  return os << "0x" << util::format_hex(cid.data, as_signed(cid.datalen));
 }
 
 } // namespace ngtcp2

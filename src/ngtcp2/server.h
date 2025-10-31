@@ -47,6 +47,7 @@
 #include "tls_server_context.h"
 #include "network.h"
 #include "shared.h"
+#include "util.h"
 
 using namespace ngtcp2;
 
@@ -138,6 +139,9 @@ public:
   int start_closing_period();
   int handle_error();
   int send_conn_close();
+  int send_conn_close(const Endpoint &ep, const Address &local_addr,
+                      const sockaddr *sa, socklen_t salen,
+                      const ngtcp2_pkt_info *pi, std::span<const uint8_t> data);
 
   int update_key(uint8_t *rx_secret, uint8_t *tx_secret,
                  ngtcp2_crypto_aead_ctx *rx_aead_ctx, uint8_t *rx_iv,
@@ -158,7 +162,7 @@ public:
   int on_stream_reset(int64_t stream_id);
   int on_stream_stop_sending(int64_t stream_id);
   int extend_max_stream_data(int64_t stream_id, uint64_t max_data);
-  void shutdown_read(int64_t stream_id, int app_error_code);
+  void shutdown_read(int64_t stream_id, uint64_t app_error_code);
   void http_acked_stream_data(Stream *stream, uint64_t datalen);
   void http_stream_close(int64_t stream_id, uint64_t app_error_code);
   int http_stop_sending(int64_t stream_id, uint64_t app_error_code);
@@ -166,11 +170,15 @@ public:
 
   void write_qlog(const void *data, size_t datalen);
 
-  void on_send_blocked(Endpoint &ep, const ngtcp2_addr &local_addr,
-                       const ngtcp2_addr &remote_addr, unsigned int ecn,
+  void on_send_blocked(const ngtcp2_path &path, unsigned int ecn,
                        std::span<const uint8_t> data, size_t gso_size);
   void start_wev_endpoint(const Endpoint &ep);
+  int send_packet(const ngtcp2_path &path, unsigned int ecn,
+                  std::span<const uint8_t> data, size_t gso_size);
   int send_blocked_packet();
+
+  ngtcp2_ssize write_pkt(ngtcp2_path *path, ngtcp2_pkt_info *pi, uint8_t *dest,
+                         size_t destlen, ngtcp2_tstamp ts);
 
 private:
   struct ev_loop *loop_;
@@ -188,34 +196,26 @@ private:
   // nkey_update_ is the number of key update occurred.
   size_t nkey_update_;
   bool no_gso_;
+  struct {
+    size_t bytes_recv;
+    size_t bytes_sent;
+    size_t num_pkts_recv;
+    size_t next_pkts_recv;
+  } close_wait_;
 
   struct {
     bool send_blocked;
-    size_t num_blocked;
-    size_t num_blocked_sent;
     // blocked field is effective only when send_blocked is true.
     struct {
-      Endpoint *endpoint;
+      const Endpoint *endpoint;
       Address local_addr;
       Address remote_addr;
       unsigned int ecn;
       std::span<const uint8_t> data;
       size_t gso_size;
-    } blocked[2];
+    } blocked;
     std::unique_ptr<uint8_t[]> data;
   } tx_;
-};
-
-struct string_hash {
-  using is_transparent = void;
-
-  size_t operator()(const std::string_view &s) const {
-    return std::hash<std::string_view>{}(s);
-  }
-
-  size_t operator()(const std::string &s) const {
-    return std::hash<std::string>{}(s);
-  }
 };
 
 class Server {
@@ -227,32 +227,33 @@ public:
   void disconnect();
   void close();
 
-  int on_read(Endpoint &ep);
-  void read_pkt(Endpoint &ep, const Address &local_addr, const sockaddr *sa,
-                socklen_t salen, const ngtcp2_pkt_info *pi,
+  int on_read(const Endpoint &ep);
+  void read_pkt(const Endpoint &ep, const Address &local_addr,
+                const sockaddr *sa, socklen_t salen, const ngtcp2_pkt_info *pi,
                 std::span<const uint8_t> data);
   int send_version_negotiation(uint32_t version, std::span<const uint8_t> dcid,
-                               std::span<const uint8_t> scid, Endpoint &ep,
-                               const Address &local_addr, const sockaddr *sa,
-                               socklen_t salen);
-  int send_retry(const ngtcp2_pkt_hd *chd, Endpoint &ep,
+                               std::span<const uint8_t> scid,
+                               const Endpoint &ep, const Address &local_addr,
+                               const sockaddr *sa, socklen_t salen);
+  int send_retry(const ngtcp2_pkt_hd *chd, const Endpoint &ep,
                  const Address &local_addr, const sockaddr *sa, socklen_t salen,
                  size_t max_pktlen);
-  int send_stateless_connection_close(const ngtcp2_pkt_hd *chd, Endpoint &ep,
+  int send_stateless_connection_close(const ngtcp2_pkt_hd *chd,
+                                      const Endpoint &ep,
                                       const Address &local_addr,
                                       const sockaddr *sa, socklen_t salen);
   int send_stateless_reset(size_t pktlen, std::span<const uint8_t> dcid,
-                           Endpoint &ep, const Address &local_addr,
+                           const Endpoint &ep, const Address &local_addr,
                            const sockaddr *sa, socklen_t salen);
   int verify_retry_token(ngtcp2_cid *ocid, const ngtcp2_pkt_hd *hd,
                          const sockaddr *sa, socklen_t salen);
   int verify_token(const ngtcp2_pkt_hd *hd, const sockaddr *sa,
                    socklen_t salen);
-  int send_packet(Endpoint &ep, const ngtcp2_addr &local_addr,
+  int send_packet(const Endpoint &ep, const ngtcp2_addr &local_addr,
                   const ngtcp2_addr &remote_addr, unsigned int ecn,
                   std::span<const uint8_t> data);
   std::pair<std::span<const uint8_t>, int>
-  send_packet(Endpoint &ep, bool &no_gso, const ngtcp2_addr &local_addr,
+  send_packet(const Endpoint &ep, bool &no_gso, const ngtcp2_addr &local_addr,
               const ngtcp2_addr &remote_addr, unsigned int ecn,
               std::span<const uint8_t> data, size_t gso_size);
   void remove(const Handler *h);
@@ -263,8 +264,7 @@ public:
   void on_stateless_reset_regen();
 
 private:
-  std::unordered_map<std::string, Handler *, string_hash, std::equal_to<>>
-    handlers_;
+  std::unordered_map<ngtcp2_cid, Handler *> handlers_;
   struct ev_loop *loop_;
   std::vector<Endpoint> endpoints_;
   TLSServerContext &tls_ctx_;

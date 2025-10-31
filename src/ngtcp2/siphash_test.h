@@ -1,7 +1,8 @@
 /*
  * ngtcp2
  *
- * Copyright (c) 2020 ngtcp2 contributors
+ * Copyright (c) 2025 nghttp2 contributors
+ * Copyright (c) 2025 ngtcp2 contributors
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -22,35 +23,24 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifndef TLS_CLIENT_CONTEXT_H
-#define TLS_CLIENT_CONTEXT_H
+#ifndef SIPHASH_TEST_H
+#define SIPHASH_TEST_H
 
 #ifdef HAVE_CONFIG_H
 #  include <config.h>
 #endif // defined(HAVE_CONFIG_H)
 
-#ifdef WITH_EXAMPLE_QUICTLS
-#  include "tls_client_context_quictls.h"
-#endif // defined(WITH_EXAMPLE_QUICTLS)
+#define MUNIT_ENABLE_ASSERT_ALIASES
 
-#ifdef WITH_EXAMPLE_GNUTLS
-#  include "tls_client_context_gnutls.h"
-#endif // defined(WITH_EXAMPLE_GNUTLS)
+#include "munit.h"
 
-#ifdef WITH_EXAMPLE_BORINGSSL
-#  include "tls_client_context_boringssl.h"
-#endif // defined(WITH_EXAMPLE_BORINGSSL)
+namespace ngtcp2 {
 
-#ifdef WITH_EXAMPLE_PICOTLS
-#  include "tls_client_context_picotls.h"
-#endif // defined(WITH_EXAMPLE_PICOTLS)
+extern const MunitSuite siphash_suite;
 
-#ifdef WITH_EXAMPLE_WOLFSSL
-#  include "tls_client_context_wolfssl.h"
-#endif // defined(WITH_EXAMPLE_WOLFSSL)
+munit_void_test_decl(test_siphash)
+munit_void_test_decl(test_siphash_vector)
 
-#ifdef WITH_EXAMPLE_OSSL
-#  include "tls_client_context_ossl.h"
-#endif // defined(WITH_EXAMPLE_OSSL)
+} // namespace ngtcp2
 
-#endif // !defined(TLS_CLIENT_CONTEXT_H)
+#endif // !defined(SIPHASH_TEST_H)

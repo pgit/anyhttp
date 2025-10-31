@@ -1,7 +1,7 @@
 /*
  * ngtcp2
  *
- * Copyright (c) 2021 ngtcp2 contributors
+ * Copyright (c) 2025 ngtcp2 contributors
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -22,19 +22,31 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include "tls_client_context_boringssl.h"
+#include "tls_client_context_ossl.h"
 
 #include <cstring>
+#include <cassert>
 #include <iostream>
 #include <fstream>
+#include <limits>
 
-#include <ngtcp2/ngtcp2_crypto_boringssl.h>
+#include <ngtcp2/ngtcp2_crypto_ossl.h>
 
 #include <openssl/err.h>
 
 #include "client_base.h"
 #include "template.h"
-#include "tls_shared_boringssl.h"
+
+namespace {
+auto _ = []() {
+  if (ngtcp2_crypto_ossl_init() != 0) {
+    assert(0);
+    abort();
+  }
+
+  return 0;
+}();
+} // namespace
 
 extern Config config;
 
@@ -55,6 +67,10 @@ int new_session_cb(SSL *ssl, SSL_SESSION *session) {
 
   c->ticket_received();
 
+  if (SSL_SESSION_get_max_early_data(session) !=
+      std::numeric_limits<uint32_t>::max()) {
+    std::cerr << "max_early_data_size is not 0xffffffff" << std::endl;
+  }
   auto f = BIO_new_file(config.session_file, "w");
   if (f == nullptr) {
     std::cerr << "Could not write TLS session in " << config.session_file
@@ -81,13 +97,13 @@ int TLSClientContext::init(const char *private_key_file,
     return -1;
   }
 
-  if (ngtcp2_crypto_boringssl_configure_client_context(ssl_ctx_) != 0) {
-    std::cerr << "ngtcp2_crypto_boringssl_configure_client_context failed"
-              << std::endl;
+  SSL_CTX_set_default_verify_paths(ssl_ctx_);
+
+  if (SSL_CTX_set_ciphersuites(ssl_ctx_, config.ciphers) != 1) {
+    std::cerr << "SSL_CTX_set_ciphersuites: "
+              << ERR_error_string(ERR_get_error(), nullptr) << std::endl;
     return -1;
   }
-
-  SSL_CTX_set_default_verify_paths(ssl_ctx_);
 
   if (SSL_CTX_set1_groups_list(ssl_ctx_, config.groups) != 1) {
     std::cerr << "SSL_CTX_set1_groups_list failed" << std::endl;
@@ -114,15 +130,6 @@ int TLSClientContext::init(const char *private_key_file,
                                                SSL_SESS_CACHE_NO_INTERNAL);
     SSL_CTX_sess_set_new_cb(ssl_ctx_, new_session_cb);
   }
-
-#ifdef HAVE_LIBBROTLI
-  if (!SSL_CTX_add_cert_compression_alg(
-        ssl_ctx_, ngtcp2::tls::CERTIFICATE_COMPRESSION_ALGO_BROTLI,
-        ngtcp2::tls::cert_compress, ngtcp2::tls::cert_decompress)) {
-    std::cerr << "SSL_CTX_add_cert_compression_alg failed" << std::endl;
-    return -1;
-  }
-#endif // defined(HAVE_LIBBROTLI)
 
   return 0;
 }

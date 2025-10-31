@@ -183,9 +183,10 @@ void log_printf(void *user_data, const char *fmt, ...) {
     n = buf.size() - 1;
   }
 
-  buf[n++] = '\n';
+  buf[static_cast<size_t>(n++)] = '\n';
 
-  while (write(fileno(stderr), buf.data(), n) == -1 && errno == EINTR)
+  while (write(fileno(stderr), buf.data(), static_cast<size_t>(n)) == -1 &&
+         errno == EINTR)
     ;
 }
 
@@ -295,6 +296,13 @@ void print_http_settings(const nghttp3_settings *settings) {
           settings->h3_datagram);
 }
 
+void print_http_origin(const uint8_t *origin, size_t originlen) {
+  fprintf(outfile, "http: origin [%.*s]\n", static_cast<int>(originlen),
+          origin);
+}
+
+void print_http_end_origin() { fprintf(outfile, "http: origin ended\n"); }
+
 std::string_view secret_title(ngtcp2_encryption_level level) {
   switch (level) {
   case NGTCP2_ENCRYPTION_LEVEL_0RTT:
@@ -307,6 +315,29 @@ std::string_view secret_title(ngtcp2_encryption_level level) {
     assert(0);
     abort();
   }
+}
+
+void print_conn_info(ngtcp2_conn *conn) {
+  ngtcp2_conn_info cinfo;
+
+  ngtcp2_conn_get_conn_info(conn, &cinfo);
+
+  std::cout << "# Connection Statistics (see ngtcp2_conn_info for details)\n"
+               "min_rtt="
+            << util::format_durationf(cinfo.min_rtt) << '\n'
+            << "smoothed_rtt=" << util::format_durationf(cinfo.smoothed_rtt)
+            << '\n'
+            << "rttvar=" << util::format_durationf(cinfo.rttvar) << '\n'
+            << "cwnd=" << cinfo.cwnd << '\n'
+            << "ssthresh=" << cinfo.ssthresh << '\n'
+            << "pkt_sent=" << cinfo.pkt_sent << '\n'
+            << "bytes_sent=" << cinfo.bytes_sent << '\n'
+            << "pkt_recv=" << cinfo.pkt_recv << '\n'
+            << "bytes_recv=" << cinfo.bytes_recv << '\n'
+            << "pkt_lost=" << cinfo.pkt_lost << '\n'
+            << "bytes_lost=" << cinfo.bytes_lost << '\n'
+            << "ping_recv=" << cinfo.ping_recv << '\n'
+            << "pkt_discarded=" << cinfo.pkt_discarded << std::endl;
 }
 
 } // namespace debug

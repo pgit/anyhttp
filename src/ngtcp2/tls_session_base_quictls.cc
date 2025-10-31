@@ -47,20 +47,19 @@ std::string TLSSessionBase::get_cipher_name() const {
 }
 
 std::string_view TLSSessionBase::get_negotiated_group() const {
-#if defined(OPENSSL_IS_BORINGSSL) || defined(OPENSSL_IS_AWSLC)
+#ifdef WITH_EXAMPLE_BORINGSSL
   return SSL_get_group_name(SSL_get_group_id(ssl_));
 #elif OPENSSL_VERSION_NUMBER >= 0x30000000L
-  auto nid = SSL_get_negotiated_group(ssl_);
-
-  auto name = EC_curve_nid2nist(nid);
+  auto name =
+    SSL_group_to_name(ssl_, static_cast<int>(SSL_get_negotiated_group(ssl_)));
   if (!name) {
-    name = OBJ_nid2sn(nid);
+    return ""sv;
   }
 
   return name;
 #elif defined(LIBRESSL_VERSION_NUMBER)
   return ""sv;
-#else  // !(defined(OPENSSL_IS_BORINGSSL) || defined(OPENSSL_IS_AWSLC) ||
+#else  // !(defined(WITH_EXAMPLE_BORINGSSL) ||
        // OPENSSL_VERSION_NUMBER >= 0x30000000L ||
        // defined(LIBRESSL_VERSION_NUMBER))
   EVP_PKEY *key;
@@ -82,10 +81,13 @@ std::string_view TLSSessionBase::get_negotiated_group() const {
   auto name = EC_curve_nid2nist(nid);
   if (!name) {
     name = OBJ_nid2sn(nid);
+    if (!name) {
+      return ""sv;
+    }
   }
 
   return name;
-#endif // !(defined(OPENSSL_IS_BORINGSSL) || defined(OPENSSL_IS_AWSLC) ||
+#endif // !(defined(WITH_EXAMPLE_BORINGSSL) ||
        // OPENSSL_VERSION_NUMBER >= 0x30000000L ||
        // defined(LIBRESSL_VERSION_NUMBER))
 }
