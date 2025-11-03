@@ -17,6 +17,9 @@
 namespace asio = boost::asio;
 namespace ip = asio::ip;
 
+// this is considerably slower, likely because buffer contents may get copied
+// #define USE_ASIO_LINEARISE
+
 namespace anyhttp
 {
 // =================================================================================================
@@ -49,8 +52,17 @@ public:
       virtual ~Impl() = default;
       virtual executor_type get_executor() noexcept = 0;
       virtual ip::tcp::socket& get_socket() = 0;
+#if defined(USE_ASIO_LINEARISE)
+      using ConstBuffers = asio::const_buffer;
+      using MutableBuffers = asio::mutable_buffer;
+      virtual void async_write_impl(ReadWriteHandler handler, asio::const_buffer buffer) = 0;
+      virtual void async_read_impl(ReadWriteHandler handler, asio::mutable_buffer buffer) = 0;
+#else
+      using ConstBuffers = ConstBufferVector;
+      using MutableBuffers = MutableBufferVector;
       virtual void async_write_impl(ReadWriteHandler handler, ConstBufferVector buffer) = 0;
       virtual void async_read_impl(ReadWriteHandler handler, MutableBufferVector buffer) = 0;
+#endif
       virtual void async_shutdown_impl(ShutdownHandler handler)
       {
          auto ex = boost::asio::get_associated_executor(handler, get_executor());
@@ -84,6 +96,10 @@ public:
    // * https://en.cppreference.com/w/cpp/iterator/bidirectional_iterator
    // * https://en.cppreference.com/w/cpp/iterator/contiguous_iterator.html
    //
+   // In the end, we just re-use ASIOs "buffer sequence adapter" that yields a single buffer.
+   // When writing, it merges small buffers and when reading, it uses the first non-empty buffer.
+   // This is simple, but effective -- and also what an SSL stream does, internally.
+   //
    template <typename ConstBufferSequence,
              BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite) CompletionToken>
       requires boost::beast::is_const_buffer_sequence<ConstBufferSequence>::value
@@ -94,9 +110,16 @@ public:
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
          [this](ReadWriteHandler handler, const ConstBufferSequence& buffers)
       {
+#if defined(USE_ASIO_LINEARISE)
+         using namespace asio;
+         using Adapter = detail::buffer_sequence_adapter<const_buffer, ConstBufferSequence>;
+         std::array<uint8_t, Adapter::linearisation_storage_size> storage;
+         impl->async_write_impl(std::move(handler), Adapter::linearise(buffers, buffer(storage)));
+#else
          impl->async_write_impl(std::move(handler),
                                 ConstBufferVector{asio::buffer_sequence_begin(buffers),
                                                   asio::buffer_sequence_end(buffers)});
+#endif
       }, token, buffers);
    }
 
@@ -112,9 +135,15 @@ public:
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
          [this](ReadWriteHandler handler, const MutableBufferSequence& buffers)
       {
+#if defined(USE_ASIO_LINEARISE)
+         using namespace asio;
+         using Adapter = detail::buffer_sequence_adapter<mutable_buffer, MutableBufferSequence>;
+         impl->async_read_impl(std::move(handler), Adapter::first(buffers));
+#else
          impl->async_read_impl(std::move(handler),
                                MutableBufferVector{asio::buffer_sequence_begin(buffers),
                                                    asio::buffer_sequence_end(buffers)});
+#endif
       }, token, buffers);
    }
 };

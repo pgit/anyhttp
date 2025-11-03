@@ -192,12 +192,12 @@ public:
    executor_type get_executor() noexcept override { return socket_.get_executor(); }
 
    ip::tcp::socket& get_socket() final { return socket_; }
-   void async_write_impl(ReadWriteHandler handler, ConstBufferVector buffers) final
+   void async_write_impl(ReadWriteHandler handler, ConstBuffers buffers) final
    {
       socket_.async_write_some(buffers, std::move(handler));
    }
 
-   void async_read_impl(ReadWriteHandler handler, MutableBufferVector buffers) final
+   void async_read_impl(ReadWriteHandler handler, MutableBuffers buffers) final
    {
       socket_.async_read_some(buffers, std::move(handler));
    }
