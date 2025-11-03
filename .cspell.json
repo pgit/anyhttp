@@ -16,6 +16,8 @@
         "HCAT",
         "IOCP",
         "IWYU",
+        "linearisation",
+        "linearise",
         "logd",
         "loge",
         "logi",

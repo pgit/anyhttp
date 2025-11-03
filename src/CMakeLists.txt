@@ -1,7 +1,8 @@
-cmake_minimum_required(VERSION 3.17)
-project(anyhttp VERSION 0.0.1)
-
 include_directories(${CMAKE_SOURCE_DIR}/include)
+
+# nice sample:
+# https://github.com/andrewmd5/libwtf/blob/main/CMakeLists.txt
+
 
 #
 # lib
@@ -21,6 +22,7 @@ target_link_libraries(anyhttp PRIVATE OpenSSL::SSL)
 target_link_libraries(anyhttp PRIVATE Boost::thread Boost::atomic Boost::url Boost::filesystem)
 target_link_libraries(anyhttp PRIVATE spdlog::spdlog_header_only)
 target_link_libraries(anyhttp PRIVATE PkgConfig::NGHTTP2)
+target_link_libraries(anyhttp PRIVATE ngtcp2_common)
 
 #
 # server
@@ -29,6 +31,7 @@ add_executable(server)
 target_sources(server PRIVATE "server_main.cpp")
 target_link_libraries(server PRIVATE anyhttp)
 target_link_libraries(server PRIVATE Boost::program_options)
+target_link_libraries(server PRIVATE PkgConfig::NGHTTP2)
 
 #
 # client
