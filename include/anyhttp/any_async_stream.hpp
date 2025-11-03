@@ -101,11 +101,11 @@ public:
    // This is simple, but effective -- and also what an SSL stream does, internally.
    //
    template <typename ConstBufferSequence,
-             BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite) CompletionToken>
+             BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite)
+                CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
       requires boost::beast::is_const_buffer_sequence<ConstBufferSequence>::value
-   auto
-   async_write_some(const ConstBufferSequence& buffers,
-                    CompletionToken&& token = asio::default_completion_token_t<executor_type>())
+   auto async_write_some(const ConstBufferSequence& buffers,
+                         CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
          [this](ReadWriteHandler handler, const ConstBufferSequence& buffers)
@@ -127,10 +127,11 @@ public:
    // async_read_some
    //
    template <typename MutableBufferSequence,
-             BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite) CompletionToken>
+             BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite)
+                CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
       requires boost::beast::is_mutable_buffer_sequence<MutableBufferSequence>::value
    auto async_read_some(const MutableBufferSequence& buffers,
-                        CompletionToken&& token = asio::default_completion_token_t<executor_type>())
+                        CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
          [this](ReadWriteHandler handler, const MutableBufferSequence& buffers)
