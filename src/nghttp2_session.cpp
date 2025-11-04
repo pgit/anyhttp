@@ -465,10 +465,10 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
 void NGHttp2Session::handle_buffer_contents()
 {
    mlogd("");
-   mlogd("read: nghttp2_session_mem_recv... ({} bytes)", m_buffer.size());
+   mlogd("read: nghttp2_session_mem_recv2... ({} bytes)", m_buffer.size());
    auto data = m_buffer.data();
-   ssize_t rv = nghttp2_session_mem_recv(session, static_cast<uint8_t*>(data.data()), data.size());
-   mlogd("read: nghttp2_session_mem_recv... done ({})", rv);
+   ssize_t rv = nghttp2_session_mem_recv2(session, static_cast<uint8_t*>(data.data()), data.size());
+   mlogd("read: nghttp2_session_mem_recv2... done ({})", rv);
 
    if (rv < 0)
    {
@@ -526,26 +526,26 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    }
 
    //
-   // If the stream is closed before the response has been requested by the user, we might have
-   // to delay the deletion of the stream until the user does.
+   // If the stream is closed before the user requests the response, we might have to
+   // delay the deletion of the stream until the user does.
    //
    if (!stream->response_delivered)
    {
       //
-      // If we have seen a response from the peer, the user could still request it. This may
-      // also happen during normal operation, if the server delivers a response before the
-      // client calls async_get_response().
+      // If we have seen a response from the peer, the user could still request it and any buffered
+      // data. This may also happen during normal operation, if the server delivers a response
+      // before the client calls async_get_response().
       //
       if (stream->has_response)
       {
          logd("[{}] close_stream: response not delivered yet", logPrefix(stream_id));
-         it->second->call_read_handler();
-         return;
+         it->second->call_read_handler(); // FIXME: this seems to be not needed
+         return; // keep stream for now
       }
    }
 
    //
-   // Finally, erase stream from our map.
+   // Finally, erase stream from map.
    //
    m_streams.erase(it);
 
@@ -558,8 +558,6 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    // 2) We submit a RST frame ourselves
    // In both situations, this stream is deleted. It seems that this may happen multiple times...
    //
-   assert(stream);
-
    if (stream->m_read_handler)
    {
       logd("[{}] stream closed while reading, raising 'partial_message'", logPrefix(stream_id));

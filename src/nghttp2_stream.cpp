@@ -294,6 +294,12 @@ size_t NGHttp2Stream::read_buffers_size() const
 
 void NGHttp2Stream::call_read_handler(asio::const_buffer view)
 {
+   //
+   // If there is no pending read handler we can invoke now, we have to buffer the data until there
+   // is. The amount of data that is buffered is limitted by the window size. If that is exceeded
+   // by a malicious peer, nghttp2 will generate a stream or connection error (typically
+   // NGHTTP2_ERR_FLOW_CONTROL internally) and send a RST_STREAM or GOAWAY frame to the peer.
+   //
    if (!m_read_handler)
    {
       if (!is_empty(view))
@@ -325,7 +331,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    m_inside_call_read_handler = true;
 
    //
-   // If there is no pending data to write, we can start writing the view right away.
+   // If there is no pending data to write, we can start writing the new view right away.
    //
    if (m_pending_read_buffers.empty())
       std::swap(m_read_buffer, view); // view is empty after this
@@ -333,6 +339,9 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    //
    // Try to deliver as many buffers as possible. As long as the consumer installs a new read
    // handler after handling a buffer, this loop can continue.
+   //
+   // FIXME: Do we need to limit recursion here? Probably not, as this is limitted by the number
+   //        of stored buffers, and they are limitted by the window size.
    //
    size_t count = 0, consumed = 0;
    while (m_read_handler && !is_empty(m_read_buffer))
@@ -477,12 +486,11 @@ void NGHttp2Stream::on_data(nghttp2_session* session, int32_t id_, const uint8_t
 
    logd("[{}] read callback: {} bytes...", logPrefix, len);
 
-   if (len)
-      nghttp2_session_consume_connection(session, len);
+   nghttp2_session_consume_connection(session, len);
 
    //
    // We try to invoke the read handler directly with the new buffer view. Only if there is no
-   // pending read handler to invoke, the data will be copied into a buffer.
+   // pending read handler that can be invoked immediately, the data will be copied into a buffer.
    //
    call_read_handler(asio::const_buffer(data, len));
 }
@@ -563,7 +571,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
             // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
             post(get_executor(), [handler = std::move(write_handler)] mutable { //
                std::move(handler)(errc::make_error_code(errc::operation_canceled));
-            });            
+            });
          }
       });
    }

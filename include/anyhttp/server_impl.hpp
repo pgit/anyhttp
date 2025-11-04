@@ -39,12 +39,15 @@ public:
    Impl() noexcept;
    virtual ~Impl();
 
-   virtual void async_submit(WriteHandler&& handler, unsigned int status_code, const Fields& fields) = 0;
+   virtual void async_submit(WriteHandler&& handler, unsigned int status_code,
+                             const Fields& fields) = 0;
 
    using ReaderOrWriter = impl::Writer;
 };
 
 // =================================================================================================
+
+struct Endpoint;
 
 class Server::Impl : public std::enable_shared_from_this<Server::Impl>
 {
@@ -79,6 +82,7 @@ public:
    const RequestHandlerCoro& requestHandlerCoro() const { return m_requestHandlerCoro; }
 
    asio::awaitable<void> udp_receive_loop();
+   int udp_on_read(Endpoint& ep);
 
 private:
    Config m_config;
@@ -87,7 +91,7 @@ private:
    std::optional<asio::ip::tcp::acceptor> m_acceptor;
    std::optional<asio::ip::udp::socket> m_udp_socket;
 
-   std::mutex m_sessionMutex;   
+   std::mutex m_sessionMutex;
    std::set<std::shared_ptr<Session::Impl>> m_sessions;
 
    RequestHandler m_requestHandler;

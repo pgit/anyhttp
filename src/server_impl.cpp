@@ -28,6 +28,8 @@
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
 
+#include <netinet/udp.h>
+
 using namespace std::chrono_literals;
 using namespace boost::asio;
 namespace socket_option = boost::asio::detail::socket_option;
@@ -147,9 +149,19 @@ void Server::Impl::listen_udp()
    //
    // QUIC test -- open a UDP port
    //
-   m_udp_socket.emplace(m_executor, ip::udp::endpoint(ip::udp::v6(), config().port));
-   m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
-   m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTTL>(1));
+   // m_udp_socket.emplace(m_executor, ip::udp::endpoint(ip::udp::v6(), config().port));
+   m_udp_socket.emplace(m_executor);
+   m_udp_socket->open(ip::udp::v6());
+   // m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
+   // m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTTL>(1));
+   // m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_PKTINFO>(1));
+   // m_udp_socket->set_option(boost::asio::ip::v6_only{true});
+   m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVTCLASS>(1));
+   m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_MTU_DISCOVER>(1));
+   m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVPKTINFO>(1));
+   m_udp_socket->set_option(socket_option::integer<IPPROTO_UDP, UDP_GRO>(1));
+   m_udp_socket->non_blocking(true);
+   m_udp_socket->bind(ip::udp::endpoint(ip::udp::v6(), config().port));
 }
 
 // =================================================================================================

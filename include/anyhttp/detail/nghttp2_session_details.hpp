@@ -209,8 +209,15 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    if (auto rv = nghttp2_session_server_new2(&session, callbacks.get(), this, options.get()))
       throw std::runtime_error("nghttp2_session_server_new");
 
+#if 0
+   const uint32_t window_size = 1024 * 1024;
+   std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
+                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
+   nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
+#else
    nghttp2_settings_entry ent{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, &ent, 1);
+#endif
 
    //
    // Let NGHTTP2 parse what we have received so far.

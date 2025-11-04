@@ -53,11 +53,11 @@ awaitable<void> do_request(Session& session, boost::urls::url url)
 {
    const std::string hello = "Hello, World!\r\n";
 #if 0
-   auto request = co_await session.async_submit(url, {{"Content-Length", std::format("{}", hello.size())}}, deferred);
+   auto request = co_await session.async_submit(url, {{"Content-Length", std::format("{}", hello.size())}});
 #else
    Fields fields;
    fields.set("X-Custom-Header", "value");
-   auto request = co_await session.async_submit(url, fields, deferred);
+   auto request = co_await session.async_submit(url, fields);
 #endif
 #if 0
    size_t bytes = 64 * 1024 - 1;
@@ -77,7 +77,7 @@ awaitable<void> do_requests(any_io_executor executor, Session session, boost::ur
 
 awaitable<void> do_session(Client& client, boost::urls::url url)
 {
-   auto session = co_await client.async_connect(deferred);
+   auto session = co_await client.async_connect();
 
 #if 1
    for (size_t i = 0; i < 1; ++i)

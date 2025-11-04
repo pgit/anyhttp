@@ -66,6 +66,10 @@ namespace rv = std::ranges::views;
 
 using namespace anyhttp;
 
+#define CURL_PATH "/usr/bin/curl"
+#define NGHTTP_PATH "/usr/local/bin/nghttp"
+#define H2LOAD_PATH "/usr/local/bin/h2load"
+
 // =================================================================================================
 
 std::string NameGenerator(const testing::TestParamInfo<anyhttp::Protocol>& info)
@@ -331,8 +335,8 @@ protected:
 
       readable_pipe out(context), err(context);
       bp::process child(co_await this_coro::executor, path, args,
-                        bp::process_stdio{.out = out, .err = err},
-                        bp::process_environment{{"LD_LIBRARY_PATH=/usr/local/lib"}});
+                        bp::process_stdio{.out = out, .err = err});
+      // bp::process_environment{{"LD_LIBRARY_PATH=/usr/local/lib"}});
 
       logi("spawn: starting to communicate...");
 #if 1
@@ -397,7 +401,7 @@ TEST_P(External, nghttp2)
       GTEST_SKIP(); // no --nghttp2-prior-knowledge for 'nghttp', re-enable when ALPN works
 
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   auto future = spawn("/usr/local/bin/nghttp", {"-d", testFile.string(), url});
+   auto future = spawn(NGHTTP_PATH, {"-d", testFile.string(), url});
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize);
@@ -413,7 +417,7 @@ TEST_P(External, curl)
    if (GetParam() == anyhttp::Protocol::h2)
       args.insert(args.begin(), "--http2-prior-knowledge");
 
-   auto future = spawn("/usr/local/bin/curl", std::move(args));
+   auto future = spawn(CURL_PATH, std::move(args));
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize);
@@ -432,7 +436,7 @@ TEST_P(External, curl_many)
       if (GetParam() == anyhttp::Protocol::h2)
          args.insert(args.begin(), "--http2-prior-knowledge");
 
-      futures.emplace_back(spawn("/usr/local/bin/curl", std::move(args)));
+      futures.emplace_back(spawn(CURL_PATH, std::move(args)));
    }
 
    run();
@@ -451,7 +455,7 @@ TEST_P(External, curl_https)
    else
       args.insert(args.begin(), "--http1.1"); // not implemented, yet
 
-   auto future = spawn("/usr/local/bin/curl", std::move(args));
+   auto future = spawn(CURL_PATH, std::move(args));
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize);
@@ -466,7 +470,7 @@ TEST_P(External, curl_multiple)
       args.insert(args.begin(), "--http2-prior-knowledge");
 
    // https://github.com/curl/curl/issues/10634 --> use custom built curl
-   auto future = spawn("/usr/local/bin/curl", std::move(args));
+   auto future = spawn(CURL_PATH, std::move(args));
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize * 2);
@@ -483,7 +487,7 @@ TEST_P(External, curl_multiple_https)
    else
       args.insert(args.begin(), "--http1.1");
 
-   auto future = spawn("/usr/local/bin/curl", std::move(args));
+   auto future = spawn(CURL_PATH, std::move(args));
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize * 2);
@@ -544,7 +548,7 @@ TEST_P(External, h2load)
    if (GetParam() == anyhttp::Protocol::http11)
       args.insert(args.begin(), "--h1");
 
-   auto future = spawn("/usr/local/bin/h2load", std::move(args));
+   auto future = spawn(H2LOAD_PATH, std::move(args));
    run();
 
    const std::string output = future.get();
@@ -961,7 +965,7 @@ TEST_P(ClientAsync, PostRange)
       auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1 * 1024 * 1024));
       auto received = co_await (std::move(sender) && count(response));
       loge("received: {}", received);
-      EXPECT_GT(received, 0);
+      EXPECT_EQ(received, 1 * 1024 * 1024);
    };
 }
 
@@ -973,7 +977,7 @@ TEST_P(ClientAsync, PostRangeImmediate)
       auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1 * 1024 * 1024));
       auto received = co_await (std::move(sender) && read_response(request));
       loge("received: {}", received);
-      EXPECT_GT(received, 0);
+      EXPECT_EQ(received, 1 * 1024 * 1024);
    };
 }
 
