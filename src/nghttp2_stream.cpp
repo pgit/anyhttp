@@ -277,19 +277,12 @@ NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int id_)
 
 size_t NGHttp2Stream::read_buffers_size() const
 {
-   auto tail_sizes = m_pending_read_buffers | std::views::drop(1) |
-                     std::views::transform([](const auto& buffer) { return buffer.size(); });
-
-   auto sum_tail = std::ranges::fold_left(
-      m_pending_read_buffers | std::views::drop(1) |
-         std::views::transform([](const auto& buffer) { return buffer.size(); }),
-      size_t{0}, [](size_t a, size_t b) { return a + b; });
-
-   return asio::buffer_size(m_read_buffer) +
-          std::ranges::fold_left(
-             m_pending_read_buffers | std::views::drop(1) |
+   return asio::buffer_size(m_read_buffer) + // remaining part of first buffer
+          std::ranges::fold_left( // sum of all but the first remaining buffers
+             m_pending_read_buffers | //
+                std::views::drop(1) |
                 std::views::transform([](const auto& buffer) { return buffer.size(); }),
-             size_t{0}, [](size_t a, size_t b) { return a + b; });
+             size_t{0}, std::plus{});
 }
 
 void NGHttp2Stream::call_read_handler(asio::const_buffer view)
@@ -321,6 +314,8 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    // This is an expected scenario in ASIO, similar to using dispatch() instead of post()
    // -- although ASIO also has some countermeasures against recursion I think.
    //
+   // FIXME: Check if we are not supposed to post() here, anyway!
+   //
    if (m_inside_call_read_handler)
    {
       logd("[{}] read_callback: avoided recursion, returning...", logPrefix);
@@ -351,14 +346,24 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
       bytesRead += copied;
       m_read_buffer += copied;
 
-      logd("[{}] read_callback: calling read handler with {} bytes... (#{} in a row, buf={})",
-           logPrefix, copied, count, asio::buffer_size(m_read_buffer));
+      if (count == 1)
+         logd("[{}] read_callback: calling read handler with {} bytes... (buf={})", //
+              logPrefix, copied, asio::buffer_size(m_read_buffer));
+      else
+         logd("[{}] read_callback: calling read handler with {} bytes... (#{} in a row, buf={})",
+              logPrefix, copied, count, asio::buffer_size(m_read_buffer));
 
       //
       // swap_and_invoke() moves the read handler into a local variable before invoking it,
       // allowing a new read handler to be set. This is what we call 'respawning' here.
       //
+#if 0
+      post(get_executor(), [handler = std::move(m_read_handler), copied]() mutable { //
+         std::move(handler)(boost::system::error_code{}, copied);
+      });
+#else
       swap_and_invoke(m_read_handler, boost::system::error_code{}, copied);
+#endif
 
       if (m_read_handler)
          logd("[{}] read_callback: calling handler with {} bytes... done,"

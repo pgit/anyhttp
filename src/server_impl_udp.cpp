@@ -6,6 +6,7 @@
 #include <boost/asio.hpp>
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/error.hpp>
+#include <boost/asio/ip/address.hpp>
 #include <boost/asio/ssl/detail/engine.hpp>
 
 #include <boost/system/detail/errc.hpp>

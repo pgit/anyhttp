@@ -365,9 +365,8 @@ protected:
    std::future<std::string> spawn(bp::filesystem::path path, std::vector<std::string> args)
    {
       ++numSpawned;
-      std::future<std::string> future;
       std::promise<std::string> promise;
-      future = promise.get_future();
+      auto future = promise.get_future();
       if (!strand)
          strand = make_strand(context.get_executor());
       co_spawn(*strand, spawn_process(std::move(path), std::move(args)),

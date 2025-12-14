@@ -245,17 +245,11 @@ public:
          mlogd("async_write: {} bytes (chunked={} content_length={})", buffer.size(),
                message.chunked(), message.has_content_length());
 
+      // https://github.com/boostorg/beast/issues/3032
       // make sure to set 'nullptr' on empty size, otherwise beast may serialize an empty chunk
       message.body().data = buffer.size() ? const_cast<void*>(buffer.data()) : nullptr;
       message.body().size = buffer.size();
       message.body().more = buffer.size() != 0; // empty buffer --> EOF
-
-      // http::response<http::buffer_body> res;
-      // res.clear();
-
-      // Message m;
-      // http::response_serializer<http::buffer_body> s{m};
-      // s.get().chunked();
 
       auto slot = asio::get_associated_cancellation_slot(handler);
       auto cb = [this, expected = buffer.size(), handler = std::move(handler)] //
