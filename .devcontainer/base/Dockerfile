@@ -2,7 +2,7 @@
 # https://github.com/microsoft/vscode-dev-containers/tree/main/containers/debian
 # https://github.com/pgit/cpp-devcontainer
 #
-FROM docker.io/psedoc/cpp-devcontainer:0.21
+FROM docker.io/psedoc/cpp-devcontainer:0.22
 
 #
 # GDB libc++ pretty printer (works for string, but not for map with llvm-18)
@@ -63,9 +63,10 @@ ENV LD_LIBRARY_PATH=/usr/local/lib
 # NOTE: don't install BoringSSL to /usr/local, we don't want it to interfere with OpenSSL
 # NOTE: actually, we are using aws-lc instead of boringssl, but to ngtcp2, this is the same
 #
-# With debian trixie, we now have OpenSSL 3 with QUIC support. We keep boringssl for testing.
+# With debian trixie, we now have OpenSSL 3 with QUIC support. Whether or not that is any good,
+# seems to be up for debate: https://www.haproxy.com/blog/state-of-ssl-stacks
 #
-ARG AWS_LC_VERSION=v1.62.1
+ARG AWS_LC_VERSION=v1.66.0
 RUN git clone --depth 1 -b ${AWS_LC_VERSION} https://github.com/aws/aws-lc && \
     cd aws-lc && \
     cmake -B build -DDISABLE_GO=ON --install-prefix=/opt/boringssl && \
@@ -74,7 +75,7 @@ RUN git clone --depth 1 -b ${AWS_LC_VERSION} https://github.com/aws/aws-lc && \
     cd .. && \
     rm -rf aws-lc
 
-ARG NGHTTP3_VERSION=v1.12.0
+ARG NGHTTP3_VERSION=v1.13.1
 RUN git clone --recursive --depth 1 --branch ${NGHTTP3_VERSION} https://github.com/ngtcp2/nghttp3 && \
     cd nghttp3 && \
     autoreconf -i && \
@@ -83,9 +84,9 @@ RUN git clone --recursive --depth 1 --branch ${NGHTTP3_VERSION} https://github.c
     cd .. && rm -rf nghttp3
 
 #
-# nghtcp2 is built with both 'boringssl' and 'ossl' support
+# nghtcp2 is built with both 'boringssl' (actually, aws-lc) and 'ossl' support
 #
-ARG NGTCP2_VERSION=v1.17.0
+ARG NGTCP2_VERSION=v1.18.0
 RUN git clone --recursive --depth 1 --branch ${NGTCP2_VERSION} https://github.com/ngtcp2/ngtcp2 && \
     cd ngtcp2 && \
     autoreconf -i && \
@@ -103,7 +104,7 @@ RUN git clone --recursive --depth 1 --branch ${NGTCP2_VERSION} https://github.co
   
 # ==================================================================================================
 
-RUN git clone --depth 1 -b v1.5.0 https://github.com/libbpf/libbpf && \
+RUN git clone --depth 1 -b v1.6.2 https://github.com/libbpf/libbpf && \
     cd libbpf && \
     PREFIX=/usr/local LIBDIR=/usr/local/lib make -j$(nproc) -C src install && \
     cd .. && rm -rf libbpf
