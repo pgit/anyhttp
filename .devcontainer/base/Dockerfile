@@ -2,7 +2,7 @@
 # https://github.com/microsoft/vscode-dev-containers/tree/main/containers/debian
 # https://github.com/pgit/cpp-devcontainer
 #
-FROM docker.io/psedoc/cpp-devcontainer:0.22
+FROM docker.io/psedoc/cpp-devcontainer:0.23
 
 #
 # GDB libc++ pretty printer (works for string, but not for map with llvm-18)
@@ -75,7 +75,7 @@ RUN git clone --depth 1 -b ${AWS_LC_VERSION} https://github.com/aws/aws-lc && \
     cd .. && \
     rm -rf aws-lc
 
-ARG NGHTTP3_VERSION=v1.13.1
+ARG NGHTTP3_VERSION=v1.15.0
 RUN git clone --recursive --depth 1 --branch ${NGHTTP3_VERSION} https://github.com/ngtcp2/nghttp3 && \
     cd nghttp3 && \
     autoreconf -i && \
@@ -86,7 +86,7 @@ RUN git clone --recursive --depth 1 --branch ${NGHTTP3_VERSION} https://github.c
 #
 # nghtcp2 is built with both 'boringssl' (actually, aws-lc) and 'ossl' support
 #
-ARG NGTCP2_VERSION=v1.18.0
+ARG NGTCP2_VERSION=v1.20.0
 RUN git clone --recursive --depth 1 --branch ${NGTCP2_VERSION} https://github.com/ngtcp2/ngtcp2 && \
     cd ngtcp2 && \
     autoreconf -i && \
@@ -104,7 +104,7 @@ RUN git clone --recursive --depth 1 --branch ${NGTCP2_VERSION} https://github.co
   
 # ==================================================================================================
 
-RUN git clone --depth 1 -b v1.6.2 https://github.com/libbpf/libbpf && \
+RUN git clone --depth 1 -b v1.6.3 https://github.com/libbpf/libbpf && \
     cd libbpf && \
     PREFIX=/usr/local LIBDIR=/usr/local/lib make -j$(nproc) -C src install && \
     cd .. && rm -rf libbpf
