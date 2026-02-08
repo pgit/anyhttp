@@ -31,6 +31,8 @@
         "mylogd",
         "nghttp",
         "ngtcp",
+        "PROFDATA",
+        "PROFRAW",
         "psedoc",
         "pynghttp",
         "QUIC",
@@ -41,6 +43,7 @@
         "respawning",
         "spdlog",
         "SSLKEYLOGFILE",
+        "STREQUAL",
         "testcases",
         "TLSEXT",
         "TSAN"

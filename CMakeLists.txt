@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED On)
 set(CMAKE_EXPORT_COMPILE_COMMANDS On)
 
+option(ENABLE_COVERAGE "Enable coverage flags and llvm-cov target" OFF)
+
 if (DEFINED ENV{GITHUB_ACTIONS})
     add_compile_definitions(GITHUB_ACTIONS)
 endif()
@@ -24,10 +26,17 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
     # add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
     # add_link_options(-fsanitize=address)
 
-    # include(CodeCoverage)
-    # append_coverage_compiler_flags()
-    # SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-instr-generate -fcoverage-mapping")
 endif()
+
+if (ENABLE_COVERAGE)
+    if (NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        message(FATAL_ERROR "ENABLE_COVERAGE is supported only with GNU or Clang compilers")
+    endif()
+    set(COVERAGE_RAW_DIR "${CMAKE_BINARY_DIR}/coverage_raw")
+    add_compile_options(-O0 -g -fprofile-instr-generate=${COVERAGE_RAW_DIR}/%p.profraw -fcoverage-mapping)
+    add_link_options(-fprofile-instr-generate=${COVERAGE_RAW_DIR}/%p.profraw)
+endif()
+
 add_compile_options(-stdlib=libc++)
 add_link_options(-stdlib=libc++ -lstdc++fs)
 
@@ -96,3 +105,43 @@ check_include_file("linux/rtnetlink.h" HAVE_LINUX_RTNETLINK_H)
 enable_testing(false)
 add_subdirectory(src)
 add_subdirectory(test)
+
+# --------------------------------------------------------------------------------------------------
+
+if (ENABLE_COVERAGE)
+    find_program(LLVM_COV_EXECUTABLE llvm-cov)
+    find_program(LLVM_PROFDATA_EXECUTABLE llvm-profdata)
+    if (NOT LLVM_COV_EXECUTABLE OR NOT LLVM_PROFDATA_EXECUTABLE)
+        message(FATAL_ERROR "llvm-cov and llvm-profdata are required for coverage reporting")
+    endif()
+
+    set(COVERAGE_RAW_DIR "${CMAKE_BINARY_DIR}/coverage_raw")
+    set(COVERAGE_PROFDATA_FILE "${CMAKE_BINARY_DIR}/coverage.profdata")
+    set(COVERAGE_HTML_DIR "${CMAKE_BINARY_DIR}/coverage_report")
+    set(COVERAGE_MERGE_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/merge_profraw.cmake")
+    set(COVERAGE_TEST_BIN "${CMAKE_BINARY_DIR}/test/test_all")
+    set(LLVM_COV_IGNORE_REGEX "/usr/|${CMAKE_BINARY_DIR}/|${CMAKE_SOURCE_DIR}/test/|${CMAKE_SOURCE_DIR}/src/ngtcp2/")
+
+    add_custom_target(coverage
+        COMMAND ${CMAKE_COMMAND} -E rm -rf ${COVERAGE_RAW_DIR} ${COVERAGE_HTML_DIR}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${COVERAGE_RAW_DIR}
+        COMMAND ${CMAKE_COMMAND} -E env
+            LLVM_PROFILE_FILE=${COVERAGE_RAW_DIR}/%p.profraw
+            ${CMAKE_CTEST_COMMAND} --output-on-failure
+        COMMAND ${CMAKE_COMMAND}
+            -DPROFRAW_DIR=${COVERAGE_RAW_DIR}
+            -DPROFDATA_FILE=${COVERAGE_PROFDATA_FILE}
+            -DLLVM_PROFDATA_EXECUTABLE=${LLVM_PROFDATA_EXECUTABLE}
+            -P ${COVERAGE_MERGE_SCRIPT}
+        COMMAND ${LLVM_COV_EXECUTABLE} show
+            ${COVERAGE_TEST_BIN}
+            -instr-profile=${COVERAGE_PROFDATA_FILE}
+            -format=html
+            -output-dir=${COVERAGE_HTML_DIR}
+            -ignore-filename-regex=${LLVM_COV_IGNORE_REGEX}
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Running tests and generating llvm-cov HTML report"
+        VERBATIM
+    )
+    add_dependencies(coverage test_all)
+endif()
