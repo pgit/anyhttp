@@ -11,6 +11,7 @@
 
 #include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/associated_executor.hpp>
+#include <boost/asio/associated_immediate_executor.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
@@ -117,7 +118,10 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    //
    if (asio::buffer_size(buffer) == 0)
    {
-      std::move(handler)(boost::system::error_code{}, 0);
+      any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
+      ex.execute([handler = std::move(handler)]() mutable { //
+         std::move(handler)(boost::system::error_code{}, 0);
+      });
       return;
    }
 

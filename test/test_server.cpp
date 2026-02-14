@@ -8,6 +8,7 @@
 #include <boost/asio.hpp>
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/bind_cancellation_slot.hpp>
+#include <boost/asio/bind_immediate_executor.hpp>
 #include <boost/asio/cancellation_signal.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
@@ -893,6 +894,40 @@ TEST_P(ClientAsync, ServerYieldFirst)
       co_await (read_response(request) || sleep(2s));
    };
 }
+
+// ----------------------------------------------------------------------------------------------
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-stack-address"
+static const char* stackp()
+{
+   int dummy;
+   return reinterpret_cast<const char*>(&dummy); // NOLINT
+}
+#pragma clang diagnostic pop
+
+TEST_P(ClientAsync, Recursion)
+{
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto ex = co_await this_coro::executor;
+      auto request = co_await session.async_submit(url.set_path("echo"), {});
+      auto response = co_await request.async_get_response();
+
+      // verify that immediate completion (here, due to an empty buffer) does not cause recursion
+      std::array<uint8_t, 0> empty;
+      co_await response.async_read_some(asio::buffer(empty));
+      auto s0 = stackp();
+      co_await response.async_read_some(asio::buffer(empty));
+      EXPECT_EQ(s0 - stackp(), 0);
+
+      // however, ASIO allows us to control this behavior using "immediate executors"
+      co_await response.async_read_some(asio::buffer(empty), bind_immediate_executor(ex));
+      EXPECT_GT(s0 - stackp(), 0);
+   };
+}
+
+// ----------------------------------------------------------------------------------------------
 
 TEST_P(ClientAsync, Custom)
 {

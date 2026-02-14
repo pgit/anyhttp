@@ -123,10 +123,13 @@ public:
 
       assert(!reading);
 
-      if (parser.is_done())
+      if (body_buffer.size() == 0 || parser.is_done())
       {
+         any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
          deleting.reset();
-         std::move(handler)(boost::system::error_code{}, 0);
+         ex.execute([handler = std::move(handler)]() mutable { //
+            std::move(handler)(boost::system::error_code{}, 0);
+         });
          return;
       }
 
