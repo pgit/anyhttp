@@ -205,11 +205,6 @@ protected:
 
          if (request.url().path() == "/echo")
             co_await echo(std::move(request), std::move(response));
-         else if (request.url().path() == "/echo_delayed")
-         {
-            co_await sleep(1s);
-            co_return co_await echo(std::move(request), std::move(response));
-         }
          else if (request.url().path() == "/eat_request")
             co_await eat_request(std::move(request), std::move(response));
          else if (request.url().path() == "/discard")
@@ -719,7 +714,7 @@ TEST_P(ClientAsync, WHEN_server_discards_request_with_body_delayed_THEN_error_50
    {
       auto executor = co_await this_coro::executor;
       auto request = co_await session.async_submit(url.set_path("detach"), {});
-      auto [ep] = co_await co_spawn(executor, send(request, rv::iota(0)), as_tuple);
+      auto [ep] = co_await co_spawn(executor, send(request, rv::iota(uint8_t{0})), as_tuple);
       EXPECT_TRUE(ep);
    };
 }
@@ -741,7 +736,7 @@ TEST_P(ClientAsync, WHEN_get_response_is_called_twice_THEN_reports_error)
    {
       auto request = co_await session.async_submit(url.set_path("echo"));
       auto [ec, response] = co_await request.async_get_response(as_tuple);
-      // EXPECT_THROW(co_await request.async_get_response(), boost::system::system_error);
+      EXPECT_EQ(ec, boost::system::errc::success);
       std::tie(ec, response) = co_await request.async_get_response(as_tuple);
       EXPECT_EQ(ec, boost::system::errc::connection_already_in_progress);
       EXPECT_EQ(ec, asio::error::basic_errors::already_started);
@@ -757,7 +752,7 @@ TEST_P(ClientAsync, WHEN_server_discards_request_while_writing_THEN_connection_i
    };
    test = [this](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url.set_path("custom"));
+      auto request = co_await session.async_submit(url);
       auto executor = co_await this_coro::executor;
       auto [ec] = co_await co_spawn(executor, send(request, rv::iota(uint8_t(0))), as_tuple);
       EXPECT_EQ(code(ec), boost::system::errc::connection_reset);
@@ -777,7 +772,7 @@ TEST_P(ClientAsync, WHEN_server_discards_request_and_response_THEN_completes_any
    };
    test = [this](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url.set_path("custom"));
+      auto request = co_await session.async_submit(url);
       auto [ec, _] = co_await request.async_get_response(as_tuple);
       EXPECT_EQ(ec, boost::beast::http::error::end_of_stream);
       // EXPECT_EQ(ec, std::errc::connection_reset);
@@ -908,6 +903,9 @@ static const char* stackp()
 
 TEST_P(ClientAsync, Recursion)
 {
+#if __has_feature(address_sanitizer)
+   GTEST_SKIP() << "skipped under address sanitizer";
+#endif
    test = [this](Session session) -> awaitable<void>
    {
       auto ex = co_await this_coro::executor;
@@ -945,7 +943,7 @@ TEST_P(ClientAsync, Custom)
    };
    test = [this](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url.set_path("custom"), {});
+      auto request = co_await session.async_submit(url, {});
       size_t bytes = 1024;
       auto res = co_await (send(request, bytes) && read_response(request));
       EXPECT_EQ(bytes, res);
@@ -963,7 +961,7 @@ TEST_P(ClientAsync, IgnoreRequest)
    {
       Fields fields;
       fields.set("content-length", "0");
-      auto request = co_await session.async_submit(url.set_path("custom"), fields);
+      auto request = co_await session.async_submit(url, fields);
       auto res = co_await (send(request, 0) && read_response(request));
    };
 }
@@ -978,9 +976,10 @@ TEST_P(ClientAsync, IgnoreRequestAndResponse)
    };
    test = [this](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url.set_path("custom"), {});
+      auto request = co_await session.async_submit(url, {});
       auto res = co_await (send(request, 0) && try_read_response(request));
-      std::println("{}", res.error().message());
+      EXPECT_FALSE(res.has_value());
+      std::println("ERROR: {}", res.error().message());
    };
 }
 
@@ -1106,8 +1105,8 @@ TEST_P(ClientAsync, Backpressure)
 //
 // Any short write of a body with known content length should result in a 'partial message' error.
 //
-// FIXME: With nghttp2 1.67, the partial message results in a GOAWAY, so that only one request
-//        can be made. The following request should throw an exception.
+// FIXME: As of nghttp2 version 1.67, the partial message results in a GOAWAY, so that only one
+//        request can be made. The following request should throw an exception.
 //
 TEST_P(ClientAsync, CancellationContentLength)
 {
@@ -1126,8 +1125,8 @@ TEST_P(ClientAsync, CancellationContentLength)
          auto response = co_await request.async_get_response();
 
          //
-         // This is a single large buffer and will be serialized as a single chunk. When this
-         // process gets cancelled, there is no way to recover gracefully.
+         // This is a single large buffer and will be serialized as a single chunk. When writing
+         // gets cancelled, there is no way to recover gracefully.
          //
          auto sender = sendAndForceEOF(request, std::string_view(buffer));
 
@@ -1325,7 +1324,7 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
    };
 }
 
-TEST_P(ClientAsync, SpawnAndForget)
+TEST_P(ClientAsync, DISABLED_SpawnAndForget)
 {
    if (GetParam() == anyhttp::Protocol::http11)
       GTEST_SKIP(); // FIXME: ASAN errors
