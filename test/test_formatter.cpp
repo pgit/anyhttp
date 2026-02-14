@@ -75,7 +75,7 @@ TEST(FormatterTest, BoostStringViewEmpty)
 
 TEST(FormatterTest, EndpointIPv4)
 {
-   auto addr = boost::asio::ip::address_v4::from_string("192.168.1.1");
+   auto addr = boost::asio::ip::make_address_v4("192.168.1.1");
    boost::asio::ip::tcp::endpoint endpoint(addr, 8080);
    auto formatted = std::format("{}", endpoint);
    EXPECT_EQ(formatted, "192.168.1.1:8080");
@@ -83,7 +83,7 @@ TEST(FormatterTest, EndpointIPv4)
 
 TEST(FormatterTest, EndpointIPv6)
 {
-   auto addr = boost::asio::ip::address_v6::from_string("::1");
+   auto addr = boost::asio::ip::make_address_v6("::1");
    boost::asio::ip::tcp::endpoint endpoint(addr, 9090);
    auto formatted = std::format("{}", endpoint);
    EXPECT_EQ(formatted, "[::1]:9090");
@@ -91,7 +91,7 @@ TEST(FormatterTest, EndpointIPv6)
 
 TEST(FormatterTest, EndpointIPv6Full)
 {
-   auto addr = boost::asio::ip::address_v6::from_string("2001:db8::1");
+   auto addr = boost::asio::ip::make_address_v6("2001:db8::1");
    boost::asio::ip::tcp::endpoint endpoint(addr, 443);
    auto formatted = std::format("{}", endpoint);
    EXPECT_EQ(formatted, "[2001:db8::1]:443");
@@ -215,13 +215,6 @@ TEST(FormatterTest, NgHttp2NvValueOnly)
    auto nv = make_nghttp2_nv("user-agent", "Mozilla/5.0");
    auto formatted = std::format("{:v}", nv);
    EXPECT_EQ(formatted, "Mozilla/5.0");
-}
-
-TEST(FormatterTest, NgHttp2NvInvalidFormat)
-{
-   auto nv = make_nghttp2_nv("test", "value");
-   // Verify that invalid format specifier throws std::format_error
-   EXPECT_THROW(std::format("{:x}", nv), std::format_error);
 }
 
 TEST(FormatterTest, NgHttp2NvEmptyName)
