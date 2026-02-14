@@ -180,98 +180,58 @@ TEST(FormatterTest, CancellationTypeMultipleCombined)
 // Test nghttp2_nv formatter
 // =================================================================================================
 
+namespace
+{
+   nghttp2_nv make_nghttp2_nv(const char* name, const char* value)
+   {
+      return nghttp2_nv{
+         const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(name)),
+         const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(value)),
+         strlen(name),
+         strlen(value),
+         NGHTTP2_NV_FLAG_NONE
+      };
+   }
+}
+
 TEST(FormatterTest, NgHttp2NvDefault)
 {
-   const char* name = "content-type";
-   const char* value = "text/html";
-   nghttp2_nv nv = {
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(name)),
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(value)),
-      strlen(name),
-      strlen(value),
-      NGHTTP2_NV_FLAG_NONE
-   };
-   
+   auto nv = make_nghttp2_nv("content-type", "text/html");
    auto formatted = std::format("{}", nv);
    EXPECT_EQ(formatted, "content-type=text/html");
 }
 
 TEST(FormatterTest, NgHttp2NvNameOnly)
 {
-   const char* name = "accept-encoding";
-   const char* value = "gzip, deflate";
-   nghttp2_nv nv = {
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(name)),
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(value)),
-      strlen(name),
-      strlen(value),
-      NGHTTP2_NV_FLAG_NONE
-   };
-   
+   auto nv = make_nghttp2_nv("accept-encoding", "gzip, deflate");
    auto formatted = std::format("{:n}", nv);
    EXPECT_EQ(formatted, "accept-encoding");
 }
 
 TEST(FormatterTest, NgHttp2NvValueOnly)
 {
-   const char* name = "user-agent";
-   const char* value = "Mozilla/5.0";
-   nghttp2_nv nv = {
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(name)),
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(value)),
-      strlen(name),
-      strlen(value),
-      NGHTTP2_NV_FLAG_NONE
-   };
-   
+   auto nv = make_nghttp2_nv("user-agent", "Mozilla/5.0");
    auto formatted = std::format("{:v}", nv);
    EXPECT_EQ(formatted, "Mozilla/5.0");
 }
 
 TEST(FormatterTest, NgHttp2NvInvalidFormat)
 {
-   const char* name = "test";
-   const char* value = "value";
-   nghttp2_nv nv = {
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(name)),
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(value)),
-      strlen(name),
-      strlen(value),
-      NGHTTP2_NV_FLAG_NONE
-   };
-   
+   auto nv = make_nghttp2_nv("test", "value");
    // Invalid format specifier should throw
    EXPECT_THROW(std::format("{:x}", nv), std::format_error);
 }
 
 TEST(FormatterTest, NgHttp2NvEmptyName)
 {
-   const char* name = "";
-   const char* value = "some-value";
-   nghttp2_nv nv = {
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(name)),
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(value)),
-      0,
-      strlen(value),
-      NGHTTP2_NV_FLAG_NONE
-   };
-   
+   auto nv = make_nghttp2_nv("", "some-value");
    auto formatted = std::format("{}", nv);
    EXPECT_EQ(formatted, "=some-value");
 }
 
 TEST(FormatterTest, NgHttp2NvEmptyValue)
 {
-   const char* name = "some-header";
-   const char* value = "";
-   nghttp2_nv nv = {
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(name)),
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(value)),
-      strlen(name),
-      0,
-      NGHTTP2_NV_FLAG_NONE
-   };
-   
+   auto nv = make_nghttp2_nv("some-header", "");
    auto formatted = std::format("{}", nv);
    EXPECT_EQ(formatted, "some-header=");
 }
