@@ -159,7 +159,7 @@ awaitable<void> discard(server::Request request, server::Response response) { co
 
 awaitable<void> send(client::Request& request, size_t bytes)
 {
-   return sendAndForceEOF(request, rv::iota(0) | rv::take(bytes));
+   return sendAndForceEOF(request, rv::iota(uint8_t{0}) | rv::take(bytes));
 }
 
 awaitable<std::string> read(client::Response& response)
@@ -287,22 +287,6 @@ awaitable<void> h2spec(server::Request request, server::Response response)
    co_await response.async_submit(200, {});
    co_await response.async_write(asio::buffer("Hello, World!\n"sv));
    co_await response.async_write({});
-   while (co_await request.async_read_some(asio::buffer(buffer)) > 0)
-      ;
-}
-
-awaitable<void> h2spec_delayed(server::Request request, server::Response response)
-{
-   co_await yield(10);
-   std::array<uint8_t, 1024> buffer;
-   size_t n = co_await request.async_read_some(asio::buffer(buffer));
-   co_await yield(); // ok
-   co_await response.async_submit(200, {});
-   co_await yield(); // ok
-   co_await response.async_write(asio::buffer("Hello, World!\n"sv));
-   co_await yield(); // ok
-   co_await response.async_write({});
-   co_await yield(); // ok
    while (co_await request.async_read_some(asio::buffer(buffer)) > 0)
       ;
 }

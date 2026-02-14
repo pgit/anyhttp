@@ -216,7 +216,7 @@ public:
          session->wx = nullptr;
    }
 
-   inline auto logPrefix() const { return session->logPrefix(); }
+   inline auto logPrefix() const { return session ? session->logPrefix() : "DETACHED"; }
 
    // ----------------------------------------------------------------------------------------------
 
@@ -363,9 +363,9 @@ class ResponseWriter
 
 public:
    using super::message;
-   using super::submit_headers;
    using super::serializer;
    using super::stream;
+   using super::submit_headers;
 
 public:
    inline ResponseWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_)

@@ -104,7 +104,8 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
       //        delivered on the next call to async_read_some().
       //
       //        It is still a bit unclear what should happen if the user calls async_read_some()
-      //        after that. This is arguably misuse of the interface.
+      //        after that. This is arguably a misuse of the interface, when the user knows that
+      //        the stream is gone, but it should still be handled gracefully.
       //
       std::move(handler)(boost::beast::http::error::partial_message, 0);
       // std::move(handler)(boost::asio::error::operation_aborted, 0);
@@ -115,6 +116,9 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    // Given an empty buffer, we can't do anything. This includes signalling EOF, because that is
    // done using an empty buffer as well. TODO: That design doesn't match the way ASIO usually
    // signals EOF, which is using asio::error::eof. We should do it like that, too.
+   //
+   // FIXME: This should probably be posted.
+   // https://stackoverflow.com/questions/79717907/boost-asio-any-completion-handler-and-associated-executor
    //
    if (asio::buffer_size(buffer) == 0)
    {
@@ -282,7 +286,7 @@ NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int id_)
 size_t NGHttp2Stream::read_buffers_size() const
 {
    return asio::buffer_size(m_read_buffer) + // remaining part of first buffer
-          std::ranges::fold_left( // sum of all but the first remaining buffers
+          std::ranges::fold_left( // sum of all other buffers
              m_pending_read_buffers | //
                 std::views::drop(1) |
                 std::views::transform([](const auto& buffer) { return buffer.size(); }),
@@ -626,7 +630,7 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
    {
       cs.assign([this](asio::cancellation_type_t ct)
       {
-         logd("[{}] async_get_response: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", int(ct));
+         logd("[{}] async_get_response: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", ct);
 
          if (response_handler)
          {
@@ -673,6 +677,9 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
    // TODO: Try to avoid the extra round trip through this callback on EOF. Currently, EOF is
    //       signalled by an empty send buffer, but if that was done using an extra flag, we could
    //       return NGHTTP2_DATA_FLAG_EOF earlier.
+   //
+   // However, that is not supported by the interface of an async write stream. Writing an empty
+   // buffer shouldn't do anything special.
    //
    size_t copied = 0;
    if (write_buffer.size())

@@ -45,6 +45,16 @@ public:
    int status_code() const noexcept;
 
 public:
+   template <typename Buffers,
+             BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
+      requires(boost::asio::is_mutable_buffer_sequence<Buffers>::value)
+   auto async_read_some(const Buffers& buffers, CompletionToken&& token = CompletionToken())
+   {
+      for (auto& buffer : buffers)
+         if (buffer.size() > 0)
+            return async_read_some(buffer, std::forward<CompletionToken>(token));
+   }
+
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
    auto async_read_some(asio::mutable_buffer buffer, CompletionToken&& token = CompletionToken())
    {
@@ -60,8 +70,7 @@ private:
    std::unique_ptr<Impl> impl;
 };
 
-// FIXME: async_read_some needs to support BufferSequence for this... need AnyBufferSequence?
-// static_assert(boost::beast::is_async_read_stream<Response>::value);
+static_assert(boost::beast::is_async_read_stream<Response>::value);
 
 // -------------------------------------------------------------------------------------------------
 
@@ -114,6 +123,8 @@ private:
    std::unique_ptr<Impl> impl;
 };
 
+// static_assert(boost::beast::is_async_write_stream<Request>::value);
+
 // =================================================================================================
 
 using Connect = void(boost::system::error_code, Session);
@@ -132,7 +143,7 @@ public:
    /**
     * Connect to configured peer and establish a new session.
     *
-    * This operation supports 'terminal' cancellation. When cancellation is requested, that may
+    * This operation supports 'terminal' cancellation. When cancellation is requested, it may
     * take some time to be executed. This is because the async resolver eventually calls
     * \c getaddrinfo(), which is a blocking system call. This is done from a separate thread,
     * so the users executor is not blocked, but this still means that the operation cannot be
@@ -143,7 +154,9 @@ public:
    {
       auto executor = asio::get_associated_executor(token, get_executor());
       return asio::async_initiate<CompletionToken, Connect>(
-         bind_executor(executor, [&](auto&& handler) { async_connect_any(std::move(handler)); }),
+         bind_executor(executor, [&](auto&& handler) { //
+            async_connect_any(std::move(handler));
+         }),
          token);
    }
 

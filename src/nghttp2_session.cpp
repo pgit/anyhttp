@@ -247,6 +247,7 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
       break;
 
    case NGHTTP2_GOAWAY:
+      logd("[{}] on_frame_recv_callback: GOAWAY", handler->logPrefix(frame));
       handler->destroy(nullptr); // fixes h2spec generic/3.8
       break;
 
@@ -381,6 +382,12 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    if (!session)
    {
       mloge("submit: session already gone!");
+      std::move(handler)(errc::make_error_code(errc::operation_canceled), client::Request{nullptr});
+      return;
+   }
+   if (!nghttp2_session_check_request_allowed(session))
+   {
+      mloge("submit: request not allowed!");
       std::move(handler)(errc::make_error_code(errc::operation_canceled), client::Request{nullptr});
       return;
    }

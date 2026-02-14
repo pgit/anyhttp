@@ -20,8 +20,6 @@ using namespace std::chrono_literals;
 
 namespace anyhttp
 {
-using error_code = boost::system::error_code;
-
 template <typename T>
 using expected = std::expected<T, boost::system::error_code>;
 
@@ -64,7 +62,6 @@ awaitable<void> not_found(server::Response response);
 awaitable<void> not_found(server::Request request, server::Response response);
 awaitable<void> dump(server::Request request, server::Response response);
 awaitable<void> echo(server::Request request, server::Response response);
-awaitable<void> echo_buffer(server::Request request, server::Response response);
 awaitable<void> eat_request(server::Request request, server::Response response);
 
 awaitable<void> delayed(server::Request request, server::Response response);
@@ -84,12 +81,16 @@ awaitable<void> send_eof(client::Request& request);
 
 // =================================================================================================
 
+template <typename Range>
+concept ByteRange =
+   std::ranges::borrowed_range<Range> && (sizeof(std::ranges::range_value_t<Range>) == 1);
+
 //
 // FIXME: Do we really need to restrict to "borrowed range" here? The range is kept alive in
 //        the coroutine frame, so we do not need to worry about it's lifetime.
 //
-template <typename Range>
-   requires std::ranges::borrowed_range<Range> && std::ranges::contiguous_range<Range>
+template <ByteRange Range>
+   requires std::ranges::contiguous_range<Range>
 awaitable<void> send(client::Request& request, Range range)
 {
    logi("send: (contiguous range)...");
@@ -100,8 +101,8 @@ awaitable<void> send(client::Request& request, Range range)
 //
 // For a non-contiguous range, we need to copy into a buffer first.
 //
-template <typename Range>
-   requires std::ranges::borrowed_range<Range> && (!std::ranges::contiguous_range<Range>)
+template <ByteRange Range>
+   requires (!std::ranges::contiguous_range<Range>)
 awaitable<void> send(client::Request& request, Range range)
 {
    logi("send:");
@@ -149,7 +150,7 @@ awaitable<void> send(client::Request& request, Range range)
 // -------------------------------------------------------------------------------------------------
 
 template <typename Range>
-   requires std::ranges::borrowed_range<Range>
+   requires ByteRange<Range>
 awaitable<void> sendAndDrop(client::Request request, Range range)
 {
 #if 0
@@ -176,6 +177,7 @@ awaitable<void> sendAndDrop(client::Request request, Range range)
 // -------------------------------------------------------------------------------------------------
 
 template <typename Range>
+   requires ByteRange<Range>
 awaitable<void> sendAndForceEOF(client::Request& request, Range range)
 {
 #if 0

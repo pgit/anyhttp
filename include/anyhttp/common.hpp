@@ -31,6 +31,8 @@ namespace anyhttp
 namespace asio = boost::asio;
 using asio::awaitable;
 
+using error_code = boost::system::error_code;
+
 // =================================================================================================
 
 enum class Protocol
@@ -52,6 +54,9 @@ static_assert(boost::beast::http::is_fields<Fields>::value);
 
 using ReadSome = void(boost::system::error_code, size_t);
 using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
+
+using WriteSome = void(boost::system::error_code, size_t);
+using writeSomeHandler = asio::any_completion_handler<WriteSome>;
 
 using Write = void(boost::system::error_code);
 using WriteHandler = asio::any_completion_handler<Write>;
