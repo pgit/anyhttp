@@ -44,6 +44,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <pthread.h>
+
 #include <chrono>
 #include <cstddef>
 
@@ -892,14 +894,22 @@ TEST_P(ClientAsync, ServerYieldFirst)
 
 // ----------------------------------------------------------------------------------------------
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wreturn-stack-address"
-static const char* stackp()
+static size_t stackRemainingBytes()
 {
-   int dummy;
-   return reinterpret_cast<const char*>(&dummy); // NOLINT
+   pthread_attr_t attr;
+   pthread_getattr_np(pthread_self(), &attr);
+
+   void* stack_base = nullptr;
+   size_t stack_size = 0;
+   pthread_attr_getstack(&attr, &stack_base, &stack_size);
+   pthread_attr_destroy(&attr);
+
+   int local = 0;
+   std::uintptr_t sp = reinterpret_cast<std::uintptr_t>(&local);
+   std::uintptr_t base = reinterpret_cast<std::uintptr_t>(stack_base);
+
+   return (sp >= base) ? (sp - base) : 0;
 }
-#pragma clang diagnostic pop
 
 TEST_P(ClientAsync, Recursion)
 {
@@ -915,13 +925,13 @@ TEST_P(ClientAsync, Recursion)
       // verify that immediate completion (here, due to an empty buffer) does not cause recursion
       std::array<uint8_t, 0> empty;
       co_await response.async_read_some(asio::buffer(empty));
-      auto s0 = stackp();
+      auto s0 = stackRemainingBytes();
       co_await response.async_read_some(asio::buffer(empty));
-      EXPECT_EQ(s0 - stackp(), 0);
+      EXPECT_EQ(s0, stackRemainingBytes());
 
       // however, ASIO allows us to control this behavior using "immediate executors"
       co_await response.async_read_some(asio::buffer(empty), bind_immediate_executor(ex));
-      EXPECT_GT(s0 - stackp(), 0);
+      EXPECT_LT(stackRemainingBytes(), s0);
    };
 }
 
