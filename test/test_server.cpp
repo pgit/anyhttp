@@ -894,21 +894,30 @@ TEST_P(ClientAsync, ServerYieldFirst)
 
 // ----------------------------------------------------------------------------------------------
 
-static size_t stackRemainingBytes()
+static std::optional<size_t> stackRemainingBytes()
 {
    pthread_attr_t attr;
-   pthread_getattr_np(pthread_self(), &attr);
+   if (pthread_getattr_np(pthread_self(), &attr) != 0)
+      return std::nullopt;
 
    void* stack_base = nullptr;
    size_t stack_size = 0;
-   pthread_attr_getstack(&attr, &stack_base, &stack_size);
+   if (pthread_attr_getstack(&attr, &stack_base, &stack_size) != 0)
+   {
+      pthread_attr_destroy(&attr);
+      return std::nullopt;
+   }
+
    pthread_attr_destroy(&attr);
+
+   if (stack_base == nullptr || stack_size == 0)
+      return std::nullopt;
 
    int local = 0;
    std::uintptr_t sp = reinterpret_cast<std::uintptr_t>(&local);
    std::uintptr_t base = reinterpret_cast<std::uintptr_t>(stack_base);
 
-   return (sp >= base) ? (sp - base) : 0;
+   return (sp >= base) ? std::optional(sp - base) : std::nullopt;
 }
 
 TEST_P(ClientAsync, Recursion)
@@ -916,8 +925,12 @@ TEST_P(ClientAsync, Recursion)
 #if __has_feature(address_sanitizer)
    GTEST_SKIP() << "skipped under address sanitizer";
 #endif
+   if (!stackRemainingBytes())
+      GTEST_SKIP() << "unable to measure stack on this platform";
+
    test = [this](Session session) -> awaitable<void>
    {
+
       auto ex = co_await this_coro::executor;
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       auto response = co_await request.async_get_response();
@@ -925,13 +938,15 @@ TEST_P(ClientAsync, Recursion)
       // verify that immediate completion (here, due to an empty buffer) does not cause recursion
       std::array<uint8_t, 0> empty;
       co_await response.async_read_some(asio::buffer(empty));
-      auto s0 = stackRemainingBytes();
+      auto s0 = stackRemainingBytes().value();
       co_await response.async_read_some(asio::buffer(empty));
-      EXPECT_EQ(s0, stackRemainingBytes());
+      auto s1 = stackRemainingBytes().value();
+      EXPECT_EQ(s0, s1);
 
       // however, ASIO allows us to control this behavior using "immediate executors"
       co_await response.async_read_some(asio::buffer(empty), bind_immediate_executor(ex));
-      EXPECT_LT(stackRemainingBytes(), s0);
+      auto s2 = stackRemainingBytes().value();
+      EXPECT_LT(s2, s0);
    };
 }
 
