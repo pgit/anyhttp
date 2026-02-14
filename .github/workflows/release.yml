@@ -76,6 +76,10 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: docker.io/psedoc/anyhttp:0.22
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
 
     steps:
       - *checkout
@@ -90,9 +94,26 @@ jobs:
         run: |
           cmake --build build --target coverage
 
+      - name: Prepare Pages directory
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        run: |
+          mkdir -p pages/coverage
+          cp -r build/coverage_report/* pages/coverage/
+
       - name: Upload Coverage Report
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: build/coverage_report/
           retention-days: 30
+
+      - name: Upload coverage to GitHub Pages
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages/
+
+      - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        id: deployment
+        uses: actions/deploy-pages@v4
