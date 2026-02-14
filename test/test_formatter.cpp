@@ -182,6 +182,8 @@ TEST(FormatterTest, CancellationTypeMultipleCombined)
 
 namespace
 {
+   // Helper to create nghttp2_nv from string literals
+   // Note: const_cast is safe here as the formatter doesn't modify the data
    nghttp2_nv make_nghttp2_nv(const char* name, const char* value)
    {
       return nghttp2_nv{
@@ -218,7 +220,7 @@ TEST(FormatterTest, NgHttp2NvValueOnly)
 TEST(FormatterTest, NgHttp2NvInvalidFormat)
 {
    auto nv = make_nghttp2_nv("test", "value");
-   // Invalid format specifier should throw
+   // Verify that invalid format specifier throws std::format_error
    EXPECT_THROW(std::format("{:x}", nv), std::format_error);
 }
 
