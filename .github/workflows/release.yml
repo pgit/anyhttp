@@ -70,3 +70,29 @@ jobs:
       - name: Run tests (if available)
         run: |
           TSAN_OPTIONS=report_signal_unsafe=0 build/test/test_all
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/psedoc/anyhttp:0.22
+
+    steps:
+      - *checkout
+
+      - name: Configure CMake with Coverage
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_COVERAGE=ON
+
+      - *build
+
+      - name: Generate Coverage Report
+        run: |
+          cmake --build build --target coverage
+
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build/coverage_report/
+          retention-days: 30
