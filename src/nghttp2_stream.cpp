@@ -621,7 +621,10 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
    {
       auto ec = asio::error::basic_errors::already_started;
       logw("[{}] async_get_response: \x1b[1;31m{}\x1b[0m", logPrefix, what(ec));
-      std::move(handler)(ec, client::Response{nullptr});
+      any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
+      ex.execute([handler = std::move(handler), ec = std::move(ec)]() mutable { //
+         std::move(handler)(ec, client::Response{nullptr});
+      });
       return;
    }
 

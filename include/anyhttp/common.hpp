@@ -75,13 +75,7 @@ template <typename F, typename... Args>
    requires std::invocable<F, Args...>
 inline void swap_and_invoke(F&& function, Args&&... args)
 {
-#if 1
    std::exchange(function, nullptr)(std::forward<Args>(args)...);   
-#else
-   std::decay_t<F> temp;
-   std::swap(function, temp);
-   std::move(temp)(std::forward<Args>(args)...);
-#endif
 }
 
 // =================================================================================================

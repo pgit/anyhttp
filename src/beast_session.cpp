@@ -228,12 +228,22 @@ public:
       session = nullptr;
    }
 
+   template <typename Handler, typename... Args>
+      requires std::invocable<Handler, Args...>
+   inline void complete_immediately(Handler&& handler, Args&&... args)
+   {
+      auto ex = asio::get_associated_immediate_executor(handler, get_executor());
+      ex.execute([handler = std::forward<Handler>(handler)] mutable { //
+         std::move(handler)(errc::make_error_code(errc::operation_canceled));
+      });
+   }
+
    void async_write(WriteHandler&& handler, asio::const_buffer buffer) override
    {
       if (cancelled)
       {
          mloge("async_write: already canceled");
-         std::move(handler)(errc::make_error_code(errc::operation_canceled));
+         complete_immediately(std::move(handler), errc::make_error_code(errc::operation_canceled));
          return;
       }
 
@@ -437,6 +447,8 @@ public:
          message.content_length(boost::none);
    }
 
+   asio::any_io_executor get_executor() const noexcept { return session->get_executor(); }
+
    void async_submit(WriteHandler&& handler, unsigned int status_code,
                      const Fields& headers) override
    {
@@ -456,11 +468,16 @@ public:
 
    void async_get_response(client::Request::GetResponseHandler&& handler) override
    {
+      logd("async_get_response:");
+
       if (response_requested)
       {
          auto ec = asio::error::basic_errors::already_started;
-         loge("async_get_response: {}", what(ec));
-         std::move(handler)(ec, client::Response{nullptr});
+         logw("async_get_response: \x1b[1;31m{}\x1b[0m", what(ec));
+         any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
+         ex.execute([handler = std::move(handler), ec = std::move(ec)]() mutable { //
+            std::move(handler)(ec, client::Response{nullptr});
+         });
          return;
       }
       response_requested = true;

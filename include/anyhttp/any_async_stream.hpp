@@ -65,8 +65,8 @@ public:
 #endif
       virtual void async_shutdown_impl(ShutdownHandler handler)
       {
-         auto ex = boost::asio::get_associated_executor(handler, get_executor());
-         boost::asio::dispatch(ex, [handler = std::move(handler)]() mutable { //
+         auto ex = boost::asio::get_associated_immediate_executor(handler, get_executor());
+         ex.execute([handler = std::move(handler)]() mutable { //
             handler(boost::system::error_code());
          });
       }
