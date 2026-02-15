@@ -213,6 +213,10 @@ protected:
             co_return;
          else if (request.url().path() == "/h2spec")
             co_await h2spec(std::move(request), std::move(response));
+         else if (request.url().path() == "/dump")
+            co_await dump(std::move(request), std::move(response));
+         else if (request.url().path() == "/dump space")
+            co_await dump(std::move(request), std::move(response));
          else if (request.url().path() == "/detach")
             co_await detach(std::move(request), std::move(response));
          else if (request.url().path() == "/custom")
@@ -745,6 +749,15 @@ TEST_P(ClientAsync, WHEN_get_response_is_called_twice_THEN_reports_error)
    };
 }
 
+TEST_P(ClientAsync, WHEN_get_response_is_detached_THEN_does_not_crash)
+{
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("echo"));
+      request.async_get_response(detached);
+   };
+}
+
 TEST_P(ClientAsync, WHEN_server_discards_request_while_writing_THEN_connection_is_reset)
 {
    custom = [this](server::Request request, server::Response response) -> awaitable<void>
@@ -930,7 +943,6 @@ TEST_P(ClientAsync, Recursion)
 
    test = [this](Session session) -> awaitable<void>
    {
-
       auto ex = co_await this_coro::executor;
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       auto response = co_await request.async_get_response();
@@ -1093,6 +1105,22 @@ TEST_P(ClientAsync, EatRequest)
       auto response = co_await request.async_get_response();
       auto received = co_await count(response);
       EXPECT_EQ(received, 0);
+   };
+}
+
+// -------------------------------------------------------------------------------------------------
+
+TEST_P(ClientAsync, Dump)
+{
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(
+         url.set_path("dump space").set_params({{"blah", "white space"}, {"x", "y"}}), {});
+      co_await send_eof(request);
+      auto response = co_await request.async_get_response();
+      auto dump = co_await read(response);
+      EXPECT_THAT(dump, testing::HasSubstr("path: /dump space"));
+      EXPECT_THAT(dump, testing::HasSubstr("  blah=white space"));
    };
 }
 
