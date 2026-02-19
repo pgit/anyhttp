@@ -117,9 +117,6 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    // done using an empty buffer as well. TODO: That design doesn't match the way ASIO usually
    // signals EOF, which is using asio::error::eof. We should do it like that, too.
    //
-   // FIXME: This should probably be posted.
-   // https://stackoverflow.com/questions/79717907/boost-asio-any-completion-handler-and-associated-executor
-   //
    if (asio::buffer_size(buffer) == 0)
    {
       any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
@@ -135,8 +132,8 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    {
       cs.assign([this](asio::cancellation_type_t ct)
       {
-         logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m ({})", stream->logPrefix, "cancelled",
-              int(ct));
+         logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m ({})", //
+              stream->logPrefix, "cancelled", int(ct));
 
          if (stream->m_read_handler)
          {
@@ -144,8 +141,6 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
                std::move(handler)(errc::make_error_code(errc::operation_canceled), 0);
             });
          }
-
-         // stream->delete_writer();
       });
    }
 #endif
@@ -363,10 +358,13 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
 
       //
       // swap_and_invoke() moves the read handler into a local variable before invoking it,
-      // allowing a new read handler to be set. This is what we call 'respawning' here.
+      // allowing a new read handler to be set. This is what we call 'respawning' here, when a
+      // new handler is set immediately.
       //
 #if 0
-      post(get_executor(), [handler = std::move(m_read_handler), copied]() mutable { //
+      any_completion_executor ex =
+         get_associated_immediate_executor(m_read_handler, get_executor());
+      ex.execute([handler = std::move(m_read_handler), copied]() mutable { //
          std::move(handler)(boost::system::error_code{}, copied);
       });
 #else
@@ -457,7 +455,8 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    }
 
    //
-   // If there is no further user-provided read handler to call, we can return now.
+   // If there is no further user-provided read handler to call, we can return for now. When the
+   // user calls async_read_some() again,
    // The rest of this function is about delivering EOF or error codes.
    //
    if (!m_read_handler)
@@ -601,7 +600,7 @@ void NGHttp2Stream::resume()
       logd("[{}] async_write: resuming stream ({} bytes to write)", logPrefix, write_buffer.size());
 
       //
-      // It is important to reset the deferred state before resuming, because that may result in
+      // It is important to reset the deferred state BEFORE resuming, because it may result in
       // an immediate call to the read callback.
       //
       is_deferred = false;

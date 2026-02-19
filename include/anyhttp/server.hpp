@@ -117,9 +117,7 @@ public:
                    asio::any_io_executor executor) mutable -> void { //
                co_await asio::co_spawn(executor, sleep(100ms), asio::deferred);
                co_await async_write(buffer);
-               // co_await sleep(100ms);
                co_await async_write({});
-               // co_await sleep(100ms);
                co_return {boost::system::error_code{}};
             },
             get_executor()),

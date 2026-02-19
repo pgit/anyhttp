@@ -183,7 +183,7 @@ awaitable<std::string> read(client::Response& response)
 awaitable<size_t> count(client::Response& response)
 {
    size_t bytes = 0;
-   std::array<uint8_t, 1024> buffer;
+   std::array<uint8_t, 16 * 1024> buffer;
    for (;;)
    {
       size_t n = co_await response.async_read_some(asio::buffer(buffer));

@@ -126,7 +126,7 @@ public:
       if (body_buffer.size() == 0 || parser.is_done())
       {
          any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
-         deleting.reset();
+         deleting.reset(); // may delete this
          ex.execute([handler = std::move(handler)]() mutable { //
             std::move(handler)(boost::system::error_code{}, 0);
          });
@@ -175,7 +175,7 @@ public:
    }
 
    asio::any_io_executor get_executor() const noexcept { return session->get_executor(); }
-   inline auto logPrefix() const { return session->logPrefix(); }
+   inline auto logPrefix() const { return session ? session->logPrefix() : "DETACHED"; }
 
    BeastSession<Stream>* session;
    Stream& stream;
@@ -184,6 +184,13 @@ public:
    std::optional<unsigned int> m_status_code = 0;
    boost::url m_url;
    bool reading = false;
+
+   /**
+    * This pointer takes temporary ownership of the reader/writer when it is deleted while there
+    * is still an outstanding asynchronous operation waiting to complete. This serves a similar
+    * purpose as the \c shared_ptr or \c weak_ptr passed to completion handlers, as can bee found
+    * in callback-based ASIO code often.
+    */
    std::unique_ptr<typename Interface::ReaderOrWriter> deleting;
 };
 
@@ -325,8 +332,9 @@ public:
 
       //
       // With 'chunked' transfer encoding, the serializer will automatically emit a chunk as
-      // large as possible. This means that, like the 'Cancellation' testcase, if the user writes
-      // a single large buffer, cancellation can not be done gracefully at chunk boundary.
+      // large as possible. This means that if the user writes a single large buffer, cancellation
+      // can not be done gracefully at chunk boundary any more. See 'Cancellation' testcase for an
+      // example of this.
       //
       http::async_write(stream, serializer, asio::bind_cancellation_slot(slot, std::move(cb)));
    }
