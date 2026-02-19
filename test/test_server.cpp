@@ -75,7 +75,8 @@ using namespace anyhttp;
 
 // =================================================================================================
 
-std::string NameGenerator(const testing::TestParamInfo<anyhttp::Protocol>& info)
+/// Returns HTTP11 or HTTP/2 depending on the protocol.
+static std::string NameGenerator(const testing::TestParamInfo<anyhttp::Protocol>& info)
 {
    return to_string(info.param);
 };
@@ -89,25 +90,6 @@ static void setupLogging()
 #else
    spdlog::set_level(spdlog::level::debug);
 #endif
-}
-
-// =================================================================================================
-
-class Empty : public testing::Test
-{
-};
-
-TEST_F(Empty, Hello)
-{
-   boost::process::filesystem::path path{"."};
-   std::println("Hello, World!");
-   std::println("Path: {}", path.string());
-}
-
-TEST_F(Empty, Path)
-{
-   bp::filesystem::path path("/usr/bin/echo");
-   std::println("spawn: {}", path.string());
 }
 
 // =================================================================================================
@@ -128,6 +110,20 @@ TEST_F(ClientConnect, WHEN_unknown_host_THEN_completes_with_host_not_found_event
       loge("ERROR: {}", ec.message());
       EXPECT_TRUE(ec == boost::asio::error::netdb_errors::host_not_found ||
                   ec == boost::asio::error::netdb_errors::host_not_found_try_again);
+   });
+   context.run();
+}
+
+TEST_F(ClientConnect, WHEN_wrong_port_THEN_completes_with_host_not_found_eventually)
+{
+   boost::asio::io_context context;
+   auto port = get_unused_port(context);
+   client::Config config{.url = boost::urls::url("http://localhost").set_port_number(port)};
+   client::Client client(context.get_executor(), config);
+   client.async_connect([this](boost::system::error_code ec, Session session)
+   {
+      loge("ERROR: {}", ec.message());
+      EXPECT_EQ(ec, boost::system::errc::connection_refused);
    });
    context.run();
 }

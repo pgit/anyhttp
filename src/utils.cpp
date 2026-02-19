@@ -1,5 +1,7 @@
 #include "anyhttp/utils.hpp"
 
+#include <boost/asio/ip/tcp.hpp>
+
 #include <print>
 
 // =================================================================================================
@@ -28,6 +30,22 @@ size_t run(boost::asio::io_context& context)
    }
    return i;
 #endif
+}
+
+// =================================================================================================
+
+unsigned short get_unused_port(boost::asio::io_context& io)
+{
+    boost::asio::ip::tcp::acceptor acc(io);
+
+    acc.open(boost::asio::ip::tcp::v4());
+    acc.bind({boost::asio::ip::address_v4::loopback(), 0});
+
+    unsigned short port = acc.local_endpoint().port();
+
+    acc.close(); // release immediately
+
+    return port;
 }
 
 // =================================================================================================
