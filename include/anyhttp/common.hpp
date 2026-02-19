@@ -2,6 +2,7 @@
 
 #include <anyhttp/common.hpp>
 #include <anyhttp/concepts.hpp>
+#include <anyhttp/logging.hpp>
 
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
@@ -18,8 +19,6 @@
 #include <boost/system/system_error.hpp>
 #include <boost/url/authority_view.hpp>
 #include <boost/url/pct_string_view.hpp>
-
-#include <spdlog/spdlog.h>
 
 #include <chrono>
 #include <iostream>
@@ -75,7 +74,7 @@ template <typename F, typename... Args>
    requires std::invocable<F, Args...>
 inline void swap_and_invoke(F&& function, Args&&... args)
 {
-   std::exchange(function, nullptr)(std::forward<Args>(args)...);   
+   std::exchange(function, nullptr)(std::forward<Args>(args)...);
 }
 
 // =================================================================================================
@@ -153,49 +152,5 @@ std::string what(const boost::system::error_code& ec);
 
 /// Format according to HTTP date spec (RFC 7231)
 std::string format_http_date(std::chrono::system_clock::time_point tp);
-
-// -------------------------------------------------------------------------------------------------
-
-#define logwi(ec, ...)                                                                             \
-   do                                                                                              \
-   {                                                                                               \
-      if (ec && spdlog::default_logger_raw()->should_log(spdlog::level::warn))                     \
-         spdlog::default_logger_raw()->warn(__VA_ARGS__);                                          \
-      else if (spdlog::default_logger_raw()->should_log(spdlog::level::info))                      \
-         spdlog::default_logger_raw()->info(__VA_ARGS__);                                          \
-   } while (false)
-
-#define loge(...)                                                                                  \
-   do                                                                                              \
-   {                                                                                               \
-      if (spdlog::default_logger_raw()->should_log(spdlog::level::err))                            \
-         spdlog::default_logger_raw()->error(__VA_ARGS__);                                         \
-   } while (false)
-
-#define logw(...)                                                                                  \
-   do                                                                                              \
-   {                                                                                               \
-      if (spdlog::default_logger_raw()->should_log(spdlog::level::warn))                           \
-         spdlog::default_logger_raw()->warn(__VA_ARGS__);                                          \
-   } while (false)
-
-#define logi(...)                                                                                  \
-   do                                                                                              \
-   {                                                                                               \
-      if (spdlog::default_logger_raw()->should_log(spdlog::level::info))                           \
-         spdlog::default_logger_raw()->info(__VA_ARGS__);                                          \
-   } while (false)
-
-#define logd(...)                                                                                  \
-   do                                                                                              \
-   {                                                                                               \
-      if (spdlog::default_logger_raw()->should_log(spdlog::level::debug))                          \
-         spdlog::default_logger_raw()->debug(__VA_ARGS__);                                         \
-   } while (false)
-
-#define mloge(x, ...) loge("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
-#define mlogd(x, ...) logd("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
-#define mlogi(x, ...) logi("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
-#define mlogw(x, ...) logw("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
 
 // =================================================================================================
