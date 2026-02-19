@@ -59,6 +59,8 @@ asio::any_io_executor Request::get_executor() const noexcept
 
 // =================================================================================================
 
+Response::Response() : impl(nullptr) {}
+
 Response::Response(std::unique_ptr<Response::Impl> impl_) : impl(std::move(impl_))
 {
    if (impl)

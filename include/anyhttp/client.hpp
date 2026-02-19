@@ -30,6 +30,7 @@ class Response
 {
 public:
    class Impl;
+   Response();
    explicit Response(std::unique_ptr<Impl> impl);
    Response(Response&& other) noexcept;
    Response& operator=(Response&& other) noexcept;
