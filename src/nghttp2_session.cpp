@@ -248,7 +248,7 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
 
    case NGHTTP2_GOAWAY:
       logd("[{}] on_frame_recv_callback: GOAWAY", handler->logPrefix(frame));
-      handler->destroy(nullptr); // fixes h2spec generic/3.8
+      handler->destroy(); // fixes h2spec generic/3.8
       break;
 
    default:

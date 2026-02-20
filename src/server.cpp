@@ -22,8 +22,8 @@ void Request::reset() noexcept
    if (impl)
    {
       logd("\x1b[35mServer::Request: dtor\x1b[0m");
-      auto temp = impl.get();
-      temp->destroy(std::move(impl)); // give implementation a chance for cancellation
+      impl->destroy();
+      impl.reset();
    }
 }
 
@@ -64,8 +64,8 @@ void Response::reset() noexcept
    if (impl)
    {
       logd("\x1b[35mServer::Response: dtor\x1b[0m");
-      auto temp = impl.get();
-      temp->destroy(std::move(impl)); // give implementation a chance for cancellation
+      impl->destroy();
+      impl.reset();
    }
 }
 
@@ -102,7 +102,12 @@ Server::Server(boost::asio::any_io_executor executor, Config config)
    impl->start();
 }
 
+Server::Server(Server&& other) noexcept = default;
+Server& Server::operator=(Server&& other) noexcept = default;
+
 Server::~Server() { impl->destroy(); }
+
+// -------------------------------------------------------------------------------------------------
 
 void Server::setRequestHandler(RequestHandler&& handler)
 {

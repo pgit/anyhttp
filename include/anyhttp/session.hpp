@@ -25,7 +25,7 @@ public:
    void reset() noexcept;
    ~Session();
 
-   constexpr operator bool() const noexcept { return static_cast<bool>(m_impl); }
+   constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
 
 public:
    /**
@@ -64,9 +64,7 @@ public:
 
 private:
    void async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers);
-
-   /// FIXME: For the user-facing interface, we don't want shared semantics by default.
-   std::shared_ptr<Impl> m_impl;
+   std::shared_ptr<Impl> impl;
 };
 
 // =================================================================================================

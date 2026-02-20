@@ -34,7 +34,7 @@ public:
    
    // ----------------------------------------------------------------------------------------------
    
-   void destroy(std::shared_ptr<Session::Impl>) noexcept override;
+   void destroy() noexcept override;
    
    boost::asio::any_io_executor get_executor() const noexcept override { return m_executor; }
 

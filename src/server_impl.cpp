@@ -419,7 +419,7 @@ awaitable<void> Server::Impl::listen_loop()
    for (; sessionCounter; ++i)
    {
       for (auto& session : m_sessions)
-         session->destroy(std::move(session));
+         session->destroy();
       m_sessions.clear();
 
       lock.unlock();

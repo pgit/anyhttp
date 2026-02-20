@@ -67,7 +67,7 @@ public:
       parser.body_limit(std::numeric_limits<uint64_t>::max());
    }
 
-   void destroy(std::unique_ptr<typename Interface::ReaderOrWriter> self) noexcept override
+   void destroy() noexcept override
    {
       if (!parser.is_done() && session)
       {
@@ -83,8 +83,6 @@ public:
          if (ec)
             logw("destroy: shutdown: {}", what(ec));
       }
-      if (reading)
-         this->deleting = std::move(self);
    }
 
    ~BeastReader() override
@@ -126,7 +124,6 @@ public:
       if (body_buffer.size() == 0 || parser.is_done())
       {
          any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
-         deleting.reset(); // may delete this
          ex.execute([handler = std::move(handler)]() mutable { //
             std::move(handler)(boost::system::error_code{}, 0);
          });
@@ -138,16 +135,10 @@ public:
       parser.get().body().size = body_buffer.size();
 
       auto cs = asio::get_associated_cancellation_slot(handler);
-      auto cb = [this, body_buffer = std::move(body_buffer),
+      auto cb = [this, self = Interface::shared_from_this(), body_buffer = std::move(body_buffer),
                  handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
       {
          reading = false;
-         if (deleting)
-         {
-            std::move(handler)(errc::make_error_code(errc::operation_canceled), 0);
-            deleting.reset();
-            return;
-         }
 
          auto& body = parser.get().body();
          size_t payload = body_buffer.size() - body.size;
@@ -184,14 +175,6 @@ public:
    std::optional<unsigned int> m_status_code = 0;
    boost::url m_url;
    bool reading = false;
-
-   /**
-    * This pointer takes temporary ownership of the reader/writer when it is deleted while there
-    * is still an outstanding asynchronous operation waiting to complete. This serves a similar
-    * purpose as the \c shared_ptr or \c weak_ptr passed to completion handlers, as can bee found
-    * in callback-based ASIO code often.
-    */
-   std::unique_ptr<typename Interface::ReaderOrWriter> deleting;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -208,12 +191,6 @@ public:
    inline WriterBase(BeastSession<Stream>& session_, Stream& stream_)
       : session(&session_), stream(stream_)
    {
-   }
-
-   virtual void destroy(std::unique_ptr<typename Parent::ReaderOrWriter> self) noexcept override
-   {
-      if (writing)
-         this->deleting = std::move(self);
    }
 
    ~WriterBase() override
@@ -272,7 +249,8 @@ public:
       message.body().more = buffer.size() != 0; // empty buffer --> EOF
 
       auto slot = asio::get_associated_cancellation_slot(handler);
-      auto cb = [this, expected = buffer.size(), handler = std::move(handler)] //
+      auto cb = [this, self = Parent::shared_from_this(), expected = buffer.size(),
+                 handler = std::move(handler)] //
          (boost::system::error_code ec, size_t n) mutable
       {
          // async op result 'n' is the number of bytes written to the stream,
@@ -282,12 +260,6 @@ public:
                ec.message(), serializer.is_done(), serializer.get().body().size);
 
          writing = false;
-         if (deleting)
-         {
-            (std::move(handler))(errc::make_error_code(errc::operation_canceled));
-            deleting.reset();
-            return;
-         }
 
          //
          // 'need_buffer' means that the serializer is done consuming all of the given buffer
@@ -367,7 +339,6 @@ public:
    bool writing = false;
    bool cancelled = false;
    bool response_requested = false;
-   std::unique_ptr<typename Parent::ReaderOrWriter> deleting;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -571,7 +542,7 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_execut
 }
 
 template <typename Stream>
-void BeastSession<Stream>::destroy(std::shared_ptr<Session::Impl> self) noexcept
+void BeastSession<Stream>::destroy() noexcept
 {
    //
    // FIXME: ClientAsync.Cancellation runs into a heap-use-after-free here, when the session is

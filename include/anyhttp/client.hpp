@@ -68,7 +68,7 @@ public:
 
 private:
    void async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler);
-   std::unique_ptr<Impl> impl;
+   std::shared_ptr<Impl> impl;
 };
 
 static_assert(boost::beast::is_async_read_stream<Response>::value);
@@ -121,7 +121,7 @@ public:
 private:
    void async_write_any(WriteHandler&& handler, asio::const_buffer buffer);
    void async_get_response_any(GetResponseHandler&& handler);
-   std::unique_ptr<Impl> impl;
+   std::shared_ptr<Impl> impl;
 };
 
 // static_assert(boost::beast::is_async_write_stream<Request>::value);
@@ -136,6 +136,8 @@ class Client
 public:
    class Impl;
    Client(asio::any_io_executor executor, Config config);
+   Client(Client&& other) noexcept;
+   Client& operator=(Client&& other) noexcept;
    ~Client();
 
    using executor_type = asio::any_io_executor;
@@ -163,7 +165,7 @@ public:
 
 private:
    void async_connect_any(ConnectHandler&& handler);
-   std::unique_ptr<Impl> impl;
+   std::shared_ptr<Impl> impl;
 };
 
 // =================================================================================================

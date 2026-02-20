@@ -54,7 +54,7 @@ public:
 
 private:
    void async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler);
-   std::unique_ptr<Impl> impl;
+   std::shared_ptr<Impl> impl;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -127,7 +127,7 @@ public:
 private:
    void async_submit_any(WriteHandler&& handler, unsigned int status_code, const Fields& headers);
    void async_write_any(WriteHandler&& handler, asio::const_buffer buffer);
-   std::unique_ptr<Impl> impl;
+   std::shared_ptr<Impl> impl;
 };
 
 // =================================================================================================
@@ -140,10 +140,9 @@ class Server
 public:
    class Impl;
    Server(asio::any_io_executor executor, Config config);
+   Server(Server&& other) noexcept;
+   Server& operator=(Server&& other) noexcept;
    ~Server();
-
-   Server(Server&& other) = default;
-   Server& operator=(Server&& other) = default;
 
    using executor_type = asio::any_io_executor;
    executor_type get_executor() const noexcept;

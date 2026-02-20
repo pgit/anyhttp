@@ -39,6 +39,9 @@ using ShutdownHandler = asio::any_completion_handler<Shutdown>;
  * The difficult part here is to type-erase the buffer sequences. For starters, the buffers are
  * copied into a small vector that can hold up to 4 buffers without allocation. This seems to work
  * reasonably well.
+ *
+ * There is also asio::buffer_sequence_adapter and linearise(), which seems to be used in ASIO's
+ * SSL code was well. It merges a set of buffers into a new, contiguous buffer. But that is slow.
  */
 class AnyAsyncStream
 {

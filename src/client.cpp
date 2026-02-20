@@ -26,8 +26,8 @@ void Request::reset() noexcept
    if (impl)
    {
       logd("\x1b[34mClient::Request: dtor\x1b[0m");
-      auto temp = impl.get();
-      temp->destroy(std::move(impl)); // give implementation a chance for graceful cancellation
+      impl->destroy();
+      impl.reset();
    }
 }
 
@@ -75,8 +75,8 @@ void Response::reset() noexcept
    if (impl)
    {
       logd("\x1b[34mClient::Response: dtor\x1b[0m");
-      auto temp = impl.get();
-      temp->destroy(std::move(impl)); // give implementation a chance for graceful cancellation
+      impl->destroy();
+      impl.reset();
    }
 }
 
@@ -100,7 +100,13 @@ Client::Client(boost::asio::any_io_executor executor, Config config)
    : impl(std::make_unique<Client::Impl>(std::move(executor), std::move(config)))
 {
 }
+
+Client::Client(Client&&) noexcept = default;
+Client& Client::operator=(Client&& other) noexcept = default;
+
 Client::~Client() = default;
+
+// -------------------------------------------------------------------------------------------------
 
 void Client::async_connect_any(ConnectHandler&& handler)
 {

@@ -22,6 +22,7 @@
 
 #include <chrono>
 #include <iostream>
+#include <memory>
 
 // =================================================================================================
 
@@ -81,7 +82,7 @@ inline void swap_and_invoke(F&& function, Args&&... args)
 
 namespace impl
 {
-class Reader
+class Reader : public std::enable_shared_from_this<Reader>
 {
 public:
    virtual ~Reader() = default;
@@ -89,11 +90,10 @@ public:
    virtual std::optional<size_t> content_length() const noexcept = 0;
    virtual void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) = 0;
    virtual void detach() = 0;
-
-   virtual void destroy(std::unique_ptr<Reader> self) noexcept { /* delete self */ }
+   virtual void destroy() {};
 };
 
-class Writer
+class Writer: public std::enable_shared_from_this<Writer>
 {
 public:
    virtual ~Writer() = default;
@@ -101,8 +101,7 @@ public:
    virtual void content_length(std::optional<size_t> content_length) = 0;
    virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
    virtual void detach() = 0;
-
-   virtual void destroy(std::unique_ptr<Writer> self) noexcept { /* delete self */ }
+   virtual void destroy() {};
 };
 } // namespace impl
 
