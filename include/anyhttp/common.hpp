@@ -15,7 +15,6 @@
 
 #include <boost/beast/http/fields_fwd.hpp>
 #include <boost/beast/http/type_traits.hpp>
-#include <boost/core/detail/string_view.hpp>
 #include <boost/system/system_error.hpp>
 #include <boost/url/authority_view.hpp>
 #include <boost/url/pct_string_view.hpp>
@@ -48,7 +47,6 @@ std::ostream& operator<<(std::ostream& str, Protocol protocol);
 
 // =================================================================================================
 
-// using Fields = std::map<std::string, std::string>;
 using Fields = boost::beast::http::fields;
 static_assert(boost::beast::http::is_fields<Fields>::value);
 

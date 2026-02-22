@@ -29,13 +29,16 @@ class Request
 {
 public:
    class Impl;
-   explicit Request(std::unique_ptr<Impl> impl);
+   explicit Request(std::shared_ptr<Impl> impl);
    Request(Request&& other) noexcept;
    Request& operator=(Request&& other) noexcept;
    void reset() noexcept;
    ~Request();
 
    constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
+
+   using executor_type = asio::any_io_executor;
+   executor_type get_executor() const noexcept;
 
    boost::url_view url() const;
    std::optional<size_t> content_length() const noexcept;
@@ -72,7 +75,7 @@ class Response
 {
 public:
    class Impl;
-   explicit Response(std::unique_ptr<Impl> impl);
+   explicit Response(std::shared_ptr<Impl> impl);
    Response(Response&& other) noexcept;
    Response& operator=(Response&& other) noexcept;
    void reset() noexcept;
@@ -115,7 +118,6 @@ public:
          asio::co_composed<Write>(
             [this](auto state, asio::const_buffer buffer,
                    asio::any_io_executor executor) mutable -> void { //
-               co_await asio::co_spawn(executor, sleep(100ms), asio::deferred);
                co_await async_write(buffer);
                co_await async_write({});
                co_return {boost::system::error_code{}};

@@ -9,7 +9,7 @@ namespace anyhttp::server
 
 // =================================================================================================
 
-Request::Request(std::unique_ptr<Request::Impl> impl) : impl(std::move(impl))
+Request::Request(std::shared_ptr<Request::Impl> impl) : impl(std::move(impl))
 {
    logd("\x1b[1;35mServer::Request: ctor\x1b[0m");
 }
@@ -31,6 +31,8 @@ Request::~Request() { reset(); }
 
 // -------------------------------------------------------------------------------------------------
 
+asio::any_io_executor Request::get_executor() const noexcept { return impl->get_executor(); }
+
 boost::url_view Request::url() const
 {
    assert(impl);
@@ -51,7 +53,7 @@ void Request::async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&&
 
 // =================================================================================================
 
-Response::Response(std::unique_ptr<Response::Impl> impl) : impl(std::move(impl))
+Response::Response(std::shared_ptr<Response::Impl> impl) : impl(std::move(impl))
 {
    logd("\x1b[1;35mServer::Response: ctor\x1b[0m");
 }
