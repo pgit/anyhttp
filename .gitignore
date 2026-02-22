@@ -11,3 +11,4 @@ secrets
 Testing
 *.pcap
 *.junit
+callgrind.*

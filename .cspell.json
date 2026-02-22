@@ -5,6 +5,7 @@
         "anyhttp",
         "ASAN",
         "ASIO",
+        "callgrind",
         "cfssl",
         "coro",
         "darkbase",

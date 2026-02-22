@@ -5,6 +5,14 @@
 FROM docker.io/psedoc/anyhttp:0.23
 
 #
+# install some more interactive utils in the devcontainer
+#
+RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
+    apt-get -y install iputils-ping tmux btop valgrind && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+#
 # enable persistent bash history in container
 #
 # https://code.visualstudio.com/remote/advancedcontainers/persist-bash-history
