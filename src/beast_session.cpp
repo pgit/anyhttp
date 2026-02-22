@@ -5,8 +5,11 @@
 #include "anyhttp/server.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/associated_allocator.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
+#include <boost/asio/associated_executor.hpp>
 #include <boost/asio/bind_cancellation_slot.hpp>
+#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -180,6 +183,36 @@ public:
 // -------------------------------------------------------------------------------------------------
 
 /**
+ * Handler wrapper that forwards all associated properties (executor, allocator, cancellation slot)
+ * to the underlying async operation. This is more efficient and cleaner than nested bind_* calls.
+ */
+template <typename Handler, typename Executor, typename Allocator, typename CancellationSlot>
+struct forwarding_handler
+{
+   Handler handler;
+   Executor executor;
+   Allocator allocator;
+   CancellationSlot cancellation_slot;
+
+   template <typename... Args>
+   void operator()(Args&&... args)
+   {
+      std::move(handler)(std::forward<Args>(args)...);
+   }
+
+   using executor_type = Executor;
+   executor_type get_executor() const noexcept { return executor; }
+
+   using allocator_type = Allocator;
+   allocator_type get_allocator() const noexcept { return allocator; }
+
+   using cancellation_slot_type = CancellationSlot;
+   cancellation_slot_type get_cancellation_slot() const noexcept { return cancellation_slot; }
+};
+
+// -------------------------------------------------------------------------------------------------
+
+/**
  * Common implementation of server::Response and client::Request writer.
  */
 template <typename Parent, typename Stream, typename Serializer,
@@ -248,7 +281,19 @@ public:
       message.body().size = buffer.size();
       message.body().more = buffer.size() != 0; // empty buffer --> EOF
 
-      auto slot = asio::get_associated_cancellation_slot(handler);
+      //
+      // With 'chunked' transfer encoding, the serializer will automatically emit a chunk as
+      // large as possible. This means that if the user writes a single large buffer, cancellation
+      // can not be done gracefully at chunk boundary any more. See 'Cancellation' testcase for an
+      // example of this.
+      //
+      // Use a custom forwarding handler to propagate all associated properties without nested
+      // bind_* calls. This is more efficient and avoids multiple layers of wrappers.
+      //
+      auto cs = get_associated_cancellation_slot(handler);
+      auto ex = get_associated_executor(handler, get_executor());
+      auto alloc = get_associated_allocator(handler);
+
       auto cb = [this, self = Parent::shared_from_this(), expected = buffer.size(),
                  handler = std::move(handler)] //
          (boost::system::error_code ec, size_t n) mutable
@@ -302,13 +347,10 @@ public:
          std::move(handler)(ec);
       };
 
-      //
-      // With 'chunked' transfer encoding, the serializer will automatically emit a chunk as
-      // large as possible. This means that if the user writes a single large buffer, cancellation
-      // can not be done gracefully at chunk boundary any more. See 'Cancellation' testcase for an
-      // example of this.
-      //
-      http::async_write(stream, serializer, asio::bind_cancellation_slot(slot, std::move(cb)));
+      http::async_write(
+         stream, serializer,
+         forwarding_handler<decltype(cb), decltype(ex), decltype(alloc), decltype(cs)>{
+            std::move(cb), std::move(ex), std::move(alloc), std::move(cs)});
    }
 
    // ----------------------------------------------------------------------------------------------
@@ -647,7 +689,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       //
       // Prepare response.
       //
-      auto writer = std::make_unique<ResponseWriter<Stream>>(*this, m_stream);
+      auto writer = std::make_shared<ResponseWriter<Stream>>(*this, m_stream);
       if (wx)
          wx->detach();
       wx = writer.get();
