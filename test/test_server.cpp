@@ -227,13 +227,10 @@ protected:
 #if defined(MULTITHREADED)
       auto threads =
          rv::iota(0) | rv::take(std::max(1u, std::thread::hardware_concurrency())) |
-         rv::transform([this](int) { return std::thread([this] { ::run(context); }); }) |
+         rv::transform([this](int) { return std::jthread([this] { ::run(context); }); }) |
          std::ranges::to<std::vector>();
 
       ::run(context);
-
-      for (auto& thread : threads)
-         thread.join();
 #else
       ::run(context);
 #endif
@@ -331,7 +328,8 @@ protected:
    {
       logi("spawn: {} {}", path.generic_string(), boost::algorithm::join(args, " "));
 
-      readable_pipe out(context), err(context);
+      auto ex = co_await this_coro::executor;
+      readable_pipe out(ex), err(ex);
       bp::process child(co_await this_coro::executor, path, args,
                         bp::process_stdio{.out = out, .err = err});
       // bp::process_environment{{"LD_LIBRARY_PATH=/usr/local/lib"}});
