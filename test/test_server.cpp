@@ -14,6 +14,7 @@
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/strand.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/asio/use_future.hpp>
@@ -330,8 +331,7 @@ protected:
 
       auto ex = co_await this_coro::executor;
       readable_pipe out(ex), err(ex);
-      bp::process child(co_await this_coro::executor, path, args,
-                        bp::process_stdio{.out = out, .err = err});
+      bp::process child(ex, path, args, bp::process_stdio{.out = out, .err = err});
       // bp::process_environment{{"LD_LIBRARY_PATH=/usr/local/lib"}});
 
       logi("spawn: starting to communicate...");
@@ -363,10 +363,9 @@ protected:
       ++numSpawned;
       std::promise<std::string> promise;
       auto future = promise.get_future();
-      if (!strand)
-         strand = make_strand(context.get_executor());
-      co_spawn(*strand, spawn_process(std::move(path), std::move(args)),
-               [promise = std::move(promise)](const std::exception_ptr& ex, std::string str) mutable
+      co_spawn(strand, spawn_process(std::move(path), std::move(args)),
+               bind_executor(strand, [promise = std::move(promise)](const std::exception_ptr& ex,
+                                                                    std::string str) mutable
       {
          if (ex)
          {
@@ -374,11 +373,11 @@ protected:
             loge("{}", str);
          }
          promise.set_value(std::move(str));
-      });
+      }));
       return std::move(future);
    }
 
-   std::optional<any_io_executor> strand;
+   any_io_executor strand{make_strand(context.get_executor())};
    bp::filesystem::path testFile{"CMakeLists.txt"};
    size_t testFileSize = file_size(testFile);
    std::atomic<int> numSpawned = 0;
@@ -1208,7 +1207,7 @@ TEST_P(ClientAsync, Cancellation)
    {
       const size_t length = 50ul * 1024 * 1024;
       const std::vector<char> buffer(length, 'a');
-      for (size_t i = 5; i <= 5; ++i)
+      for (size_t i = 0; i <= 5; ++i)
       {
          auto request = co_await session.async_submit(url.set_path("echo"), {});
          auto response = co_await request.async_get_response();

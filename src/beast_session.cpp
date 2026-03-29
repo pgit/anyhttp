@@ -72,6 +72,7 @@ public:
 
    void destroy() noexcept override
    {
+      logw("destroy: reader destroyed, is_done={}", parser.is_done());
       if (!parser.is_done() && session)
       {
          logw("destroy: reader destroyed, but parser not done yet... closing socket");
@@ -137,7 +138,8 @@ public:
       parser.get().body().data = body_buffer.data();
       parser.get().body().size = body_buffer.size();
 
-      auto cs = asio::get_associated_cancellation_slot(handler);
+      auto ex = get_associated_executor(handler, get_executor());
+      auto cs = get_associated_cancellation_slot(handler);
       auto cb = [this, self = Interface::shared_from_this(), body_buffer = std::move(body_buffer),
                  handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
       {
@@ -164,8 +166,8 @@ public:
       //
       //  Note that beast::http::async_read_same() is implemented using async_compose<>, too.
       //
-      boost::beast::http::async_read_some(stream, buffer, parser,
-                                          asio::bind_cancellation_slot(cs, std::move(cb)));
+      boost::beast::http::async_read_some(
+         stream, buffer, parser, bind_executor(ex, bind_cancellation_slot(cs, std::move(cb))));
    }
 
    asio::any_io_executor get_executor() const noexcept { return session->get_executor(); }
@@ -421,19 +423,20 @@ public:
 
       submit_headers(headers);
 
-      if (message.find(http::field::date) == message.end())
+      if (message.find(http::field::server) == message.end())
          message.set(http::field::server, "anyhttp");
 
       //
       // TODO: For bundling writing the header and body, we should just post the writing here,
-      //       giving an async_write the change to add a body to the message first.
+      //       giving an async_write the chance to add a body to the message first.
       //
       // post(get_executor(), [this](){write);
-      async_write_header(
-         stream, serializer,
-         [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
-            std::move(handler)(ec);
-         });
+
+      auto ex = get_associated_executor(handler, super::get_executor());
+      auto cb = [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
+         std::move(handler)(ec);
+      };
+      async_write_header(stream, serializer, bind_executor(ex, std::move(cb)));
    }
 };
 
@@ -480,11 +483,11 @@ public:
       // TODO: For bundling writing the header and body, we should just post the writing here,
       //       giving an async_write the chance to add a body to the message first.
       //
-      async_write_header(
-         stream, serializer,
-         [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
-            std::move(handler)(ec);
-         });
+      auto ex = get_associated_executor(handler, get_executor());
+      auto cb = [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
+         std::move(handler)(ec);
+      };
+      async_write_header(stream, serializer, bind_executor(ex, std::move(cb)));
    }
 
    void async_get_response(client::Request::GetResponseHandler&& handler) override
@@ -513,6 +516,7 @@ public:
       session->rx = reader.get();
       http::response_parser<http::buffer_body>& parser = reader->parser;
 
+      auto ex = get_associated_executor(handler, get_executor());
       auto slot = get_associated_cancellation_slot(handler);
       auto intermediate = [reader = std::move(reader), handler = std::move(handler),
                            this](boost::system::error_code ec, size_t len) mutable
@@ -537,7 +541,7 @@ public:
 
       mlogd("waiting for response (size={} capacity={})", buffer.size(), buffer.capacity());
       async_read_header(stream, buffer, parser,
-                        bind_cancellation_slot(slot, std::move(intermediate)));
+                        bind_executor(ex, bind_cancellation_slot(slot, std::move(intermediate))));
    }
 
    client::Request::GetResponseHandler responseHandler;
@@ -586,6 +590,7 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_execut
 template <typename Stream>
 void BeastSession<Stream>::destroy() noexcept
 {
+   logw("destroy: closing stream");
    //
    // FIXME: ClientAsync.Cancellation runs into a heap-use-after-free here, when the session is
    //        deleted. This is because the request and response may outlive the session and are
@@ -840,13 +845,16 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
    // TODO: make writer shared? put into queue
    //
    auto& serializer = writer->serializer;
-   async_write_header(m_stream, serializer,
-                      [handler = std::move(handler), writer = std::move(writer), this](
+   auto cs = get_associated_cancellation_slot(handler);
+   auto ex = get_associated_executor(handler, super::get_executor());
+   auto alloc = get_associated_allocator(handler);
+   auto cb = [handler = std::move(handler), writer = std::move(writer), this](
                          boost::system::error_code ec, size_t n) mutable { //
                          std::move(handler)(std::move(ec),
                                             client::Request(std::move(writer)));
-                      });
-   ;
+                      };
+
+   async_write_header(m_stream, serializer, bind_executor(ex, std::move(cb)));
 }
 
 // =================================================================================================

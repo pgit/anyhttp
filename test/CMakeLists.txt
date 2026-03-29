@@ -21,6 +21,7 @@ target_link_libraries(test_all PRIVATE spdlog::spdlog_header_only)
 include(GoogleTest)
 gtest_discover_tests(test_all
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  DISCOVERY_MODE PRE_TEST 
 )
 
 # Add a custom target to run all tests
