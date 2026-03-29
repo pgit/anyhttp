@@ -2,7 +2,7 @@
 # https://github.com/microsoft/vscode-dev-containers/tree/main/containers/debian
 # https://github.com/pgit/cpp-devcontainer
 #
-FROM docker.io/psedoc/cpp-devcontainer:0.23
+FROM docker.io/psedoc/cpp-devcontainer:0.24
 
 #
 # GDB libc++ pretty printer (works for string, but not for map with llvm-18)
@@ -66,7 +66,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib
 # With debian trixie, we now have OpenSSL 3 with QUIC support. Whether or not that is any good,
 # seems to be up for debate: https://www.haproxy.com/blog/state-of-ssl-stacks
 #
-ARG AWS_LC_VERSION=v1.66.0
+ARG AWS_LC_VERSION=v1.68.0
 RUN git clone --depth 1 -b ${AWS_LC_VERSION} https://github.com/aws/aws-lc && \
     cd aws-lc && \
     cmake -B build -DDISABLE_GO=ON --install-prefix=/opt/boringssl && \
