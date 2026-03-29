@@ -42,4 +42,16 @@ RUN chown $USERNAME:$USERNAME /home/${USERNAME}/.bash_aliases
 
 # --------------------------------------------------------------------------------------------------
 
+RUN git clone https://github.com/cppalliance/capy.git && \
+    cd capy && mkdir -p build && cd build && \
+    cmake .. && make -j $(nproc) install && \
+    cd ../.. && rm -rf capy
+
+RUN git clone https://github.com/cppalliance/corosio.git && \
+    cd corosio && mkdir -p build && cd build && \
+    cmake .. && make -j $(nproc) install && \
+    cd ../.. && rm -rf corosio
+
+# --------------------------------------------------------------------------------------------------
+
 SHELL ["/bin/bash", "-c"]
