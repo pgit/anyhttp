@@ -1,5 +1,6 @@
 #pragma once
 #include <boost/asio.hpp>
+#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/experimental/co_composed.hpp>
 
 #include <boost/beast/core/stream_traits.hpp>

@@ -36,13 +36,13 @@ public:
    
    void destroy() noexcept override;
    
-   boost::asio::any_io_executor get_executor() const noexcept override { return m_executor; }
+   Executor get_executor() const noexcept override { return m_executor; }
 
    // ----------------------------------------------------------------------------------------------
 
 public:
    std::string m_logPrefix;
-   asio::any_io_executor m_executor;
+   Executor m_executor;
    Stream m_stream;
    Buffer m_buffer;
    bool m_closed = false;
@@ -87,7 +87,7 @@ public:
    ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
 
    void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers) override;
-   awaitable<void> do_session(Buffer&& data) override;
+   Awaitable<void> do_session(Buffer&& data) override;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -122,7 +122,7 @@ public:
    ClientSession(client::Client::Impl& parent, any_io_executor executor, Stream&& stream);
 
    void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers) override;
-   awaitable<void> do_session(Buffer&& data) override;
+   Awaitable<void> do_session(Buffer&& data) override;
 };
 
 // =================================================================================================

@@ -31,7 +31,7 @@ Request::~Request() { reset(); }
 
 // -------------------------------------------------------------------------------------------------
 
-asio::any_io_executor Request::get_executor() const noexcept { return impl->get_executor(); }
+Executor Request::get_executor() const noexcept { return impl->get_executor(); }
 
 boost::url_view Request::url() const
 {
@@ -75,7 +75,7 @@ Response::~Response() { reset(); }
 
 // -------------------------------------------------------------------------------------------------
 
-asio::any_io_executor Response::get_executor() const noexcept { return impl->get_executor(); }
+Executor Response::get_executor() const noexcept { return impl->get_executor(); }
 
 void Response::content_length(std::optional<size_t> content_length)
 {
@@ -98,7 +98,7 @@ void Response::async_write_any(WriteHandler&& handler, asio::const_buffer buffer
 
 // =================================================================================================
 
-Server::Server(boost::asio::any_io_executor executor, Config config)
+Server::Server(Executor executor, Config config)
    : impl(std::make_unique<Server::Impl>(std::move(executor), std::move(config)))
 {
    impl->start();
@@ -121,7 +121,7 @@ void Server::setRequestHandlerCoro(RequestHandlerCoro&& handler)
    impl->setRequestHandler(std::move(handler));
 }
 
-asio::any_io_executor Server::get_executor() const noexcept { return impl->get_executor(); }
+Executor Server::get_executor() const noexcept { return impl->get_executor(); }
 
 asio::ip::tcp::endpoint Server::local_endpoint() const { return impl->local_endpoint(); }
 

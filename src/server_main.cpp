@@ -98,7 +98,7 @@ int main(int argc, char* argv[])
    });
 
    server->setRequestHandlerCoro(
-      [](server::Request request, server::Response response) -> awaitable<void>
+      [](server::Request request, server::Response response) -> Awaitable<void>
    {
       std::string path = request.url().path();
       if (path == "/echo")

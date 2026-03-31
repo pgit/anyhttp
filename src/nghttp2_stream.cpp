@@ -59,7 +59,7 @@ void NGHttp2Reader<Base>::detach()
 // -------------------------------------------------------------------------------------------------
 
 template <typename Base>
-asio::any_io_executor NGHttp2Reader<Base>::get_executor() const noexcept
+Executor NGHttp2Reader<Base>::get_executor() const noexcept
 {
    assert(stream);
    return stream->get_executor();
@@ -179,7 +179,7 @@ void NGHttp2Writer<Base>::detach()
 // -------------------------------------------------------------------------------------------------
 
 template <typename Base>
-asio::any_io_executor NGHttp2Writer<Base>::get_executor() const noexcept
+Executor NGHttp2Writer<Base>::get_executor() const noexcept
 {
    assert(stream);
    return stream->get_executor();
@@ -773,7 +773,7 @@ void NGHttp2Stream::on_request()
    }
 }
 
-asio::any_io_executor NGHttp2Stream::get_executor() const noexcept { return parent.get_executor(); }
+Executor NGHttp2Stream::get_executor() const noexcept { return parent.get_executor(); }
 
 // =================================================================================================
 

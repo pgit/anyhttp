@@ -51,7 +51,7 @@ void Request::async_get_response_any(Request::GetResponseHandler&& handler)
       std::move(handler)(boost::asio::error::bad_descriptor, Response{nullptr});
 }
 
-asio::any_io_executor Request::get_executor() const noexcept
+Executor Request::get_executor() const noexcept
 {
    assert(impl);
    return impl->get_executor();
@@ -96,7 +96,7 @@ void Response::async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeH
 
 // =================================================================================================
 
-Client::Client(boost::asio::any_io_executor executor, Config config)
+Client::Client(Executor executor, Config config)
    : impl(std::make_unique<Client::Impl>(std::move(executor), std::move(config)))
 {
 }
@@ -113,7 +113,7 @@ void Client::async_connect_any(ConnectHandler&& handler)
    impl->async_connect(std::move(handler));
 }
 
-asio::any_io_executor Client::get_executor() const noexcept { return impl->get_executor(); }
+Executor Client::get_executor() const noexcept { return impl->get_executor(); }
 
 // =================================================================================================
 

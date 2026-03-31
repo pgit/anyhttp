@@ -55,7 +55,7 @@ Response::Impl::~Impl() = default;
 
 // =================================================================================================
 
-Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
+Server::Impl::Impl(Executor executor, Config config)
    : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
 {
    logi("Server: ctor");
@@ -220,7 +220,7 @@ private:
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
+Awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 {
    const auto prefix = normalize(socket.remote_endpoint());
    logi("[{}] new connection", prefix);
@@ -351,7 +351,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
  * https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p3149r5.html#listener-loop-in-an-http-server
  *
  */
-awaitable<void> Server::Impl::listen_loop()
+Awaitable<void> Server::Impl::listen_loop()
 {
    assert(m_acceptor);
    auto& acceptor = *m_acceptor;

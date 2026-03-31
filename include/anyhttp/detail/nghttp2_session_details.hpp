@@ -62,7 +62,7 @@ void NGHttp2SessionImpl<Stream>::destroy() noexcept
 // to the stream. Finally, if still no more data is returned, it waits for a signal to resume.
 //
 template <typename Stream>
-awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
+Awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
 {
    Buffer buffer;
    buffer.reserve(1460);
@@ -151,7 +151,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
 // because it does not need to wait on re-activation by the user.
 //
 template <typename Stream>
-awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
+Awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
 {
    m_buffer.reserve(64 * 1024);
 
@@ -190,7 +190,7 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_execut
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
+Awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
    // get_socket(m_stream).set_option(ip::tcp::no_delay(true));
@@ -249,7 +249,7 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_execut
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
+Awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
    get_socket(m_stream).set_option(ip::tcp::no_delay(true));

@@ -164,7 +164,7 @@ int Server::Impl::udp_on_read(Endpoint& ep)
    return 0;
 }
 
-awaitable<void> Server::Impl::udp_receive_loop()
+Awaitable<void> Server::Impl::udp_receive_loop()
 {
    for (;;)
    {

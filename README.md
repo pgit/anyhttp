@@ -18,7 +18,7 @@ None of those protocols are implemented from scratch. Instead, it is a wrapper a
 ## Synopsis
 ### Server
 ```C++
-awaitable<void> echo(server::Request request, server::Response response)
+Awaitable<void> echo(server::Request request, server::Response response)
 {
    if (request.content_length())
       response.content_length(request.content_length().value());
@@ -37,7 +37,7 @@ awaitable<void> echo(server::Request request, server::Response response)
 ```
 ### Client
 ```c++
-awaitable<void> do_session(Client& client, boost::urls::url url)
+Awaitable<void> do_session(Client& client, boost::urls::url url)
 {
    auto session = co_await client.async_connect();
    auto request = co_await session.async_submit(url, {});

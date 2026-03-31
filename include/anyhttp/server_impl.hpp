@@ -52,7 +52,7 @@ struct Endpoint;
 class Server::Impl : public std::enable_shared_from_this<Server::Impl>
 {
 public:
-   Impl(boost::asio::any_io_executor executor, Config config);
+   Impl(Executor executor, Config config);
    ~Impl();
 
    void start();
@@ -62,10 +62,10 @@ public:
    void listen_udp();
 
    const Config& config() const { return m_config; }
-   boost::asio::any_io_executor get_executor() const noexcept { return m_executor; }
+   Executor get_executor() const noexcept { return m_executor; }
 
-   asio::awaitable<void> listen_loop();
-   asio::awaitable<void> handleConnection(asio::ip::tcp::socket socket);
+   Awaitable<void> listen_loop();
+   Awaitable<void> handleConnection(asio::ip::tcp::socket socket);
 
    asio::ip::tcp::endpoint local_endpoint() const
    {
@@ -81,15 +81,15 @@ public:
    const RequestHandler& requestHandler() const { return m_requestHandler; }
    const RequestHandlerCoro& requestHandlerCoro() const { return m_requestHandlerCoro; }
 
-   asio::awaitable<void> udp_receive_loop();
+   Awaitable<void> udp_receive_loop();
    int udp_on_read(Endpoint& ep);
 
 private:
    Config m_config;
 
-   boost::asio::any_io_executor m_executor;
-   std::optional<asio::ip::tcp::acceptor> m_acceptor;
-   std::optional<asio::ip::udp::socket> m_udp_socket;
+   Executor m_executor;
+   std::optional<TcpAcceptor> m_acceptor;
+   std::optional<UdpSocket> m_udp_socket;
 
    std::mutex m_sessionMutex;
    std::set<std::shared_ptr<Session::Impl>> m_sessions;

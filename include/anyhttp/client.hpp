@@ -39,7 +39,7 @@ public:
 
    constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
    executor_type get_executor() const noexcept;
 
 public:
@@ -87,7 +87,7 @@ public:
 
    constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
    executor_type get_executor() const noexcept;
 
 public:
@@ -135,12 +135,12 @@ class Client
 {
 public:
    class Impl;
-   Client(asio::any_io_executor executor, Config config);
+   Client(Executor executor, Config config);
    Client(Client&& other) noexcept;
    Client& operator=(Client&& other) noexcept;
    ~Client();
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
    executor_type get_executor() const noexcept;
 
    /**

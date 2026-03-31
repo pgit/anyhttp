@@ -80,7 +80,7 @@ void session(tcp::socket sock)
 int main(int argc, char* argv[])
 {
    asio::io_context io_context;
-   tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), port));
+   TcpAcceptor acceptor(io_context, tcp::endpoint(tcp::v4(), port));
    session(acceptor.accept());
    return 0;
 }
@@ -104,7 +104,7 @@ void session(tcp::socket sock)
 int main(int argc, char* argv[])
 {
    asio::io_context io_context;
-   tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), port));
+   TcpAcceptor acceptor(io_context, tcp::endpoint(tcp::v4(), port));
    for (;;)
       std::thread(session, acceptor.accept()).detach();
    return 0;

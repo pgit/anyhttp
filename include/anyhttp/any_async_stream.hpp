@@ -1,5 +1,7 @@
 #pragma once
 
+#include "anyhttp/common.hpp"
+
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/associated_executor.hpp>
@@ -22,6 +24,7 @@ namespace ip = asio::ip;
 
 namespace anyhttp
 {
+
 // =================================================================================================
 
 using ReadWrite = void(boost::system::error_code, std::size_t);
@@ -46,12 +49,12 @@ using ShutdownHandler = asio::any_completion_handler<Shutdown>;
 class AnyAsyncStream
 {
 public:
-   using executor_type = boost::asio::any_io_executor;
+   using executor_type = Executor;
 
    class Impl
    {
    public:
-      using executor_type = boost::asio::any_io_executor;
+      using executor_type = Executor;
       virtual ~Impl() = default;
       virtual executor_type get_executor() noexcept = 0;
       virtual ip::tcp::socket& get_socket() = 0;
@@ -105,7 +108,7 @@ public:
    //
    template <typename ConstBufferSequence,
              BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite)
-                CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
+                CompletionToken = asio::default_completion_token_t<Executor>>
       requires boost::beast::is_const_buffer_sequence<ConstBufferSequence>::value
    auto async_write_some(const ConstBufferSequence& buffers,
                          CompletionToken&& token = CompletionToken())
@@ -131,7 +134,7 @@ public:
    //
    template <typename MutableBufferSequence,
              BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite)
-                CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
+                CompletionToken = asio::default_completion_token_t<Executor>>
       requires boost::beast::is_mutable_buffer_sequence<MutableBufferSequence>::value
    auto async_read_some(const MutableBufferSequence& buffers,
                         CompletionToken&& token = CompletionToken())

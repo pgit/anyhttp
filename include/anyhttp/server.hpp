@@ -7,8 +7,6 @@
 #include <boost/asio/co_composed.hpp>
 #include <boost/asio/co_spawn.hpp>
 
-#include <boost/url/urls.hpp>
-
 using namespace std::chrono_literals;
 
 namespace anyhttp::server
@@ -37,10 +35,10 @@ public:
 
    constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
    executor_type get_executor() const noexcept;
 
-   boost::url_view url() const;
+   boost::urls::url_view url() const;
    std::optional<size_t> content_length() const noexcept;
 
 public:
@@ -55,6 +53,54 @@ public:
          token, buffer);
    }
 
+#if defined HAVE_CAPY
+   struct read_some_awaitable
+   {
+      Request& request_;
+      boost::asio::mutable_buffer buffer_;
+      capy::io_env const* env_ = nullptr;
+      capy::continuation continuation_;
+      mutable std::error_code ec_;
+      mutable std::size_t bytes_transferred_ = 0;
+
+      read_some_awaitable(Request& request, boost::asio::mutable_buffer buffers) noexcept
+         : request_(request), buffer_(std::move(buffers))
+      {
+      }
+
+      bool await_ready() const noexcept { return false; }
+
+      std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, capy::io_env const* env)
+      {
+         env_ = env;
+         continuation_ = {h};
+
+         request_.async_read_some_any(
+            buffer_, [this](boost::system::error_code ec, size_t bytes_transferred) mutable
+         {
+            ec_ = ec;
+            bytes_transferred_ = bytes_transferred;
+            env_->executor.dispatch(continuation_);
+         });
+
+         return std::noop_coroutine();
+      }
+
+      capy::io_result<size_t> await_resume() const noexcept
+      {
+         if (env_->stop_token.stop_requested())
+            return {make_error_code(std::errc::operation_canceled), 0};
+
+         return {ec_, bytes_transferred_};
+      }
+   };
+
+   auto async_read_some_capy(boost::asio::mutable_buffer buffer)
+   {
+      return read_some_awaitable(*this, buffer);
+   }
+#endif
+
 private:
    void async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler);
    std::shared_ptr<Impl> impl;
@@ -63,7 +109,7 @@ private:
 // -------------------------------------------------------------------------------------------------
 
 template <typename T>
-awaitable<void> sleep(T duration)
+Awaitable<void> sleep(T duration)
 {
    using namespace asio;
    steady_timer timer(co_await this_coro::executor);
@@ -83,7 +129,7 @@ public:
 
    constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
    executor_type get_executor() const noexcept;
 
    void content_length(std::optional<size_t> content_length);
@@ -117,7 +163,7 @@ public:
       return asio::async_initiate<CompletionToken, Write>(
          asio::co_composed<Write>(
             [this](auto state, asio::const_buffer buffer,
-                   asio::any_io_executor executor) mutable -> void { //
+                   Executor executor) mutable -> void { //
                co_await async_write(buffer);
                co_await async_write({});
                co_return {boost::system::error_code{}};
@@ -135,18 +181,18 @@ private:
 // =================================================================================================
 
 using RequestHandler = std::function<void(Request, Response)>;
-using RequestHandlerCoro = std::function<asio::awaitable<void>(Request, Response)>;
+using RequestHandlerCoro = std::function<Awaitable<void>(Request, Response)>;
 
 class Server
 {
 public:
    class Impl;
-   Server(asio::any_io_executor executor, Config config);
+   Server(Executor executor, Config config);
    Server(Server&& other) noexcept;
    Server& operator=(Server&& other) noexcept;
    ~Server();
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
    executor_type get_executor() const noexcept;
 
    void setRequestHandler(RequestHandler&& handler);

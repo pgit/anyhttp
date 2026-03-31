@@ -170,7 +170,7 @@ public:
          stream, buffer, parser, bind_executor(ex, bind_cancellation_slot(cs, std::move(cb))));
    }
 
-   asio::any_io_executor get_executor() const noexcept { return session->get_executor(); }
+   Executor get_executor() const noexcept { return session->get_executor(); }
    inline auto logPrefix() const { return session ? session->logPrefix() : "DETACHED"; }
 
    BeastSession<Stream>* session;
@@ -239,7 +239,7 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   asio::any_io_executor get_executor() const noexcept override { return session->get_executor(); }
+   Executor get_executor() const noexcept override { return session->get_executor(); }
 
    void detach() override
    {
@@ -471,7 +471,7 @@ public:
          message.content_length(boost::none);
    }
 
-   asio::any_io_executor get_executor() const noexcept { return session->get_executor(); }
+   Executor get_executor() const noexcept { return session->get_executor(); }
 
    void async_submit(WriteHandler&& handler, unsigned int status_code,
                      const Fields& headers) override
@@ -550,7 +550,7 @@ public:
 // =================================================================================================
 
 template <typename Stream>
-BeastSession<Stream>::BeastSession(std::string_view prefix, asio::any_io_executor executor,
+BeastSession<Stream>::BeastSession(std::string_view prefix, Executor executor,
                                    Stream&& stream)
    : m_executor(std::move(executor)), m_logPrefix(prefix), m_stream(std::move(stream))
 {
@@ -620,7 +620,7 @@ void BeastSession<Stream>::destroy() noexcept
  *
  */
 template <typename Stream>
-awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
+Awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
 
@@ -770,7 +770,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
+Awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
 

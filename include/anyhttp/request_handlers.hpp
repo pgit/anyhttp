@@ -26,7 +26,7 @@ using expected = std::expected<T, boost::system::error_code>;
 // =================================================================================================
 
 template <typename T>
-awaitable<void> sleep(T duration)
+Awaitable<void> sleep(T duration)
 {
    using namespace asio;
 
@@ -57,27 +57,27 @@ awaitable<void> sleep(T duration)
 #endif
 }
 
-awaitable<void> yield(size_t count = 1);
-awaitable<void> not_found(server::Response response);
-awaitable<void> not_found(server::Request request, server::Response response);
-awaitable<void> dump(server::Request request, server::Response response);
-awaitable<void> echo(server::Request request, server::Response response);
-awaitable<void> eat_request(server::Request request, server::Response response);
+Awaitable<void> yield(size_t count = 1);
+Awaitable<void> not_found(server::Response response);
+Awaitable<void> not_found(server::Request request, server::Response response);
+Awaitable<void> dump(server::Request request, server::Response response);
+Awaitable<void> echo(server::Request request, server::Response response);
+Awaitable<void> eat_request(server::Request request, server::Response response);
 
-awaitable<void> delayed(server::Request request, server::Response response);
-awaitable<void> detach(server::Request request, server::Response response);
-awaitable<void> discard(server::Request request, server::Response response);
+Awaitable<void> delayed(server::Request request, server::Response response);
+Awaitable<void> detach(server::Request request, server::Response response);
+Awaitable<void> discard(server::Request request, server::Response response);
 
 // =================================================================================================
 
-awaitable<void> send(client::Request& request, size_t bytes);
-awaitable<std::string> read(client::Response& response);
-awaitable<size_t> count(client::Response& response);
-awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response);
-awaitable<size_t> try_receive(client::Response& response, boost::system::error_code& ec);
-awaitable<size_t> read_response(client::Request& request);
-awaitable<expected<size_t>> try_read_response(client::Request& request);
-awaitable<void> send_eof(client::Request& request);
+Awaitable<void> send(client::Request& request, size_t bytes);
+Awaitable<std::string> read(client::Response& response);
+Awaitable<size_t> count(client::Response& response);
+Awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response);
+Awaitable<size_t> try_receive(client::Response& response, boost::system::error_code& ec);
+Awaitable<size_t> read_response(client::Request& request);
+Awaitable<expected<size_t>> try_read_response(client::Request& request);
+Awaitable<void> send_eof(client::Request& request);
 
 // =================================================================================================
 
@@ -91,7 +91,7 @@ concept ByteRange =
 //
 template <ByteRange Range>
    requires std::ranges::contiguous_range<Range>
-awaitable<void> send(client::Request& request, Range range)
+Awaitable<void> send(client::Request& request, Range range)
 {
    logi("send: (contiguous range)...");
    co_await request.async_write(asio::buffer(range.data(), range.size()));
@@ -103,7 +103,7 @@ awaitable<void> send(client::Request& request, Range range)
 //
 template <ByteRange Range>
    requires (!std::ranges::contiguous_range<Range>)
-awaitable<void> send(client::Request& request, Range range)
+Awaitable<void> send(client::Request& request, Range range)
 {
    logi("send:");
    size_t bytes = 0;
@@ -151,7 +151,7 @@ awaitable<void> send(client::Request& request, Range range)
 
 template <typename Range>
    requires ByteRange<Range>
-awaitable<void> sendAndDrop(client::Request request, Range range)
+Awaitable<void> sendAndDrop(client::Request request, Range range)
 {
 #if 0
    try
@@ -178,7 +178,7 @@ awaitable<void> sendAndDrop(client::Request request, Range range)
 
 template <typename Range>
    requires ByteRange<Range>
-awaitable<void> sendAndForceEOF(client::Request& request, Range range)
+Awaitable<void> sendAndForceEOF(client::Request& request, Range range)
 {
 #if 0
    try
@@ -205,7 +205,7 @@ awaitable<void> sendAndForceEOF(client::Request& request, Range range)
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> h2spec(server::Request request, server::Response response);
+Awaitable<void> h2spec(server::Request request, server::Response response);
 
 // =================================================================================================
 

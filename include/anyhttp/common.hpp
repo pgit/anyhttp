@@ -10,6 +10,11 @@
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ip/udp.hpp>
+
+// #include <boost/capy/ex/any_executor.hpp>
+// #include <boost/capy/ex/executor_ref.hpp>
+// #include <boost/capy/io_task.hpp>
 
 #include <boost/beast/http/fields.hpp>
 
@@ -28,7 +33,21 @@
 namespace anyhttp
 {
 namespace asio = boost::asio;
-using asio::awaitable;
+
+#if 1
+template <typename T>
+using Awaitable = asio::awaitable<T>;
+using Executor = asio::any_io_executor;
+
+using TcpAcceptor = asio::ip::tcp::acceptor;
+using UdpSocket = asio::ip::udp::socket;
+#else
+template <typename T>
+using Awaitable2 = capy::io_task<T>;
+using Executor2 = capy::executor_ref;
+#endif
+
+// -------------------------------------------------------------------------------------------------
 
 using error_code = boost::system::error_code;
 
@@ -59,7 +78,7 @@ using writeSomeHandler = asio::any_completion_handler<WriteSome>;
 using Write = void(boost::system::error_code);
 using WriteHandler = asio::any_completion_handler<Write>;
 
-using DefaultCompletionToken = asio::default_completion_token_t<asio::any_io_executor>;
+using DefaultCompletionToken = asio::default_completion_token_t<Executor>;
 
 // =================================================================================================
 
@@ -84,18 +103,18 @@ class Reader : public std::enable_shared_from_this<Reader>
 {
 public:
    virtual ~Reader() = default;
-   virtual asio::any_io_executor get_executor() const noexcept = 0;
+   virtual Executor get_executor() const noexcept = 0;
    virtual std::optional<size_t> content_length() const noexcept = 0;
    virtual void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) = 0;
    virtual void detach() = 0;
    virtual void destroy() {};
 };
 
-class Writer: public std::enable_shared_from_this<Writer>
+class Writer : public std::enable_shared_from_this<Writer>
 {
 public:
    virtual ~Writer() = default;
-   virtual asio::any_io_executor get_executor() const noexcept = 0;
+   virtual Executor get_executor() const noexcept = 0;
    virtual void content_length(std::optional<size_t> content_length) = 0;
    virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
    virtual void detach() = 0;

@@ -61,6 +61,9 @@ find_package(Boost 1.88 COMPONENTS thread atomic url filesystem process program_
 find_package(OpenSSL)
 find_package(Threads)
 
+find_package(boost_capy)
+find_package(boost_corosio)
+
 #
 # nghttp2
 # https://github.com/curl/curl/blob/master/CMake/FindNGHTTP2.cmake

@@ -36,7 +36,7 @@ size_t run(boost::asio::io_context& context)
 
 unsigned short get_unused_port(boost::asio::io_context& io)
 {
-    boost::asio::ip::tcp::acceptor acc(io);
+    anyhttp::TcpAcceptor acc(io);
 
     acc.open(boost::asio::ip::tcp::v4());
     acc.bind({boost::asio::ip::address_v4::loopback(), 0});

@@ -60,7 +60,7 @@ public:
          token, std::move(url), headers);
    }
 
-   boost::asio::any_io_executor get_executor() const noexcept;
+   Executor get_executor() const noexcept;
 
 private:
    void async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers);

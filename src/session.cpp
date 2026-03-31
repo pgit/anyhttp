@@ -43,7 +43,7 @@ Session::~Session() { reset(); }
 
 // -------------------------------------------------------------------------------------------------
 
-boost::asio::any_io_executor Session::get_executor() const noexcept
+Executor Session::get_executor() const noexcept
 {
    return impl->get_executor();
 }

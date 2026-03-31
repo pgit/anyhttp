@@ -20,7 +20,7 @@ using namespace std::chrono_literals;
 
 using namespace boost::asio::experimental::awaitable_operators;
 
-awaitable<void> send(Request& request, std::string_view hello)
+Awaitable<void> send(Request& request, std::string_view hello)
 {
    logd("send: sending string of {} bytes...", hello.size());
    co_await request.async_write(asio::buffer(hello));
@@ -29,7 +29,7 @@ awaitable<void> send(Request& request, std::string_view hello)
    logd("send: sending string of {} bytes... done, sending EOF... done", hello.size());
 }
 
-awaitable<size_t> read_response(Request& request)
+Awaitable<size_t> read_response(Request& request)
 {
    logd("receive: waiting for response...");
    auto response = co_await request.async_get_response();
@@ -49,7 +49,7 @@ awaitable<size_t> read_response(Request& request)
    co_return total;
 }
 
-awaitable<void> do_request(Session& session, boost::urls::url url)
+Awaitable<void> do_request(Session& session, boost::urls::url url)
 {
    const std::string hello = "Hello, World!\r\n";
 #if 0
@@ -69,13 +69,13 @@ awaitable<void> do_request(Session& session, boost::urls::url url)
 #endif
 }
 
-awaitable<void> do_requests(any_io_executor executor, Session session, boost::urls::url url)
+Awaitable<void> do_requests(any_io_executor executor, Session session, boost::urls::url url)
 {
    for (size_t i = 0; i < 833; ++i)
       co_await do_request(session, url);
 }
 
-awaitable<void> do_session(Client& client, boost::urls::url url)
+Awaitable<void> do_session(Client& client, boost::urls::url url)
 {
    auto session = co_await client.async_connect();
 

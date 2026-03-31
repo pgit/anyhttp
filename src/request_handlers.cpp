@@ -48,14 +48,14 @@ struct std::formatter<EscapedString> : std::formatter<std::string>
 namespace anyhttp
 {
 
-awaitable<void> yield(size_t count)
+Awaitable<void> yield(size_t count)
 {
    auto executor = co_await asio::this_coro::executor;
    for (size_t i = 0; i < count; ++i)
       co_await post(executor, asio::deferred);
 }
 
-awaitable<void> dump(server::Request request, server::Response response)
+Awaitable<void> dump(server::Request request, server::Response response)
 {
    auto url = request.url();
 
@@ -80,7 +80,7 @@ awaitable<void> dump(server::Request request, server::Response response)
    co_await response.async_write({}, deferred);
 }
 
-awaitable<void> echo(server::Request request, server::Response response)
+Awaitable<void> echo(server::Request request, server::Response response)
 {
    if (request.content_length())
       response.content_length(request.content_length().value());
@@ -97,19 +97,19 @@ awaitable<void> echo(server::Request request, server::Response response)
    }
 }
 
-awaitable<void> not_found(server::Response response)
+Awaitable<void> not_found(server::Response response)
 {
    co_await response.async_submit(404, {});
    co_await response.async_write({});
 }
 
-awaitable<void> not_found(server::Request, server::Response response)
+Awaitable<void> not_found(server::Request, server::Response response)
 {
    co_await response.async_submit(404, {});
    co_await response.async_write({});
 }
 
-awaitable<void> eat_request(server::Request request, server::Response response)
+Awaitable<void> eat_request(server::Request request, server::Response response)
 {
    logi("eat_request: going to eat {} bytes", request.content_length().value_or(-1));
 
@@ -140,29 +140,29 @@ awaitable<void> eat_request(server::Request request, server::Response response)
    // co_await anyhttp::sleep(100ms);
 }
 
-awaitable<void> delayed(server::Request request, server::Response response)
+Awaitable<void> delayed(server::Request request, server::Response response)
 {
    co_await sleep(100ms);
    co_await eat_request(std::move(request), std::move(response));
 }
 
-awaitable<void> detach(server::Request request, server::Response response)
+Awaitable<void> detach(server::Request request, server::Response response)
 {
    co_await sleep(100ms);
    std::ignore = request;
    std::ignore = response;
 }
 
-awaitable<void> discard(server::Request request, server::Response response) { co_return; }
+Awaitable<void> discard(server::Request request, server::Response response) { co_return; }
 
 // =================================================================================================
 
-awaitable<void> send(client::Request& request, size_t bytes)
+Awaitable<void> send(client::Request& request, size_t bytes)
 {
    return sendAndForceEOF(request, rv::iota(uint8_t{0}) | rv::take(bytes));
 }
 
-awaitable<std::string> read(client::Response& response)
+Awaitable<std::string> read(client::Response& response)
 {
    std::string body;
    std::array<char, 1024> buffer;
@@ -180,7 +180,7 @@ awaitable<std::string> read(client::Response& response)
    co_return body;
 }
 
-awaitable<size_t> count(client::Response& response)
+Awaitable<size_t> count(client::Response& response)
 {
    size_t bytes = 0;
    std::array<uint8_t, 16 * 1024> buffer;
@@ -198,7 +198,7 @@ awaitable<size_t> count(client::Response& response)
    co_return bytes;
 }
 
-awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response)
+Awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response)
 {
    size_t bytes = 0;
    std::array<uint8_t, 16 * 1024> buffer;
@@ -212,7 +212,7 @@ awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response
    }
 }
 
-awaitable<size_t> try_receive(client::Response& response, error_code& ec)
+Awaitable<size_t> try_receive(client::Response& response, error_code& ec)
 {
 #if 0
    size_t bytes;
@@ -252,13 +252,13 @@ awaitable<size_t> try_receive(client::Response& response, error_code& ec)
 #endif
 }
 
-awaitable<size_t> read_response(client::Request& request)
+Awaitable<size_t> read_response(client::Request& request)
 {
    auto response = co_await request.async_get_response();
    co_return co_await count(response);
 }
 
-awaitable<expected<size_t>> try_read_response(client::Request& request)
+Awaitable<expected<size_t>> try_read_response(client::Request& request)
 {
    try
    {
@@ -271,7 +271,7 @@ awaitable<expected<size_t>> try_read_response(client::Request& request)
    }
 }
 
-awaitable<void> send_eof(client::Request& request)
+Awaitable<void> send_eof(client::Request& request)
 {
    co_await request.async_write({});
    // logi("send: finishing request...");
@@ -279,7 +279,7 @@ awaitable<void> send_eof(client::Request& request)
    // logi("send: finishing request... done ({})", ec.message());
 }
 
-awaitable<void> h2spec(server::Request request, server::Response response)
+Awaitable<void> h2spec(server::Request request, server::Response response)
 {
    co_await yield(10);
    std::array<uint8_t, 1024> buffer;

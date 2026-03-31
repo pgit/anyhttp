@@ -41,20 +41,20 @@ public:
 class Client::Impl
 {
 public:
-   explicit Impl(asio::any_io_executor executor, Config config);
+   explicit Impl(Executor executor, Config config);
    ~Impl();
 
-   boost::asio::any_io_executor get_executor() const noexcept { return m_executor; }
+   Executor get_executor() const noexcept { return m_executor; }
 
    void async_connect(ConnectHandler handler);
 
 private:
    const Config& config() const { return m_config; }
-   awaitable<Session> async_connect();
+   Awaitable<Session> async_connect();
 
 private:
    Config m_config;
-   asio::any_io_executor m_executor;
+   Executor m_executor;
    std::optional<asio::ip::tcp::resolver> m_resolver;
 };
 

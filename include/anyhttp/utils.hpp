@@ -1,5 +1,7 @@
 #pragma once
 
+#include "anyhttp/common.hpp"
+
 #include <boost/asio/io_context.hpp>
 
 // =================================================================================================

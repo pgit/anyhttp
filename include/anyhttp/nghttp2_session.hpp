@@ -49,7 +49,7 @@ public:
    NGHttp2Session(std::string_view prefix, any_io_executor executor);
    virtual ~NGHttp2Session();
 
-   boost::asio::any_io_executor get_executor() const noexcept override { return m_executor; }
+   Executor get_executor() const noexcept override { return m_executor; }
    const std::string& logPrefix() const { return m_logPrefix; }
 
    std::string logPrefix(int stream_id) const
@@ -100,8 +100,8 @@ public:
     */
    void handle_buffer_contents();
 
-   virtual awaitable<void> send_loop() = 0;
-   virtual awaitable<void> recv_loop() = 0;
+   virtual Awaitable<void> send_loop() = 0;
+   virtual Awaitable<void> recv_loop() = 0;
 
    // ----------------------------------------------------------------------------------------------
 
@@ -114,7 +114,7 @@ public:
 
 public:
    std::string m_logPrefix;
-   boost::asio::any_io_executor m_executor;
+   Executor m_executor;
 
    nghttp2_session* session = nullptr;
    std::map<int32_t, std::shared_ptr<NGHttp2Stream>> m_streams;
@@ -136,8 +136,8 @@ protected:
    }
 
 public:
-   awaitable<void> send_loop() override;
-   awaitable<void> recv_loop() override;
+   Awaitable<void> send_loop() override;
+   Awaitable<void> recv_loop() override;
    void destroy() noexcept override;
 
 public:
@@ -180,7 +180,7 @@ public:
 
    // void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
    // override;
-   awaitable<void> do_session(Buffer&& data) override;
+   Awaitable<void> do_session(Buffer&& data) override;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -219,7 +219,7 @@ public:
 
    // void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
    // override;
-   awaitable<void> do_session(Buffer&& data) override;
+   Awaitable<void> do_session(Buffer&& data) override;
 };
 
 // =================================================================================================
