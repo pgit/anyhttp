@@ -13,3 +13,4 @@ Testing
 *.junit
 callgrind.*
 cmake_test_discovery_*.json
+_codeql_detected_source_root

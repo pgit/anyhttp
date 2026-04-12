@@ -341,11 +341,14 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    // FIXME: Do we need to limit recursion here? Probably not, as this is limitted by the number
    //        of stored buffers, and they are limitted by the window size.
    //
+   // FIXME: Actually, we shouldn't be calling the read handler multiple times in a row in the
+   //        first place.
+   //
    size_t count = 0, consumed = 0;
    while (m_read_handler && !is_empty(m_read_buffer))
    {
       size_t copied = asio::buffer_copy(m_read_handler_buffer, m_read_buffer);
-      count++, consumed += copied;
+      ++count, consumed += copied;
       bytesRead += copied;
       m_read_buffer += copied;
 

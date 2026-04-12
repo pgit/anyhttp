@@ -409,7 +409,10 @@ Awaitable<void> Server::Impl::listen_loop()
    }
 
    //
-   // FIXME: implement a better waiting mechanism using async promises or just a condition variable.
+   // FIXME: Implement a better waiting mechanism using async promises or just a condition variable.
+   //
+   //        On the other hand, as there should be no waiting as a result of calling destroy()
+   //        or the destructor of a session, busy waiting in the event loop may even be OK.
    //
    auto lock = std::unique_lock(m_sessionMutex);
    const auto waitingFor = sessionCounter;
