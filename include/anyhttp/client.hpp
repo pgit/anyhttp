@@ -75,10 +75,11 @@ public:
    {
       Response& response_;
       asio::mutable_buffer buffer_;
-      mutable CapyAwaitableState<size_t> state_;
+      std::shared_ptr<CapyAwaitableState<size_t>> state_;
 
       read_some_awaitable(Response& response, asio::mutable_buffer buffer) noexcept
-         : response_(response), buffer_(buffer)
+         : response_(response), buffer_(buffer),
+           state_(std::make_shared<CapyAwaitableState<size_t>>())
       {
       }
 
@@ -86,19 +87,19 @@ public:
 
       std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, capy::io_env const* env)
       {
-         state_.env = env;
-         state_.continuation = {h};
+         state_->env = env;
+         state_->continuation = {h};
 
-         response_.async_read_some_any(buffer_, [this](boost::system::error_code ec, size_t n) mutable {
-            state_.ec = ec;
-            state_.result = n;
-            state_.env->executor.dispatch(state_.continuation);
+         response_.async_read_some_any(buffer_, [state = state_](boost::system::error_code ec, size_t n) mutable {
+            state->ec = ec;
+            state->result = n;
+            state->env->executor.dispatch(state->continuation);
          });
 
          return std::noop_coroutine();
       }
 
-      capy::io_result<size_t> await_resume() noexcept { return state_.resume_result(); }
+      capy::io_result<size_t> await_resume() noexcept { return state_->resume_result(); }
    };
 
    auto async_read_some_capy(asio::mutable_buffer buffer)
@@ -150,27 +151,30 @@ public:
    struct get_response_awaitable
    {
       Request& request_;
-      mutable CapyAwaitableState<Response> state_;
+      std::shared_ptr<CapyAwaitableState<Response>> state_;
 
-      explicit get_response_awaitable(Request& request) : request_(request) {}
+      explicit get_response_awaitable(Request& request)
+         : request_(request), state_(std::make_shared<CapyAwaitableState<Response>>())
+      {
+      }
 
       bool await_ready() const noexcept { return false; }
 
       std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, capy::io_env const* env)
       {
-         state_.env = env;
-         state_.continuation = {h};
+         state_->env = env;
+         state_->continuation = {h};
 
-         request_.async_get_response_any([this](boost::system::error_code ec, Response response) mutable {
-            state_.ec = ec;
-            state_.result = std::move(response);
-            state_.env->executor.dispatch(state_.continuation);
+         request_.async_get_response_any([state = state_](boost::system::error_code ec, Response response) mutable {
+            state->ec = ec;
+            state->result = std::move(response);
+            state->env->executor.dispatch(state->continuation);
          });
 
          return std::noop_coroutine();
       }
 
-      capy::io_result<Response> await_resume() noexcept { return state_.resume_result(); }
+      capy::io_result<Response> await_resume() noexcept { return state_->resume_result(); }
    };
 
    auto async_get_response_capy() { return get_response_awaitable(*this); }
@@ -194,9 +198,10 @@ public:
    {
       Request& request_;
       asio::const_buffer buffer_;
-      mutable CapyAwaitableStateVoid state_;
+      std::shared_ptr<CapyAwaitableStateVoid> state_;
 
-      write_awaitable(Request& request, asio::const_buffer buffer) : request_(request), buffer_(buffer)
+      write_awaitable(Request& request, asio::const_buffer buffer)
+         : request_(request), buffer_(buffer), state_(std::make_shared<CapyAwaitableStateVoid>())
       {
       }
 
@@ -204,19 +209,19 @@ public:
 
       std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, capy::io_env const* env)
       {
-         state_.env = env;
-         state_.continuation = {h};
+         state_->env = env;
+         state_->continuation = {h};
 
-         request_.async_write_any([this](boost::system::error_code ec) mutable {
-            state_.ec = ec;
-            state_.env->executor.dispatch(state_.continuation);
+         request_.async_write_any([state = state_](boost::system::error_code ec) mutable {
+            state->ec = ec;
+            state->env->executor.dispatch(state->continuation);
          },
                                   buffer_);
 
          return std::noop_coroutine();
       }
 
-      capy::io_result<> await_resume() noexcept { return state_.resume_result(); }
+      capy::io_result<> await_resume() noexcept { return state_->resume_result(); }
    };
 
    auto async_write_capy(asio::const_buffer buffer) { return write_awaitable(*this, buffer); }
