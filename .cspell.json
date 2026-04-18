@@ -9,6 +9,7 @@
         "capy",
         "cfssl",
         "coro",
+        "corosio",
         "darkbase",
         "Eisenlohr",
         "epoll",

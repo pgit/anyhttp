@@ -12,9 +12,13 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ip/udp.hpp>
 
-// #include <boost/capy/ex/any_executor.hpp>
-// #include <boost/capy/ex/executor_ref.hpp>
-// #include <boost/capy/io_task.hpp>
+#if defined HAVE_CAPY
+#include <boost/capy/continuation.hpp>
+#include <boost/capy/ex/io_env.hpp>
+#include <boost/capy/ex/executor_ref.hpp>
+#include <boost/capy/io_result.hpp>
+#include <boost/capy/io_task.hpp>
+#endif
 
 #include <boost/beast/http/fields.hpp>
 
@@ -33,18 +37,21 @@
 namespace anyhttp
 {
 namespace asio = boost::asio;
+#if defined HAVE_CAPY
+namespace capy = boost::capy;
+#endif
 
-#if 1
 template <typename T>
 using Awaitable = asio::awaitable<T>;
 using Executor = asio::any_io_executor;
 
 using TcpAcceptor = asio::ip::tcp::acceptor;
 using UdpSocket = asio::ip::udp::socket;
-#else
-template <typename T>
-using Awaitable2 = capy::io_task<T>;
-using Executor2 = capy::executor_ref;
+
+#if defined HAVE_CAPY
+template <typename... T>
+using CapyIoTask = capy::io_task<T...>;
+using CapyExecutor = capy::executor_ref;
 #endif
 
 // -------------------------------------------------------------------------------------------------
@@ -79,6 +86,40 @@ using Write = void(boost::system::error_code);
 using WriteHandler = asio::any_completion_handler<Write>;
 
 using DefaultCompletionToken = asio::default_completion_token_t<Executor>;
+
+#if defined HAVE_CAPY
+template <typename Result>
+struct CapyAwaitableState
+{
+   capy::io_env const* env = nullptr;
+   capy::continuation continuation;
+   error_code ec;
+   Result result{};
+
+   [[nodiscard]] capy::io_result<Result> resume_result() noexcept
+   {
+      if (env != nullptr && env->stop_token.stop_requested())
+         return {make_error_code(std::errc::operation_canceled), Result{}};
+
+      return {ec, std::move(result)};
+   }
+};
+
+struct CapyAwaitableStateVoid
+{
+   capy::io_env const* env = nullptr;
+   capy::continuation continuation;
+   error_code ec;
+
+   [[nodiscard]] capy::io_result<> resume_result() const noexcept
+   {
+      if (env != nullptr && env->stop_token.stop_requested())
+         return {make_error_code(std::errc::operation_canceled)};
+
+      return {ec};
+   }
+};
+#endif
 
 // =================================================================================================
 

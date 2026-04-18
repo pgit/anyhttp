@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED On)
 set(CMAKE_EXPORT_COMPILE_COMMANDS On)
 
 option(ENABLE_COVERAGE "Enable coverage flags and llvm-cov target" OFF)
+option(ANYHTTP_ENABLE_CAPY "Enable Capy coroutine API support" OFF)
 
 if (DEFINED ENV{GITHUB_ACTIONS})
     add_compile_definitions(GITHUB_ACTIONS)
@@ -61,8 +62,15 @@ find_package(Boost 1.88 COMPONENTS thread atomic url filesystem process program_
 find_package(OpenSSL)
 find_package(Threads)
 
-find_package(boost_capy)
-find_package(boost_corosio)
+if (ANYHTTP_ENABLE_CAPY)
+    # capy provides coroutine primitives; corosio provides the actual async I/O runtime.
+    find_package(boost_capy REQUIRED)
+    find_package(boost_corosio REQUIRED)
+    add_compile_definitions(HAVE_CAPY)
+else()
+    find_package(boost_capy QUIET)
+    find_package(boost_corosio QUIET)
+endif()
 
 #
 # nghttp2

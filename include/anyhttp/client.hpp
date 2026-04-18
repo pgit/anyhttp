@@ -9,6 +9,10 @@
 
 #include <boost/url.hpp>
 
+#ifdef HAVE_CAPY
+#include <boost/corosio/endpoint.hpp>
+#endif
+
 namespace anyhttp
 {
 class Session;
@@ -66,6 +70,43 @@ public:
          token, buffer);
    }
 
+#if defined HAVE_CAPY
+   struct read_some_awaitable
+   {
+      Response& response_;
+      asio::mutable_buffer buffer_;
+      mutable CapyAwaitableState<size_t> state_;
+
+      read_some_awaitable(Response& response, asio::mutable_buffer buffer) noexcept
+         : response_(response), buffer_(buffer)
+      {
+      }
+
+      bool await_ready() const noexcept { return false; }
+
+      std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, capy::io_env const* env)
+      {
+         state_.env = env;
+         state_.continuation = {h};
+
+         response_.async_read_some_any(buffer_, [this](boost::system::error_code ec, size_t n) mutable {
+            state_.ec = ec;
+            state_.result = n;
+            state_.env->executor.dispatch(state_.continuation);
+         });
+
+         return std::noop_coroutine();
+      }
+
+      capy::io_result<size_t> await_resume() noexcept { return state_.resume_result(); }
+   };
+
+   auto async_read_some_capy(asio::mutable_buffer buffer)
+   {
+      return read_some_awaitable(*this, buffer);
+   }
+#endif
+
 private:
    void async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler);
    std::shared_ptr<Impl> impl;
@@ -105,6 +146,36 @@ public:
          token);
    }
 
+#if defined HAVE_CAPY
+   struct get_response_awaitable
+   {
+      Request& request_;
+      mutable CapyAwaitableState<Response> state_;
+
+      explicit get_response_awaitable(Request& request) : request_(request) {}
+
+      bool await_ready() const noexcept { return false; }
+
+      std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, capy::io_env const* env)
+      {
+         state_.env = env;
+         state_.continuation = {h};
+
+         request_.async_get_response_any([this](boost::system::error_code ec, Response response) mutable {
+            state_.ec = ec;
+            state_.result = std::move(response);
+            state_.env->executor.dispatch(state_.continuation);
+         });
+
+         return std::noop_coroutine();
+      }
+
+      capy::io_result<Response> await_resume() noexcept { return state_.resume_result(); }
+   };
+
+   auto async_get_response_capy() { return get_response_awaitable(*this); }
+#endif
+
 public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
    auto async_write(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
@@ -117,6 +188,39 @@ public:
          }),
          token, buffer);
    }
+
+#if defined HAVE_CAPY
+   struct write_awaitable
+   {
+      Request& request_;
+      asio::const_buffer buffer_;
+      mutable CapyAwaitableStateVoid state_;
+
+      write_awaitable(Request& request, asio::const_buffer buffer) : request_(request), buffer_(buffer)
+      {
+      }
+
+      bool await_ready() const noexcept { return false; }
+
+      std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, capy::io_env const* env)
+      {
+         state_.env = env;
+         state_.continuation = {h};
+
+         request_.async_write_any([this](boost::system::error_code ec) mutable {
+            state_.ec = ec;
+            state_.env->executor.dispatch(state_.continuation);
+         },
+                                  buffer_);
+
+         return std::noop_coroutine();
+      }
+
+      capy::io_result<> await_resume() noexcept { return state_.resume_result(); }
+   };
+
+   auto async_write_capy(asio::const_buffer buffer) { return write_awaitable(*this, buffer); }
+#endif
 
 private:
    void async_write_any(WriteHandler&& handler, asio::const_buffer buffer);
@@ -162,6 +266,14 @@ public:
          }),
          token);
    }
+
+#if defined HAVE_CAPY
+   /**
+    * Capy-based async connect that yields io_result<Session>.
+    * Usage: auto [ec, session] = co_await client.async_connect_capy(endpoint);
+    */
+   auto async_connect_capy(boost::corosio::endpoint ep);
+#endif
 
 private:
    void async_connect_any(ConnectHandler&& handler);

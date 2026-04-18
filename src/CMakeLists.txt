@@ -40,6 +40,12 @@ add_executable(client)
 target_sources(client PRIVATE "client_main.cpp")
 target_link_libraries(client PRIVATE anyhttp)
 
+if (ANYHTTP_ENABLE_CAPY)
+add_executable(capy_corosio_minimal)
+target_sources(capy_corosio_minimal PRIVATE "capy_corosio_minimal_main.cpp")
+target_link_libraries(capy_corosio_minimal PRIVATE Boost::corosio)
+endif()
+
 #
 # beast_issue_3032
 #

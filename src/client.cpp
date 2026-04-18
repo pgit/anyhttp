@@ -2,6 +2,10 @@
 #include "anyhttp/client.hpp"
 #include "anyhttp/client_impl.hpp"
 
+#ifdef HAVE_CAPY
+#include "anyhttp/session.hpp"
+#endif
+
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/error.hpp>
 
@@ -114,6 +118,44 @@ void Client::async_connect_any(ConnectHandler&& handler)
 }
 
 Executor Client::get_executor() const noexcept { return impl->get_executor(); }
+
+#ifdef HAVE_CAPY
+namespace detail
+{
+// Awaitable wrapper for async_connect that yields io_result<Session>
+struct connect_awaitable
+{
+   std::shared_ptr<CapyAwaitableState<Session>> state;
+   std::shared_ptr<Client::Impl> client_impl;
+
+   bool await_ready() const noexcept { return false; }
+
+   std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, capy::io_env const* env)
+   {
+      state->env = env;
+      state->continuation = {h};
+
+      // Capture state and env in the callback lambda
+      client_impl->async_connect(
+         [state_cap = state, env_cap = env](boost::system::error_code ec, Session session) mutable {
+            state_cap->ec = ec;
+            state_cap->result = std::move(session);
+            env_cap->executor.dispatch(state_cap->continuation);
+         });
+
+      return std::noop_coroutine();
+   }
+
+   capy::io_result<Session> await_resume() noexcept { return state->resume_result(); }
+};
+} // namespace detail
+
+auto Client::async_connect_capy(boost::corosio::endpoint ep)
+{
+   auto state = std::make_shared<CapyAwaitableState<Session>>();
+   return detail::connect_awaitable{state, impl};
+}
+#endif
 
 // =================================================================================================
 

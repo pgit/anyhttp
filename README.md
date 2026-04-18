@@ -53,6 +53,29 @@ The implementation is hidden behind [any_completion_handler](https://www.boost.o
 
 This work is partly inspired by [asio-grpc](https://github.com/Tradias/asio-grpc), which takes the idea even one step further and also supports the upcoming sender/receiver model of execution.
 
+## Capy + Corosio minimal example
+
+Capy coroutine support in this repository uses Corosio for actual network I/O.
+
+Enable it at configure time:
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DANYHTTP_ENABLE_CAPY=ON
+cmake --build build --parallel
+```
+
+Run the minimal loopback TCP example:
+
+```bash
+build/src/capy_corosio_minimal
+```
+
+The example source is in `src/capy_corosio_minimal_main.cpp` and demonstrates:
+
+* a Corosio `tcp_acceptor` and `tcp_socket`
+* Capy task launch via `capy::run_async`
+* coroutine-based connect/accept/read/write flow
+
 ```mermaid
 classDiagram
 
