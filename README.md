@@ -53,18 +53,57 @@ The implementation is hidden behind [any_completion_handler](https://www.boost.o
 
 This work is partly inspired by [asio-grpc](https://github.com/Tradias/asio-grpc), which takes the idea even one step further and also supports the upcoming sender/receiver model of execution.
 
-## Capy + Corosio minimal example
+## Capy + Corosio Coroutine Support
 
-Capy coroutine support in this repository uses Corosio for actual network I/O.
+The library provides parallel C++20 coroutine APIs for both client and server using the Capy coroutine primitives library and Corosio for actual network I/O.
 
-Enable it at configure time:
+### Enable Capy Support
+
+Configure with the `ANYHTTP_ENABLE_CAPY` option:
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DANYHTTP_ENABLE_CAPY=ON
 cmake --build build --parallel
 ```
 
-Run the minimal loopback TCP example:
+### API Overview
+
+When `ANYHTTP_ENABLE_CAPY=ON`, all major I/O operations support Capy-based coroutines:
+
+#### Server Request & Response
+```cpp
+// Server Request (read from client)
+auto [ec, bytes_read] = co_await request.async_read_some_capy(buffer);
+
+// Server Response (write to client)
+auto [ec] = co_await response.async_submit_capy(200, headers);
+auto [ec] = co_await response.async_write_capy(buffer);
+auto [ec] = co_await response.async_write_eof_capy();
+```
+
+#### Client Response & Request
+```cpp
+// Client Response (read from server)
+auto [ec, bytes_read] = co_await response.async_read_some_capy(buffer);
+
+// Client Request (send to server)
+auto [ec, response] = co_await request.async_get_response_capy();
+auto [ec] = co_await request.async_write_capy(buffer);
+
+// Client connection
+auto [ec, session] = co_await client.async_connect_capy(endpoint);
+```
+
+### Key Design Points
+
+- **Parallel, not Replacement**: Capy methods coexist with traditional Asio completion-token APIs
+- **Structured Binding**: All Capy operations return `io_result<T>` compatible with structured bindings
+- **Lifetime Safety**: Awaitable state uses `shared_ptr` to prevent use-after-free on cancellation
+- **Cancellation Support**: Via `env->stop_token` checks in `resume_result()`
+
+### Minimal Example
+
+Run the TCP loopback example:
 
 ```bash
 build/src/capy_corosio_minimal
@@ -72,9 +111,22 @@ build/src/capy_corosio_minimal
 
 The example source is in `src/capy_corosio_minimal_main.cpp` and demonstrates:
 
-* a Corosio `tcp_acceptor` and `tcp_socket`
-* Capy task launch via `capy::run_async`
-* coroutine-based connect/accept/read/write flow
+* a Corosio `tcp_acceptor` and `tcp_socket` with Capy tasks
+* `capy::run_async` launching multiple concurrent tasks
+* Structured binding of `io_result<>` for error handling
+* Real network I/O (not just coroutine primitives)
+
+### Testing
+
+Run the test suite with Capy tests:
+
+```bash
+build/test/test_all --gtest_filter="Capy*"
+```
+
+### Implementation Architecture
+
+The implementation bridges Capy coroutine primitives to the existing AnyHTTP async infrastructure:
 
 ```mermaid
 classDiagram
