@@ -2,7 +2,7 @@
 # https://github.com/microsoft/vscode-dev-containers/tree/main/containers/debian
 # https://github.com/pgit/cpp-devcontainer
 #
-FROM docker.io/psedoc/cpp-devcontainer:0.24
+FROM docker.io/psedoc/cpp-devcontainer:0.25
 
 #
 # GDB libc++ pretty printer (works for string, but not for map with llvm-18)
@@ -66,7 +66,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib
 # With debian trixie, we now have OpenSSL 3 with QUIC support. Whether or not that is any good,
 # seems to be up for debate: https://www.haproxy.com/blog/state-of-ssl-stacks
 #
-ARG AWS_LC_VERSION=v1.68.0
+ARG AWS_LC_VERSION=v1.72.0
 RUN git clone --depth 1 -b ${AWS_LC_VERSION} https://github.com/aws/aws-lc && \
     cd aws-lc && \
     cmake -B build -DDISABLE_GO=ON --install-prefix=/opt/boringssl && \
@@ -86,7 +86,7 @@ RUN git clone --recursive --depth 1 --branch ${NGHTTP3_VERSION} https://github.c
 #
 # nghtcp2 is built with both 'boringssl' (actually, aws-lc) and 'ossl' support
 #
-ARG NGTCP2_VERSION=v1.20.0
+ARG NGTCP2_VERSION=v1.22.1
 RUN git clone --recursive --depth 1 --branch ${NGTCP2_VERSION} https://github.com/ngtcp2/ngtcp2 && \
     cd ngtcp2 && \
     autoreconf -i && \
@@ -112,7 +112,7 @@ RUN git clone --depth 1 -b v1.6.3 https://github.com/libbpf/libbpf && \
 #
 # nghttp2 with HTTP/3 support (based on OpenSSL)
 #
-ARG NGHTTP2_VERSION=v1.68.0
+ARG NGHTTP2_VERSION=v1.69.0
 RUN git clone --recursive --depth 1 --branch ${NGHTTP2_VERSION} https://github.com/nghttp2/nghttp2.git && \
     cd nghttp2 && \
     autoreconf -i && \
