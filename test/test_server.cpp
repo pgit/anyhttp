@@ -187,7 +187,8 @@ protected:
       {
          logd("{} ({})", request.url().path(), request.url().buffer());
 
-         auto params = request.url().params();
+         auto url = request.url();
+         auto params = url.params();
          if (auto it = params.find("delay"); it != params.end())
          {
             try
