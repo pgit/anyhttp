@@ -12,6 +12,7 @@ add_compile_definitions(ENABLE_EXAMPLE_OSSL WITH_EXAMPLE_OSSL)
 add_compile_definitions(HAVE_NETINET_UDP_H)
 add_compile_definitions(HAVE_NETINET_IN_H)
 add_compile_definitions(HAVE_ARPA_INET_H)
+add_compile_definitions(UDP_GRO)
 # include_directories("." "/opt/boringssl/include")
 # link_directories("/opt/boringssl/lib")
 
