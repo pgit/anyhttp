@@ -263,7 +263,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       // TODO: This is a testing key only. Still, we might want to remove it from the repository
       //       to avoid flagging repository scanners.
       //
-      ctx.use_certificate_chain_file("pki/out/server.pem");
+      ctx.use_certificate_chain_file("pki/out/server-chain.pem");
       ctx.use_private_key_file("pki/out/server-key.pem", asio::ssl::context::pem);
 
       ssl_stream.emplace(std::move(socket), ctx);

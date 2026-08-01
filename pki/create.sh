@@ -19,6 +19,11 @@ then
    cfssl sign -ca out/intermediate.pem -ca-key out/intermediate-key.pem -config config.json -profile server out/server.csr | cfssljson -bare out/server
 fi
 
+if ! [[ -f out/server-chain.pem ]]
+then
+   cat out/server.pem out/intermediate.pem > out/server-chain.pem
+fi
+
 if ! [[ -f out/client.pem ]]
 then
    cfssl gencert -initca client.json | cfssljson -bare out/client
