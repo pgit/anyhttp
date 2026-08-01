@@ -113,6 +113,9 @@ awaitable<Session> Client::Impl::async_connect()
 
    logi("Client: connected to {}", socket.remote_endpoint());
 
+   // HTTP/2 is very slow without this, and TLS handshake is faster as well.
+   socket.set_option(ip::tcp::no_delay(true));
+
    //
    // Playing with socket buffer sizes... Doesn't seem to do any good.
    //

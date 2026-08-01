@@ -225,7 +225,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    const auto prefix = normalize(socket.remote_endpoint());
    logi("[{}] new connection", prefix);
 
-   // HTTP/2 is very slow without this
+   // HTTP/2 is very slow without this, and TLS handshake is faster as well.
    socket.set_option(ip::tcp::no_delay(true));
 
    //
@@ -238,10 +238,10 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    socket.get_option(receive_buffer_size);
    logd("[{}] socket buffer sizes: send={} receive={}", prefix, send_buffer_size.value(),
         receive_buffer_size.value());
-#if 1
+
    // socket.set_option(sb::send_buffer_size(8192));
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
-#endif
+
 
    auto executor = co_await boost::asio::this_coro::executor;
    auto buffer = boost::beast::flat_buffer();

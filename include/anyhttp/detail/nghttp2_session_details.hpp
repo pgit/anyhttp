@@ -209,11 +209,12 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    if (auto rv = nghttp2_session_server_new2(&session, callbacks.get(), this, options.get()))
       throw std::runtime_error("nghttp2_session_server_new");
 
-#if 0
+#if 1
    const uint32_t window_size = 1024 * 1024;
    std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
                                              {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
+   nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
 #else
    nghttp2_settings_entry ent{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, &ent, 1);
@@ -252,7 +253,7 @@ template <typename Stream>
 awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
-   get_socket(m_stream).set_option(ip::tcp::no_delay(true));
+   // get_socket(m_stream).set_option(ip::tcp::no_delay(true));
    auto callbacks = super::setup_callbacks();
 
    //
@@ -269,13 +270,14 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
       throw std::runtime_error("nghttp2_session_client_new");
 
 #if 1
-   // const uint32_t window_size = 256 * 1024 * 1024;
-   // const uint32_t window_size = 64 * 1024;
    const uint32_t window_size = 1024 * 1024;
    std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
                                              {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
+#else
+   nghttp2_settings_entry ent{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100};
+   nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, &ent, 1);
 #endif
 
    //
