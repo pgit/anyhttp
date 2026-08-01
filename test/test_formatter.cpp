@@ -89,6 +89,14 @@ TEST(FormatterTest, EndpointIPv6)
    EXPECT_EQ(formatted, "[::1]:9090");
 }
 
+TEST(FormatterTest, EndpointUDP)
+{
+   auto addr = boost::asio::ip::make_address_v6("::1");
+   boost::asio::ip::udp::endpoint endpoint(addr, 9090);
+   auto formatted = std::format("{}", endpoint);
+   EXPECT_EQ(formatted, "[::1]:9090");
+}
+
 TEST(FormatterTest, EndpointIPv6Full)
 {
    auto addr = boost::asio::ip::make_address_v6("2001:db8::1");

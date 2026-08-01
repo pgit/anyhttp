@@ -578,6 +578,52 @@ TEST_P(External, echo)
 
 // =================================================================================================
 
+//
+// Non-parameterised fixture for HTTP/3-only (QUIC) external tests.
+//
+// Inherits all helper infrastructure from External. The server still listens on 127.0.0.2 over
+// both TCP and UDP; QUIC clients connect over the UDP socket using TLS (curl -k, h2load
+// SSL_VERIFY_NONE).
+//
+class ExternalH3 : public External
+{
+};
+
+TEST_F(ExternalH3, curl_http3)
+{
+   auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
+   Args args = {"--http3-only", "-k", "-sS", "-v", "--data-binary",
+                std::format("@{}", testFile.string()), url};
+   auto future = spawn(CURL_PATH, std::move(args));
+   run();
+   EXPECT_EQ(future.get().size(), testFileSize);
+}
+
+TEST_F(ExternalH3, h2load_http3)
+{
+   const size_t n = 10;
+   const size_t data_size = 65535;
+   auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
+   Args args = {"--h3", "-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "2", "-m",
+                "4", url};
+   auto future = spawn(H2LOAD_PATH, std::move(args));
+   run();
+
+   const std::string output = future.get();
+   std::smatch match;
+   std::regex regex(
+      R"((\d+) total, \d+ started, (\d+) done, (\d+) succeeded, (\d+) failed, \d+ errored)");
+   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
+   EXPECT_EQ(std::stoul(match[3].str()), n) << match[1];
+   EXPECT_EQ(std::stoul(match[4].str()), 0) << match[1];
+
+   regex = std::regex(R"(\((\d+)\) data)");
+   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
+   EXPECT_EQ(std::stoul(match[1].str()), n * data_size) << match[1];
+}
+
+// =================================================================================================
+
 class Client : public Server
 {
 protected:

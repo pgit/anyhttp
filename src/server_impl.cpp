@@ -147,21 +147,37 @@ void Server::Impl::listen_tcp()
 void Server::Impl::listen_udp()
 {
    //
-   // QUIC test -- open a UDP port
+   // Bind the UDP socket to the same address and port as the TCP acceptor so
+   // HTTP/3 and HTTP/1.1/2 can share one endpoint. Requires listen_tcp() to
+   // have run first, since we may have been given port=0 and want to reuse the
+   // kernel-assigned port here.
    //
-   // m_udp_socket.emplace(m_executor, ip::udp::endpoint(ip::udp::v6(), config().port));
+   assert(m_acceptor);
+   auto tcp_ep = m_acceptor->local_endpoint();
+   const bool is_v6 = tcp_ep.protocol() == ip::tcp::v6();
+
    m_udp_socket.emplace(m_executor);
-   m_udp_socket->open(ip::udp::v6());
-   // m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
-   // m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTTL>(1));
-   // m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_PKTINFO>(1));
-   // m_udp_socket->set_option(boost::asio::ip::v6_only{true});
-   m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVTCLASS>(1));
-   m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_MTU_DISCOVER>(1));
-   m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVPKTINFO>(1));
+   m_udp_socket->open(is_v6 ? ip::udp::v6() : ip::udp::v4());
+
+   if (is_v6)
+   {
+      boost::system::error_code ec;
+      std::ignore = m_udp_socket->set_option(ip::v6_only(false), ec);
+      m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVTCLASS>(1));
+      m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_MTU_DISCOVER>(1));
+      m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVPKTINFO>(1));
+   }
+   else
+   {
+      m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
+      m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_PKTINFO>(1));
+   }
    m_udp_socket->set_option(socket_option::integer<IPPROTO_UDP, UDP_GRO>(1));
    m_udp_socket->non_blocking(true);
-   m_udp_socket->bind(ip::udp::endpoint(ip::udp::v6(), config().port));
+
+   ip::udp::endpoint udp_ep(tcp_ep.address(), tcp_ep.port());
+   m_udp_socket->bind(udp_ep);
+   logi("Server: UDP listening on {}", udp_ep);
 }
 
 // =================================================================================================
