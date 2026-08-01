@@ -107,15 +107,15 @@ awaitable<void> send(client::Request& request, Range range)
 {
    logi("send:");
    size_t bytes = 0;
-   // std::array<uint8_t, 1460> buffer;
    std::array<uint8_t, 16 * 1024> buffer;
    for (auto chunk : range | ranges::views::chunk(buffer.size()))
    {
-      auto end = std::ranges::copy(chunk, buffer.data()).out;
-      bytes += end - buffer.data();
+      const auto end = std::ranges::copy(chunk, buffer.data()).out;
+      const auto n = end - buffer.data();
+      bytes += n;  // FIXME: count after async_write
 #if 0
 #if defined(NDEBUG)
-      co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()));
+      co_await request.async_write(asio::buffer(buffer.data(), n));
 #else
       //
       // FIXME: With as_tuple<>, testcase h2spec fails, very sporadically.
@@ -123,7 +123,7 @@ awaitable<void> send(client::Request& request, Range range)
       //        This is also influenced by the logging level: With INFO only for the server,
       //        it happens more often than with DEBUG.
       //
-      auto [ec] = co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()),
+      auto [ec] = co_await request.async_write(asio::buffer(buffer.data(), n),
                                                asio::as_tuple);
       if (ec)
       {
@@ -134,7 +134,7 @@ awaitable<void> send(client::Request& request, Range range)
 #else
       try
       {
-         co_await request.async_write(asio::buffer(buffer.data(), end - buffer.data()));
+         co_await request.async_write(asio::buffer(buffer.data(), n));
       }
       catch (const boost::system::system_error& ec)
       {

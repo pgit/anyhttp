@@ -1141,7 +1141,8 @@ TEST_P(ClientAsync, Backpressure)
       // FIXME: or even use asio::async_write() on top of a async_write_some() implementation
 
       // Now that the flow control window is 0, we can't even send an EOF any more:
-      // co_await send_eof(request);
+      auto rc = co_await (send_eof(request) || sleep(100ms));
+      EXPECT_EQ(rc.index(), 1);
 
       // So instead, we start doing this in background, to be resumed as soon as the window reopens.
       co_spawn(co_await this_coro::executor, send_eof(request), detached); // FIXME: join
@@ -1151,6 +1152,7 @@ TEST_P(ClientAsync, Backpressure)
       auto received = co_await try_receive(response, ec);
       std::println("receiving... done, got {} bytes ({})", received, ec.message());
       EXPECT_GT(received, 0);
+      // EXPECT_EQ(received, sent);
       // FIXME: we should be able to receive the remainders that already have been buffered
       // FIXME: in the end, this must be the same as the the bytes sent above
    };
@@ -1217,7 +1219,7 @@ TEST_P(ClientAsync, Cancellation)
    {
       const size_t length = 50ul * 1024 * 1024;
       const std::vector<char> buffer(length, 'a');
-      for (size_t i = 0; i <= 5; ++i)
+      for (size_t i = 0; i <= 20; ++i)
       {
          auto request = co_await session.async_submit(url.set_path("echo"), {});
          auto response = co_await request.async_get_response();

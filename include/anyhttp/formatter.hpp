@@ -90,8 +90,7 @@ struct std::formatter<boost::asio::cancellation_type> : std::formatter<std::stri
 {
    auto format(boost::asio::cancellation_type type, auto& ctx) const
    {
-      using ct = boost::asio::cancellation_type;
-      using enum ct;
+      using enum boost::asio::cancellation_type;
 
       if (type == none)
          return std::formatter<std::string_view>::format("none", ctx);
@@ -100,7 +99,7 @@ struct std::formatter<boost::asio::cancellation_type> : std::formatter<std::stri
          return std::formatter<std::string_view>::format("all", ctx);
 
       bool first = true;
-      auto append_if = [&](boost::asio::cancellation_type flag, std::string_view name)
+      auto append = [&](boost::asio::cancellation_type flag, std::string_view name)
       {
          if ((type & flag) == flag)
          {
@@ -110,9 +109,9 @@ struct std::formatter<boost::asio::cancellation_type> : std::formatter<std::stri
          }
       };
 
-      append_if(terminal, "terminal");
-      append_if(partial, "partial");
-      append_if(total, "total");
+      append(terminal, "terminal");
+      append(partial, "partial");
+      append(total, "total");
 
       if (type != none)
          std::format_to(ctx.out(), "{}0x{:x}", first ? "" : "|", to_underlying(type));
@@ -123,6 +122,9 @@ struct std::formatter<boost::asio::cancellation_type> : std::formatter<std::stri
 
 // =================================================================================================
 
+/// Formats an HTTP/2 name-value pair (nghttp2_nv).
+/// Format specifiers: 'n' = name only, 'v' = value only, default = "name=value".
+/// Example: {:n} → "content-type", {:v} → "application/json", {} → "content-type=application/json"
 template <>
 struct std::formatter<nghttp2_nv>
 {
@@ -161,10 +163,13 @@ struct std::formatter<nghttp2_nv>
       auto out = ctx.out();
       if (what == part::name || what == part::name_and_value)
          std::ranges::copy(rv::counted(nv.name, nv.namelen), out);
+
       if (what == part::name_and_value)
          *out++ = '=';
+
       if (what == part::value || what == part::name_and_value)
          std::ranges::copy(rv::counted(nv.value, nv.valuelen), out);
+
       return out;
    }
 };
