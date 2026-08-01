@@ -1,26 +1,34 @@
 //
-// anyhttp QUIC / HTTP/3 server (first slice).
+// anyhttp QUIC / HTTP/3 server.
 //
-// This is intentionally minimal: TLS handshake + a hardcoded 200 OK response for
-// any request. It is not yet wired into the anyhttp Session::Impl / RequestHandler
-// abstractions -- follow-up commits will layer QUICSession on top of this.
+// One `Http3Session` per QUIC connection implements `Session::Impl`, and per-request
+// `Http3Stream` state feeds an `Http3Reader` (server::Request) and `Http3Writer`
+// (server::Response) into the same `RequestHandler` used by the HTTP/1.1 and HTTP/2
+// backends.
 //
-// Supporting machinery (retry tokens, version negotiation, stateless reset,
-// connection migration, GSO, ECN) is deliberately not implemented yet. Enough
-// packet metadata handling remains to be interoperable with curl on the same box.
+// Not yet implemented: retry tokens, version negotiation, stateless reset, connection
+// migration, GSO, ECN, client-side (async_submit is a no-op).
 //
 
+#include "anyhttp/client_impl.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/literals.hpp"
+#include "anyhttp/request_handlers.hpp" // IWYU pragma: keep
 #include "anyhttp/server_impl.hpp"
+#include "anyhttp/session_impl.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/error.hpp>
+#include <boost/asio/redirect_error.hpp>
 #include <boost/asio/steady_timer.hpp>
+#include <boost/asio/use_awaitable.hpp>
 
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
+
+#include <boost/beast/http/error.hpp>
+#include <boost/url/parse.hpp>
 
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
@@ -39,25 +47,26 @@
 #include <openssl/ssl.h>
 
 #include <array>
+#include <charconv>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "ngtcp2/shared.h"
 #include "ngtcp2/util.h"
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
+namespace errc = boost::system::errc;
 
 namespace anyhttp::server
 {
 
-// =================================================================================================
-// Endpoint: a shim describing the local UDP socket the way ngtcp2 wants to see it.
-// One process-wide socket, but ngtcp2 needs it wrapped in an Address+fd struct.
 // =================================================================================================
 
 struct Endpoint
@@ -74,11 +83,10 @@ namespace
 {
 
 constexpr size_t QUIC_SCIDLEN = 18;
-constexpr std::string_view QUIC_ALPN_H3 = "\x2h3";
 
 //
 // One-shot process-wide initialization of ngtcp2_crypto_ossl and the OpenSSL SSL_CTX
-// used for every QUIC connection. Lazily created on the first incoming packet.
+// used for every QUIC connection.
 //
 struct TlsServerContext
 {
@@ -128,7 +136,6 @@ struct TlsServerContext
    static int alpn_select_cb(SSL*, const unsigned char** out, unsigned char* outlen,
                              const unsigned char* in, unsigned int inlen, void*)
    {
-      // Look for "h3" in the client's ALPN list (length-prefixed strings).
       for (auto s = std::span{in, inlen}; s.size() >= 3; s = s.subspan(s[0] + 1))
       {
          if (s[0] == 2 && s[1] == 'h' && s[2] == '3')
@@ -174,7 +181,7 @@ int send_udp(int fd, const sockaddr* sa, socklen_t salen, std::span<const uint8_
          if (errno == EINTR)
             continue;
          if (errno == EAGAIN || errno == EWOULDBLOCK)
-            return 0; // treat as best-effort; caller will retry on next tick
+            return 0; // best-effort; ngtcp2 will retransmit
          loge("sendto: {}", strerror(errno));
          return -1;
       }
@@ -182,53 +189,155 @@ int send_udp(int fd, const sockaddr* sa, socklen_t salen, std::span<const uint8_
    }
 }
 
+nghttp3_nv make_nv(std::string_view name, std::string_view value)
+{
+   nghttp3_nv nv{};
+   nv.name = reinterpret_cast<uint8_t*>(const_cast<char*>(name.data()));
+   nv.namelen = name.size();
+   nv.value = reinterpret_cast<uint8_t*>(const_cast<char*>(value.data()));
+   nv.valuelen = value.size();
+   nv.flags = NGHTTP3_NV_FLAG_NONE;
+   return nv;
+}
+
 } // namespace
 
 // =================================================================================================
-// Handler: one QUIC connection.
-// Owns the ngtcp2_conn, its SSL, the nghttp3_conn, and the retransmission timer.
+// Http3Stream: per-request state.
 // =================================================================================================
 
-class QuicHandler : public std::enable_shared_from_this<QuicHandler>
+class Http3Session;
+class Http3Stream;
+
+class Http3Stream
 {
 public:
-   QuicHandler(Server::Impl& server, Endpoint ep, ngtcp2::Address remote);
-   ~QuicHandler();
+   Http3Stream(Http3Session& session, int64_t id);
+   ~Http3Stream();
 
-   // First entry point for a brand-new connection: create ngtcp2_conn + SSL and consume
-   // the first (Initial) packet. `dcid` and `scid` come from the client packet header.
+   int64_t id;
+   Http3Session& session;
+   std::string log_prefix;
+
+   //
+   // Request state (populated by nghttp3 header callbacks).
+   //
+   std::string method;
+   boost::urls::url url;
+   std::optional<size_t> content_length;
+   Fields request_fields;
+
+   //
+   // Response state (populated by user via Http3Writer).
+   //
+   unsigned int response_status = 0;
+   Fields response_fields;
+   std::optional<size_t> response_content_length;
+   std::string response_content_length_str; // storage for nghttp3_nv
+   bool response_submitted = false;
+
+   //
+   // Request body plumbing (client → server).
+   //
+   std::deque<std::vector<uint8_t>> pending_read;
+   asio::const_buffer read_head; // view of pending_read.front() not yet delivered
+   bool eof_received = false;
+   ReadSomeHandler read_handler;
+   asio::mutable_buffer read_handler_buffer;
+
+   //
+   // Response body plumbing (server → client).
+   //
+   // nghttp3 does not copy the bytes handed to its data reader -- it retains raw
+   // pointers until add_write_offset acknowledges them (in framed byte count, which
+   // conflates payload with DATA-frame header overhead). To sidestep that accounting
+   // headache we take a copy of each async_write buffer into stream-owned storage
+   // and fire the completion handler immediately. Chunks stay alive in `in_flight`
+   // for the lifetime of the stream, so pointers we handed nghttp3 remain valid.
+   //
+   std::deque<std::vector<uint8_t>> pending_writes;      // not yet handed to nghttp3
+   std::vector<std::vector<uint8_t>> in_flight_writes;   // handed to nghttp3, keep alive
+   bool eof_submitted = false;                           // user signalled EOF via empty write
+   bool eof_sent_to_h3 = false;                          // NGHTTP3_DATA_FLAG_EOF returned
+
+   //
+   // Lifecycle.
+   //
+   impl::Reader* reader = nullptr; // pointer back to the Http3Reader when attached
+   impl::Writer* writer = nullptr; // pointer back to the Http3Writer when attached
+   bool closed = false;            // set in h3_cb_stream_close
+
+   asio::any_io_executor get_executor() const noexcept;
+
+   // Data flow into user land.
+   void on_data_chunk(const uint8_t* data, size_t len);
+   void on_eof();
+   void call_read_handler();
+
+   // Data flow from user land back to nghttp3.
+   void submit_response();
+   nghttp3_ssize data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t* pflags);
+   void on_write_consumed(size_t n);
+
+   // Called from either reader or writer destructor.
+   void delete_reader();
+   void delete_writer();
+   void maybe_close();
+};
+
+// =================================================================================================
+// Http3Session: one QUIC connection, one anyhttp Session::Impl.
+// =================================================================================================
+
+class Http3Session : public Session::Impl
+{
+public:
+   Http3Session(Server::Impl& server, Endpoint ep, ngtcp2::Address remote);
+   ~Http3Session() override;
+
+   //
+   // Session::Impl
+   //
+   asio::any_io_executor get_executor() const noexcept override { return server_.get_executor(); }
+   void async_submit(SubmitHandler&& handler, boost::urls::url, const Fields&) override;
+   awaitable<void> do_session(Buffer&& data) override;
+   void destroy() noexcept override;
+
+   //
+   // Interface used by the UDP demux in Server::Impl.
+   //
    int init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t version,
             const ngtcp2_pkt_info& pi, std::span<const uint8_t> data);
-
-   // Process a subsequent packet on an existing connection.
    int on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> data,
                const ngtcp2::Address& remote);
-
-   // Drain any pending ngtcp2/nghttp3 output.
    int write_streams();
-
-   // Called after a read or timer tick to arm/rearm the retransmission timer.
    void update_timer();
-
-   // Fired by the asio steady_timer.
    int handle_expiry();
 
    const ngtcp2_cid& scid() const noexcept { return scid_; }
    ngtcp2_conn* conn() const noexcept { return conn_; }
    bool closed() const noexcept { return closed_; }
    const std::string& log_prefix() const noexcept { return log_prefix_; }
+   Server::Impl& server() noexcept { return server_; }
+   nghttp3_conn* h3() const noexcept { return h3_; }
+
+   // Called by Http3Writer/Reader to make sure the write loop runs after new data was queued.
+   void wake_write();
+
+   Http3Stream* find_stream(int64_t id);
+   Http3Stream* create_stream(int64_t id);
+   void erase_stream(int64_t id);
 
    //
-   // ngtcp2 <-> ngtcp2_crypto_ossl bridge: crypto lib calls back into ngtcp2 via this
-   // ref that lives inside the SSL's app data.
+   // ngtcp2 <-> ngtcp2_crypto_ossl bridge.
    //
    static ngtcp2_conn* get_conn(ngtcp2_crypto_conn_ref* ref)
    {
-      return static_cast<QuicHandler*>(ref->user_data)->conn_;
+      return static_cast<Http3Session*>(ref->user_data)->conn_;
    }
 
    //
-   // Callback bridges (static -> instance)
+   // ngtcp2 callback bridges
    //
    static int cb_handshake_completed(ngtcp2_conn*, void* user);
    static int cb_recv_stream_data(ngtcp2_conn*, uint32_t flags, int64_t stream_id, uint64_t offset,
@@ -273,9 +382,9 @@ public:
 
 private:
    int setup_http3();
-   int submit_response(int64_t stream_id);
    int handle_error(int rv);
    void arm_timer_from_ngtcp2();
+   void signal_done();
 
 private:
    Server::Impl& server_;
@@ -284,36 +393,382 @@ private:
    ngtcp2_cid scid_{};
 
    ngtcp2_conn* conn_ = nullptr;
-   ngtcp2_crypto_ossl_ctx* ossl_ctx_ = nullptr; // owns the SSL
+   ngtcp2_crypto_ossl_ctx* ossl_ctx_ = nullptr;
    ngtcp2_crypto_conn_ref conn_ref_{};
 
    nghttp3_conn* h3_ = nullptr;
 
    asio::steady_timer timer_;
+   asio::steady_timer done_signal_; // used to wake do_session() on connection close
    ngtcp2_ccerr last_error_{};
    bool closed_ = false;
 
    std::string log_prefix_;
 
-   // Cached to hand back to nghttp3's data reader for the hardcoded response.
-   static constexpr std::string_view kResponseBody =
-      "Hello from anyhttp QUIC!\n"
-      "\n"
-      "This is a hardcoded response served by the first-slice HTTP/3 server.\n";
+   std::unordered_map<int64_t, std::shared_ptr<Http3Stream>> streams_;
 };
+
+// =================================================================================================
+// Http3Reader / Http3Writer: adapter classes that plug Http3Stream into the anyhttp
+// Reader/Writer interfaces. Server-side only; the client-side templates come later.
+// =================================================================================================
+
+template <typename Interface>
+class Http3Reader : public Interface
+{
+public:
+   explicit Http3Reader(Http3Stream& s) : stream(&s) { s.reader = this; }
+   ~Http3Reader() override
+   {
+      if (stream)
+      {
+         stream->reader = nullptr;
+         stream->delete_reader();
+      }
+   }
+
+   asio::any_io_executor get_executor() const noexcept override
+   {
+      assert(stream);
+      return stream->get_executor();
+   }
+
+   std::optional<size_t> content_length() const noexcept override
+   {
+      return stream ? stream->content_length : std::nullopt;
+   }
+
+   unsigned int status_code() const noexcept override
+   {
+      // Server-side Request; status doesn't apply, but the interface requires it.
+      return 0;
+   }
+
+   boost::url_view url() const override
+   {
+      assert(stream);
+      return stream->url;
+   }
+
+   void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) override
+   {
+      if (!stream)
+      {
+         std::move(handler)(boost::beast::http::error::partial_message, 0);
+         return;
+      }
+      if (asio::buffer_size(buffer) == 0)
+      {
+         asio::any_completion_executor ex =
+            asio::get_associated_immediate_executor(handler, stream->get_executor());
+         ex.execute([handler = std::move(handler)]() mutable {
+            std::move(handler)(boost::system::error_code{}, 0);
+         });
+         return;
+      }
+
+      assert(!stream->read_handler);
+      stream->read_handler = std::move(handler);
+      stream->read_handler_buffer = buffer;
+      stream->call_read_handler();
+   }
+
+   void detach() override { stream = nullptr; }
+
+   Http3Stream* stream;
+};
+
+template <typename Base>
+class Http3Writer : public Base
+{
+public:
+   explicit Http3Writer(Http3Stream& s) : stream(&s) { s.writer = this; }
+   ~Http3Writer() override
+   {
+      if (stream)
+      {
+         stream->writer = nullptr;
+         stream->delete_writer();
+      }
+   }
+
+   asio::any_io_executor get_executor() const noexcept override
+   {
+      assert(stream);
+      return stream->get_executor();
+   }
+
+   void content_length(std::optional<size_t> len) override
+   {
+      assert(stream);
+      stream->response_content_length = len;
+   }
+
+   void async_write(WriteHandler&& handler, asio::const_buffer buffer) override
+   {
+      if (!stream || stream->closed)
+      {
+         std::move(handler)(errc::make_error_code(errc::connection_reset));
+         return;
+      }
+
+      auto n = asio::buffer_size(buffer);
+      if (n == 0)
+      {
+         stream->eof_submitted = true;
+      }
+      else
+      {
+         auto* src = static_cast<const uint8_t*>(buffer.data());
+         stream->pending_writes.emplace_back(src, src + n);
+      }
+
+      if (auto h3 = stream->session.h3())
+         nghttp3_conn_resume_stream(h3, stream->id);
+      stream->session.wake_write();
+
+      // Buffer content is captured into stream-owned storage above, so we can
+      // complete the write immediately -- the async contract is honored.
+      asio::any_completion_executor ex =
+         asio::get_associated_immediate_executor(handler, stream->get_executor());
+      ex.execute([handler = std::move(handler)]() mutable {
+         std::move(handler)(boost::system::error_code{});
+      });
+   }
+
+   void async_submit(StatusHandler&& handler, unsigned int status_code, const Fields& fields)
+   {
+      if (!stream || stream->closed)
+      {
+         std::move(handler)(errc::make_error_code(errc::connection_reset));
+         return;
+      }
+      stream->response_status = status_code;
+      stream->response_fields = fields;
+      stream->submit_response();
+      stream->session.wake_write();
+
+      asio::any_completion_executor ex =
+         asio::get_associated_immediate_executor(handler, stream->get_executor());
+      ex.execute(
+         [handler = std::move(handler)]() mutable { std::move(handler)(boost::system::error_code{}); });
+   }
+
+   void detach() override { stream = nullptr; }
+
+   Http3Stream* stream;
+};
+
+// =================================================================================================
+// Http3Stream implementation
+// =================================================================================================
+
+Http3Stream::Http3Stream(Http3Session& s, int64_t stream_id) : id(stream_id), session(s)
+{
+   log_prefix = std::format("{}.{}", session.log_prefix(), id);
+}
+
+Http3Stream::~Http3Stream()
+{
+   if (read_handler)
+      swap_and_invoke(read_handler, errc::make_error_code(errc::connection_reset), 0);
+}
+
+asio::any_io_executor Http3Stream::get_executor() const noexcept { return session.get_executor(); }
 
 // -------------------------------------------------------------------------------------------------
 
-QuicHandler::QuicHandler(Server::Impl& server, Endpoint ep, ngtcp2::Address remote)
-   : server_(server), ep_(ep), remote_(remote), timer_(server.get_executor())
+void Http3Stream::on_data_chunk(const uint8_t* data, size_t len)
+{
+   if (len == 0)
+      return;
+   pending_read.emplace_back(data, data + len);
+   if (read_head.size() == 0)
+      read_head = asio::buffer(pending_read.front());
+   call_read_handler();
+}
+
+void Http3Stream::on_eof()
+{
+   eof_received = true;
+   call_read_handler();
+}
+
+void Http3Stream::call_read_handler()
+{
+   if (!read_handler)
+      return;
+
+   if (asio::buffer_size(read_head) > 0)
+   {
+      auto copied = asio::buffer_copy(read_handler_buffer, read_head);
+      read_head += copied;
+      if (read_head.size() == 0)
+      {
+         pending_read.pop_front();
+         read_head = pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
+      }
+      swap_and_invoke(read_handler, boost::system::error_code{}, copied);
+      return;
+   }
+
+   if (eof_received)
+   {
+      // 0-byte read = EOF, matching the beast/nghttp2 convention.
+      swap_and_invoke(read_handler, boost::system::error_code{}, 0);
+      return;
+   }
+}
+
+// -------------------------------------------------------------------------------------------------
+
+namespace
+{
+nghttp3_ssize stream_read_data(nghttp3_conn*, int64_t /*stream_id*/, nghttp3_vec* vec,
+                               size_t veccnt, uint32_t* pflags, void* /*conn_user*/,
+                               void* stream_user)
+{
+   auto s = static_cast<Http3Stream*>(stream_user);
+   return s->data_reader(vec, veccnt, pflags);
+}
+} // namespace
+
+void Http3Stream::submit_response()
+{
+   assert(!response_submitted);
+
+   auto status_str = std::to_string(response_status);
+   std::vector<nghttp3_nv> nva;
+   nva.reserve(16); // small typical header count; vector will grow if needed
+   nva.push_back(make_nv(":status", status_str));
+   nva.push_back(make_nv("server", "anyhttp-quic/0.1"));
+
+   if (response_content_length)
+   {
+      response_content_length_str = std::to_string(*response_content_length);
+      nva.push_back(make_nv("content-length", response_content_length_str));
+   }
+
+   for (auto&& item : response_fields)
+   {
+      if (item.name_string().starts_with(':'))
+      {
+         logw("[{}] submit_response: dropping pseudo-header '{}'", log_prefix, item.name_string());
+         continue;
+      }
+      nva.push_back(make_nv(item.name_string(), item.value()));
+   }
+
+   nghttp3_data_reader dr{};
+   dr.read_data = &stream_read_data;
+
+   if (auto rv = nghttp3_conn_set_stream_user_data(session.h3(), id, this); rv != 0)
+   {
+      loge("[{}] nghttp3_conn_set_stream_user_data: {}", log_prefix, nghttp3_strerror(rv));
+      return;
+   }
+
+   if (auto rv = nghttp3_conn_submit_response(session.h3(), id, nva.data(), nva.size(), &dr);
+       rv != 0)
+   {
+      loge("[{}] nghttp3_conn_submit_response: {}", log_prefix, nghttp3_strerror(rv));
+      return;
+   }
+   response_submitted = true;
+   logi("[{}] response submitted (status={})", log_prefix, response_status);
+}
+
+nghttp3_ssize Http3Stream::data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t* pflags)
+{
+   if (veccnt == 0)
+      return 0;
+
+   // Nghttp3 only calls the data reader when it has fully consumed the previous
+   // return, so on each call we hand out the next queued chunk. The chunk stays
+   // alive in in_flight_writes for the lifetime of the stream (nghttp3 keeps raw
+   // pointers into it until add_write_offset accounts for them).
+   if (!pending_writes.empty())
+   {
+      in_flight_writes.emplace_back(std::move(pending_writes.front()));
+      pending_writes.pop_front();
+      auto& chunk = in_flight_writes.back();
+      vec[0].base = chunk.data();
+      vec[0].len = chunk.size();
+      if (eof_submitted && pending_writes.empty())
+      {
+         *pflags |= NGHTTP3_DATA_FLAG_EOF;
+         eof_sent_to_h3 = true;
+      }
+      return 1;
+   }
+
+   if (eof_submitted)
+   {
+      *pflags |= NGHTTP3_DATA_FLAG_EOF;
+      eof_sent_to_h3 = true;
+      return 0;
+   }
+
+   return NGHTTP3_ERR_WOULDBLOCK;
+}
+
+void Http3Stream::on_write_consumed(size_t /*n*/)
+{
+   // Nothing to do: user handlers already fired in async_write, and in_flight_writes
+   // are freed on stream destruction.
+}
+
+// -------------------------------------------------------------------------------------------------
+
+void Http3Stream::delete_reader()
+{
+   pending_read.clear();
+   read_head = {};
+   maybe_close();
+}
+
+void Http3Stream::delete_writer()
+{
+   // If the writer is deleted before EOF was submitted, synthesize one so nghttp3
+   // finalizes the stream.
+   if (!eof_submitted)
+   {
+      eof_submitted = true;
+      if (auto h3 = session.h3())
+         nghttp3_conn_resume_stream(h3, id);
+      session.wake_write();
+   }
+   maybe_close();
+}
+
+void Http3Stream::maybe_close()
+{
+   if (reader || writer)
+      return;
+   if (!closed)
+      return;
+   session.erase_stream(id);
+}
+
+// =================================================================================================
+// Http3Session implementation
+// =================================================================================================
+
+Http3Session::Http3Session(Server::Impl& server, Endpoint ep, ngtcp2::Address remote)
+   : server_(server), ep_(ep), remote_(remote), timer_(server.get_executor()),
+     done_signal_(server.get_executor())
 {
    ngtcp2_ccerr_default(&last_error_);
    log_prefix_ = std::format("h3:{}", ngtcp2::util::straddr(&remote_.su.sa, remote_.len));
+   // done_signal_ is armed at "never" until signal_done() moves it to the past.
+   done_signal_.expires_at(asio::steady_timer::time_point::max());
 }
 
-QuicHandler::~QuicHandler()
+Http3Session::~Http3Session()
 {
    timer_.cancel();
+   done_signal_.cancel();
+   streams_.clear();
    if (h3_)
       nghttp3_conn_del(h3_);
    if (conn_)
@@ -327,15 +782,73 @@ QuicHandler::~QuicHandler()
       }
       ngtcp2_crypto_ossl_ctx_del(ossl_ctx_);
    }
-   logd("[{}] handler destroyed", log_prefix_);
+   logd("[{}] session destroyed", log_prefix_);
 }
 
 // -------------------------------------------------------------------------------------------------
 
-int QuicHandler::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t version,
-                      const ngtcp2_pkt_info& pi, std::span<const uint8_t> data)
+void Http3Session::async_submit(SubmitHandler&& handler, boost::urls::url, const Fields&)
 {
-   // Our source CID: what we want the client to use to address us going forward.
+   // Client-side submit is not implemented yet.
+   std::move(handler)(errc::make_error_code(errc::operation_not_supported), client::Request{nullptr});
+}
+
+awaitable<void> Http3Session::do_session(Buffer&&)
+{
+   boost::system::error_code ec;
+   co_await done_signal_.async_wait(redirect_error(use_awaitable, ec));
+   // ec is boost::asio::error::operation_aborted (from destroy()) or a spurious
+   // wake-up; either way, this coroutine's job is done.
+   co_return;
+}
+
+void Http3Session::destroy() noexcept
+{
+   closed_ = true;
+   signal_done();
+}
+
+void Http3Session::signal_done()
+{
+   // Move the sentinel timer to the past so any waiter wakes up.
+   done_signal_.expires_at(asio::steady_timer::time_point::min());
+}
+
+// -------------------------------------------------------------------------------------------------
+
+Http3Stream* Http3Session::find_stream(int64_t id)
+{
+   auto it = streams_.find(id);
+   return it == streams_.end() ? nullptr : it->second.get();
+}
+
+Http3Stream* Http3Session::create_stream(int64_t id)
+{
+   auto [it, inserted] = streams_.emplace(id, std::make_shared<Http3Stream>(*this, id));
+   return it->second.get();
+}
+
+void Http3Session::erase_stream(int64_t id) { streams_.erase(id); }
+
+void Http3Session::wake_write()
+{
+   // The session write loop is only run in reaction to a packet arriving or a timer
+   // firing. When the user submits response data outside those events, we need to
+   // kick the write loop ourselves.
+   asio::post(get_executor(), [self = std::static_pointer_cast<Http3Session>(shared_from_this())]
+   {
+      if (self->closed_)
+         return;
+      if (self->write_streams() == 0)
+         self->update_timer();
+   });
+}
+
+// -------------------------------------------------------------------------------------------------
+
+int Http3Session::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t version,
+                       const ngtcp2_pkt_info& pi, std::span<const uint8_t> data)
+{
    scid_.datalen = QUIC_SCIDLEN;
    if (RAND_bytes(scid_.data, static_cast<int>(scid_.datalen)) != 1)
    {
@@ -346,27 +859,27 @@ int QuicHandler::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t v
    ngtcp2_callbacks callbacks{};
    callbacks.recv_client_initial = ngtcp2_crypto_recv_client_initial_cb;
    callbacks.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
-   callbacks.handshake_completed = &QuicHandler::cb_handshake_completed;
+   callbacks.handshake_completed = &Http3Session::cb_handshake_completed;
    callbacks.encrypt = ngtcp2_crypto_encrypt_cb;
    callbacks.decrypt = ngtcp2_crypto_decrypt_cb;
    callbacks.hp_mask = ngtcp2_crypto_hp_mask_cb;
-   callbacks.recv_stream_data = &QuicHandler::cb_recv_stream_data;
-   callbacks.acked_stream_data_offset = &QuicHandler::cb_acked_stream_data_offset;
-   callbacks.stream_open = &QuicHandler::cb_stream_open;
-   callbacks.stream_close = &QuicHandler::cb_stream_close;
-   callbacks.rand = &QuicHandler::cb_rand;
-   callbacks.get_new_connection_id = &QuicHandler::cb_get_new_connection_id;
-   callbacks.remove_connection_id = &QuicHandler::cb_remove_connection_id;
+   callbacks.recv_stream_data = &Http3Session::cb_recv_stream_data;
+   callbacks.acked_stream_data_offset = &Http3Session::cb_acked_stream_data_offset;
+   callbacks.stream_open = &Http3Session::cb_stream_open;
+   callbacks.stream_close = &Http3Session::cb_stream_close;
+   callbacks.rand = &Http3Session::cb_rand;
+   callbacks.get_new_connection_id = &Http3Session::cb_get_new_connection_id;
+   callbacks.remove_connection_id = &Http3Session::cb_remove_connection_id;
    callbacks.update_key = ngtcp2_crypto_update_key_cb;
-   callbacks.stream_reset = &QuicHandler::cb_stream_reset;
-   callbacks.extend_max_remote_streams_bidi = &QuicHandler::cb_extend_max_remote_streams_bidi;
-   callbacks.extend_max_stream_data = &QuicHandler::cb_extend_max_stream_data;
+   callbacks.stream_reset = &Http3Session::cb_stream_reset;
+   callbacks.extend_max_remote_streams_bidi = &Http3Session::cb_extend_max_remote_streams_bidi;
+   callbacks.extend_max_stream_data = &Http3Session::cb_extend_max_stream_data;
    callbacks.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
    callbacks.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
    callbacks.get_path_challenge_data = ngtcp2_crypto_get_path_challenge_data_cb;
-   callbacks.stream_stop_sending = &QuicHandler::cb_stream_stop_sending;
+   callbacks.stream_stop_sending = &Http3Session::cb_stream_stop_sending;
    callbacks.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
-   callbacks.recv_rx_key = &QuicHandler::cb_recv_rx_key;
+   callbacks.recv_rx_key = &Http3Session::cb_recv_rx_key;
 
    ngtcp2_settings settings;
    ngtcp2_settings_default(&settings);
@@ -405,7 +918,7 @@ int QuicHandler::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t v
       return -1;
    }
 
-   conn_ref_.get_conn = &QuicHandler::get_conn;
+   conn_ref_.get_conn = &Http3Session::get_conn;
    conn_ref_.user_data = this;
    SSL_set_app_data(ssl, &conn_ref_);
    SSL_set_accept_state(ssl);
@@ -434,8 +947,8 @@ int QuicHandler::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t v
 
 // -------------------------------------------------------------------------------------------------
 
-int QuicHandler::on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> data,
-                         const ngtcp2::Address& remote)
+int Http3Session::on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> data,
+                          const ngtcp2::Address& remote)
 {
    ngtcp2_path path{
       {const_cast<sockaddr*>(&ep_.addr.su.sa), ep_.addr.len},
@@ -447,7 +960,6 @@ int QuicHandler::on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> dat
       ngtcp2_conn_read_pkt(conn_, &path, &pi, data.data(), data.size(), ngtcp2::util::timestamp());
    if (rv != 0)
    {
-      // DRAINING is a normal client-initiated close; the rest is an actual failure.
       if (rv == NGTCP2_ERR_DRAINING)
          logd("[{}] ngtcp2_conn_read_pkt: draining", log_prefix_);
       else
@@ -469,7 +981,7 @@ int QuicHandler::on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> dat
 
 // -------------------------------------------------------------------------------------------------
 
-int QuicHandler::write_streams()
+int Http3Session::write_streams()
 {
    if (ngtcp2_conn_in_closing_period(conn_) || ngtcp2_conn_in_draining_period(conn_))
       return 0;
@@ -534,6 +1046,8 @@ int QuicHandler::write_streams()
                        nghttp3_strerror(rv));
                   return handle_error(NGTCP2_ERR_CALLBACK_FAILURE);
                }
+               if (auto s = find_stream(stream_id))
+                  s->on_write_consumed(static_cast<size_t>(ndatalen));
             }
             continue;
          default:
@@ -553,6 +1067,8 @@ int QuicHandler::write_streams()
             loge("[{}] nghttp3_conn_add_write_offset: {}", log_prefix_, nghttp3_strerror(rv));
             return handle_error(NGTCP2_ERR_CALLBACK_FAILURE);
          }
+         if (auto s = find_stream(stream_id))
+            s->on_write_consumed(static_cast<size_t>(ndatalen));
       }
 
       if (nwrite == 0)
@@ -571,9 +1087,9 @@ int QuicHandler::write_streams()
 
 // -------------------------------------------------------------------------------------------------
 
-void QuicHandler::update_timer() { arm_timer_from_ngtcp2(); }
+void Http3Session::update_timer() { arm_timer_from_ngtcp2(); }
 
-void QuicHandler::arm_timer_from_ngtcp2()
+void Http3Session::arm_timer_from_ngtcp2()
 {
    auto expiry = ngtcp2_conn_get_expiry(conn_);
    auto now = ngtcp2::util::timestamp();
@@ -586,12 +1102,12 @@ void QuicHandler::arm_timer_from_ngtcp2()
    {
       if (ec)
          return;
-      if (auto handler = self.lock())
-         handler->handle_expiry();
+      if (auto session = std::static_pointer_cast<Http3Session>(self.lock()))
+         session->handle_expiry();
    });
 }
 
-int QuicHandler::handle_expiry()
+int Http3Session::handle_expiry()
 {
    auto now = ngtcp2::util::timestamp();
    if (auto rv = ngtcp2_conn_handle_expiry(conn_, now); rv != 0)
@@ -608,11 +1124,10 @@ int QuicHandler::handle_expiry()
 
 // -------------------------------------------------------------------------------------------------
 
-int QuicHandler::handle_error(int /*rv*/)
+int Http3Session::handle_error(int /*rv*/)
 {
-   // First-slice: flag the connection closed and drop it. No CONNECTION_CLOSE for now --
-   // the client will time out. Follow-up commits will add draining/closing periods.
    closed_ = true;
+   signal_done();
    return -1;
 }
 
@@ -620,20 +1135,20 @@ int QuicHandler::handle_error(int /*rv*/)
 // ngtcp2 callback implementations
 // -------------------------------------------------------------------------------------------------
 
-int QuicHandler::cb_handshake_completed(ngtcp2_conn*, void* user)
+int Http3Session::cb_handshake_completed(ngtcp2_conn*, void* user)
 {
-   auto self = static_cast<QuicHandler*>(user);
+   auto self = static_cast<Http3Session*>(user);
    logi("[{}] TLS handshake complete", self->log_prefix_);
    if (self->setup_http3() != 0)
       return NGTCP2_ERR_CALLBACK_FAILURE;
    return 0;
 }
 
-int QuicHandler::cb_recv_stream_data(ngtcp2_conn*, uint32_t flags, int64_t stream_id,
-                                     uint64_t /*offset*/, const uint8_t* data, size_t datalen,
-                                     void* user, void*)
+int Http3Session::cb_recv_stream_data(ngtcp2_conn*, uint32_t flags, int64_t stream_id,
+                                      uint64_t /*offset*/, const uint8_t* data, size_t datalen,
+                                      void* user, void*)
 {
-   auto self = static_cast<QuicHandler*>(user);
+   auto self = static_cast<Http3Session*>(user);
    if (!self->h3_)
       return 0;
 
@@ -654,10 +1169,10 @@ int QuicHandler::cb_recv_stream_data(ngtcp2_conn*, uint32_t flags, int64_t strea
    return 0;
 }
 
-int QuicHandler::cb_acked_stream_data_offset(ngtcp2_conn*, int64_t stream_id, uint64_t /*offset*/,
-                                             uint64_t datalen, void* user, void*)
+int Http3Session::cb_acked_stream_data_offset(ngtcp2_conn*, int64_t stream_id, uint64_t /*offset*/,
+                                              uint64_t datalen, void* user, void*)
 {
-   auto self = static_cast<QuicHandler*>(user);
+   auto self = static_cast<Http3Session*>(user);
    if (!self->h3_)
       return 0;
    if (auto rv = nghttp3_conn_add_ack_offset(self->h3_, stream_id, datalen); rv != 0)
@@ -668,12 +1183,12 @@ int QuicHandler::cb_acked_stream_data_offset(ngtcp2_conn*, int64_t stream_id, ui
    return 0;
 }
 
-int QuicHandler::cb_stream_open(ngtcp2_conn*, int64_t /*stream_id*/, void* /*user*/) { return 0; }
+int Http3Session::cb_stream_open(ngtcp2_conn*, int64_t /*stream_id*/, void* /*user*/) { return 0; }
 
-int QuicHandler::cb_stream_close(ngtcp2_conn*, uint32_t flags, int64_t stream_id,
-                                 uint64_t app_error_code, void* user, void*)
+int Http3Session::cb_stream_close(ngtcp2_conn*, uint32_t flags, int64_t stream_id,
+                                  uint64_t app_error_code, void* user, void*)
 {
-   auto self = static_cast<QuicHandler*>(user);
+   auto self = static_cast<Http3Session*>(user);
    if (!(flags & NGTCP2_STREAM_CLOSE_FLAG_APP_ERROR_CODE_SET))
       app_error_code = NGHTTP3_H3_NO_ERROR;
    if (self->h3_)
@@ -690,20 +1205,16 @@ int QuicHandler::cb_stream_close(ngtcp2_conn*, uint32_t flags, int64_t stream_id
    return 0;
 }
 
-void QuicHandler::cb_rand(uint8_t* dest, size_t destlen, const ngtcp2_rand_ctx*)
+void Http3Session::cb_rand(uint8_t* dest, size_t destlen, const ngtcp2_rand_ctx*)
 {
    if (RAND_bytes(dest, static_cast<int>(destlen)) != 1)
-   {
-      // RAND_bytes failure is very unusual; fall back to something so we don't return
-      // uninitialized memory.
       std::memset(dest, 0, destlen);
-   }
 }
 
-int QuicHandler::cb_get_new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, uint8_t* token,
-                                          size_t cidlen, void* user)
+int Http3Session::cb_get_new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, uint8_t* token,
+                                           size_t cidlen, void* user)
 {
-   auto self = static_cast<QuicHandler*>(user);
+   auto self = static_cast<Http3Session*>(user);
    if (RAND_bytes(cid->data, static_cast<int>(cidlen)) != 1)
       return NGTCP2_ERR_CALLBACK_FAILURE;
    cid->datalen = cidlen;
@@ -713,39 +1224,23 @@ int QuicHandler::cb_get_new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, uint8_t
    return 0;
 }
 
-int QuicHandler::cb_remove_connection_id(ngtcp2_conn*, const ngtcp2_cid* cid, void* user)
+int Http3Session::cb_remove_connection_id(ngtcp2_conn*, const ngtcp2_cid* cid, void* user)
 {
-   auto self = static_cast<QuicHandler*>(user);
+   auto self = static_cast<Http3Session*>(user);
    self->server_.dissociate_quic_cid(*cid);
    return 0;
 }
 
-int QuicHandler::cb_extend_max_remote_streams_bidi(ngtcp2_conn*, uint64_t /*max_streams*/,
-                                                   void* /*user*/)
+int Http3Session::cb_extend_max_remote_streams_bidi(ngtcp2_conn*, uint64_t /*max_streams*/,
+                                                    void* /*user*/)
 {
    return 0;
 }
 
-int QuicHandler::cb_stream_stop_sending(ngtcp2_conn*, int64_t stream_id, uint64_t app_error_code,
-                                        void* user, void*)
+int Http3Session::cb_stream_stop_sending(ngtcp2_conn*, int64_t stream_id, uint64_t /*ec*/,
+                                         void* user, void*)
 {
-   auto self = static_cast<QuicHandler*>(user);
-   if (!self->h3_)
-      return 0;
-   if (auto rv = nghttp3_conn_shutdown_stream_read(self->h3_, stream_id); rv != 0)
-   {
-      loge("[{}] nghttp3_conn_shutdown_stream_read({}): {}", self->log_prefix_, stream_id,
-           nghttp3_strerror(rv));
-      return NGTCP2_ERR_CALLBACK_FAILURE;
-   }
-   (void)app_error_code;
-   return 0;
-}
-
-int QuicHandler::cb_stream_reset(ngtcp2_conn*, int64_t stream_id, uint64_t /*final_size*/,
-                                 uint64_t /*app_error_code*/, void* user, void*)
-{
-   auto self = static_cast<QuicHandler*>(user);
+   auto self = static_cast<Http3Session*>(user);
    if (!self->h3_)
       return 0;
    if (auto rv = nghttp3_conn_shutdown_stream_read(self->h3_, stream_id); rv != 0)
@@ -757,10 +1252,25 @@ int QuicHandler::cb_stream_reset(ngtcp2_conn*, int64_t stream_id, uint64_t /*fin
    return 0;
 }
 
-int QuicHandler::cb_extend_max_stream_data(ngtcp2_conn*, int64_t stream_id, uint64_t /*max_data*/,
-                                           void* user, void*)
+int Http3Session::cb_stream_reset(ngtcp2_conn*, int64_t stream_id, uint64_t /*final_size*/,
+                                  uint64_t /*ec*/, void* user, void*)
 {
-   auto self = static_cast<QuicHandler*>(user);
+   auto self = static_cast<Http3Session*>(user);
+   if (!self->h3_)
+      return 0;
+   if (auto rv = nghttp3_conn_shutdown_stream_read(self->h3_, stream_id); rv != 0)
+   {
+      loge("[{}] nghttp3_conn_shutdown_stream_read({}): {}", self->log_prefix_, stream_id,
+           nghttp3_strerror(rv));
+      return NGTCP2_ERR_CALLBACK_FAILURE;
+   }
+   return 0;
+}
+
+int Http3Session::cb_extend_max_stream_data(ngtcp2_conn*, int64_t stream_id, uint64_t /*max_data*/,
+                                            void* user, void*)
+{
+   auto self = static_cast<Http3Session*>(user);
    if (!self->h3_)
       return 0;
    if (auto rv = nghttp3_conn_unblock_stream(self->h3_, stream_id); rv != 0)
@@ -772,35 +1282,33 @@ int QuicHandler::cb_extend_max_stream_data(ngtcp2_conn*, int64_t stream_id, uint
    return 0;
 }
 
-int QuicHandler::cb_recv_rx_key(ngtcp2_conn*, ngtcp2_encryption_level level, void* user)
+int Http3Session::cb_recv_rx_key(ngtcp2_conn*, ngtcp2_encryption_level level, void* user)
 {
    if (level != NGTCP2_ENCRYPTION_LEVEL_1RTT)
       return 0;
-   auto self = static_cast<QuicHandler*>(user);
+   auto self = static_cast<Http3Session*>(user);
    if (!self->h3_ && self->setup_http3() != 0)
       return NGTCP2_ERR_CALLBACK_FAILURE;
    return 0;
 }
 
 // -------------------------------------------------------------------------------------------------
-// nghttp3 setup + callbacks
-// -------------------------------------------------------------------------------------------------
 
-int QuicHandler::setup_http3()
+int Http3Session::setup_http3()
 {
    if (h3_)
       return 0;
 
    nghttp3_callbacks h3cb{};
-   h3cb.stream_close = &QuicHandler::h3_cb_stream_close;
-   h3cb.recv_data = &QuicHandler::h3_cb_recv_data;
-   h3cb.deferred_consume = &QuicHandler::h3_cb_deferred_consume;
-   h3cb.begin_headers = &QuicHandler::h3_cb_begin_headers;
-   h3cb.recv_header = &QuicHandler::h3_cb_recv_header;
-   h3cb.end_headers = &QuicHandler::h3_cb_end_headers;
-   h3cb.end_stream = &QuicHandler::h3_cb_end_stream;
-   h3cb.stop_sending = &QuicHandler::h3_cb_stop_sending;
-   h3cb.reset_stream = &QuicHandler::h3_cb_reset_stream;
+   h3cb.stream_close = &Http3Session::h3_cb_stream_close;
+   h3cb.recv_data = &Http3Session::h3_cb_recv_data;
+   h3cb.deferred_consume = &Http3Session::h3_cb_deferred_consume;
+   h3cb.begin_headers = &Http3Session::h3_cb_begin_headers;
+   h3cb.recv_header = &Http3Session::h3_cb_recv_header;
+   h3cb.end_headers = &Http3Session::h3_cb_end_headers;
+   h3cb.end_stream = &Http3Session::h3_cb_end_stream;
+   h3cb.stop_sending = &Http3Session::h3_cb_stop_sending;
+   h3cb.reset_stream = &Http3Session::h3_cb_reset_stream;
 
    nghttp3_settings settings;
    nghttp3_settings_default(&settings);
@@ -849,156 +1357,164 @@ int QuicHandler::setup_http3()
 }
 
 // -------------------------------------------------------------------------------------------------
-
-namespace
-{
-nghttp3_nv make_nv(std::string_view name, std::string_view value)
-{
-   nghttp3_nv nv{};
-   nv.name = reinterpret_cast<uint8_t*>(const_cast<char*>(name.data()));
-   nv.namelen = name.size();
-   nv.value = reinterpret_cast<uint8_t*>(const_cast<char*>(value.data()));
-   nv.valuelen = value.size();
-   nv.flags = NGHTTP3_NV_FLAG_NONE;
-   return nv;
-}
-
-nghttp3_ssize response_read_data(nghttp3_conn*, int64_t /*stream_id*/, nghttp3_vec* vec,
-                                 size_t veccnt, uint32_t* pflags, void* /*user*/,
-                                 void* stream_user)
-{
-   auto body = static_cast<std::string_view*>(stream_user);
-   if (veccnt == 0)
-      return 0;
-   vec[0].base = reinterpret_cast<uint8_t*>(const_cast<char*>(body->data()));
-   vec[0].len = body->size();
-   *pflags |= NGHTTP3_DATA_FLAG_EOF;
-   return 1;
-}
-} // namespace
-
-int QuicHandler::submit_response(int64_t stream_id)
-{
-   static const auto content_length = std::to_string(kResponseBody.size());
-   static thread_local std::string_view body_view = kResponseBody;
-
-   std::array<nghttp3_nv, 4> nva{
-      make_nv(":status", "200"),
-      make_nv("server", "anyhttp-quic/0.1"),
-      make_nv("content-type", "text/plain; charset=utf-8"),
-      make_nv("content-length", content_length),
-   };
-
-   nghttp3_data_reader dr{};
-   dr.read_data = response_read_data;
-
-   if (auto rv = nghttp3_conn_set_stream_user_data(h3_, stream_id, &body_view); rv != 0)
-   {
-      loge("[{}] nghttp3_conn_set_stream_user_data({}): {}", log_prefix_, stream_id,
-           nghttp3_strerror(rv));
-      return -1;
-   }
-
-   if (auto rv = nghttp3_conn_submit_response(h3_, stream_id, nva.data(), nva.size(), &dr);
-       rv != 0)
-   {
-      loge("[{}] nghttp3_conn_submit_response({}): {}", log_prefix_, stream_id,
-           nghttp3_strerror(rv));
-      return -1;
-   }
-   logi("[{}.{}] submitted hardcoded 200 OK ({} bytes)", log_prefix_, stream_id,
-        kResponseBody.size());
-   return 0;
-}
-
-// -------------------------------------------------------------------------------------------------
-// nghttp3 callback implementations
+// nghttp3 callbacks
 // -------------------------------------------------------------------------------------------------
 
-int QuicHandler::h3_cb_stream_close(nghttp3_conn*, int64_t stream_id, uint64_t app_error_code,
-                                    void* user, void*)
+int Http3Session::h3_cb_stream_close(nghttp3_conn*, int64_t stream_id, uint64_t /*app_error*/,
+                                     void* user, void*)
 {
-   auto self = static_cast<QuicHandler*>(user);
-   logd("[{}.{}] h3 stream closed (app_error=0x{:x})", self->log_prefix_, stream_id,
-        app_error_code);
+   auto self = static_cast<Http3Session*>(user);
+   logd("[{}] h3 stream {} closed", self->log_prefix_, stream_id);
+   if (auto s = self->find_stream(stream_id))
+   {
+      s->closed = true;
+      // Waiting readers/writers should see the close now.
+      if (s->read_handler)
+         swap_and_invoke(s->read_handler, boost::system::error_code{}, 0);
+      s->maybe_close();
+   }
    if (ngtcp2_conn_is_server(self->conn_))
       ngtcp2_conn_extend_max_streams_bidi(self->conn_, 1);
    return 0;
 }
 
-int QuicHandler::h3_cb_recv_data(nghttp3_conn*, int64_t /*stream_id*/, const uint8_t* /*data*/,
-                                 size_t datalen, void* user, void*)
+int Http3Session::h3_cb_recv_data(nghttp3_conn*, int64_t stream_id, const uint8_t* data,
+                                  size_t datalen, void* user, void*)
 {
-   auto self = static_cast<QuicHandler*>(user);
-   // We accept request body bytes but discard them for the first slice.
+   auto self = static_cast<Http3Session*>(user);
    ngtcp2_conn_extend_max_offset(self->conn_, datalen);
+   ngtcp2_conn_extend_max_stream_offset(self->conn_, stream_id, datalen);
+   if (auto s = self->find_stream(stream_id))
+      s->on_data_chunk(data, datalen);
    return 0;
 }
 
-int QuicHandler::h3_cb_deferred_consume(nghttp3_conn*, int64_t stream_id, size_t nconsumed,
-                                        void* user, void*)
+int Http3Session::h3_cb_deferred_consume(nghttp3_conn*, int64_t stream_id, size_t nconsumed,
+                                         void* user, void*)
 {
-   auto self = static_cast<QuicHandler*>(user);
+   auto self = static_cast<Http3Session*>(user);
    ngtcp2_conn_extend_max_stream_offset(self->conn_, stream_id, nconsumed);
    ngtcp2_conn_extend_max_offset(self->conn_, nconsumed);
    return 0;
 }
 
-int QuicHandler::h3_cb_begin_headers(nghttp3_conn*, int64_t /*stream_id*/, void* /*user*/, void*)
+int Http3Session::h3_cb_begin_headers(nghttp3_conn*, int64_t stream_id, void* user, void*)
 {
+   auto self = static_cast<Http3Session*>(user);
+   self->create_stream(stream_id);
    return 0;
 }
 
-int QuicHandler::h3_cb_recv_header(nghttp3_conn*, int64_t stream_id, int32_t /*token*/,
-                                   nghttp3_rcbuf* name, nghttp3_rcbuf* value, uint8_t /*flags*/,
-                                   void* user, void*)
-{
-   auto self = static_cast<QuicHandler*>(user);
-   auto n = nghttp3_rcbuf_get_buf(name);
-   auto v = nghttp3_rcbuf_get_buf(value);
-   logd("[{}.{}]   {}: {}", self->log_prefix_, stream_id,
-        std::string_view{reinterpret_cast<const char*>(n.base), n.len},
-        std::string_view{reinterpret_cast<const char*>(v.base), v.len});
-   return 0;
-}
-
-int QuicHandler::h3_cb_end_headers(nghttp3_conn*, int64_t stream_id, int /*fin*/, void* user,
-                                   void*)
-{
-   auto self = static_cast<QuicHandler*>(user);
-   logi("[{}.{}] end of headers", self->log_prefix_, stream_id);
-   return self->submit_response(stream_id);
-}
-
-int QuicHandler::h3_cb_end_stream(nghttp3_conn*, int64_t /*stream_id*/, void* /*user*/, void*)
-{
-   return 0;
-}
-
-int QuicHandler::h3_cb_stop_sending(nghttp3_conn*, int64_t stream_id, uint64_t app_error_code,
+int Http3Session::h3_cb_recv_header(nghttp3_conn*, int64_t stream_id, int32_t /*token*/,
+                                    nghttp3_rcbuf* name, nghttp3_rcbuf* value, uint8_t /*flags*/,
                                     void* user, void*)
 {
-   auto self = static_cast<QuicHandler*>(user);
+   auto self = static_cast<Http3Session*>(user);
+   auto n = nghttp3_rcbuf_get_buf(name);
+   auto v = nghttp3_rcbuf_get_buf(value);
+   auto name_view = std::string_view{reinterpret_cast<const char*>(n.base), n.len};
+   auto value_view = std::string_view{reinterpret_cast<const char*>(v.base), v.len};
+
+   auto s = self->find_stream(stream_id);
+   if (!s)
+      return 0;
+
+   logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", s->log_prefix, name_view, value_view);
+
+   try
+   {
+      if (name_view == ":method")
+         s->method = value_view;
+      else if (name_view == ":path")
+      {
+         if (auto url = boost::urls::parse_relative_ref(value_view); url.has_value())
+         {
+            s->url.set_path(url->path());
+            if (url->has_query())
+               s->url.set_query(url->query());
+            if (url->has_fragment())
+               s->url.set_fragment(url->fragment());
+         }
+      }
+      else if (name_view == ":scheme")
+         s->url.set_scheme(value_view);
+      else if (name_view == ":authority")
+         s->url.set_encoded_authority(value_view);
+      else if (name_view == "content-length")
+      {
+         size_t len = 0;
+         if (std::from_chars(value_view.begin(), value_view.end(), len).ec == std::errc{})
+            s->content_length = len;
+      }
+      else
+         s->request_fields.set(name_view, value_view);
+   }
+   catch (const std::exception& ex)
+   {
+      logw("[{}] ignoring invalid header: {} ({})", s->log_prefix, value_view, ex.what());
+   }
+   return 0;
+}
+
+int Http3Session::h3_cb_end_headers(nghttp3_conn*, int64_t stream_id, int /*fin*/, void* user,
+                                    void*)
+{
+   auto self = static_cast<Http3Session*>(user);
+   auto s = self->find_stream(stream_id);
+   if (!s)
+      return 0;
+
+   logi("[{}] {} {}", s->log_prefix, s->method, s->url.buffer());
+
+   //
+   // Build user-facing Request/Response and dispatch through the shared handler.
+   //
+   server::Request request(std::make_unique<Http3Reader<server::Request::Impl>>(*s));
+   server::Response response(std::make_unique<Http3Writer<server::Response::Impl>>(*s));
+
+   auto& sv = self->server_;
+   if (auto& handler = sv.requestHandlerCoro())
+      co_spawn(self->get_executor(), handler(std::move(request), std::move(response)), detached);
+   else if (auto& handler = sv.requestHandler())
+      handler(std::move(request), std::move(response));
+   else
+   {
+      loge("[{}] no request handler set", s->log_prefix);
+      co_spawn(self->get_executor(), not_found(std::move(response)), detached);
+   }
+   return 0;
+}
+
+int Http3Session::h3_cb_end_stream(nghttp3_conn*, int64_t stream_id, void* user, void*)
+{
+   auto self = static_cast<Http3Session*>(user);
+   if (auto s = self->find_stream(stream_id))
+      s->on_eof();
+   return 0;
+}
+
+int Http3Session::h3_cb_stop_sending(nghttp3_conn*, int64_t stream_id, uint64_t app_error_code,
+                                     void* user, void*)
+{
+   auto self = static_cast<Http3Session*>(user);
    ngtcp2_conn_shutdown_stream_read(self->conn_, 0, stream_id, app_error_code);
    return 0;
 }
 
-int QuicHandler::h3_cb_reset_stream(nghttp3_conn*, int64_t stream_id, uint64_t app_error_code,
-                                    void* user, void*)
+int Http3Session::h3_cb_reset_stream(nghttp3_conn*, int64_t stream_id, uint64_t app_error_code,
+                                     void* user, void*)
 {
-   auto self = static_cast<QuicHandler*>(user);
+   auto self = static_cast<Http3Session*>(user);
    ngtcp2_conn_shutdown_stream_write(self->conn_, 0, stream_id, app_error_code);
    return 0;
 }
 
 // =================================================================================================
-// Packet dispatch: this is what turns raw UDP datagrams from the shared socket into
-// per-connection QuicHandler instances, creating new ones on first Initial packet.
+// Server::Impl QUIC glue.
 // =================================================================================================
 
 namespace
 {
-
 std::optional<ngtcp2::Address> to_ngtcp2_address(const sockaddr_storage& src, socklen_t len)
 {
    ngtcp2::Address addr{};
@@ -1008,17 +1524,12 @@ std::optional<ngtcp2::Address> to_ngtcp2_address(const sockaddr_storage& src, so
    addr.len = len;
    return addr;
 }
-
 } // namespace
 
-// -------------------------------------------------------------------------------------------------
-// Server::Impl QUIC glue.
-// The Impl gets a couple of new members (see server_impl.hpp) to hold the CID->handler map.
-// -------------------------------------------------------------------------------------------------
-
-void Server::Impl::associate_quic_cid(const ngtcp2_cid& cid, QuicHandler* h)
+void Server::Impl::associate_quic_cid(const ngtcp2_cid& cid, Http3Session* h)
 {
-   m_quic_handlers.emplace(cid_key(cid), h->shared_from_this());
+   m_quic_handlers.emplace(cid_key(cid),
+                           std::static_pointer_cast<Http3Session>(h->shared_from_this()));
 }
 
 void Server::Impl::dissociate_quic_cid(const ngtcp2_cid& cid)
@@ -1057,7 +1568,7 @@ int Server::Impl::udp_on_read(Endpoint& ep)
          return 0;
       }
 
-      if (nread < 22) // shortest possible QUIC packet
+      if (nread < 22)
          continue;
 
       auto local_addr = ngtcp2::msghdr_get_local_addr(&msg, su.storage.ss_family);
@@ -1077,7 +1588,6 @@ int Server::Impl::udp_on_read(Endpoint& ep)
       {
          if (rv != NGTCP2_ERR_VERSION_NEGOTIATION)
             logw("could not decode version/cid: {}", ngtcp2_strerror(rv));
-         // First slice: no version negotiation response yet.
          continue;
       }
 
@@ -1087,11 +1597,8 @@ int Server::Impl::udp_on_read(Endpoint& ep)
       if (it == m_quic_handlers.end())
       {
          ngtcp2_pkt_hd hd;
-         if (auto arv = ngtcp2_accept(&hd, data.data(), data.size()); arv != 0)
-         {
-            // Unexpected packet for an unknown CID -- silently drop.
+         if (ngtcp2_accept(&hd, data.data(), data.size()) != 0)
             continue;
-         }
 
          auto remote = to_ngtcp2_address(su.storage, msg.msg_namelen);
          if (!remote)
@@ -1100,39 +1607,51 @@ int Server::Impl::udp_on_read(Endpoint& ep)
             continue;
          }
 
-         auto handler =
-            std::make_shared<QuicHandler>(*this, ep, *remote);
-         if (handler->init(hd.dcid, hd.scid, hd.version, pi, data) != 0)
-         {
+         auto session = std::make_shared<Http3Session>(*this, ep, *remote);
+         if (session->init(hd.dcid, hd.scid, hd.version, pi, data) != 0)
             continue;
+
+         m_quic_handlers.emplace(std::move(key), session);
+         std::array<ngtcp2_cid, 8> scids;
+         auto num_scid = ngtcp2_conn_get_scid(session->conn(), nullptr);
+         if (num_scid <= scids.size())
+         {
+            ngtcp2_conn_get_scid(session->conn(), scids.data());
+            for (size_t i = 0; i < num_scid; ++i)
+               m_quic_handlers.emplace(cid_key(scids[i]), session);
          }
 
          //
-         // Register the handler under both the client's original DCID and every
-         // server-side SCID ngtcp2 knows about. Without the former, a client
-         // retransmitting its Initial before receiving our reply would spawn a
-         // second handler; without the latter, connection-ID rotation would strand
-         // packets on unregistered CIDs.
+         // Register with the shared session set + spawn the do_session() task so
+         // the session participates in server-wide shutdown, exactly like the
+         // TCP-based sessions.
          //
-         m_quic_handlers.emplace(std::move(key), handler);
-         std::array<ngtcp2_cid, 8> scids;
-         auto num_scid = ngtcp2_conn_get_scid(handler->conn(), nullptr);
-         if (num_scid <= scids.size())
          {
-            ngtcp2_conn_get_scid(handler->conn(), scids.data());
-            for (size_t i = 0; i < num_scid; ++i)
-               m_quic_handlers.emplace(cid_key(scids[i]), handler);
+            auto lock = std::lock_guard(m_sessionMutex);
+            m_sessions.emplace(session);
          }
+         co_spawn(get_executor(), session->do_session({}),
+                  [self = shared_from_this(), session](const std::exception_ptr& ex)
+         {
+            if (ex)
+               logw("[{}] {}", session->log_prefix(), what(ex));
+            auto lock = std::lock_guard(self->m_sessionMutex);
+            self->m_sessions.erase(session);
+         });
       }
       else
       {
-         auto handler = it->second;
+         auto session = it->second;
          auto remote = to_ngtcp2_address(su.storage, msg.msg_namelen);
          if (!remote)
             continue;
-         if (handler->on_read(pi, data, *remote) != 0 && handler->closed())
+         if (session->on_read(pi, data, *remote) != 0 && session->closed())
          {
-            m_quic_handlers.erase(it);
+            //
+            // Drop all CID entries pointing at this session so it can be freed.
+            //
+            std::erase_if(m_quic_handlers,
+                          [&](const auto& kv) { return kv.second.get() == session.get(); });
          }
       }
    }

@@ -6,6 +6,7 @@
         "ASAN",
         "ASIO",
         "callgrind",
+        "ccerr",
         "cfssl",
         "coro",
         "darkbase",

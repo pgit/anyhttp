@@ -52,7 +52,7 @@ public:
 // =================================================================================================
 
 struct Endpoint;
-class QuicHandler;
+class Http3Session;
 
 class Server::Impl : public std::enable_shared_from_this<Server::Impl>
 {
@@ -93,7 +93,7 @@ public:
    // QUIC connection-ID demux table. Populated by QuicHandler as new source CIDs are minted,
    // consulted by udp_on_read() to route packets to the right connection.
    //
-   void associate_quic_cid(const ngtcp2_cid& cid, QuicHandler* h);
+   void associate_quic_cid(const ngtcp2_cid& cid, Http3Session* session);
    void dissociate_quic_cid(const ngtcp2_cid& cid);
 
 private:
@@ -106,7 +106,7 @@ private:
    std::mutex m_sessionMutex;
    std::set<std::shared_ptr<Session::Impl>> m_sessions;
 
-   std::unordered_map<std::string, std::shared_ptr<QuicHandler>> m_quic_handlers;
+   std::unordered_map<std::string, std::shared_ptr<Http3Session>> m_quic_handlers;
 
    RequestHandler m_requestHandler;
    RequestHandlerCoro m_requestHandlerCoro;
