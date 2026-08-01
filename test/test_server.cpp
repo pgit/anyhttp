@@ -296,8 +296,17 @@ protected:
          for (;;)
          {
             auto n = co_await async_read_until(pipe, dynamic_buffer(buffer), '\n');
-            print(std::string_view(buffer).substr(0, n - 1));
-            buffer.erase(0, n);
+            for (;;)
+            {
+               print(std::string_view(buffer).substr(0, n - 1));
+               buffer.erase(0, n);
+
+               // try to bundle multiple lines, looks nicer in debug output
+               auto pos = buffer.find('\n');
+               if (pos == std::string::npos)
+                  break;
+               n = pos + 1;
+            }
          }
       }
       catch (const boost::system::system_error& ec)
