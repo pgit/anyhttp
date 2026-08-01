@@ -3,6 +3,13 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 # nice sample:
 # https://github.com/andrewmd5/libwtf/blob/main/CMakeLists.txt
 
+#
+# QUIC / HTTP3 libraries -- shared between the anyhttp library below and the
+# stand-alone ngtcp2 example binaries in the ngtcp2/ subdirectory.
+#
+pkg_check_modules(NGTCP2              REQUIRED IMPORTED_TARGET libngtcp2)
+pkg_check_modules(NGHTTP3             REQUIRED IMPORTED_TARGET libnghttp3)
+pkg_check_modules(NGTCP2_CRYPTO_OSSL  REQUIRED IMPORTED_TARGET libngtcp2_crypto_ossl)
 
 #
 # lib
@@ -23,6 +30,7 @@ target_link_libraries(anyhttp PRIVATE Boost::thread Boost::atomic Boost::url Boo
 target_link_libraries(anyhttp PRIVATE spdlog::spdlog_header_only)
 target_link_libraries(anyhttp PRIVATE PkgConfig::NGHTTP2)
 target_link_libraries(anyhttp PRIVATE ngtcp2_common)
+target_link_libraries(anyhttp PRIVATE PkgConfig::NGTCP2 PkgConfig::NGHTTP3 PkgConfig::NGTCP2_CRYPTO_OSSL)
 
 #
 # server
