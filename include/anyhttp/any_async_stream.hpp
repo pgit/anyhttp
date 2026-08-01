@@ -1,5 +1,7 @@
 #pragma once
 
+#include <anyhttp/buffer_array.hpp>
+
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/associated_executor.hpp>
@@ -27,8 +29,10 @@ namespace anyhttp
 using ReadWrite = void(boost::system::error_code, std::size_t);
 using ReadWriteHandler = asio::any_completion_handler<ReadWrite>;
 
-using ConstBufferVector = boost::container::small_vector<asio::const_buffer, 4>;
-using MutableBufferVector = boost::container::small_vector<asio::mutable_buffer, 4>;
+// using ConstBufferVector = boost::container::small_vector<asio::const_buffer, 4>;
+// using MutableBufferVector = boost::container::small_vector<asio::mutable_buffer, 4>;
+using ConstBufferVector = const_buffer_array<16>;
+using MutableBufferVector = mutable_buffer_array<16>;
 
 using Shutdown = void(boost::system::error_code);
 using ShutdownHandler = asio::any_completion_handler<Shutdown>;
