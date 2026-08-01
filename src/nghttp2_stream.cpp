@@ -192,7 +192,7 @@ void NGHttp2Writer<Base>::content_length(std::optional<size_t> content_length)
 }
 
 template <typename Base>
-void NGHttp2Writer<Base>::async_submit(WriteHandler&& handler, unsigned int status_code,
+void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int status_code,
                                        const Fields& headers)
 {
    if (!stream)
@@ -251,7 +251,7 @@ void NGHttp2Writer<Base>::async_write(WriteHandler&& handler, asio::const_buffer
    if (!stream)
    {
       logw("[] async_write: stream already gone");
-      std::move(handler)(boost::asio::error::basic_errors::connection_aborted);
+      swap_and_invoke(handler, boost::asio::error::basic_errors::connection_aborted);
    }
    else
       stream->async_write(std::move(handler), buffer);
@@ -540,7 +540,7 @@ NGHttp2Stream::~NGHttp2Stream()
    if (m_read_handler)
    {
       logw("Stream: dtor... cancelling async_read_some()", logPrefix);
-      swap_and_invoke(m_read_handler, boost::beast::http::error::partial_message, 0);
+      swap_and_invoke(m_read_handler, boost::beast::http::error::partial_message, bytesRead);
    }
    if (write_handler)
    {
@@ -581,7 +581,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
          if (write_handler)
          {
             // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
-            post(get_executor(), [handler = std::move(write_handler)] mutable { //
+            post(get_executor(), [handler = std::move(write_handler), n = bytesWritten] mutable { //
                std::move(handler)(errc::make_error_code(errc::operation_canceled));
             });
          }
@@ -711,7 +711,7 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
    {
       logd("[{}] write callback: EOF", logPrefix);
       eof_submitted = true;
-      std::move(write_handler)(boost::system::error_code{});
+      swap_and_invoke(write_handler, boost::system::error_code{});
       *data_flags |= NGHTTP2_DATA_FLAG_EOF;
    }
 

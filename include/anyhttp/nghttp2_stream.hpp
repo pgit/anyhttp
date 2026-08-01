@@ -57,7 +57,7 @@ public:
    void async_write(WriteHandler&& handler, asio::const_buffer buffer) override;
    void detach() override;
 
-   void async_submit(WriteHandler&& handler, unsigned int status_code, const Fields& headers);
+   void async_submit(StatusHandler&& handler, unsigned int status_code, const Fields& headers);
    void async_get_response(client::Request::GetResponseHandler&& handler);
 
    NGHttp2Stream* stream;

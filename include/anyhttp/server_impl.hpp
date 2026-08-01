@@ -39,7 +39,7 @@ public:
    Impl() noexcept;
    virtual ~Impl();
 
-   virtual void async_submit(WriteHandler&& handler, unsigned int status_code,
+   virtual void async_submit(StatusHandler&& handler, unsigned int status_code,
                              const Fields& fields) = 0;
 
    using ReaderOrWriter = impl::Writer;

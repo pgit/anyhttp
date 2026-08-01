@@ -83,7 +83,7 @@ void Response::content_length(std::optional<size_t> content_length)
    impl->content_length(content_length);
 }
 
-void Response::async_submit_any(WriteHandler&& handler, unsigned int status_code,
+void Response::async_submit_any(StatusHandler&& handler, unsigned int status_code,
                                 const Fields& headers)
 {
    assert(impl);

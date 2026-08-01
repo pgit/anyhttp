@@ -252,8 +252,8 @@ public:
    inline void complete_immediately(Handler&& handler, Args&&... args)
    {
       auto ex = asio::get_associated_immediate_executor(handler, get_executor());
-      ex.execute([handler = std::forward<Handler>(handler)] mutable { //
-         std::move(handler)(errc::make_error_code(errc::operation_canceled));
+      ex.execute([handler = std::forward<Handler>(handler), ...args = std::forward<Args>(args)] mutable { //
+           std::move(handler)(std::move(args)...);
       });
    }
 
@@ -413,7 +413,7 @@ public:
          message.content_length(boost::none);
    }
 
-   void async_submit(WriteHandler&& handler, unsigned int status_code,
+   void async_submit(StatusHandler&& handler, unsigned int status_code,
                      const Fields& headers) override
    {
       message.result(status_code);
@@ -473,7 +473,7 @@ public:
 
    asio::any_io_executor get_executor() const noexcept { return session->get_executor(); }
 
-   void async_submit(WriteHandler&& handler, unsigned int status_code,
+   void async_submit(StatusHandler&& handler, unsigned int status_code,
                      const Fields& headers) override
    {
       submit_headers(headers);

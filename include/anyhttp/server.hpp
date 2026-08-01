@@ -89,12 +89,12 @@ public:
    void content_length(std::optional<size_t> content_length);
 
 public:
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Status) CompletionToken = DefaultCompletionToken>
    auto async_submit(unsigned int status_code, const Fields& headers,
                      CompletionToken&& token = CompletionToken())
    {
-      return boost::asio::async_initiate<CompletionToken, Write>(
-         [this](WriteHandler handler, unsigned int status_code, const Fields& headers) { //
+      return boost::asio::async_initiate<CompletionToken, Status>(
+         [this](StatusHandler handler, unsigned int status_code, const Fields& headers) { //
             async_submit_any(std::move(handler), status_code, headers);
          },
          token, status_code, headers);
@@ -118,6 +118,7 @@ public:
          asio::co_composed<Write>(
             [this](auto state, asio::const_buffer buffer,
                    asio::any_io_executor executor) mutable -> void { //
+               // FIXME: error handling
                co_await async_write(buffer);
                co_await async_write({});
                co_return {boost::system::error_code{}};
@@ -127,7 +128,7 @@ public:
    }
 
 private:
-   void async_submit_any(WriteHandler&& handler, unsigned int status_code, const Fields& headers);
+   void async_submit_any(StatusHandler&& handler, unsigned int status_code, const Fields& headers);
    void async_write_any(WriteHandler&& handler, asio::const_buffer buffer);
    std::shared_ptr<Impl> impl;
 };

@@ -59,6 +59,9 @@ using writeSomeHandler = asio::any_completion_handler<WriteSome>;
 using Write = void(boost::system::error_code);
 using WriteHandler = asio::any_completion_handler<Write>;
 
+using Status = void(boost::system::error_code);
+using StatusHandler = asio::any_completion_handler<Status>;
+
 using DefaultCompletionToken = asio::default_completion_token_t<asio::any_io_executor>;
 
 // =================================================================================================
