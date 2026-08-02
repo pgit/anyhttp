@@ -1,12 +1,13 @@
 {
-	"CN": "Test Server Certificate",
-	"key": {
-		"algo": "ecdsa",
-		"size": 256
-	},
-	"hosts": [
+   "CN": "Test Server Certificate",
+   "key": {
+      "algo": "ecdsa",
+      "size": 256
+   },
+   "hosts": [
       "localhost",
       "::1",
-      "127.0.0.1"
-	]
+      "127.0.0.1",
+      "127.0.0.2"
+   ]
 }
