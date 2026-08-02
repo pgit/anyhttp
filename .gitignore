@@ -13,3 +13,5 @@ Testing
 *.junit
 callgrind.*
 cmake_test_discovery_*.json
+.claude/
+*:Zone.Identifier
