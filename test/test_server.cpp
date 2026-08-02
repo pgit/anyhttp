@@ -70,7 +70,7 @@ namespace rv = std::ranges::views;
 
 using namespace anyhttp;
 
-#define CURL_PATH "/usr/bin/curl"
+#define CURL_PATH "/usr/local/bin/curl"
 #define NGHTTP_PATH "/usr/local/bin/nghttp"
 #define H2LOAD_PATH "/usr/local/bin/h2load"
 
@@ -351,7 +351,7 @@ protected:
       co_await (log("STDERR", err) && log("STDOUT", out));
       auto result = std::string();
 #endif
-      logi("spawn: starting to communicate... done");
+      logi("spawn: starting to communicate... done, read {} bytes", result.size());
 
       co_await child.async_wait();
       if (child.exit_code())
@@ -362,7 +362,9 @@ protected:
       if (--numSpawned <= 0)
       {
          co_await post(server->get_executor());
+         logi("all processes exited, stopping server...");
          server.reset();
+         logi("all processes exited, stopping server... done");
       }
 
       co_return result;
@@ -579,7 +581,7 @@ TEST_P(External, echo)
 // =================================================================================================
 
 //
-// Non-parameterised fixture for HTTP/3-only (QUIC) external tests.
+// Non-parametrized fixture for HTTP/3-only (QUIC) external tests.
 //
 // Inherits all helper infrastructure from External. The server still listens on 127.0.0.2 over
 // both TCP and UDP; QUIC clients connect over the UDP socket using TLS (curl -k, h2load
@@ -592,11 +594,46 @@ class ExternalH3 : public External
 TEST_F(ExternalH3, curl_http3)
 {
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"--http3-only", "-k", "-sS", "-v", "--data-binary",
-                std::format("@{}", testFile.string()), url};
+   Args args = {"--http3-only",
+                "--cacert", "pki/out/root.pem",
+                "-sS",
+                "-vv",
+                "--data-binary", std::format("@{}", testFile.string()),
+                url, url};
+#if 0                
    auto future = spawn(CURL_PATH, std::move(args));
+#else
+   args.insert(args.begin(), {"1", CURL_PATH});
+   auto future = spawn("/usr/bin/timeout", std::move(args));
+#endif
    run();
-   EXPECT_EQ(future.get().size(), testFileSize);
+   EXPECT_EQ(future.get().size(), testFileSize * 2);
+}
+
+TEST_F(ExternalH3, curl_many)
+{
+   std::vector<std::future<std::string>> futures;
+   futures.reserve(50);
+
+   for (size_t i = 0; i < futures.capacity(); ++i)
+   {
+      auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
+      Args args = {"--http3-only",
+                   "--cacert", "pki/out/root.pem",
+                   "-sS",
+                   "-vv",
+                   "-d", "blah",
+                   // "--data-binary", std::format("@{}", testFile.string()),
+                   url};
+   args.insert(args.begin(), {"1", CURL_PATH});
+   auto future = spawn("/usr/bin/timeout", std::move(args));
+   }
+
+   // spawn("/usr/bin/sleep", {"100"});
+   run();
+
+   for (auto& future : futures)
+      EXPECT_EQ(future.get().size(), testFileSize);
 }
 
 TEST_F(ExternalH3, h2load_http3)
@@ -604,8 +641,10 @@ TEST_F(ExternalH3, h2load_http3)
    const size_t n = 10;
    const size_t data_size = 65535;
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"--h3", "-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "2", "-m",
-                "4", url};
+   Args args = {"--h3", //
+                "-d", "test/data/64kminus1",
+                "-n", std::to_string(n), "-c", "2", "-m", "4",
+                url};
    auto future = spawn(H2LOAD_PATH, std::move(args));
    run();
 
