@@ -33,14 +33,14 @@
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
 
-#include <netinet/udp.h>
 #include <net/if.h>
+#include <netinet/udp.h>
 #include <sys/socket.h>
 
+#include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
 #include <ngtcp2/ngtcp2_crypto_ossl.h>
-#include <nghttp3/nghttp3.h>
 
 #include <openssl/err.h>
 #include <openssl/rand.h>
@@ -48,6 +48,7 @@
 
 #include <array>
 #include <charconv>
+#include <cstdarg>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -104,10 +105,9 @@ struct TlsServerContext
       if (!ctx)
          throw std::runtime_error("SSL_CTX_new");
 
-      SSL_CTX_set_options(ctx,
-                          (SSL_OP_ALL & ~SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS) |
-                             SSL_OP_SINGLE_ECDH_USE | SSL_OP_CIPHER_SERVER_PREFERENCE |
-                             SSL_OP_NO_ANTI_REPLAY);
+      SSL_CTX_set_options(ctx, (SSL_OP_ALL & ~SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS) |
+                                  SSL_OP_SINGLE_ECDH_USE | SSL_OP_CIPHER_SERVER_PREFERENCE |
+                                  SSL_OP_NO_ANTI_REPLAY);
       SSL_CTX_set_mode(ctx, SSL_MODE_RELEASE_BUFFERS);
 
       SSL_CTX_set_alpn_select_cb(ctx, &TlsServerContext::alpn_select_cb, nullptr);
@@ -200,6 +200,18 @@ nghttp3_nv make_nv(std::string_view name, std::string_view value)
    return nv;
 }
 
+void ngtcp2_log_printf(void* /*user*/, const char* fmt, ...) noexcept
+{
+   if (!spdlog::default_logger()->should_log(spdlog::level::trace))
+      return;
+   std::array<char, 512> buf;
+   va_list ap;
+   va_start(ap, fmt);
+   std::vsnprintf(buf.data(), buf.size(), fmt, ap);
+   va_end(ap);
+   spdlog::trace("{}", buf.data());
+}
+
 } // namespace
 
 // =================================================================================================
@@ -255,19 +267,21 @@ public:
    // and fire the completion handler immediately. Chunks stay alive in `in_flight`
    // for the lifetime of the stream, so pointers we handed nghttp3 remain valid.
    //
-   std::deque<std::vector<uint8_t>> pending_writes;      // not yet handed to nghttp3
-   std::vector<std::vector<uint8_t>> in_flight_writes;   // handed to nghttp3, keep alive
-   bool eof_submitted = false;                           // user signalled EOF via empty write
-   bool eof_sent_to_h3 = false;                          // NGHTTP3_DATA_FLAG_EOF returned
+   std::deque<std::vector<uint8_t>> pending_writes; // not yet handed to nghttp3
+   std::vector<std::vector<uint8_t>> in_flight_writes; // handed to nghttp3, keep alive
+   bool eof_submitted = false; // user signalled EOF via empty write
+   bool eof_sent_to_h3 = false; // NGHTTP3_DATA_FLAG_EOF returned
 
    //
    // Lifecycle.
    //
    impl::Reader* reader = nullptr; // pointer back to the Http3Reader when attached
    impl::Writer* writer = nullptr; // pointer back to the Http3Writer when attached
-   bool closed = false;            // set in h3_cb_stream_close
+   bool closed = false; // set in h3_cb_stream_close
 
    asio::any_io_executor get_executor() const noexcept;
+
+   const std::string& logPrefix() const noexcept { return log_prefix; }
 
    // Data flow into user land.
    void on_data_chunk(const uint8_t* data, size_t len);
@@ -317,12 +331,15 @@ public:
    const ngtcp2_cid& scid() const noexcept { return scid_; }
    ngtcp2_conn* conn() const noexcept { return conn_; }
    bool closed() const noexcept { return closed_; }
-   const std::string& log_prefix() const noexcept { return log_prefix_; }
+   const std::string& logPrefix() const noexcept { return log_prefix_; }
    Server::Impl& server() noexcept { return server_; }
    nghttp3_conn* h3() const noexcept { return h3_; }
 
    // Called by Http3Writer/Reader to make sure the write loop runs after new data was queued.
    void wake_write();
+
+   // Called from udp_on_read() when a packet arrives during the closing period.
+   void resend_conn_close();
 
    Http3Stream* find_stream(int64_t id);
    Http3Stream* create_stream(int64_t id);
@@ -367,8 +384,8 @@ public:
                                  void* user, void*);
    static int h3_cb_recv_data(nghttp3_conn*, int64_t stream_id, const uint8_t* data, size_t datalen,
                               void* user, void*);
-   static int h3_cb_deferred_consume(nghttp3_conn*, int64_t stream_id, size_t nconsumed,
-                                     void* user, void*);
+   static int h3_cb_deferred_consume(nghttp3_conn*, int64_t stream_id, size_t nconsumed, void* user,
+                                     void*);
    static int h3_cb_begin_headers(nghttp3_conn*, int64_t stream_id, void* user, void*);
    static int h3_cb_recv_header(nghttp3_conn*, int64_t stream_id, int32_t token,
                                 nghttp3_rcbuf* name, nghttp3_rcbuf* value, uint8_t flags,
@@ -385,6 +402,7 @@ private:
    int handle_error(int rv);
    void arm_timer_from_ngtcp2();
    void signal_done();
+   void schedule_close_timer();
 
 private:
    Server::Impl& server_;
@@ -404,6 +422,8 @@ private:
    bool closed_ = false;
 
    std::string log_prefix_;
+
+   std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
 
    std::unordered_map<int64_t, std::shared_ptr<Http3Stream>> streams_;
 };
@@ -461,9 +481,8 @@ public:
       {
          asio::any_completion_executor ex =
             asio::get_associated_immediate_executor(handler, stream->get_executor());
-         ex.execute([handler = std::move(handler)]() mutable {
-            std::move(handler)(boost::system::error_code{}, 0);
-         });
+         ex.execute([handler = std::move(handler)]() mutable
+         { std::move(handler)(boost::system::error_code{}, 0); });
          return;
       }
 
@@ -531,9 +550,8 @@ public:
       // complete the write immediately -- the async contract is honored.
       asio::any_completion_executor ex =
          asio::get_associated_immediate_executor(handler, stream->get_executor());
-      ex.execute([handler = std::move(handler)]() mutable {
-         std::move(handler)(boost::system::error_code{});
-      });
+      ex.execute([handler = std::move(handler)]() mutable
+      { std::move(handler)(boost::system::error_code{}); });
    }
 
    void async_submit(StatusHandler&& handler, unsigned int status_code, const Fields& fields)
@@ -550,8 +568,8 @@ public:
 
       asio::any_completion_executor ex =
          asio::get_associated_immediate_executor(handler, stream->get_executor());
-      ex.execute(
-         [handler = std::move(handler)]() mutable { std::move(handler)(boost::system::error_code{}); });
+      ex.execute([handler = std::move(handler)]() mutable
+      { std::move(handler)(boost::system::error_code{}); });
    }
 
    void detach() override { stream = nullptr; }
@@ -565,13 +583,16 @@ public:
 
 Http3Stream::Http3Stream(Http3Session& s, int64_t stream_id) : id(stream_id), session(s)
 {
-   log_prefix = std::format("{}.{}", session.log_prefix(), id);
+   log_prefix = std::format("{}.{}", session.logPrefix(), id);
+   logd("\x1b[1;33mStream: ctor\x1b[0m");
 }
 
 Http3Stream::~Http3Stream()
 {
+   mlogd("\x1b[33mStream: dtor... \x1b[0m");
    if (read_handler)
       swap_and_invoke(read_handler, errc::make_error_code(errc::connection_reset), 0);
+   mlogd("\x1b[33mStream: dtor... done\x1b[0m");
 }
 
 asio::any_io_executor Http3Stream::get_executor() const noexcept { return session.get_executor(); }
@@ -606,7 +627,8 @@ void Http3Stream::call_read_handler()
       if (read_head.size() == 0)
       {
          pending_read.pop_front();
-         read_head = pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
+         read_head =
+            pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
       }
       swap_and_invoke(read_handler, boost::system::error_code{}, copied);
       return;
@@ -675,7 +697,7 @@ void Http3Stream::submit_response()
       return;
    }
    response_submitted = true;
-   logi("[{}] response submitted (status={})", log_prefix, response_status);
+   logd("[{}] response submitted (status={})", log_prefix, response_status);
 }
 
 nghttp3_ssize Http3Stream::data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t* pflags)
@@ -762,6 +784,7 @@ Http3Session::Http3Session(Server::Impl& server, Endpoint ep, ngtcp2::Address re
    log_prefix_ = std::format("h3:{}", ngtcp2::util::straddr(&remote_.su.sa, remote_.len));
    // done_signal_ is armed at "never" until signal_done() moves it to the past.
    done_signal_.expires_at(asio::steady_timer::time_point::max());
+   mlogi("session created");
 }
 
 Http3Session::~Http3Session()
@@ -782,7 +805,7 @@ Http3Session::~Http3Session()
       }
       ngtcp2_crypto_ossl_ctx_del(ossl_ctx_);
    }
-   logd("[{}] session destroyed", log_prefix_);
+   mlogi("session destroyed");
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -790,7 +813,8 @@ Http3Session::~Http3Session()
 void Http3Session::async_submit(SubmitHandler&& handler, boost::urls::url, const Fields&)
 {
    // Client-side submit is not implemented yet.
-   std::move(handler)(errc::make_error_code(errc::operation_not_supported), client::Request{nullptr});
+   std::move(handler)(errc::make_error_code(errc::operation_not_supported),
+                      client::Request{nullptr});
 }
 
 awaitable<void> Http3Session::do_session(Buffer&&)
@@ -805,6 +829,7 @@ awaitable<void> Http3Session::do_session(Buffer&&)
 void Http3Session::destroy() noexcept
 {
    closed_ = true;
+   timer_.cancel();
    signal_done();
 }
 
@@ -884,6 +909,7 @@ int Http3Session::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t 
    ngtcp2_settings settings;
    ngtcp2_settings_default(&settings);
    settings.initial_ts = ngtcp2::util::timestamp();
+   settings.log_printf = &ngtcp2_log_printf;
 
    ngtcp2_transport_params params;
    ngtcp2_transport_params_default(&params);
@@ -950,6 +976,8 @@ int Http3Session::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t 
 int Http3Session::on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> data,
                           const ngtcp2::Address& remote)
 {
+   logd("[{}] on_read: {} bytes", log_prefix_, data.size());
+
    ngtcp2_path path{
       {const_cast<sockaddr*>(&ep_.addr.su.sa), ep_.addr.len},
       {const_cast<sockaddr*>(&remote.su.sa), remote.len},
@@ -986,6 +1014,8 @@ int Http3Session::write_streams()
    if (ngtcp2_conn_in_closing_period(conn_) || ngtcp2_conn_in_draining_period(conn_))
       return 0;
 
+   logd("[{}] write_streams: max_data_left={}", log_prefix_, ngtcp2_conn_get_max_data_left(conn_));
+
    std::array<uint8_t, 1500> buf;
    ngtcp2_path_storage ps;
    ngtcp2_pkt_info pi;
@@ -1002,13 +1032,15 @@ int Http3Session::write_streams()
       if (h3_ && ngtcp2_conn_get_max_data_left(conn_))
       {
          sveccnt = nghttp3_conn_writev_stream(h3_, &stream_id, &fin, vec.data(), vec.size());
+         logd("[{}] write_streams: nghttp3_conn_writev_stream -> stream={} sveccnt={} fin={}",
+              log_prefix_, stream_id, sveccnt, fin);
          if (sveccnt < 0)
          {
             loge("[{}] nghttp3_conn_writev_stream: {}", log_prefix_,
                  nghttp3_strerror(static_cast<int>(sveccnt)));
             ngtcp2_ccerr_set_application_error(
-               &last_error_,
-               nghttp3_err_infer_quic_app_error_code(static_cast<int>(sveccnt)), nullptr, 0);
+               &last_error_, nghttp3_err_infer_quic_app_error_code(static_cast<int>(sveccnt)),
+               nullptr, 0);
             return handle_error(NGTCP2_ERR_CALLBACK_FAILURE);
          }
       }
@@ -1018,10 +1050,10 @@ int Http3Session::write_streams()
       if (fin)
          flags |= NGTCP2_WRITE_STREAM_FLAG_FIN;
 
-      auto nwrite = ngtcp2_conn_writev_stream(
-         conn_, &ps.path, &pi, buf.data(), buf.size(), &ndatalen, flags, stream_id,
-         reinterpret_cast<const ngtcp2_vec*>(vec.data()), static_cast<size_t>(sveccnt),
-         ngtcp2::util::timestamp());
+      auto nwrite =
+         ngtcp2_conn_writev_stream(conn_, &ps.path, &pi, buf.data(), buf.size(), &ndatalen, flags,
+                                   stream_id, reinterpret_cast<const ngtcp2_vec*>(vec.data()),
+                                   static_cast<size_t>(sveccnt), ngtcp2::util::timestamp());
 
       if (nwrite < 0)
       {
@@ -1038,12 +1070,11 @@ int Http3Session::write_streams()
          case NGTCP2_ERR_WRITE_MORE:
             if (h3_ && stream_id >= 0 && ndatalen > 0)
             {
-               if (auto rv = nghttp3_conn_add_write_offset(h3_, stream_id,
-                                                           static_cast<size_t>(ndatalen));
+               if (auto rv =
+                      nghttp3_conn_add_write_offset(h3_, stream_id, static_cast<size_t>(ndatalen));
                    rv != 0)
                {
-                  loge("[{}] nghttp3_conn_add_write_offset: {}", log_prefix_,
-                       nghttp3_strerror(rv));
+                  loge("[{}] nghttp3_conn_add_write_offset: {}", log_prefix_, nghttp3_strerror(rv));
                   return handle_error(NGTCP2_ERR_CALLBACK_FAILURE);
                }
                if (auto s = find_stream(stream_id))
@@ -1060,8 +1091,7 @@ int Http3Session::write_streams()
 
       if (ndatalen > 0 && h3_ && stream_id >= 0)
       {
-         if (auto rv =
-                nghttp3_conn_add_write_offset(h3_, stream_id, static_cast<size_t>(ndatalen));
+         if (auto rv = nghttp3_conn_add_write_offset(h3_, stream_id, static_cast<size_t>(ndatalen));
              rv != 0)
          {
             loge("[{}] nghttp3_conn_add_write_offset: {}", log_prefix_, nghttp3_strerror(rv));
@@ -1091,9 +1121,20 @@ void Http3Session::update_timer() { arm_timer_from_ngtcp2(); }
 
 void Http3Session::arm_timer_from_ngtcp2()
 {
-   auto expiry = ngtcp2_conn_get_expiry(conn_);
-   auto now = ngtcp2::util::timestamp();
+   if (closed_)
+      return;
 
+   auto expiry = ngtcp2_conn_get_expiry(conn_);
+   if (expiry == UINT64_MAX)
+   {
+      // ngtcp2 has no pending timer. Cancel the current one so we don't
+      // accidentally keep an old retransmission timer alive past its purpose
+      // and don't keep the io_context alive indefinitely.
+      timer_.cancel();
+      return;
+   }
+
+   auto now = ngtcp2::util::timestamp();
    asio::steady_timer::duration delay =
       expiry <= now ? std::chrono::nanoseconds{1} : std::chrono::nanoseconds{expiry - now};
 
@@ -1126,9 +1167,79 @@ int Http3Session::handle_expiry()
 
 int Http3Session::handle_error(int /*rv*/)
 {
+   if (closed_)
+      return -1;
    closed_ = true;
-   signal_done();
+
+   // Idle timeout and drop-conn need no CONNECTION_CLOSE packet.
+   if (last_error_.type == NGTCP2_CCERR_TYPE_IDLE_CLOSE ||
+       last_error_.type == NGTCP2_CCERR_TYPE_DROP_CONN)
+   {
+      signal_done();
+      return -1;
+   }
+
+   // If already in draining (peer sent CONNECTION_CLOSE), don't reply.
+   // If already in closing, the buffered packet is still valid.
+   if (conn_ && !ngtcp2_conn_in_draining_period(conn_) && !ngtcp2_conn_in_closing_period(conn_))
+   {
+      conn_closebuf_.resize(NGTCP2_MAX_UDP_PAYLOAD_SIZE);
+      ngtcp2_path_storage ps;
+      ngtcp2_pkt_info pi;
+      ngtcp2_path_storage_zero(&ps);
+
+      auto nwrite = ngtcp2_conn_write_connection_close(conn_, &ps.path, &pi, conn_closebuf_.data(),
+                                                       conn_closebuf_.size(), &last_error_,
+                                                       ngtcp2::util::timestamp());
+      if (nwrite > 0)
+      {
+         conn_closebuf_.resize(static_cast<size_t>(nwrite));
+         logi("[{}] sending CONNECTION_CLOSE", log_prefix_);
+         send_udp(ep_.fd, ps.path.remote.addr, ps.path.remote.addrlen,
+                  {conn_closebuf_.data(), conn_closebuf_.size()});
+      }
+      else
+      {
+         conn_closebuf_.clear();
+         signal_done();
+         return -1;
+      }
+   }
+
+   // Stay alive for 3 PTO so we can resend the CONNECTION_CLOSE if the
+   // peer retransmits, or absorb late packets during the draining period.
+   schedule_close_timer();
    return -1;
+}
+
+void Http3Session::schedule_close_timer()
+{
+   auto delay = conn_ ? std::chrono::nanoseconds{ngtcp2_conn_get_pto(conn_) * 3}
+                      : std::chrono::milliseconds{100};
+   timer_.expires_after(delay);
+   timer_.async_wait([self = weak_from_this()](const boost::system::error_code& ec)
+   {
+      if (ec)
+         return;
+      auto session = std::static_pointer_cast<Http3Session>(self.lock());
+      if (!session)
+         return;
+      logi("[{}] closing/draining period over", session->log_prefix_);
+      session->server_.erase_quic_session(session.get());
+      session->signal_done();
+   });
+}
+
+void Http3Session::resend_conn_close()
+{
+   if (conn_closebuf_.empty())
+      return;
+   auto* path = ngtcp2_conn_get_path(conn_);
+   if (!path)
+      return;
+   logd("[{}] resending CONNECTION_CLOSE", log_prefix_);
+   send_udp(ep_.fd, path->remote.addr, path->remote.addrlen,
+            {conn_closebuf_.data(), conn_closebuf_.size()});
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1145,12 +1256,18 @@ int Http3Session::cb_handshake_completed(ngtcp2_conn*, void* user)
 }
 
 int Http3Session::cb_recv_stream_data(ngtcp2_conn*, uint32_t flags, int64_t stream_id,
-                                      uint64_t /*offset*/, const uint8_t* data, size_t datalen,
+                                      uint64_t offset, const uint8_t* data, size_t datalen,
                                       void* user, void*)
 {
    auto self = static_cast<Http3Session*>(user);
+   logd("[{}] cb_recv_stream_data: stream={} offset={} datalen={} fin={} h3_={}", self->log_prefix_,
+        stream_id, offset, datalen, !!(flags & NGTCP2_STREAM_DATA_FLAG_FIN), !!self->h3_);
    if (!self->h3_)
+   {
+      logw("[{}] cb_recv_stream_data: DROPPING {} bytes on stream {} (h3 not ready)",
+           self->log_prefix_, datalen, stream_id);
       return 0;
+   }
 
    auto nread = nghttp3_conn_read_stream(self->h3_, stream_id, data, datalen,
                                          (flags & NGTCP2_STREAM_DATA_FLAG_FIN) ? 1 : 0);
@@ -1464,7 +1581,7 @@ int Http3Session::h3_cb_end_headers(nghttp3_conn*, int64_t stream_id, int /*fin*
    if (!s)
       return 0;
 
-   logi("[{}] {} {}", s->log_prefix, s->method, s->url.buffer());
+   logd("[{}] {} {}", s->log_prefix, s->method, s->url.buffer());
 
    //
    // Build user-facing Request/Response and dispatch through the shared handler.
@@ -1537,6 +1654,11 @@ void Server::Impl::dissociate_quic_cid(const ngtcp2_cid& cid)
    m_quic_handlers.erase(cid_key(cid));
 }
 
+void Server::Impl::erase_quic_session(Http3Session* h)
+{
+   std::erase_if(m_quic_handlers, [h](const auto& kv) { return kv.second.get() == h; });
+}
+
 // -------------------------------------------------------------------------------------------------
 
 int Server::Impl::udp_on_read(Endpoint& ep)
@@ -1580,78 +1702,122 @@ int Server::Impl::udp_on_read(Endpoint& ep)
       ngtcp2::set_port(*local_addr, ep.addr);
       ep.addr = *local_addr;
 
-      auto data = std::span<const uint8_t>{buf.data(), static_cast<size_t>(nread)};
-
-      ngtcp2_version_cid vc;
-      auto rv = ngtcp2_pkt_decode_version_cid(&vc, data.data(), data.size(), QUIC_SCIDLEN);
-      if (rv != 0)
+      // When UDP_GRO is enabled the kernel may coalesce several datagrams
+      // from the same 4-tuple into one recvmsg result.  The GRO cmsg carries
+      // the uniform segment size so we can split the buffer back into
+      // individual QUIC datagrams before handing them to ngtcp2.
+      uint16_t gro_size = 0;
+      for (auto* cm = CMSG_FIRSTHDR(&msg); cm; cm = CMSG_NXTHDR(&msg, cm))
       {
-         if (rv != NGTCP2_ERR_VERSION_NEGOTIATION)
-            logw("could not decode version/cid: {}", ngtcp2_strerror(rv));
+         if (cm->cmsg_level == SOL_UDP && cm->cmsg_type == UDP_GRO)
+         {
+            memcpy(&gro_size, CMSG_DATA(cm), sizeof(gro_size));
+            break;
+         }
+      }
+
+      auto remote = to_ngtcp2_address(su.storage, msg.msg_namelen);
+      if (!remote)
+      {
+         logw("unsupported remote address family");
          continue;
       }
 
-      auto key = cid_key(vc.dcid, vc.dcidlen);
-      auto it = m_quic_handlers.find(key);
+      auto all_data = std::span<const uint8_t>{buf.data(), static_cast<size_t>(nread)};
+      const size_t seg_size = gro_size > 0 ? gro_size : all_data.size();
 
-      if (it == m_quic_handlers.end())
+      while (!all_data.empty())
       {
-         ngtcp2_pkt_hd hd;
-         if (ngtcp2_accept(&hd, data.data(), data.size()) != 0)
-            continue;
+         auto data = all_data.subspan(0, std::min(seg_size, all_data.size()));
+         all_data = all_data.subspan(data.size());
 
-         auto remote = to_ngtcp2_address(su.storage, msg.msg_namelen);
-         if (!remote)
+         ngtcp2_version_cid vc;
+         auto rv = ngtcp2_pkt_decode_version_cid(&vc, data.data(), data.size(), QUIC_SCIDLEN);
+         if (rv != 0)
          {
-            logw("unsupported remote address family");
+            if (rv != NGTCP2_ERR_VERSION_NEGOTIATION)
+               logw("could not decode version/cid: {}", ngtcp2_strerror(rv));
             continue;
          }
 
-         auto session = std::make_shared<Http3Session>(*this, ep, *remote);
-         if (session->init(hd.dcid, hd.scid, hd.version, pi, data) != 0)
-            continue;
+         auto key = cid_key(vc.dcid, vc.dcidlen);
+         auto it = m_quic_handlers.find(key);
 
-         m_quic_handlers.emplace(std::move(key), session);
-         std::array<ngtcp2_cid, 8> scids;
-         auto num_scid = ngtcp2_conn_get_scid(session->conn(), nullptr);
-         if (num_scid <= scids.size())
+         if (it == m_quic_handlers.end())
          {
-            ngtcp2_conn_get_scid(session->conn(), scids.data());
-            for (size_t i = 0; i < num_scid; ++i)
-               m_quic_handlers.emplace(cid_key(scids[i]), session);
-         }
+            ngtcp2_pkt_hd hd;
+            if (ngtcp2_accept(&hd, data.data(), data.size()) != 0)
+               continue;
 
-         //
-         // Register with the shared session set + spawn the do_session() task so
-         // the session participates in server-wide shutdown, exactly like the
-         // TCP-based sessions.
-         //
-         {
-            auto lock = std::lock_guard(m_sessionMutex);
-            m_sessions.emplace(session);
-         }
-         co_spawn(get_executor(), session->do_session({}),
-                  [self = shared_from_this(), session](const std::exception_ptr& ex)
-         {
-            if (ex)
-               logw("[{}] {}", session->log_prefix(), what(ex));
-            auto lock = std::lock_guard(self->m_sessionMutex);
-            self->m_sessions.erase(session);
-         });
-      }
-      else
-      {
-         auto session = it->second;
-         auto remote = to_ngtcp2_address(su.storage, msg.msg_namelen);
-         if (!remote)
-            continue;
-         if (session->on_read(pi, data, *remote) != 0 && session->closed())
-         {
+            auto session = std::make_shared<Http3Session>(*this, ep, *remote);
+            if (session->init(hd.dcid, hd.scid, hd.version, pi, data) != 0)
+               continue;
+
+            m_quic_handlers.emplace(std::move(key), session);
+            std::array<ngtcp2_cid, 8> scids;
+            auto num_scid = ngtcp2_conn_get_scid(session->conn(), nullptr);
+            if (num_scid <= scids.size())
+            {
+               ngtcp2_conn_get_scid(session->conn(), scids.data());
+               for (size_t i = 0; i < num_scid; ++i)
+                  m_quic_handlers.emplace(cid_key(scids[i]), session);
+            }
+
             //
-            // Drop all CID entries pointing at this session so it can be freed.
+            // Register with the shared session set + spawn the do_session() task so
+            // the session participates in server-wide shutdown, exactly like the
+            // TCP-based sessions.
             //
-            std::erase_if(m_quic_handlers,
-                          [&](const auto& kv) { return kv.second.get() == session.get(); });
+            {
+               auto lock = std::lock_guard(m_sessionMutex);
+               m_sessions.emplace(session);
+            }
+            co_spawn(get_executor(), session->do_session({}),
+                     [self = shared_from_this(), session](const std::exception_ptr& ex)
+            {
+               if (ex)
+                  logw("[{}] {}", session->logPrefix(), what(ex));
+               auto lock = std::lock_guard(self->m_sessionMutex);
+               self->m_sessions.erase(session);
+            });
+         }
+         else
+         {
+            auto session = it->second;
+
+            //
+            // Handle closing / draining periods.  During closing we resend the
+            // buffered CONNECTION_CLOSE so the peer can tear down cleanly.
+            // During draining (peer sent CONNECTION_CLOSE) we just drop the packet.
+            // In both cases the session stays in m_quic_handlers until the 3-PTO
+            // close timer fires and calls erase_quic_session().
+            //
+            if (auto* conn = session->conn())
+            {
+               if (ngtcp2_conn_in_closing_period(conn))
+               {
+                  session->resend_conn_close();
+                  continue;
+               }
+               if (ngtcp2_conn_in_draining_period(conn))
+                  continue;
+            }
+
+            if (session->on_read(pi, data, *remote) != 0 && session->closed())
+            {
+               //
+               // Only erase immediately when not in closing/draining period.
+               // If we are, the 3-PTO close timer in handle_error() will call
+               // erase_quic_session() once the period expires.
+               //
+               auto* conn = session->conn();
+               if (!conn ||
+                   (!ngtcp2_conn_in_closing_period(conn) && !ngtcp2_conn_in_draining_period(conn)))
+               {
+                  std::erase_if(m_quic_handlers,
+                                [&](const auto& kv) { return kv.second.get() == session.get(); });
+               }
+            }
          }
       }
    }

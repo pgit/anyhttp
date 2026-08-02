@@ -95,6 +95,7 @@ public:
    //
    void associate_quic_cid(const ngtcp2_cid& cid, Http3Session* session);
    void dissociate_quic_cid(const ngtcp2_cid& cid);
+   void erase_quic_session(Http3Session* h);
 
 private:
    Config m_config;

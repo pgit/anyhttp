@@ -106,6 +106,14 @@ void Server::Impl::destroy()
    if (m_udp_socket)
       m_udp_socket->close(); // breaks udp_receive_loop()
 
+   // Destroy all active sessions (TCP and QUIC) so their timers and
+   // async operations are cancelled, allowing the io_context to drain.
+   {
+      auto lock = std::lock_guard(m_sessionMutex);
+      for (auto& session : m_sessions)
+         session->destroy();
+   }
+
    m_stopped = true;
 }
 
