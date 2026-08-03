@@ -546,14 +546,53 @@ TEST_P(External, curl_multiple_https)
    EXPECT_EQ(future.get().size(), testFileSize * 2);
 }
 
+namespace
+{
+void check_h2load_output(const std::string& output, size_t n, size_t data_size)
+{
+   std::smatch match;
+   std::regex regex(
+      R"((\d+) total, \d+ started, (\d+) done, (\d+) succeeded, (\d+) failed, \d+ errored)");
+   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
+   EXPECT_EQ(std::stoul(match[3].str()), n) << match[1];
+   EXPECT_EQ(std::stoul(match[4].str()), 0) << match[1];
+
+   regex = std::regex(R"(\((\d+)\) data)");
+   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
+   EXPECT_EQ(std::stoul(match[1].str()), n * data_size) << match[1];
+}
+} // namespace
+
+TEST_P(External, h2load)
+{
+   const size_t n = 100; // number of requests, echoing 65535 bytes each
+   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   Args args = {"-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3", url};
+
+   switch (GetParam())
+   {
+   case anyhttp::Protocol::http11:
+      args.insert(args.begin(), "--h1");
+      break;
+   case anyhttp::Protocol::h3:
+      args.insert(args.begin(), "--h3"); // h2load negotiates h3 itself, http:// URL is fine
+      break;
+   default:
+      break; // h2load defaults to HTTP/2
+   }
+
+   auto future = spawn(H2LOAD_PATH, std::move(args));
+   run();
+   check_h2load_output(future.get(), n, 65535);
+}
+
 // =================================================================================================
 
 //
 // Non-parametrized fixture for external tests that are inherently tied to a single protocol --
 // either because the tool itself only ever speaks one (h2spec, nc_crazy_chunked's raw chunked-
-// encoding probe), because the tuning differs so much per protocol that a shared body would be
-// mostly branches (h2load), or because the test doesn't touch HTTP at all (echo). Keeping these
-// out of the External/Protocol::* matrix avoids dead skip branches and needless repetition.
+// encoding probe), or because the test doesn't touch HTTP at all (echo). Keeping these out of the
+// External/Protocol::* matrix avoids dead skip branches and needless repetition.
 //
 class ExternalSingleProtocol : public External
 {
@@ -597,58 +636,6 @@ TEST_F(ExternalSingleProtocol, h2spec)
          return 145;
    });
    EXPECT_EQ(std::stoi(match[3].str()), expected_ok) << output;
-}
-
-namespace
-{
-void check_h2load_output(const std::string& output, size_t n, size_t data_size)
-{
-   std::smatch match;
-   std::regex regex(
-      R"((\d+) total, \d+ started, (\d+) done, (\d+) succeeded, (\d+) failed, \d+ errored)");
-   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
-   EXPECT_EQ(std::stoul(match[3].str()), n) << match[1];
-   EXPECT_EQ(std::stoul(match[4].str()), 0) << match[1];
-
-   regex = std::regex(R"(\((\d+)\) data)");
-   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
-   EXPECT_EQ(std::stoul(match[1].str()), n * data_size) << match[1];
-}
-} // namespace
-
-TEST_F(ExternalSingleProtocol, h2load_http11)
-{
-   const size_t n = 100; // number of requests, echoing 65535 bytes each
-   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"--h1", "-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3",
-               url};
-
-   auto future = spawn(H2LOAD_PATH, std::move(args));
-   run();
-   check_h2load_output(future.get(), n, 65535);
-}
-
-TEST_F(ExternalSingleProtocol, h2load_http2)
-{
-   const size_t n = 100; // number of requests, echoing 65535 bytes each
-   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3", url};
-
-   auto future = spawn(H2LOAD_PATH, std::move(args));
-   run();
-   check_h2load_output(future.get(), n, 65535);
-}
-
-TEST_F(ExternalSingleProtocol, h2load_http3)
-{
-   const size_t n = 100; // number of requests, echoing 65535 bytes each
-   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"--h3", "-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3",
-               url};
-
-   auto future = spawn(H2LOAD_PATH, std::move(args));
-   run();
-   check_h2load_output(future.get(), n, 65535);
 }
 
 TEST_F(ExternalSingleProtocol, echo)
