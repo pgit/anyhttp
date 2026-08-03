@@ -103,16 +103,20 @@ void Server::Impl::destroy()
    if (m_acceptor)
       m_acceptor->close(); // breaks listen_loop()
 
-   if (m_udp_socket)
-      m_udp_socket->close(); // breaks udp_receive_loop()
-
-   // Destroy all active sessions (TCP and QUIC) so their timers and
-   // async operations are cancelled, allowing the io_context to drain.
+   //
+   // Destroy all active sessions (TCP and QUIC) so their timers and async operations are
+   // cancelled, allowing the io_context to drain. QUIC sessions send a final CONNECTION_CLOSE
+   // through the (still shared) UDP socket as part of destroy(), so this has to happen before
+   // that socket is closed below -- otherwise the peer only finds out via idle timeout.
+   //
    {
       auto lock = std::lock_guard(m_sessionMutex);
       for (auto& session : m_sessions)
          session->destroy();
    }
+
+   if (m_udp_socket)
+      m_udp_socket->close(); // breaks udp_receive_loop()
 
    m_stopped = true;
 }

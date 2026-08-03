@@ -751,6 +751,25 @@ void Http3Stream::delete_reader()
 
 void Http3Stream::delete_writer()
 {
+   if (!response_submitted)
+   {
+      //
+      // The handler never even started a response (e.g. it returned, or the request was
+      // reset, before calling response.async_submit()). There is no HEADERS frame for
+      // nghttp3 to close out, so "synthesize EOF" (below) has nothing to act on and the
+      // peer would be left waiting forever. Abort the stream at the transport level
+      // instead, mirroring what h3_cb_stop_sending/h3_cb_reset_stream already do for
+      // nghttp3-initiated aborts. NO_ERROR here (rather than e.g. INTERNAL_ERROR): the
+      // handler choosing not to respond isn't itself a protocol error -- the client just
+      // needs to be told the stream is over so it doesn't wait forever.
+      //
+      ngtcp2_conn_shutdown_stream(session.conn(), 0, id, NGHTTP3_H3_NO_ERROR);
+      closed = true;
+      session.wake_write();
+      maybe_close();
+      return;
+   }
+
    // If the writer is deleted before EOF was submitted, synthesize one so nghttp3
    // finalizes the stream.
    if (!eof_submitted)
@@ -828,7 +847,34 @@ awaitable<void> Http3Session::do_session(Buffer&&)
 
 void Http3Session::destroy() noexcept
 {
-   closed_ = true;
+   if (std::exchange(closed_, true))
+   {
+      timer_.cancel();
+      signal_done();
+      return;
+   }
+
+   //
+   // Explicit shutdown (e.g. the whole Server::Impl going away): let the peer know right
+   // away instead of leaving it to find out via idle timeout (up to 30s). Unlike
+   // handle_error(), this doesn't linger for 3 PTO to handle retransmits of the CLOSE --
+   // this is a clean, voluntary shutdown, not an error condition worth that effort.
+   //
+   if (conn_ && !ngtcp2_conn_in_closing_period(conn_) && !ngtcp2_conn_in_draining_period(conn_))
+   {
+      std::array<uint8_t, NGTCP2_MAX_UDP_PAYLOAD_SIZE> closebuf;
+      ngtcp2_path_storage ps;
+      ngtcp2_pkt_info pi;
+      ngtcp2_path_storage_zero(&ps);
+
+      auto nwrite = ngtcp2_conn_write_connection_close(conn_, &ps.path, &pi, closebuf.data(),
+                                                        closebuf.size(), &last_error_,
+                                                        ngtcp2::util::timestamp());
+      if (nwrite > 0)
+         send_udp(ep_.fd, ps.path.remote.addr, ps.path.remote.addrlen,
+                  {closebuf.data(), static_cast<size_t>(nwrite)});
+   }
+
    timer_.cancel();
    signal_done();
 }
@@ -860,12 +906,18 @@ void Http3Session::wake_write()
    // The session write loop is only run in reaction to a packet arriving or a timer
    // firing. When the user submits response data outside those events, we need to
    // kick the write loop ourselves.
-   asio::post(get_executor(), [self = std::static_pointer_cast<Http3Session>(shared_from_this())]
+   //
+   // Capture a weak_ptr, not shared_from_this(): wake_write() can be reached from a
+   // Reader/Writer destructor that runs as part of *this* session's own teardown (e.g. a
+   // still-in-flight request/response destroyed by Server::Impl cancelling everything on
+   // shutdown), at which point shared_from_this() would throw bad_weak_ptr.
+   asio::post(get_executor(), [self = weak_from_this()]
    {
-      if (self->closed_)
+      auto session = std::static_pointer_cast<Http3Session>(self.lock());
+      if (!session || session->closed_)
          return;
-      if (self->write_streams() == 0)
-         self->update_timer();
+      if (session->write_streams() == 0)
+         session->update_timer();
    });
 }
 
