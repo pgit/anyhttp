@@ -410,9 +410,10 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(External, External,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
-                                           anyhttp::Protocol::h3),
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2),
                          NameGenerator);
+
+using Args = std::vector<std::string>;
 
 // -------------------------------------------------------------------------------------------------
 
@@ -428,13 +429,8 @@ TEST_P(External, nghttp2)
    EXPECT_EQ(future.get().size(), testFileSize);
 }
 
-using Args = std::vector<std::string>;
-
 TEST_P(External, curl)
 {
-   if (GetParam() == anyhttp::Protocol::h3)
-      GTEST_SKIP(); // h3 requires TLS -- see curl_https
-
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url};
 
@@ -447,7 +443,38 @@ TEST_P(External, curl)
    EXPECT_EQ(future.get().size(), testFileSize);
 }
 
-TEST_P(External, curl_many)
+TEST_P(External, curl_multiple)
+{
+   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url, url};
+
+   if (GetParam() == anyhttp::Protocol::h2)
+      args.insert(args.begin(), "--http2-prior-knowledge");
+
+   // https://github.com/curl/curl/issues/10634 --> use custom built curl
+   auto future = spawn_curl(std::move(args));
+   run();
+
+   EXPECT_EQ(future.get().size(), testFileSize * 2);
+}
+
+// =================================================================================================
+
+//
+// Non-parametrized-over-h3 tests moved here don't fit http:// External: they either require TLS
+// (curl_https, curl_multiple_https) or vary their scheme/flags per protocol including h3
+// (curl_many, h2load). Parametrizing over all three protocols keeps them exercising h3 as well.
+//
+class ExternalTLS : public External
+{
+};
+
+INSTANTIATE_TEST_SUITE_P(ExternalTLS, ExternalTLS,
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                                           anyhttp::Protocol::h3),
+                         NameGenerator);
+
+TEST_P(ExternalTLS, curl_many)
 {
    auto scheme = GetParam() == anyhttp::Protocol::h3 ? "https" : "http";
 
@@ -480,7 +507,7 @@ TEST_P(External, curl_many)
       EXPECT_EQ(future.get().size(), testFileSize);
 }
 
-TEST_P(External, curl_https)
+TEST_P(ExternalTLS, curl_https)
 {
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "--cacert", "pki/out/root.pem", "--data-binary",
@@ -504,25 +531,7 @@ TEST_P(External, curl_https)
    EXPECT_EQ(future.get().size(), testFileSize);
 }
 
-TEST_P(External, curl_multiple)
-{
-   if (GetParam() == anyhttp::Protocol::h3)
-      GTEST_SKIP(); // h3 requires TLS -- see curl_multiple_https
-
-   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url, url};
-
-   if (GetParam() == anyhttp::Protocol::h2)
-      args.insert(args.begin(), "--http2-prior-knowledge");
-
-   // https://github.com/curl/curl/issues/10634 --> use custom built curl
-   auto future = spawn_curl(std::move(args));
-   run();
-
-   EXPECT_EQ(future.get().size(), testFileSize * 2);
-}
-
-TEST_P(External, curl_multiple_https)
+TEST_P(ExternalTLS, curl_multiple_https)
 {
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "--cacert", "pki/out/root.pem", "--data-binary",
@@ -546,7 +555,7 @@ TEST_P(External, curl_multiple_https)
    EXPECT_EQ(future.get().size(), testFileSize * 2);
 }
 
-TEST_P(External, h2load)
+TEST_P(ExternalTLS, h2load)
 {
    const size_t n = 100; // number of requests, echoing 65535 bytes each
    const size_t data_size = 65535;
