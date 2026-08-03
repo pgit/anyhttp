@@ -98,7 +98,7 @@ struct TlsClientContext
       //
       // TODO: verify the server certificate (e.g. against pki/out/root.pem) instead of accepting
       // anything. Matches how the plain-TCP h1/h2 client paths currently have no TLS at all, and
-      // how the ExternalH3 tests use `curl -k` / `--cacert`.
+      // how the External.curl_https/curl_multiple_https h3 cases use `--cacert` (h1/h2 use `-k`).
       //
       SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
    }

@@ -389,6 +389,20 @@ protected:
       return std::move(future);
    }
 
+   //
+   // Like spawn(CURL_PATH, args), but for Protocol::h3: QUIC handshakes can hang in ways
+   // h1/h2 curl invocations don't, so wrap in a hard `timeout 1` safety net.
+   //
+   std::future<std::string> spawn_curl(std::vector<std::string> args)
+   {
+      if (GetParam() == anyhttp::Protocol::h3)
+      {
+         args.insert(args.begin(), {"1", CURL_PATH});
+         return spawn("/usr/bin/timeout", std::move(args));
+      }
+      return spawn(CURL_PATH, std::move(args));
+   }
+
    any_io_executor strand{make_strand(context.get_executor())};
    bp::filesystem::path testFile{"CMakeLists.txt"};
    size_t testFileSize = file_size(testFile);
@@ -396,15 +410,16 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(External, External,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2),
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                                           anyhttp::Protocol::h3),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
 
 TEST_P(External, nghttp2)
 {
-   if (GetParam() == anyhttp::Protocol::http11)
-      GTEST_SKIP(); // no --nghttp2-prior-knowledge for 'nghttp', re-enable when ALPN works
+   if (GetParam() != anyhttp::Protocol::h2)
+      GTEST_SKIP(); // 'nghttp' only speaks HTTP/2 (no --nghttp2-prior-knowledge, no HTTP/3)
 
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    auto future = spawn(NGHTTP_PATH, {"-d", testFile.string(), url});
@@ -417,13 +432,16 @@ using Args = std::vector<std::string>;
 
 TEST_P(External, curl)
 {
+   if (GetParam() == anyhttp::Protocol::h3)
+      GTEST_SKIP(); // h3 requires TLS -- see curl_https
+
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url};
 
    if (GetParam() == anyhttp::Protocol::h2)
       args.insert(args.begin(), "--http2-prior-knowledge");
 
-   auto future = spawn(CURL_PATH, std::move(args));
+   auto future = spawn_curl(std::move(args));
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize);
@@ -431,18 +449,29 @@ TEST_P(External, curl)
 
 TEST_P(External, curl_many)
 {
+   auto scheme = GetParam() == anyhttp::Protocol::h3 ? "https" : "http";
+
    std::vector<std::future<std::string>> futures;
    futures.reserve(10);
 
    for (size_t i = 0; i < futures.capacity(); ++i)
    {
-      auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+      auto url = std::format("{}://127.0.0.2:{}/echo", scheme, server->local_endpoint().port());
       Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url};
 
-      if (GetParam() == anyhttp::Protocol::h2)
+      switch (GetParam())
+      {
+      case anyhttp::Protocol::h2:
          args.insert(args.begin(), "--http2-prior-knowledge");
+         break;
+      case anyhttp::Protocol::h3:
+         args.insert(args.begin(), {"--http3-only", "--cacert", "pki/out/root.pem"});
+         break;
+      default:
+         break;
+      }
 
-      futures.emplace_back(spawn(CURL_PATH, std::move(args)));
+      futures.emplace_back(spawn_curl(std::move(args)));
    }
 
    run();
@@ -454,14 +483,21 @@ TEST_P(External, curl_many)
 TEST_P(External, curl_https)
 {
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "-k", "--data-binary", std::format("@{}", testFile.string()), url};
+   Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url};
 
-   if (GetParam() == anyhttp::Protocol::h2)
-      args.insert(args.begin(), "--http2");
-   else
-      args.insert(args.begin(), "--http1.1"); // not implemented, yet
+   switch (GetParam())
+   {
+   case anyhttp::Protocol::h2:
+      args.insert(args.begin(), {"--http2", "-k"});
+      break;
+   case anyhttp::Protocol::h3:
+      args.insert(args.begin(), {"--http3-only", "--cacert", "pki/out/root.pem"});
+      break;
+   default:
+      args.insert(args.begin(), {"--http1.1", "-k"}); // not implemented, yet
+   }
 
-   auto future = spawn(CURL_PATH, std::move(args));
+   auto future = spawn_curl(std::move(args));
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize);
@@ -469,6 +505,9 @@ TEST_P(External, curl_https)
 
 TEST_P(External, curl_multiple)
 {
+   if (GetParam() == anyhttp::Protocol::h3)
+      GTEST_SKIP(); // h3 requires TLS -- see curl_multiple_https
+
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url, url};
 
@@ -476,7 +515,7 @@ TEST_P(External, curl_multiple)
       args.insert(args.begin(), "--http2-prior-knowledge");
 
    // https://github.com/curl/curl/issues/10634 --> use custom built curl
-   auto future = spawn(CURL_PATH, std::move(args));
+   auto future = spawn_curl(std::move(args));
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize * 2);
@@ -485,25 +524,41 @@ TEST_P(External, curl_multiple)
 TEST_P(External, curl_multiple_https)
 {
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "-k", "--data-binary", std::format("@{}", testFile.string()),
-                url,   url};
+   Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url, url};
 
-   if (GetParam() == anyhttp::Protocol::h2)
-      args.insert(args.begin(), "--http2");
-   else
-      args.insert(args.begin(), "--http1.1");
+   switch (GetParam())
+   {
+   case anyhttp::Protocol::h2:
+      args.insert(args.begin(), {"--http2", "-k"});
+      break;
+   case anyhttp::Protocol::h3:
+      args.insert(args.begin(), {"--http3-only", "--cacert", "pki/out/root.pem"});
+      break;
+   default:
+      args.insert(args.begin(), {"--http1.1", "-k"});
+   }
 
-   auto future = spawn(CURL_PATH, std::move(args));
+   auto future = spawn_curl(std::move(args));
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize * 2);
 }
 
-TEST_P(External, nc_crazy_chunked)
-{
-   if (GetParam() == anyhttp::Protocol::h2)
-      GTEST_SKIP();
+// =================================================================================================
 
+//
+// Non-parametrized fixture for external tests that are inherently tied to a single protocol --
+// either because the tool itself only ever speaks one (h2spec, nc_crazy_chunked's raw chunked-
+// encoding probe), because the tuning differs so much per protocol that a shared body would be
+// mostly branches (h2load), or because the test doesn't touch HTTP at all (echo). Keeping these
+// out of the External/Protocol::* matrix avoids dead skip branches and needless repetition.
+//
+class ExternalSingleProtocol : public External
+{
+};
+
+TEST_F(ExternalSingleProtocol, nc_crazy_chunked)
+{
    auto cmd =
       std::format("nc 127.0.0.2 {} <test/data/crazy-chunked.txt", server->local_endpoint().port());
    auto future = spawn("/usr/bin/bash", {"-c", cmd});
@@ -514,11 +569,8 @@ TEST_P(External, nc_crazy_chunked)
    EXPECT_TRUE(out.contains("Hello, World!\n"));
 }
 
-TEST_P(External, h2spec)
+TEST_F(ExternalSingleProtocol, h2spec)
 {
-   if (GetParam() != anyhttp::Protocol::h2)
-      GTEST_SKIP();
-
    auto future = spawn("bin/h2spec", {"--host", server->local_endpoint().address().to_string(),
                                       "--port", std::to_string(server->local_endpoint().port()),
                                       "--path", "/h2spec", "--timeout", "1", "--verbose"});
@@ -545,108 +597,10 @@ TEST_P(External, h2spec)
    EXPECT_EQ(std::stoi(match[3].str()), expected_ok) << output;
 }
 
-TEST_P(External, h2load)
+namespace
 {
-   const size_t n = 100; // number of requests, echoing 65535 bytes each
-   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3", url};
-
-   if (GetParam() == anyhttp::Protocol::http11)
-      args.insert(args.begin(), "--h1");
-
-   auto future = spawn(H2LOAD_PATH, std::move(args));
-   run();
-
-   const std::string output = future.get();
-   std::smatch match;
-   std::regex regex(
-      R"((\d+) total, \d+ started, (\d+) done, (\d+) succeeded, (\d+) failed, \d+ errored)");
-   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
-   EXPECT_EQ(std::stoul(match[3].str()), n) << match[1];
-   EXPECT_EQ(std::stoul(match[4].str()), 0) << match[1];
-
-   regex = std::regex(R"(\((\d+)\) data)");
-   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
-   EXPECT_EQ(std::stoul(match[1].str()), n * 65535) << match[1];
-}
-
-// -------------------------------------------------------------------------------------------------
-
-TEST_P(External, echo)
+void check_h2load_output(const std::string& output, size_t n, size_t data_size)
 {
-   co_spawn(context.get_executor(), spawn_process("/usr/bin/echo", {"Hello, World!"}), detached);
-   run();
-}
-
-// =================================================================================================
-
-//
-// Non-parametrized fixture for HTTP/3-only (QUIC) external tests.
-//
-// Inherits all helper infrastructure from External. The server still listens on 127.0.0.2 over
-// both TCP and UDP; QUIC clients connect over the UDP socket using TLS (curl -k, h2load
-// SSL_VERIFY_NONE).
-//
-class ExternalH3 : public External
-{
-};
-
-TEST_F(ExternalH3, curl_http3)
-{
-   auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   // clang-format off
-   Args args = {"--http3-only", "-sS", "-vv",
-                "--cacert", "pki/out/root.pem",
-                "--data-binary", std::format("@{}", testFile.string()),
-                url, url};
-   // clang-format on
-#if 0                
-   auto future = spawn(CURL_PATH, std::move(args));
-#else
-   args.insert(args.begin(), {"1", CURL_PATH});
-   auto future = spawn("/usr/bin/timeout", std::move(args));
-#endif
-   run();
-   EXPECT_EQ(future.get().size(), testFileSize * 2);
-}
-
-TEST_F(ExternalH3, curl_many)
-{
-   std::vector<std::future<std::string>> futures;
-   futures.reserve(50);
-
-   for (size_t i = 0; i < futures.capacity(); ++i)
-   {
-      auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-      Args args = {"--http3-only", "--cacert", "pki/out/root.pem", "-sS", "-vv", "-d", "blah",
-                   // "--data-binary", std::format("@{}", testFile.string()),
-                   url};
-      args.insert(args.begin(), {"1", CURL_PATH});
-      auto future = spawn("/usr/bin/timeout", std::move(args));
-   }
-
-   // spawn("/usr/bin/sleep", {"100"});
-   run();
-
-   for (auto& future : futures)
-      EXPECT_EQ(future.get().size(), testFileSize);
-}
-
-TEST_F(ExternalH3, h2load_http3)
-{
-   const size_t n = 10;
-   const size_t data_size = 65535;
-   auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   // clang-format off
-   Args args = {"--h3",
-                "-d", "test/data/64kminus1",
-                "-n", std::to_string(n), "-c", "2", "-m", "4",
-                url};
-   // clang-format on
-   auto future = spawn(H2LOAD_PATH, std::move(args));
-   run();
-
-   const std::string output = future.get();
    std::smatch match;
    std::regex regex(
       R"((\d+) total, \d+ started, (\d+) done, (\d+) succeeded, (\d+) failed, \d+ errored)");
@@ -657,6 +611,51 @@ TEST_F(ExternalH3, h2load_http3)
    regex = std::regex(R"(\((\d+)\) data)");
    ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
    EXPECT_EQ(std::stoul(match[1].str()), n * data_size) << match[1];
+}
+} // namespace
+
+TEST_F(ExternalSingleProtocol, h2load_http11)
+{
+   const size_t n = 100; // number of requests, echoing 65535 bytes each
+   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   Args args = {"--h1", "-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3",
+               url};
+
+   auto future = spawn(H2LOAD_PATH, std::move(args));
+   run();
+   check_h2load_output(future.get(), n, 65535);
+}
+
+TEST_F(ExternalSingleProtocol, h2load_http2)
+{
+   const size_t n = 100; // number of requests, echoing 65535 bytes each
+   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   Args args = {"-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3", url};
+
+   auto future = spawn(H2LOAD_PATH, std::move(args));
+   run();
+   check_h2load_output(future.get(), n, 65535);
+}
+
+TEST_F(ExternalSingleProtocol, h2load_http3)
+{
+   const size_t n = 10;
+   auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
+   // clang-format off
+   Args args = {"--h3",
+                "-d", "test/data/64kminus1",
+                "-n", std::to_string(n), "-c", "2", "-m", "4",
+                url};
+   // clang-format on
+   auto future = spawn(H2LOAD_PATH, std::move(args));
+   run();
+   check_h2load_output(future.get(), n, 65535);
+}
+
+TEST_F(ExternalSingleProtocol, echo)
+{
+   co_spawn(context.get_executor(), spawn_process("/usr/bin/echo", {"Hello, World!"}), detached);
+   run();
 }
 
 // =================================================================================================
