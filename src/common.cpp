@@ -11,9 +11,9 @@ std::string to_string(Protocol protocol)
    {
    case Protocol::http11:
       return "HTTP11";
-   case Protocol::http2:
+   case Protocol::h2:
       return "HTTP2";
-   case Protocol::http3:
+   case Protocol::h3:
       return "HTTP3";
    default:
       return std::format("UNKNOWN ({})", std::to_underlying(protocol));

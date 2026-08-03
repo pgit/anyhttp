@@ -246,7 +246,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(Server, Server,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2),
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
@@ -392,11 +392,11 @@ protected:
 
    //
    // Like spawn(CURL_PATH, args), but for Protocol::h3: QUIC handshakes can hang in ways
-   // h1/h2 curl invocations don't, so wrap in a hard `timeout 5` safety net.
+   // http11/h2 curl invocations don't, so wrap in a hard `timeout 5` safety net.
    //
    std::future<std::string> spawn_curl(std::vector<std::string> args)
    {
-      if (GetParam() == anyhttp::Protocol::http3)
+      if (GetParam() == anyhttp::Protocol::h3)
       {
          args.insert(args.begin(), {"5", CURL_PATH});
          return spawn("/usr/bin/timeout", std::move(args));
@@ -416,7 +416,7 @@ using Args = std::vector<std::string>;
 
 INSTANTIATE_TEST_SUITE_P(External, External,
                          ::testing::Values(anyhttp::Protocol::http11, // HTTP/1.1
-                                           anyhttp::Protocol::http2), // HTTP/2
+                                           anyhttp::Protocol::h2), // HTTP/2
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
@@ -426,7 +426,7 @@ TEST_P(External, curl)
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url};
 
-   if (GetParam() == anyhttp::Protocol::http2)
+   if (GetParam() == anyhttp::Protocol::h2)
       args.insert(args.begin(), "--http2-prior-knowledge");
 
    auto future = spawn(CURL_PATH, std::move(args));
@@ -440,7 +440,7 @@ TEST_P(External, curl_multiple)
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url, url};
 
-   if (GetParam() == anyhttp::Protocol::http2)
+   if (GetParam() == anyhttp::Protocol::h2)
       args.insert(args.begin(), "--http2-prior-knowledge");
 
    auto future = spawn(CURL_PATH, std::move(args));
@@ -460,9 +460,9 @@ protected:
       {
       case anyhttp::Protocol::http11:
          return "--http1.1";
-      case anyhttp::Protocol::http2:
+      case anyhttp::Protocol::h2:
          return "--http2";
-      case anyhttp::Protocol::http3:
+      case anyhttp::Protocol::h3:
          return "--http3-only";
       }
    }
@@ -470,8 +470,8 @@ protected:
 
 INSTANTIATE_TEST_SUITE_P(ExternalTLS, ExternalTLS,
                          ::testing::Values(anyhttp::Protocol::http11, // HTTP/1.1
-                                           anyhttp::Protocol::http2, // HTTP/2
-                                           anyhttp::Protocol::http3), // HTTP/3 (QUIC)
+                                           anyhttp::Protocol::h2, // HTTP/2
+                                           anyhttp::Protocol::h3), // HTTP/3 (QUIC)
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
@@ -546,7 +546,7 @@ TEST_P(ExternalTLS, h2load)
    case anyhttp::Protocol::http11:
       args.insert(args.begin(), "--h1");
       break;
-   case anyhttp::Protocol::http3:
+   case anyhttp::Protocol::h3:
       args.insert(args.begin(), "--h3"); // h2load negotiates h3 itself, http:// URL is fine
       break;
    default:
@@ -710,8 +710,8 @@ public:
 };
 
 INSTANTIATE_TEST_SUITE_P(ClientAsync, ClientAsync,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2,
-                                           anyhttp::Protocol::http3),
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                                           anyhttp::Protocol::h3),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
@@ -858,7 +858,7 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_THEN_can_resume)
 {
    if (GetParam() == anyhttp::Protocol::http11)
       GTEST_SKIP(); // a chunked body cannot be cancelled correctly --> disconnects
-   if (GetParam() == anyhttp::Protocol::http3)
+   if (GetParam() == anyhttp::Protocol::h3)
       GTEST_SKIP(); // TODO: the h3 client doesn't implement write-side backpressure yet --
                     // async_write() always completes immediately, so there is nothing to cancel
 
@@ -1191,7 +1191,7 @@ TEST_P(ClientAsync, Dump)
 
 TEST_P(ClientAsync, Backpressure)
 {
-   if (GetParam() == anyhttp::Protocol::http3)
+   if (GetParam() == anyhttp::Protocol::h3)
       GTEST_SKIP(); // TODO: the h3 client doesn't implement write-side backpressure yet --
                     // async_write() always completes immediately and buffers unboundedly,
                     // so sending an infinite range runs out of memory instead of blocking.
@@ -1233,7 +1233,7 @@ TEST_P(ClientAsync, Backpressure)
 //
 TEST_P(ClientAsync, CancellationContentLength)
 {
-   if (GetParam() == anyhttp::Protocol::http3)
+   if (GetParam() == anyhttp::Protocol::h3)
       GTEST_SKIP(); // TODO: no write-side backpressure yet, see Backpressure above -- a single
                     // large async_write() completes (and is copied) synchronously, so there is
                     // nothing in flight for the cancellation race to interrupt.
@@ -1285,7 +1285,7 @@ TEST_P(ClientAsync, CancellationContentLength)
 //
 TEST_P(ClientAsync, Cancellation)
 {
-   if (GetParam() == anyhttp::Protocol::http3)
+   if (GetParam() == anyhttp::Protocol::h3)
       GTEST_SKIP(); // TODO: no write-side backpressure yet, see Backpressure above.
 
    test = [this](Session session) -> awaitable<void>
@@ -1331,7 +1331,7 @@ TEST_P(ClientAsync, Cancellation)
 //
 TEST_P(ClientAsync, CancellationRange)
 {
-   if (GetParam() == anyhttp::Protocol::http3)
+   if (GetParam() == anyhttp::Protocol::h3)
       GTEST_SKIP(); // TODO: no write-side backpressure yet, see Backpressure above.
 
    test = [this](Session session) -> awaitable<void>
@@ -1425,7 +1425,7 @@ TEST_P(ClientAsync, ClientDropRequest)
 
 TEST_P(ClientAsync, ResetServerDuringRequest)
 {
-   if (GetParam() == anyhttp::Protocol::http3)
+   if (GetParam() == anyhttp::Protocol::h3)
       GTEST_SKIP(); // TODO: tearing the server down mid-request triggers a pre-existing
                     // use-after-free in the h3 server's stream teardown (Http3Stream::
                     // call_read_handler() re-entered from an in-flight Http3Writer::async_write()

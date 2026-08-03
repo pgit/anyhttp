@@ -36,10 +36,9 @@ using error_code = boost::system::error_code;
 
 enum class Protocol
 {
-   h1,
-   http11 = h1,
-   http2,
-   http3
+   http11,
+   h2,
+   h3
 };
 
 std::string to_string(Protocol protocol);

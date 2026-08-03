@@ -72,7 +72,7 @@ public:
 
    void destroy() noexcept override
    {
-      logw("destroy: reader destroyed, is_done={}", parser.is_done());
+      logd("destroy: reader destroyed, is_done={}", parser.is_done());
       if (!parser.is_done() && session)
       {
          logw("destroy: reader destroyed, but parser not done yet... closing socket");
