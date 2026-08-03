@@ -483,18 +483,19 @@ TEST_P(External, curl_many)
 TEST_P(External, curl_https)
 {
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url};
+   Args args = {"-sS", "-v", "--cacert", "pki/out/root.pem", "--data-binary",
+                std::format("@{}", testFile.string()), url};
 
    switch (GetParam())
    {
    case anyhttp::Protocol::h2:
-      args.insert(args.begin(), {"--http2", "-k"});
+      args.insert(args.begin(), "--http2");
       break;
    case anyhttp::Protocol::h3:
-      args.insert(args.begin(), {"--http3-only", "--cacert", "pki/out/root.pem"});
+      args.insert(args.begin(), "--http3-only");
       break;
    default:
-      args.insert(args.begin(), {"--http1.1", "-k"}); // not implemented, yet
+      args.insert(args.begin(), "--http1.1"); // not implemented, yet
    }
 
    auto future = spawn_curl(std::move(args));
@@ -524,18 +525,19 @@ TEST_P(External, curl_multiple)
 TEST_P(External, curl_multiple_https)
 {
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url, url};
+   Args args = {"-sS", "-v", "--cacert", "pki/out/root.pem", "--data-binary",
+                std::format("@{}", testFile.string()), url, url};
 
    switch (GetParam())
    {
    case anyhttp::Protocol::h2:
-      args.insert(args.begin(), {"--http2", "-k"});
+      args.insert(args.begin(), "--http2");
       break;
    case anyhttp::Protocol::h3:
-      args.insert(args.begin(), {"--http3-only", "--cacert", "pki/out/root.pem"});
+      args.insert(args.begin(), "--http3-only");
       break;
    default:
-      args.insert(args.begin(), {"--http1.1", "-k"});
+      args.insert(args.begin(), "--http1.1");
    }
 
    auto future = spawn_curl(std::move(args));
