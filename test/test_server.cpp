@@ -376,13 +376,13 @@ protected:
       std::promise<std::string> promise;
       auto future = promise.get_future();
       co_spawn(strand, spawn_process(std::move(path), std::move(args)),
-               bind_executor(strand, [promise = std::move(promise)](const std::exception_ptr& ex,
-                                                                    std::string str) mutable
+               bind_executor(strand, [this, promise = std::move(promise)](
+                                        const std::exception_ptr& ex, std::string str) mutable
       {
          if (ex)
          {
-            str = what(ex);
-            loge("{}", str);
+            loge("{}", what(ex));
+            server.reset();
          }
          promise.set_value(std::move(str));
       }));
@@ -594,12 +594,12 @@ class ExternalH3 : public External
 TEST_F(ExternalH3, curl_http3)
 {
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"--http3-only",
+   // clang-format off
+   Args args = {"--http3-only", "-sS", "-vv",
                 "--cacert", "pki/out/root.pem",
-                "-sS",
-                "-vv",
                 "--data-binary", std::format("@{}", testFile.string()),
                 url, url};
+   // clang-format on
 #if 0                
    auto future = spawn(CURL_PATH, std::move(args));
 #else
@@ -618,15 +618,11 @@ TEST_F(ExternalH3, curl_many)
    for (size_t i = 0; i < futures.capacity(); ++i)
    {
       auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-      Args args = {"--http3-only",
-                   "--cacert", "pki/out/root.pem",
-                   "-sS",
-                   "-vv",
-                   "-d", "blah",
+      Args args = {"--http3-only", "--cacert", "pki/out/root.pem", "-sS", "-vv", "-d", "blah",
                    // "--data-binary", std::format("@{}", testFile.string()),
                    url};
-   args.insert(args.begin(), {"1", CURL_PATH});
-   auto future = spawn("/usr/bin/timeout", std::move(args));
+      args.insert(args.begin(), {"1", CURL_PATH});
+      auto future = spawn("/usr/bin/timeout", std::move(args));
    }
 
    // spawn("/usr/bin/sleep", {"100"});
@@ -641,10 +637,12 @@ TEST_F(ExternalH3, h2load_http3)
    const size_t n = 10;
    const size_t data_size = 65535;
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"--h3", //
+   // clang-format off
+   Args args = {"--h3",
                 "-d", "test/data/64kminus1",
                 "-n", std::to_string(n), "-c", "2", "-m", "4",
                 url};
+   // clang-format on
    auto future = spawn(H2LOAD_PATH, std::move(args));
    run();
 
