@@ -11,5 +11,7 @@ secrets
 Testing
 *.pcap
 *.junit
+.claude
 callgrind.*
 cmake_test_discovery_*.json
+googletest_discovery_*.json

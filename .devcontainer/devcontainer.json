@@ -42,7 +42,8 @@
 				"streetsidesoftware.code-spell-checker",
 				"usernamehw.errorlens",
 				"vadimcn.vscode-lldb",
-				"xaver.clang-format"
+				"xaver.clang-format",
+				"github.vscode-github-actions"
 			]			
 		}
 	},
