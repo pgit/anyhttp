@@ -546,26 +546,10 @@ TEST_P(External, curl_multiple_https)
    EXPECT_EQ(future.get().size(), testFileSize * 2);
 }
 
-namespace
-{
-void check_h2load_output(const std::string& output, size_t n, size_t data_size)
-{
-   std::smatch match;
-   std::regex regex(
-      R"((\d+) total, \d+ started, (\d+) done, (\d+) succeeded, (\d+) failed, \d+ errored)");
-   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
-   EXPECT_EQ(std::stoul(match[3].str()), n) << match[1];
-   EXPECT_EQ(std::stoul(match[4].str()), 0) << match[1];
-
-   regex = std::regex(R"(\((\d+)\) data)");
-   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
-   EXPECT_EQ(std::stoul(match[1].str()), n * data_size) << match[1];
-}
-} // namespace
-
 TEST_P(External, h2load)
 {
    const size_t n = 100; // number of requests, echoing 65535 bytes each
+   const size_t data_size = 65535;
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3", url};
 
@@ -583,7 +567,18 @@ TEST_P(External, h2load)
 
    auto future = spawn(H2LOAD_PATH, std::move(args));
    run();
-   check_h2load_output(future.get(), n, 65535);
+
+   const std::string output = future.get();
+   std::smatch match;
+   std::regex regex(
+      R"((\d+) total, \d+ started, (\d+) done, (\d+) succeeded, (\d+) failed, \d+ errored)");
+   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
+   EXPECT_EQ(std::stoul(match[3].str()), n) << match[1];
+   EXPECT_EQ(std::stoul(match[4].str()), 0) << match[1];
+
+   regex = std::regex(R"(\((\d+)\) data)");
+   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
+   EXPECT_EQ(std::stoul(match[1].str()), n * data_size) << match[1];
 }
 
 // =================================================================================================
