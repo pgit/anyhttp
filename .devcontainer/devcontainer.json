@@ -43,7 +43,9 @@
 				"usernamehw.errorlens",
 				"vadimcn.vscode-lldb",
 				"xaver.clang-format",
-				"anthropic.claude-code"			]			
+				"github.vscode-github-actions",
+				"anthropic.claude-code"
+			]			
 		}
 	},
 
