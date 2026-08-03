@@ -641,14 +641,11 @@ TEST_F(ExternalSingleProtocol, h2load_http2)
 
 TEST_F(ExternalSingleProtocol, h2load_http3)
 {
-   const size_t n = 10;
-   auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   // clang-format off
-   Args args = {"--h3",
-                "-d", "test/data/64kminus1",
-                "-n", std::to_string(n), "-c", "2", "-m", "4",
-                url};
-   // clang-format on
+   const size_t n = 100; // number of requests, echoing 65535 bytes each
+   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   Args args = {"--h3", "-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3",
+               url};
+
    auto future = spawn(H2LOAD_PATH, std::move(args));
    run();
    check_h2load_output(future.get(), n, 65535);
