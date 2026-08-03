@@ -38,8 +38,8 @@ enum class Protocol
 {
    h1,
    http11 = h1,
-   h2,
-   h3
+   http2,
+   http3
 };
 
 std::string to_string(Protocol protocol);

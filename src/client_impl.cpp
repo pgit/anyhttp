@@ -105,7 +105,7 @@ awaitable<Session> Client::Impl::async_connect()
    // HTTP/3 runs over QUIC (UDP), so it needs an entirely different transport setup (TLS,
    // handshake, ...) than the TCP-based http11/h2 paths below.
    //
-   if (config().protocol == Protocol::h3)
+   if (config().protocol == Protocol::http3)
       co_return Session{co_await async_connect_http3(m_executor, host, port)};
 
    std::vector<ip::tcp::endpoint> endpoints;
@@ -167,12 +167,12 @@ awaitable<Session> Client::Impl::async_connect()
          *this, m_executor, boost::beast::tcp_stream(std::move(socket)));
       break;
 
-   case Protocol::h2:
+   case Protocol::http2:
       impl = std::make_shared<nghttp2::ClientSession<asio::ip::tcp::socket>>(*this, m_executor,
                                                                              std::move(socket));
       break;
 
-   case anyhttp::Protocol::h3:
+   case anyhttp::Protocol::http3:
       // handled above, before the TCP resolve/connect
       std::unreachable();
    };

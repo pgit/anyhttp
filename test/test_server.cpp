@@ -70,6 +70,7 @@ namespace rv = std::ranges::views;
 
 using namespace anyhttp;
 
+// https://github.com/curl/curl/issues/10634 --> use custom built curl
 #define CURL_PATH "/usr/local/bin/curl"
 #define NGHTTP_PATH "/usr/local/bin/nghttp"
 #define H2LOAD_PATH "/usr/local/bin/h2load"
@@ -245,7 +246,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(Server, Server,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2),
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
@@ -391,13 +392,13 @@ protected:
 
    //
    // Like spawn(CURL_PATH, args), but for Protocol::h3: QUIC handshakes can hang in ways
-   // h1/h2 curl invocations don't, so wrap in a hard `timeout 1` safety net.
+   // h1/h2 curl invocations don't, so wrap in a hard `timeout 5` safety net.
    //
    std::future<std::string> spawn_curl(std::vector<std::string> args)
    {
-      if (GetParam() == anyhttp::Protocol::h3)
+      if (GetParam() == anyhttp::Protocol::http3)
       {
-         args.insert(args.begin(), {"1", CURL_PATH});
+         args.insert(args.begin(), {"5", CURL_PATH});
          return spawn("/usr/bin/timeout", std::move(args));
       }
       return spawn(CURL_PATH, std::move(args));
@@ -409,35 +410,26 @@ protected:
    std::atomic<int> numSpawned = 0;
 };
 
-INSTANTIATE_TEST_SUITE_P(External, External,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2),
-                         NameGenerator);
-
 using Args = std::vector<std::string>;
 
+// =================================================================================================
+
+INSTANTIATE_TEST_SUITE_P(External, External,
+                         ::testing::Values(anyhttp::Protocol::http11, // HTTP/1.1
+                                           anyhttp::Protocol::http2), // HTTP/2
+                         NameGenerator);
+
 // -------------------------------------------------------------------------------------------------
-
-TEST_P(External, nghttp2)
-{
-   if (GetParam() != anyhttp::Protocol::h2)
-      GTEST_SKIP(); // 'nghttp' only speaks HTTP/2 (no --nghttp2-prior-knowledge, no HTTP/3)
-
-   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   auto future = spawn(NGHTTP_PATH, {"-d", testFile.string(), url});
-   run();
-
-   EXPECT_EQ(future.get().size(), testFileSize);
-}
 
 TEST_P(External, curl)
 {
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url};
 
-   if (GetParam() == anyhttp::Protocol::h2)
+   if (GetParam() == anyhttp::Protocol::http2)
       args.insert(args.begin(), "--http2-prior-knowledge");
 
-   auto future = spawn_curl(std::move(args));
+   auto future = spawn(CURL_PATH, std::move(args));
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize);
@@ -448,11 +440,10 @@ TEST_P(External, curl_multiple)
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url, url};
 
-   if (GetParam() == anyhttp::Protocol::h2)
+   if (GetParam() == anyhttp::Protocol::http2)
       args.insert(args.begin(), "--http2-prior-knowledge");
 
-   // https://github.com/curl/curl/issues/10634 --> use custom built curl
-   auto future = spawn_curl(std::move(args));
+   auto future = spawn(CURL_PATH, std::move(args));
    run();
 
    EXPECT_EQ(future.get().size(), testFileSize * 2);
@@ -460,43 +451,61 @@ TEST_P(External, curl_multiple)
 
 // =================================================================================================
 
-//
-// Non-parametrized-over-h3 tests moved here don't fit http:// External: they either require TLS
-// (curl_https, curl_multiple_https) or vary their scheme/flags per protocol including h3
-// (curl_many, h2load). Parametrizing over all three protocols keeps them exercising h3 as well.
-//
 class ExternalTLS : public External
 {
+protected:
+   std::string curlProtocolParam()
+   {
+      switch (GetParam())
+      {
+      case anyhttp::Protocol::http11:
+         return "--http1.1";
+      case anyhttp::Protocol::http2:
+         return "--http2";
+      case anyhttp::Protocol::http3:
+         return "--http3-only";
+      }
+   }
 };
 
 INSTANTIATE_TEST_SUITE_P(ExternalTLS, ExternalTLS,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
-                                           anyhttp::Protocol::h3),
+                         ::testing::Values(anyhttp::Protocol::http11, // HTTP/1.1
+                                           anyhttp::Protocol::http2, // HTTP/2
+                                           anyhttp::Protocol::http3), // HTTP/3 (QUIC)
                          NameGenerator);
+
+// -------------------------------------------------------------------------------------------------
+
+TEST_P(ExternalTLS, curl)
+{
+   auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
+   // clang-format off
+   Args args = {curlProtocolParam(), "-sS", "-v",
+                "--cacert", "pki/out/root.pem",
+                "--data-binary", std::format("@{}", testFile.string()),
+                url};
+   // clang-format off
+
+   auto future = spawn_curl(std::move(args));
+   run();
+
+   EXPECT_EQ(future.get().size(), testFileSize);
+}
 
 TEST_P(ExternalTLS, curl_many)
 {
-   auto scheme = GetParam() == anyhttp::Protocol::h3 ? "https" : "http";
-
    std::vector<std::future<std::string>> futures;
    futures.reserve(10);
 
    for (size_t i = 0; i < futures.capacity(); ++i)
    {
-      auto url = std::format("{}://127.0.0.2:{}/echo", scheme, server->local_endpoint().port());
-      Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url};
-
-      switch (GetParam())
-      {
-      case anyhttp::Protocol::h2:
-         args.insert(args.begin(), "--http2-prior-knowledge");
-         break;
-      case anyhttp::Protocol::h3:
-         args.insert(args.begin(), {"--http3-only", "--cacert", "pki/out/root.pem"});
-         break;
-      default:
-         break;
-      }
+      auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
+      // clang-format off
+      Args args = {curlProtocolParam(), "-sS", "-v",
+                  "--cacert", "pki/out/root.pem",
+                  "--data-binary", std::format("@{}", testFile.string()),
+                  url};
+      // clang-format off
 
       futures.emplace_back(spawn_curl(std::move(args)));
    }
@@ -507,53 +516,23 @@ TEST_P(ExternalTLS, curl_many)
       EXPECT_EQ(future.get().size(), testFileSize);
 }
 
-TEST_P(ExternalTLS, curl_https)
+TEST_P(ExternalTLS, curl_multiple)
 {
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "--cacert", "pki/out/root.pem", "--data-binary",
-                std::format("@{}", testFile.string()), url};
-
-   switch (GetParam())
-   {
-   case anyhttp::Protocol::h2:
-      args.insert(args.begin(), "--http2");
-      break;
-   case anyhttp::Protocol::h3:
-      args.insert(args.begin(), "--http3-only");
-      break;
-   default:
-      args.insert(args.begin(), "--http1.1"); // not implemented, yet
-   }
+   // clang-format off
+   Args args = {curlProtocolParam(), "-sS", "-v",
+                "--cacert", "pki/out/root.pem",
+                "--data-binary", std::format("@{}", testFile.string()),
+                url, url, url, url};
+   // clang-format off
 
    auto future = spawn_curl(std::move(args));
    run();
 
-   EXPECT_EQ(future.get().size(), testFileSize);
+   EXPECT_EQ(future.get().size(), testFileSize * 4);
 }
 
-TEST_P(ExternalTLS, curl_multiple_https)
-{
-   auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "--cacert", "pki/out/root.pem", "--data-binary",
-                std::format("@{}", testFile.string()), url, url};
-
-   switch (GetParam())
-   {
-   case anyhttp::Protocol::h2:
-      args.insert(args.begin(), "--http2");
-      break;
-   case anyhttp::Protocol::h3:
-      args.insert(args.begin(), "--http3-only");
-      break;
-   default:
-      args.insert(args.begin(), "--http1.1");
-   }
-
-   auto future = spawn_curl(std::move(args));
-   run();
-
-   EXPECT_EQ(future.get().size(), testFileSize * 2);
-}
+// -------------------------------------------------------------------------------------------------
 
 TEST_P(ExternalTLS, h2load)
 {
@@ -567,7 +546,7 @@ TEST_P(ExternalTLS, h2load)
    case anyhttp::Protocol::http11:
       args.insert(args.begin(), "--h1");
       break;
-   case anyhttp::Protocol::h3:
+   case anyhttp::Protocol::http3:
       args.insert(args.begin(), "--h3"); // h2load negotiates h3 itself, http:// URL is fine
       break;
    default:
@@ -602,7 +581,9 @@ class ExternalSingleProtocol : public External
 {
 };
 
-TEST_F(ExternalSingleProtocol, nc_crazy_chunked)
+// -------------------------------------------------------------------------------------------------
+
+TEST_F(ExternalSingleProtocol, netcat_crazy_chunked)
 {
    auto cmd =
       std::format("nc 127.0.0.2 {} <test/data/crazy-chunked.txt", server->local_endpoint().port());
@@ -612,6 +593,15 @@ TEST_F(ExternalSingleProtocol, nc_crazy_chunked)
    auto out = future.get();
    EXPECT_GT(out.size(), 0);
    EXPECT_TRUE(out.contains("Hello, World!\n"));
+}
+
+TEST_F(ExternalSingleProtocol, nghttp2)
+{
+   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+   auto future = spawn(NGHTTP_PATH, {"-d", testFile.string(), url});
+   run();
+
+   EXPECT_EQ(future.get().size(), testFileSize);
 }
 
 TEST_F(ExternalSingleProtocol, h2spec)
@@ -640,12 +630,6 @@ TEST_F(ExternalSingleProtocol, h2spec)
          return 145;
    });
    EXPECT_EQ(std::stoi(match[3].str()), expected_ok) << output;
-}
-
-TEST_F(ExternalSingleProtocol, echo)
-{
-   co_spawn(context.get_executor(), spawn_process("/usr/bin/echo", {"Hello, World!"}), detached);
-   run();
 }
 
 // =================================================================================================
@@ -726,8 +710,8 @@ public:
 };
 
 INSTANTIATE_TEST_SUITE_P(ClientAsync, ClientAsync,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
-                                           anyhttp::Protocol::h3),
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::http2,
+                                           anyhttp::Protocol::http3),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
@@ -874,7 +858,7 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_THEN_can_resume)
 {
    if (GetParam() == anyhttp::Protocol::http11)
       GTEST_SKIP(); // a chunked body cannot be cancelled correctly --> disconnects
-   if (GetParam() == anyhttp::Protocol::h3)
+   if (GetParam() == anyhttp::Protocol::http3)
       GTEST_SKIP(); // TODO: the h3 client doesn't implement write-side backpressure yet --
                     // async_write() always completes immediately, so there is nothing to cancel
 
@@ -1207,7 +1191,7 @@ TEST_P(ClientAsync, Dump)
 
 TEST_P(ClientAsync, Backpressure)
 {
-   if (GetParam() == anyhttp::Protocol::h3)
+   if (GetParam() == anyhttp::Protocol::http3)
       GTEST_SKIP(); // TODO: the h3 client doesn't implement write-side backpressure yet --
                     // async_write() always completes immediately and buffers unboundedly,
                     // so sending an infinite range runs out of memory instead of blocking.
@@ -1249,7 +1233,7 @@ TEST_P(ClientAsync, Backpressure)
 //
 TEST_P(ClientAsync, CancellationContentLength)
 {
-   if (GetParam() == anyhttp::Protocol::h3)
+   if (GetParam() == anyhttp::Protocol::http3)
       GTEST_SKIP(); // TODO: no write-side backpressure yet, see Backpressure above -- a single
                     // large async_write() completes (and is copied) synchronously, so there is
                     // nothing in flight for the cancellation race to interrupt.
@@ -1301,7 +1285,7 @@ TEST_P(ClientAsync, CancellationContentLength)
 //
 TEST_P(ClientAsync, Cancellation)
 {
-   if (GetParam() == anyhttp::Protocol::h3)
+   if (GetParam() == anyhttp::Protocol::http3)
       GTEST_SKIP(); // TODO: no write-side backpressure yet, see Backpressure above.
 
    test = [this](Session session) -> awaitable<void>
@@ -1347,7 +1331,7 @@ TEST_P(ClientAsync, Cancellation)
 //
 TEST_P(ClientAsync, CancellationRange)
 {
-   if (GetParam() == anyhttp::Protocol::h3)
+   if (GetParam() == anyhttp::Protocol::http3)
       GTEST_SKIP(); // TODO: no write-side backpressure yet, see Backpressure above.
 
    test = [this](Session session) -> awaitable<void>
@@ -1441,7 +1425,7 @@ TEST_P(ClientAsync, ClientDropRequest)
 
 TEST_P(ClientAsync, ResetServerDuringRequest)
 {
-   if (GetParam() == anyhttp::Protocol::h3)
+   if (GetParam() == anyhttp::Protocol::http3)
       GTEST_SKIP(); // TODO: tearing the server down mid-request triggers a pre-existing
                     // use-after-free in the h3 server's stream teardown (Http3Stream::
                     // call_read_handler() re-entered from an in-flight Http3Writer::async_write()
