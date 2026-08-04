@@ -7,7 +7,7 @@
 // backends.
 //
 // Not yet implemented: retry tokens, version negotiation, stateless reset, connection
-// migration, GSO, ECN, client-side (async_submit is a no-op).
+// migration, ECN, client-side (async_submit is a no-op).
 //
 
 #include "anyhttp/client_impl.hpp"
@@ -189,6 +189,67 @@ int send_udp(int fd, const sockaddr* sa, socklen_t salen, std::span<const uint8_
    }
 }
 
+// -------------------------------------------------------------------------------------------------
+
+// Sends a run of same-sized packets (as produced by ngtcp2_conn_write_aggregate_pkt2(), all but
+// the last exactly `gso_size` bytes) with a single sendmsg() using UDP_SEGMENT (GSO), so N QUIC
+// packets cost one syscall instead of N. Falls back to one sendto() per segment -- and remembers
+// to do so from then on -- if the kernel/NIC doesn't support UDP_SEGMENT here.
+int send_udp_gso(int fd, const sockaddr* sa, socklen_t salen, std::span<const uint8_t> data,
+                 size_t gso_size, bool& no_gso)
+{
+   if (no_gso || data.size() <= gso_size)
+   {
+      for (; !data.empty();)
+      {
+         auto len = std::min(gso_size, data.size());
+         if (send_udp(fd, sa, salen, data.first(len)) != 0)
+            return -1;
+         data = data.subspan(len);
+      }
+      return 0;
+   }
+
+   iovec msg_iov{const_cast<uint8_t*>(data.data()), data.size()};
+   uint8_t msg_ctrl[CMSG_SPACE(sizeof(uint16_t))];
+   msghdr msg{};
+   msg.msg_name = const_cast<sockaddr*>(sa);
+   msg.msg_namelen = salen;
+   msg.msg_iov = &msg_iov;
+   msg.msg_iovlen = 1;
+   msg.msg_control = msg_ctrl;
+   msg.msg_controllen = sizeof(msg_ctrl);
+
+   auto* cm = CMSG_FIRSTHDR(&msg);
+   cm->cmsg_level = SOL_UDP;
+   cm->cmsg_type = UDP_SEGMENT;
+   cm->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+   auto seg = static_cast<uint16_t>(gso_size);
+   memcpy(CMSG_DATA(cm), &seg, sizeof(seg));
+
+   for (;;)
+   {
+      auto n = ::sendmsg(fd, &msg, 0);
+      if (n == -1)
+      {
+         if (errno == EINTR)
+            continue;
+         if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return 0; // best-effort; ngtcp2 will retransmit
+         if (errno == EINVAL || errno == EOPNOTSUPP)
+         {
+            // GSO unsupported on this socket/NIC: fall back permanently and resend as
+            // individual datagrams.
+            no_gso = true;
+            return send_udp_gso(fd, sa, salen, data, gso_size, no_gso);
+         }
+         loge("sendmsg (GSO): {}", strerror(errno));
+         return -1;
+      }
+      return 0;
+   }
+}
+
 nghttp3_nv make_nv(std::string_view name, std::string_view value)
 {
    nghttp3_nv nv{};
@@ -325,6 +386,8 @@ public:
    int on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> data,
                const ngtcp2::Address& remote);
    int write_streams();
+   ngtcp2_ssize write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uint8_t* dest, size_t destlen,
+                          ngtcp2_tstamp ts);
    void update_timer();
    int handle_expiry();
 
@@ -425,6 +488,13 @@ private:
 
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
 
+   // Aggregated TX buffer: ngtcp2_conn_write_aggregate_pkt2() packs as many same-sized
+   // packets as it can (control/QPACK streams, response data, ...) into this buffer so
+   // they can all be flushed with a single sendmsg()+UDP_SEGMENT (GSO) call instead of
+   // one sendto() per QUIC packet.
+   std::vector<uint8_t> tx_buf_ = std::vector<uint8_t>(64_k);
+   bool no_gso_ = false;
+
    std::unordered_map<int64_t, std::shared_ptr<Http3Stream>> streams_;
 };
 
@@ -479,10 +549,7 @@ public:
       }
       if (asio::buffer_size(buffer) == 0)
       {
-         asio::any_completion_executor ex =
-            asio::get_associated_immediate_executor(handler, stream->get_executor());
-         ex.execute([handler = std::move(handler)]() mutable
-         { std::move(handler)(boost::system::error_code{}, 0); });
+         std::move(handler)(boost::system::error_code{}, 0);
          return;
       }
 
@@ -546,12 +613,14 @@ public:
          nghttp3_conn_resume_stream(h3, stream->id);
       stream->session.wake_write();
 
-      // Buffer content is captured into stream-owned storage above, so we can
-      // complete the write immediately -- the async contract is honored.
-      asio::any_completion_executor ex =
-         asio::get_associated_immediate_executor(handler, stream->get_executor());
-      ex.execute([handler = std::move(handler)]() mutable
-      { std::move(handler)(boost::system::error_code{}); });
+      // Buffer content is captured into stream-owned storage above, so we can complete the
+      // write immediately -- the async contract is honored. Note: invoke directly rather than
+      // via asio::get_associated_immediate_executor(). use_awaitable's internal resume handler
+      // does not advertise an associated immediate executor, so that call silently falls back
+      // to `stream->get_executor()` and behaves like post() -- deferring the awaiting
+      // coroutine's continuation to a fresh event-loop turn (and therefore a separate QUIC
+      // packet/syscall) instead of resuming it inline here, right after the data was queued.
+      std::move(handler)(boost::system::error_code{});
    }
 
    void async_submit(StatusHandler&& handler, unsigned int status_code, const Fields& fields)
@@ -566,10 +635,7 @@ public:
       stream->submit_response();
       stream->session.wake_write();
 
-      asio::any_completion_executor ex =
-         asio::get_associated_immediate_executor(handler, stream->get_executor());
-      ex.execute([handler = std::move(handler)]() mutable
-      { std::move(handler)(boost::system::error_code{}); });
+      std::move(handler)(boost::system::error_code{});
    }
 
    void detach() override { stream = nullptr; }
@@ -1061,18 +1127,22 @@ int Http3Session::on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> da
 
 // -------------------------------------------------------------------------------------------------
 
-int Http3Session::write_streams()
+namespace
 {
-   if (ngtcp2_conn_in_closing_period(conn_) || ngtcp2_conn_in_draining_period(conn_))
-      return 0;
+ngtcp2_ssize write_pkt_cb(ngtcp2_conn*, ngtcp2_path* path, ngtcp2_pkt_info* pi, uint8_t* dest,
+                          size_t destlen, ngtcp2_tstamp ts, void* user_data)
+{
+   return static_cast<Http3Session*>(user_data)->write_pkt(path, pi, dest, destlen, ts);
+}
+} // namespace
 
-   logd("[{}] write_streams: max_data_left={}", log_prefix_, ngtcp2_conn_get_max_data_left(conn_));
-
-   std::array<uint8_t, 1500> buf;
-   ngtcp2_path_storage ps;
-   ngtcp2_pkt_info pi;
-   ngtcp2_path_storage_zero(&ps);
-
+// Writes a single QUIC packet's worth of stream data into [dest, dest+destlen). Called
+// repeatedly by ngtcp2_conn_write_aggregate_pkt2() (once per packet it wants to pack into the
+// shared TX buffer), so unlike the old single-packet write_streams() this must never call
+// send_udp() itself -- the caller decides when/how the accumulated packets go out.
+ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uint8_t* dest,
+                                     size_t destlen, ngtcp2_tstamp ts)
+{
    std::array<nghttp3_vec, 16> vec;
 
    for (;;)
@@ -1084,7 +1154,7 @@ int Http3Session::write_streams()
       if (h3_ && ngtcp2_conn_get_max_data_left(conn_))
       {
          sveccnt = nghttp3_conn_writev_stream(h3_, &stream_id, &fin, vec.data(), vec.size());
-         logd("[{}] write_streams: nghttp3_conn_writev_stream -> stream={} sveccnt={} fin={}",
+         logd("[{}] write_pkt: nghttp3_conn_writev_stream -> stream={} sveccnt={} fin={}",
               log_prefix_, stream_id, sveccnt, fin);
          if (sveccnt < 0)
          {
@@ -1093,19 +1163,19 @@ int Http3Session::write_streams()
             ngtcp2_ccerr_set_application_error(
                &last_error_, nghttp3_err_infer_quic_app_error_code(static_cast<int>(sveccnt)),
                nullptr, 0);
-            return handle_error(NGTCP2_ERR_CALLBACK_FAILURE);
+            return NGTCP2_ERR_CALLBACK_FAILURE;
          }
       }
 
       ngtcp2_ssize ndatalen;
-      uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE;
+      uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE | NGTCP2_WRITE_STREAM_FLAG_PADDING;
       if (fin)
          flags |= NGTCP2_WRITE_STREAM_FLAG_FIN;
 
       auto nwrite =
-         ngtcp2_conn_writev_stream(conn_, &ps.path, &pi, buf.data(), buf.size(), &ndatalen, flags,
-                                   stream_id, reinterpret_cast<const ngtcp2_vec*>(vec.data()),
-                                   static_cast<size_t>(sveccnt), ngtcp2::util::timestamp());
+         ngtcp2_conn_writev_stream(conn_, path, pi, dest, destlen, &ndatalen, flags, stream_id,
+                                   reinterpret_cast<const ngtcp2_vec*>(vec.data()),
+                                   static_cast<size_t>(sveccnt), ts);
 
       if (nwrite < 0)
       {
@@ -1127,7 +1197,7 @@ int Http3Session::write_streams()
                    rv != 0)
                {
                   loge("[{}] nghttp3_conn_add_write_offset: {}", log_prefix_, nghttp3_strerror(rv));
-                  return handle_error(NGTCP2_ERR_CALLBACK_FAILURE);
+                  return NGTCP2_ERR_CALLBACK_FAILURE;
                }
                if (auto s = find_stream(stream_id))
                   s->on_write_consumed(static_cast<size_t>(ndatalen));
@@ -1137,7 +1207,7 @@ int Http3Session::write_streams()
             loge("[{}] ngtcp2_conn_writev_stream: {}", log_prefix_,
                  ngtcp2_strerror(static_cast<int>(nwrite)));
             ngtcp2_ccerr_set_liberr(&last_error_, static_cast<int>(nwrite), nullptr, 0);
-            return handle_error(static_cast<int>(nwrite));
+            return NGTCP2_ERR_CALLBACK_FAILURE;
          }
       }
 
@@ -1147,24 +1217,49 @@ int Http3Session::write_streams()
              rv != 0)
          {
             loge("[{}] nghttp3_conn_add_write_offset: {}", log_prefix_, nghttp3_strerror(rv));
-            return handle_error(NGTCP2_ERR_CALLBACK_FAILURE);
+            return NGTCP2_ERR_CALLBACK_FAILURE;
          }
          if (auto s = find_stream(stream_id))
             s->on_write_consumed(static_cast<size_t>(ndatalen));
       }
 
-      if (nwrite == 0)
-      {
-         ngtcp2_conn_update_pkt_tx_time(conn_, ngtcp2::util::timestamp());
-         return 0;
-      }
-
-      if (send_udp(ep_.fd, ps.path.remote.addr, ps.path.remote.addrlen,
-                   {buf.data(), static_cast<size_t>(nwrite)}) != 0)
-      {
-         return -1;
-      }
+      return nwrite;
    }
+}
+
+// -------------------------------------------------------------------------------------------------
+
+int Http3Session::write_streams()
+{
+   if (ngtcp2_conn_in_closing_period(conn_) || ngtcp2_conn_in_draining_period(conn_))
+      return 0;
+
+   logd("[{}] write_streams: max_data_left={}", log_prefix_, ngtcp2_conn_get_max_data_left(conn_));
+
+   ngtcp2_path_storage ps;
+   ngtcp2_pkt_info pi;
+   ngtcp2_path_storage_zero(&ps);
+
+   size_t gso_size = 0;
+   auto nwrite = ngtcp2_conn_write_aggregate_pkt2(conn_, &ps.path, &pi, tx_buf_.data(),
+                                                  tx_buf_.size(), &gso_size, &write_pkt_cb, 0,
+                                                  ngtcp2::util::timestamp());
+   if (nwrite < 0)
+   {
+      loge("[{}] ngtcp2_conn_write_aggregate_pkt2: {}", log_prefix_,
+           ngtcp2_strerror(static_cast<int>(nwrite)));
+      if (!last_error_.error_code)
+         ngtcp2_ccerr_set_liberr(&last_error_, static_cast<int>(nwrite), nullptr, 0);
+      return handle_error(static_cast<int>(nwrite));
+   }
+
+   ngtcp2_conn_update_pkt_tx_time(conn_, ngtcp2::util::timestamp());
+
+   if (nwrite == 0)
+      return 0;
+
+   return send_udp_gso(ep_.fd, ps.path.remote.addr, ps.path.remote.addrlen,
+                       {tx_buf_.data(), static_cast<size_t>(nwrite)}, gso_size, no_gso_);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1731,6 +1826,8 @@ int Server::Impl::udp_on_read(Endpoint& ep)
 
    for (size_t pktcnt = 0; pktcnt < 32; ++pktcnt)
    {
+      if (pktcnt)
+         std::println("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ", pktcnt);
       msg.msg_namelen = sizeof(su);
       msg.msg_controllen = sizeof(msg_ctrl);
 

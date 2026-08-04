@@ -809,8 +809,11 @@ TEST_P(ClientAsync, WHEN_get_response_is_called_twice_THEN_reports_error)
    };
 }
 
-TEST_P(ClientAsync, DISABLED_WHEN_get_response_is_detached_THEN_does_not_crash)
+TEST_P(ClientAsync, WHEN_get_response_is_detached_THEN_does_not_crash)
 {
+   if (GetParam() == anyhttp::Protocol::http11)
+      GTEST_SKIP();
+
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("echo"));
