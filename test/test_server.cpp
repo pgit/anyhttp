@@ -1194,11 +1194,6 @@ TEST_P(ClientAsync, Dump)
 
 TEST_P(ClientAsync, Backpressure)
 {
-   if (GetParam() == anyhttp::Protocol::h3)
-      GTEST_SKIP(); // TODO: the h3 client doesn't implement write-side backpressure yet --
-                    // async_write() always completes immediately and buffers unboundedly,
-                    // so sending an infinite range runs out of memory instead of blocking.
-
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {});

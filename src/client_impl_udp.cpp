@@ -154,6 +154,33 @@ void ngtcp2_log_printf(void* /*user*/, const char* fmt, ...) noexcept
 class Http3ClientSession;
 class Http3ClientStream;
 
+//
+// One async_write() call's worth of request-body data, queued up for data_reader()/
+// on_write_consumed() to drain in order. `token` identifies it for bind_write_cancellation() --
+// cancellation only ever detaches `handler`; `storage`/`remaining` are left alone so the bytes
+// still reach nghttp3 in order regardless of queue position (nghttp3/ngtcp2 may already hold raw
+// pointers into `storage` and there is no way to "un-offer" them).
+//
+//
+// `offered` and `confirmed` are tracked separately because nghttp3 may call data_reader()
+// several times in a row for the same stream before ever reporting consumption back via
+// on_write_consumed() -- e.g. to gather more vecs than fit in a single call, up to `veccnt`. If
+// data_reader() just kept re-handing out storage[0, storage.size()) unconditionally (tracking
+// only "confirmed"), nghttp3 would treat each of those repeat offers as *additional*, distinct
+// stream bytes and duplicate the content on the wire. `offered` marks how much has already been
+// handed to nghttp3 (whether or not it has been placed in a packet yet) so a repeat call sees
+// nothing new and gets NGHTTP3_ERR_WOULDBLOCK instead.
+//
+struct Http3PendingWrite
+{
+   std::vector<uint8_t> storage;
+   size_t offered = 0;   // bytes already handed to nghttp3 via data_reader()
+   size_t confirmed = 0; // bytes on_write_consumed() has confirmed placed in a packet (<= offered)
+   bool is_eof = false;
+   WriteHandler handler;
+   uint64_t token = 0;
+};
+
 class Http3ClientStream : public std::enable_shared_from_this<Http3ClientStream>
 {
 public:
@@ -180,10 +207,22 @@ public:
    client::Request::GetResponseHandler response_handler;
 
    //
-   // Request body plumbing (client -> server), mirrors the server's Http3Stream.
+   // Request body plumbing (client -> server).
    //
-   std::deque<std::vector<uint8_t>> pending_writes;
-   std::vector<std::vector<uint8_t>> in_flight_writes;
+   // write_queue.front() is what data_reader()/on_write_consumed() are currently draining; its
+   // bytes must stay put and be handed to nghttp3 in order, even if the async_write() call that
+   // submitted them gets cancelled while still in flight (cancellation only detaches the
+   // completion handler, see bind_write_cancellation()). Further async_write() calls queue up
+   // behind it -- normally callers only ever have one outstanding at a time, but a fresh one can
+   // legitimately arrive while an earlier (cancelled) write is still draining, since cancellation
+   // completes the caller's handler immediately without waiting for that drain.
+   //
+   std::deque<Http3PendingWrite> write_queue;
+   uint64_t next_write_token = 1;
+
+   std::vector<std::vector<uint8_t>> in_flight_writes; // kept alive for the stream's lifetime --
+                                                        // ngtcp2 may still need this memory for
+                                                        // retransmission until acked
    bool eof_submitted = false;
    bool eof_sent_to_h3 = false;
 
@@ -195,6 +234,7 @@ public:
    bool eof_received = false;
    ReadSomeHandler read_handler;
    asio::mutable_buffer read_handler_buffer;
+   bool call_read_handler_active = false; // re-entrancy guard, see call_read_handler()
 
    //
    // Lifecycle.
@@ -212,8 +252,15 @@ public:
    void call_read_handler();
 
    // Data flow from user land back to nghttp3 (request body).
+   void start_write(WriteHandler&& handler, asio::const_buffer buffer);
    nghttp3_ssize data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t* pflags);
    void on_write_consumed(size_t n);
+
+private:
+   void bind_write_cancellation(WriteHandler& handler, uint64_t token); // arms cancellation
+   void finish_active_write(); // retires write_queue.front() once fully handed to nghttp3
+
+public:
 
    // async_get_response()
    void async_get_response(client::Request::GetResponseHandler&& handler);
@@ -274,6 +321,23 @@ public:
 
    // Called by Http3ClientWriter to make sure the write loop runs after new data was queued.
    void wake_write();
+
+   //
+   // Grants the peer more *stream*-level send credit for `n` bytes of response body just
+   // delivered to the application. Deliberately NOT called as data arrives (see h3_cb_recv_data)
+   // -- only once call_read_handler() actually hands bytes to the app, so a slow/absent reader
+   // keeps the peer's flow control window for *this stream* genuinely constrained instead of
+   // nghttp3 buffering an unbounded backlog in pending_read. Connection-level credit is granted
+   // eagerly regardless (see h3_cb_recv_data) since it's a pool shared with control/QPACK
+   // streams nghttp3 manages on its own.
+   //
+   void consume_stream(int64_t stream_id, size_t n)
+   {
+      if (n == 0)
+         return;
+      ngtcp2_conn_extend_max_stream_offset(conn_, stream_id, n);
+      wake_write(); // a WINDOW_UPDATE-equivalent frame needs to go out
+   }
 
    //
    // ngtcp2 <-> ngtcp2_crypto_ossl bridge.
@@ -395,25 +459,7 @@ public:
          return;
       }
 
-      auto n = asio::buffer_size(buffer);
-      if (n == 0)
-      {
-         stream->eof_submitted = true;
-      }
-      else
-      {
-         auto* src = static_cast<const uint8_t*>(buffer.data());
-         stream->pending_writes.emplace_back(src, src + n);
-      }
-
-      if (auto h3 = stream->session.h3())
-         nghttp3_conn_resume_stream(h3, stream->id);
-      stream->session.wake_write();
-
-      asio::any_completion_executor ex =
-         asio::get_associated_immediate_executor(handler, stream->get_executor());
-      ex.execute([handler = std::move(handler)]() mutable
-      { std::move(handler)(boost::system::error_code{}); });
+      stream->start_write(std::move(handler), buffer);
    }
 
    //
@@ -540,6 +586,9 @@ Http3ClientStream::~Http3ClientStream()
    if (!response_delivered && response_handler)
       swap_and_invoke(response_handler, errc::make_error_code(errc::connection_reset),
                       client::Response{nullptr});
+   for (auto& w : write_queue)
+      if (w.handler)
+         swap_and_invoke(w.handler, errc::make_error_code(errc::connection_reset));
    logd("[{}] stream destroyed... done", log_prefix);
 }
 
@@ -568,63 +617,208 @@ void Http3ClientStream::on_eof()
 
 void Http3ClientStream::call_read_handler()
 {
-   if (!read_handler)
+   //
+   // swap_and_invoke() below may resume a user coroutine that calls async_read_some() again
+   // before returning, which re-enters this function. Letting that nested call do real work would
+   // recurse once per buffered chunk -- with enough data queued up (e.g. after a large backlog
+   // drains), that blows the C++ stack. Instead, the nested call just re-arms read_handler and
+   // returns; the outer call's loop below picks it up and keeps going without growing the stack.
+   //
+   if (!read_handler || call_read_handler_active)
       return;
 
-   if (asio::buffer_size(read_head) > 0)
+   // The loop below may resume a coroutine that drops the last owning reference to this stream
+   // (e.g. the Response gets destroyed once EOF is delivered). Keep it alive until this function
+   // returns -- consume_stream() at the bottom still needs `id` and `session`.
+   auto self = shared_from_this();
+
+   call_read_handler_active = true;
+   size_t consumed = 0;
+   while (read_handler)
    {
-      auto copied = asio::buffer_copy(read_handler_buffer, read_head);
-      read_head += copied;
-      if (read_head.size() == 0)
+      if (asio::buffer_size(read_head) > 0)
       {
-         pending_read.pop_front();
-         read_head =
-            pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
+         auto copied = asio::buffer_copy(read_handler_buffer, read_head);
+         read_head += copied;
+         consumed += copied;
+         if (read_head.size() == 0)
+         {
+            pending_read.pop_front();
+            read_head =
+               pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
+         }
+         swap_and_invoke(read_handler, boost::system::error_code{}, copied);
+         continue;
       }
-      swap_and_invoke(read_handler, boost::system::error_code{}, copied);
-      return;
-   }
 
-   if (eof_received)
-      swap_and_invoke(read_handler, boost::system::error_code{}, 0);
+      if (eof_received)
+      {
+         swap_and_invoke(read_handler, boost::system::error_code{}, 0);
+         continue;
+      }
+
+      break;
+   }
+   call_read_handler_active = false;
+
+   //
+   // Grant the peer more send credit only for what was actually delivered to the app -- see
+   // Http3ClientSession::consume_stream() for why this must not happen any earlier.
+   //
+   session.consume_stream(id, consumed);
 }
 
 // -------------------------------------------------------------------------------------------------
+
+void Http3ClientStream::start_write(WriteHandler&& handler, asio::const_buffer buffer)
+{
+   auto n = asio::buffer_size(buffer);
+   const bool is_eof = (n == 0);
+   logd("[{}] start_write: n={} is_eof={} queue_depth={}", log_prefix, n, is_eof,
+        write_queue.size());
+
+   //
+   // Once accepted, the caller's intent to end the request body is final -- delete_writer() must
+   // not inject another one.
+   //
+   if (is_eof)
+      eof_submitted = true;
+
+   const uint64_t token = next_write_token++;
+   bind_write_cancellation(handler, token);
+
+   const bool was_empty = write_queue.empty();
+   auto& w = write_queue.emplace_back();
+   if (n > 0)
+   {
+      auto* src = static_cast<const uint8_t*>(buffer.data());
+      w.storage.assign(src, src + n);
+   }
+   w.is_eof = is_eof;
+   w.handler = std::move(handler);
+   w.token = token;
+
+   if (!was_empty)
+      return; // queued behind whatever is currently draining
+
+   if (auto h3 = session.h3())
+      nghttp3_conn_resume_stream(h3, id);
+   session.wake_write();
+}
+
+void Http3ClientStream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
+{
+   // handler is empty for the synthetic EOF injected by delete_writer() -- nothing to bind.
+   if (!handler)
+      return;
+
+   auto cs = asio::get_associated_cancellation_slot(handler);
+   if (!cs.is_connected() || cs.has_handler())
+      return;
+
+   cs.assign([this, token](asio::cancellation_type_t ct)
+   {
+      //
+      // The write this token names may currently be the one data_reader()/on_write_consumed()
+      // are draining, or still waiting behind it -- either way, only its completion handler is
+      // detached here. storage/offered/confirmed/is_eof are deliberately left untouched:
+      // nghttp3/ngtcp2 may already be relying on that exact memory to finish sending this
+      // stream's bytes in order (there is no way to "un-offer" data once handed over), so
+      // draining continues in the background and finish_active_write() retires the entry once
+      // that completes.
+      //
+      for (auto& w : write_queue)
+      {
+         if (w.token != token || !w.handler)
+            continue;
+         logd("[{}] async_write: \x1b[1;31mcancelled\x1b[0m ({})", log_prefix, ct);
+         // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
+         asio::post(get_executor(), [handler = std::move(w.handler)]() mutable
+         { std::move(handler)(errc::make_error_code(errc::operation_canceled)); });
+         return;
+      }
+      // Already completed naturally before the cancellation was delivered -- nothing to do.
+   });
+}
 
 nghttp3_ssize Http3ClientStream::data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t* pflags)
 {
    if (veccnt == 0)
       return 0;
 
-   if (!pending_writes.empty())
+   if (write_queue.empty())
+      return NGHTTP3_ERR_WOULDBLOCK;
+
+   auto& w = write_queue.front();
+   if (w.offered < w.storage.size())
    {
-      in_flight_writes.emplace_back(std::move(pending_writes.front()));
-      pending_writes.pop_front();
-      auto& chunk = in_flight_writes.back();
-      vec[0].base = chunk.data();
-      vec[0].len = chunk.size();
-      if (eof_submitted && pending_writes.empty())
-      {
-         *pflags |= NGHTTP3_DATA_FLAG_EOF;
-         eof_sent_to_h3 = true;
-      }
+      vec[0].base = w.storage.data() + w.offered;
+      vec[0].len = w.storage.size() - w.offered;
+      w.offered = w.storage.size(); // don't re-offer these bytes on a repeat call -- see
+                                     // Http3PendingWrite's comment
       return 1;
    }
 
-   if (eof_submitted)
-   {
-      *pflags |= NGHTTP3_DATA_FLAG_EOF;
-      eof_sent_to_h3 = true;
-      return 0;
-   }
+   //
+   // Nothing new to offer for the head entry. If it's the EOF marker (storage is always empty),
+   // retire it now -- a FIN carries no stream bytes, so there is nothing for on_write_consumed()
+   // to report back. Otherwise this is nghttp3 asking again after already being offered
+   // everything we have; it must wait for that to be confirmed (on_write_consumed()) before
+   // there's anything new.
+   //
+   if (!w.is_eof)
+      return NGHTTP3_ERR_WOULDBLOCK;
 
-   return NGHTTP3_ERR_WOULDBLOCK;
+   *pflags |= NGHTTP3_DATA_FLAG_EOF;
+   eof_sent_to_h3 = true;
+   finish_active_write();
+   return 0;
 }
 
-void Http3ClientStream::on_write_consumed(size_t /*n*/)
+void Http3ClientStream::on_write_consumed(size_t n)
 {
-   // Nothing to do: user handlers already fired in async_write(), in_flight_writes are freed on
-   // stream destruction.
+   //
+   // n is the number of bytes of *stream* data ngtcp2 just committed to a packet, which also
+   // includes the HTTP/3 HEADERS frame nghttp3 sends ahead of any body -- e.g. the very first
+   // write_streams() call after async_submit() drains the headers before write_queue ever has an
+   // entry. Only attribute bytes to the head entry once there is one (and it isn't the EOF
+   // marker) to charge them against; clamp defensively in case a single packet still straddles
+   // the header/body boundary.
+   //
+   if (n == 0 || write_queue.empty() || write_queue.front().is_eof)
+      return;
+
+   auto& w = write_queue.front();
+   n = std::min(n, w.storage.size() - w.confirmed);
+   w.confirmed += n;
+   if (w.confirmed == w.storage.size())
+      finish_active_write();
+}
+
+void Http3ClientStream::finish_active_write()
+{
+   assert(!write_queue.empty());
+   auto& w = write_queue.front();
+
+   //
+   // ngtcp2 may still need this memory for retransmission until the bytes are acked; rather than
+   // tracking acks precisely, keep every chunk alive for the life of the stream (in_flight_writes
+   // is freed on stream destruction).
+   //
+   if (!w.storage.empty())
+      in_flight_writes.emplace_back(std::move(w.storage));
+   auto handler = std::move(w.handler);
+   write_queue.pop_front(); // invalidates w
+
+   if (handler)
+      swap_and_invoke(handler, boost::system::error_code{});
+
+   if (!write_queue.empty())
+   {
+      if (auto h3 = session.h3())
+         nghttp3_conn_resume_stream(h3, id);
+      session.wake_write();
+   }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -690,6 +884,9 @@ void Http3ClientStream::fail(boost::system::error_code ec)
       swap_and_invoke(response_handler, ec ? ec : boost::beast::http::error::end_of_stream,
                       client::Response{nullptr});
    }
+   for (auto& w : write_queue)
+      if (w.handler)
+         swap_and_invoke(w.handler, ec);
    maybe_close();
 }
 
@@ -704,13 +901,11 @@ void Http3ClientStream::delete_reader()
 
 void Http3ClientStream::delete_writer()
 {
+   // The user dropped the Request without ever writing an explicit EOF -- inject one now (staged
+   // behind whatever is currently active/queued, if anything), same as an explicit
+   // async_write({}) would.
    if (!eof_submitted)
-   {
-      eof_submitted = true;
-      if (auto h3 = session.h3())
-         nghttp3_conn_resume_stream(h3, id);
-      session.wake_write();
-   }
+      start_write(WriteHandler{}, asio::const_buffer{});
    maybe_close();
 }
 
@@ -1430,9 +1625,18 @@ int Http3ClientSession::h3_cb_stream_close(nghttp3_conn*, int64_t stream_id,
 int Http3ClientSession::h3_cb_recv_data(nghttp3_conn*, int64_t stream_id, const uint8_t* data,
                                         size_t datalen, void* user, void*)
 {
+   //
+   // Connection-level credit is granted immediately: it is a single pool shared with control/QPACK
+   // streams that nghttp3 manages on its own (the app never "reads" those), so withholding it here
+   // would stall unrelated traffic whenever this one stream's reader is slow. Only the *stream*-
+   // level credit for these bytes is deliberately deferred -- see
+   // Http3ClientSession::consume_stream(). Granting it only once the application actually reads
+   // the data (in Http3ClientStream::call_read_handler()) is what makes response-body
+   // backpressure real instead of nghttp3 buffering an unbounded backlog in pending_read while
+   // the peer keeps sending on *this* stream.
+   //
    auto self = static_cast<Http3ClientSession*>(user);
    ngtcp2_conn_extend_max_offset(self->conn_, datalen);
-   ngtcp2_conn_extend_max_stream_offset(self->conn_, stream_id, datalen);
    if (auto s = self->find_stream(stream_id))
       s->on_data_chunk(data, datalen);
    return 0;
