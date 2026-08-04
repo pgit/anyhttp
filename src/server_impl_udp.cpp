@@ -481,7 +481,14 @@ public:
    // Called from udp_on_read() when a packet arrives during the closing period.
    void resend_conn_close();
 
-   Http3Stream* find_stream(int64_t id);
+   //
+   // Returns a shared_ptr, not a raw pointer: callers routinely invoke user handlers on the
+   // stream they looked up, and those can drop the last reference to it (the coroutine they
+   // resume destroying its Request/Response), which erases the stream from streams_. Holding
+   // an owning reference for the duration of the lookup keeps that from becoming a
+   // use-after-free.
+   //
+   std::shared_ptr<Http3Stream> find_stream(int64_t id);
    Http3Stream* create_stream(int64_t id);
    void erase_stream(int64_t id);
 
@@ -758,10 +765,14 @@ void Http3Stream::call_read_handler()
    if (!read_handler || call_read_handler_active)
       return;
 
-   // The loop below may resume a coroutine that drops the last owning reference to this stream.
-   // Keep it alive until this function returns -- consume_stream() at the bottom still needs
-   // `id` and `session`.
+   //
+   // The loop below may resume a coroutine that drops the last owning reference to this stream --
+   // or to the whole Session, when that coroutine was the last user of the connection. Keep both
+   // alive until this function returns: consume_stream() at the bottom dereferences the session,
+   // so outliving the stream alone is not enough.
+   //
    auto self = shared_from_this();
+   auto session_guard = session.shared_from_this();
 
    call_read_handler_active = true;
    size_t consumed = 0;
@@ -786,6 +797,17 @@ void Http3Stream::call_read_handler()
       {
          // 0-byte read = EOF, matching the beast/nghttp2 convention.
          swap_and_invoke(read_handler, boost::system::error_code{}, 0);
+         continue;
+      }
+
+      if (closed)
+      {
+         //
+         // The stream died before the request body was complete, and this read was issued after
+         // the close -- there is nothing left that could ever complete it, so report the
+         // truncation now rather than leaving it pending forever.
+         //
+         swap_and_invoke(read_handler, boost::beast::http::error::partial_message, 0);
          continue;
       }
 
@@ -1073,6 +1095,7 @@ void Http3Stream::finish_active_write()
 
 void Http3Stream::delete_reader()
 {
+   auto self = shared_from_this(); // see delete_writer()
    pending_read.clear();
    read_head = {};
 
@@ -1095,6 +1118,12 @@ void Http3Stream::delete_reader()
 
 void Http3Stream::delete_writer()
 {
+   //
+   // The teardown paths below can run handlers that drop the last reference to this stream,
+   // erasing it from the session -- keep it alive until this function returns.
+   //
+   auto self = shared_from_this();
+
    //
    // Nothing to finalize on a stream ngtcp2 has already torn down (peer reset it, or we did):
    // there is nothing left to reset, and submitting anything would leave nghttp3 holding data for
@@ -1249,10 +1278,10 @@ void Http3Session::signal_done()
 
 // -------------------------------------------------------------------------------------------------
 
-Http3Stream* Http3Session::find_stream(int64_t id)
+std::shared_ptr<Http3Stream> Http3Session::find_stream(int64_t id)
 {
    auto it = streams_.find(id);
-   return it == streams_.end() ? nullptr : it->second.get();
+   return it == streams_.end() ? nullptr : it->second;
 }
 
 Http3Stream* Http3Session::create_stream(int64_t id)

@@ -1427,12 +1427,6 @@ TEST_P(ClientAsync, ClientDropRequest)
 
 TEST_P(ClientAsync, ResetServerDuringRequest)
 {
-   if (GetParam() == anyhttp::Protocol::h3)
-      GTEST_SKIP(); // TODO: tearing the server down mid-request triggers a pre-existing
-                    // use-after-free in the h3 server's stream teardown (Http3Stream::
-                    // call_read_handler() re-entered from an in-flight Http3Writer::async_write()
-                    // completion) -- needs its own investigation, unrelated to the h3 client.
-
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {});

@@ -315,7 +315,14 @@ public:
    const std::string& logPrefix() const noexcept { return log_prefix_; }
    nghttp3_conn* h3() const noexcept { return h3_; }
 
-   Http3ClientStream* find_stream(int64_t id);
+   //
+   // Returns a shared_ptr, not a raw pointer: callers routinely invoke user handlers on the
+   // stream they looked up, and those can drop the last reference to it (the coroutine they
+   // resume destroying its Request/Response), which erases the stream from streams_. Holding
+   // an owning reference for the duration of the lookup keeps that from becoming a
+   // use-after-free.
+   //
+   std::shared_ptr<Http3ClientStream> find_stream(int64_t id);
    Http3ClientStream* create_stream(int64_t id);
    void erase_stream(int64_t id);
 
@@ -640,10 +647,15 @@ void Http3ClientStream::call_read_handler()
    if (!read_handler || call_read_handler_active)
       return;
 
+   //
    // The loop below may resume a coroutine that drops the last owning reference to this stream
-   // (e.g. the Response gets destroyed once EOF is delivered). Keep it alive until this function
-   // returns -- consume_stream() at the bottom still needs `id` and `session`.
+   // (e.g. the Response gets destroyed once EOF is delivered) -- or to the whole Session, when
+   // that coroutine was the last user of the connection. Keep both alive until this function
+   // returns: consume_stream() at the bottom dereferences the session, so outliving the stream
+   // alone is not enough.
+   //
    auto self = shared_from_this();
+   auto session_guard = session.shared_from_this();
 
    call_read_handler_active = true;
    size_t consumed = 0;
@@ -667,6 +679,17 @@ void Http3ClientStream::call_read_handler()
       if (eof_received)
       {
          swap_and_invoke(read_handler, boost::system::error_code{}, 0);
+         continue;
+      }
+
+      if (closed)
+      {
+         //
+         // The stream died before the response body was complete, and this read was issued after
+         // fail() had already run -- there is nothing left that could ever complete it, so report
+         // the truncation now rather than leaving it pending forever.
+         //
+         swap_and_invoke(read_handler, boost::beast::http::error::partial_message, 0);
          continue;
       }
 
@@ -975,6 +998,7 @@ void Http3ClientStream::fail(boost::system::error_code ec)
 
 void Http3ClientStream::delete_reader()
 {
+   auto self = shared_from_this(); // see delete_writer()
    pending_read.clear();
    read_head = {};
    maybe_close();
@@ -982,6 +1006,12 @@ void Http3ClientStream::delete_reader()
 
 void Http3ClientStream::delete_writer()
 {
+   //
+   // reset_stream()/fail() below can run handlers that drop the last reference to this stream,
+   // erasing it from the session -- keep it alive until this function returns.
+   //
+   auto self = shared_from_this();
+
    //
    // Nothing to finalize on a stream ngtcp2 has already torn down (peer reset it, or we did):
    // there is nothing left to reset, and submitting anything would leave nghttp3 holding data for
@@ -1210,7 +1240,15 @@ awaitable<void> Http3ClientSession::do_session(Buffer&&)
          break; // handle_error() already tore things down.
    }
 
-   signal_ready(); // no-op if already signalled; unblocks a waiter if handshake never finished.
+   //
+   // The receive loop only ever ends because this connection is over: the socket errored out (ICMP
+   // reporting the peer's port unreachable, say), close() cancelled it, or on_read() hit a protocol
+   // error. Tear the session down in every case -- nothing else is running that could ever complete
+   // the requests still waiting on it, so leaving them pending hangs them forever. close() is
+   // idempotent, so the paths that already tore things down are unaffected, and it signals ready to
+   // unblock a waiter whose handshake never finished.
+   //
+   close();
    co_return;
 }
 
@@ -1261,10 +1299,10 @@ void Http3ClientSession::signal_ready()
 
 // -------------------------------------------------------------------------------------------------
 
-Http3ClientStream* Http3ClientSession::find_stream(int64_t id)
+std::shared_ptr<Http3ClientStream> Http3ClientSession::find_stream(int64_t id)
 {
    auto it = streams_.find(id);
-   return it == streams_.end() ? nullptr : it->second.get();
+   return it == streams_.end() ? nullptr : it->second;
 }
 
 Http3ClientStream* Http3ClientSession::create_stream(int64_t id)
