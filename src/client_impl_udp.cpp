@@ -154,7 +154,7 @@ void ngtcp2_log_printf(void* /*user*/, const char* fmt, ...) noexcept
 class Http3ClientSession;
 class Http3ClientStream;
 
-class Http3ClientStream
+class Http3ClientStream : public std::enable_shared_from_this<Http3ClientStream>
 {
 public:
    Http3ClientStream(Http3ClientSession& session, int64_t id);
@@ -528,6 +528,13 @@ Http3ClientStream::Http3ClientStream(Http3ClientSession& s, int64_t stream_id)
 Http3ClientStream::~Http3ClientStream()
 {
    logd("[{}] stream destroyed...", log_prefix);
+   // A Http3ClientWriter/Http3ClientReader (owned by the user-visible Request/Response) can
+   // outlive this stream, e.g. when the session tears down streams_ while a suspended coroutine
+   // still holds one. Detach them so their destructors don't dereference a freed stream.
+   if (reader)
+      reader->detach();
+   if (writer)
+      writer->detach();
    if (read_handler)
       swap_and_invoke(read_handler, errc::make_error_code(errc::connection_reset), 0);
    if (!response_delivered && response_handler)
@@ -667,6 +674,10 @@ void Http3ClientStream::deliver_response()
 
 void Http3ClientStream::fail(boost::system::error_code ec)
 {
+   // read_handler/response_handler may run synchronously and drop the last owning reference to
+   // this stream (e.g. the coroutine they resume destroys its Request/Response), reentrantly
+   // erasing it from Http3ClientSession::streams_. Keep it alive until fail() itself returns.
+   auto self = shared_from_this();
    closed = true;
    if (read_handler)
       swap_and_invoke(read_handler, ec, 0);

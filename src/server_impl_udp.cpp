@@ -656,6 +656,13 @@ Http3Stream::Http3Stream(Http3Session& s, int64_t stream_id) : id(stream_id), se
 Http3Stream::~Http3Stream()
 {
    mlogd("\x1b[33mStream: dtor... \x1b[0m");
+   // A Http3Writer/Http3Reader (owned by the user-visible Request/Response) can outlive this
+   // stream, e.g. when the session tears down streams_ while a suspended coroutine still holds
+   // one. Detach them so their destructors don't dereference a freed stream.
+   if (reader)
+      reader->detach();
+   if (writer)
+      writer->detach();
    if (read_handler)
       swap_and_invoke(read_handler, errc::make_error_code(errc::connection_reset), 0);
    mlogd("\x1b[33mStream: dtor... done\x1b[0m");
