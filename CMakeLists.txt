@@ -23,8 +23,8 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
     # add_link_options(-fsanitize=thread)
 
     # address sanitizer
-    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
-    add_link_options(-fsanitize=address)
+    # add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    # add_link_options(-fsanitize=address)
 endif()
 
 if (ENABLE_COVERAGE)
