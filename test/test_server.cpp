@@ -861,9 +861,6 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_THEN_can_resume)
 {
    if (GetParam() == anyhttp::Protocol::http11)
       GTEST_SKIP(); // a chunked body cannot be cancelled correctly --> disconnects
-   if (GetParam() == anyhttp::Protocol::h3)
-      GTEST_SKIP(); // TODO: the h3 client doesn't implement write-side backpressure yet --
-                    // async_write() always completes immediately, so there is nothing to cancel
 
    test = [this](Session session) -> awaitable<void>
    {
@@ -877,13 +874,26 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_THEN_can_resume)
                                     cancel_after(1s, as_tuple));
       EXPECT_EQ(code(ep), boost::system::errc::operation_canceled);
 
-      // now, with a closed window, we cannot even end the upload
-      std::tie(ep) = co_await co_spawn(executor, send_eof(request), cancel_after(1ms, as_tuple));
-      EXPECT_EQ(code(ep), boost::system::errc::operation_canceled);
+      if (GetParam() == anyhttp::Protocol::h3)
+      {
+         //
+         // QUIC: whether the FIN can slip out while the send window is closed depends on flow
+         // control timing, so don't assert either way here. What matters is that ending the
+         // upload and draining the response together complete the exchange.
+         //
+         auto received = co_await (send_eof(request) && count(response));
+         EXPECT_GT(received, 0);
+      }
+      else
+      {
+         // now, with a closed window, we cannot even end the upload
+         std::tie(ep) = co_await co_spawn(executor, send_eof(request), cancel_after(1ms, as_tuple));
+         EXPECT_EQ(code(ep), boost::system::errc::operation_canceled);
 
-      // as we have no control over when the send window is re-opened, wait for it in parallel
-      auto received = co_await (send_eof(request) && count(response));
-      EXPECT_GT(received, 0);
+         // as we have no control over when the send window is re-opened, wait for it in parallel
+         auto received = co_await (send_eof(request) && count(response));
+         EXPECT_GT(received, 0);
+      }
    };
 }
 
@@ -1203,9 +1213,14 @@ TEST_P(ClientAsync, Backpressure)
       // FIXME: count bytes sent, just like asio::async_write() does
       // FIXME: or even use asio::async_write() on top of a async_write_some() implementation
 
-      // Now that the flow control window is 0, we can't even send an EOF any more:
+      //
+      // Now that the flow control window is 0, we can't even send an EOF any more -- except over
+      // QUIC, where whether the FIN slips out without credit depends on flow control timing, so
+      // only assert that for the stream protocols.
+      //
       auto rc = co_await (send_eof(request) || sleep(100ms));
-      EXPECT_EQ(rc.index(), 1);
+      if (GetParam() != anyhttp::Protocol::h3)
+         EXPECT_EQ(rc.index(), 1);
 
       // So instead, we start doing this in background, to be resumed as soon as the window reopens.
       co_spawn(co_await this_coro::executor, send_eof(request), detached); // FIXME: join
@@ -1231,11 +1246,6 @@ TEST_P(ClientAsync, Backpressure)
 //
 TEST_P(ClientAsync, CancellationContentLength)
 {
-   if (GetParam() == anyhttp::Protocol::h3)
-      GTEST_SKIP(); // TODO: no write-side backpressure yet, see Backpressure above -- a single
-                    // large async_write() completes (and is copied) synchronously, so there is
-                    // nothing in flight for the cancellation race to interrupt.
-
    test = [this](Session session) -> awaitable<void>
    {
       const size_t length = 50ul * 1024 * 1024;
@@ -1283,9 +1293,6 @@ TEST_P(ClientAsync, CancellationContentLength)
 //
 TEST_P(ClientAsync, Cancellation)
 {
-   if (GetParam() == anyhttp::Protocol::h3)
-      GTEST_SKIP(); // TODO: no write-side backpressure yet, see Backpressure above.
-
    test = [this](Session session) -> awaitable<void>
    {
       const size_t length = 50ul * 1024 * 1024;
@@ -1329,9 +1336,6 @@ TEST_P(ClientAsync, Cancellation)
 //
 TEST_P(ClientAsync, CancellationRange)
 {
-   if (GetParam() == anyhttp::Protocol::h3)
-      GTEST_SKIP(); // TODO: no write-side backpressure yet, see Backpressure above.
-
    test = [this](Session session) -> awaitable<void>
    {
       for (size_t i = 6; i <= 6; ++i)

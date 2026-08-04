@@ -283,31 +283,12 @@ class Http3Session;
 class Http3Stream;
 
 //
-// One async_write() call's worth of response-body data, queued up for data_reader()/
-// on_write_consumed() to drain in order. `token` identifies it for bind_write_cancellation() --
-// cancellation only ever detaches `handler`; `storage`/`remaining` are left alone so the bytes
-// still reach nghttp3 in order regardless of queue position (nghttp3/ngtcp2 may already hold raw
-// pointers into `storage` and there is no way to "un-offer" them).
+// Bound on how much of the caller's async_write() buffer we copy into write_chunk at a time (see
+// Http3Stream's write_* members) -- copying is paced by how much nghttp3/ngtcp2 actually drains,
+// rather than copying a huge caller buffer in one synchronous allocation+memcpy, mirroring
+// nghttp2's own per-call copy into its frame buffer.
 //
-//
-// `offered` and `confirmed` are tracked separately because nghttp3 may call data_reader()
-// several times in a row for the same stream before ever reporting consumption back via
-// on_write_consumed() -- e.g. to gather more vecs than fit in a single call, up to `veccnt`. If
-// data_reader() just kept re-handing out storage[0, storage.size()) unconditionally (tracking
-// only "confirmed"), nghttp3 would treat each of those repeat offers as *additional*, distinct
-// stream bytes and duplicate the content on the wire. `offered` marks how much has already been
-// handed to nghttp3 (whether or not it has been placed in a packet yet) so a repeat call sees
-// nothing new and gets NGHTTP3_ERR_WOULDBLOCK instead.
-//
-struct Http3PendingWrite
-{
-   std::vector<uint8_t> storage;
-   size_t offered = 0;   // bytes already handed to nghttp3 via data_reader()
-   size_t confirmed = 0; // bytes on_write_consumed() has confirmed placed in a packet (<= offered)
-   bool is_eof = false;
-   WriteHandler handler;
-   uint64_t token = 0;
-};
+inline constexpr size_t kWriteChunkSize = 16 * 1024;
 
 class Http3Stream : public std::enable_shared_from_this<Http3Stream>
 {
@@ -347,18 +328,35 @@ public:
    bool call_read_handler_active = false; // re-entrancy guard, see call_read_handler()
 
    //
-   // Response body plumbing (server → client).
+   // Response body plumbing (server → client). Only one async_write() may be active at a time --
+   // callers must wait for its handler before issuing another (same contract as e.g. Beast) -- so
+   // this is flat per-stream state rather than a queue of pending writes. See the client-side
+   // counterpart (Http3ClientStream in client_impl_udp.cpp) for the fuller rationale.
    //
-   // write_queue.front() is what data_reader()/on_write_consumed() are currently draining; its
-   // bytes must stay put and be handed to nghttp3 in order, even if the async_write() call that
-   // submitted them gets cancelled while still in flight (cancellation only detaches the
-   // completion handler, see bind_write_cancellation()). Further async_write() calls queue up
-   // behind it -- normally callers only ever have one outstanding at a time, but a fresh one can
-   // legitimately arrive while an earlier (cancelled) write is still draining, since cancellation
-   // completes the caller's handler immediately without waiting for that drain. See the
-   // client-side counterpart (Http3ClientStream in client_impl_udp.cpp) for the fuller rationale.
+   // write_source is the caller's buffer, referenced (not copied) the way asio::async_write
+   // generally requires -- it must stay valid until write_handler fires (and no longer: nghttp3
+   // only ever gets pointers into write_chunk, our own copy, so once the handler has fired --
+   // including via cancellation -- the caller's buffer is no longer touched).
    //
-   std::deque<Http3PendingWrite> write_queue;
+   // write_chunk is a bounded (<= kWriteChunkSize) slice of write_source, lazily refilled by
+   // data_reader() as it's drained. write_offered and write_confirmed are tracked separately
+   // because nghttp3 may call data_reader() several times in a row for the same stream before ever
+   // reporting consumption back via on_write_consumed() -- e.g. to gather more vecs than fit in a
+   // single call. If data_reader() just kept re-handing out write_chunk[0, write_chunk.size())
+   // unconditionally (tracking only write_confirmed), nghttp3 would treat each repeat offer as
+   // *additional*, distinct stream bytes and duplicate the content on the wire. write_offered
+   // marks how much has already been handed to nghttp3 (whether or not it has been placed in a
+   // packet yet) so a repeat call sees nothing new and gets NGHTTP3_ERR_WOULDBLOCK instead.
+   //
+   bool write_active = false;
+   asio::const_buffer write_source;
+   size_t write_source_copied = 0;
+   std::vector<uint8_t> write_chunk;
+   size_t write_offered = 0;
+   size_t write_confirmed = 0;
+   bool write_is_eof = false;
+   WriteHandler write_handler;
+   uint64_t write_token = 0;
    uint64_t next_write_token = 1;
 
    std::vector<std::vector<uint8_t>> in_flight_writes; // kept alive for the stream's lifetime --
@@ -391,7 +389,7 @@ public:
 
 private:
    void bind_write_cancellation(WriteHandler& handler, uint64_t token); // arms cancellation
-   void finish_active_write(); // retires write_queue.front() once fully handed to nghttp3
+   void finish_active_write(); // completes the active write once fully handed to nghttp3
 
 public:
    // Called from either reader or writer destructor.
@@ -456,6 +454,28 @@ public:
          return;
       ngtcp2_conn_extend_max_stream_offset(conn_, stream_id, n);
       wake_write(); // a WINDOW_UPDATE-equivalent frame needs to go out
+   }
+
+   //
+   // Abort both directions of the stream (RESET_STREAM + STOP_SENDING), the QUIC equivalent of
+   // HTTP/2's RST_STREAM. nghttp3 learns of the dead write side through the existing
+   // NGTCP2_ERR_STREAM_SHUT_WR handling in write_streams().
+   //
+   void reset_stream(int64_t stream_id, uint64_t app_error_code)
+   {
+      ngtcp2_conn_shutdown_stream(conn_, 0, stream_id, app_error_code);
+      wake_write();
+   }
+
+   //
+   // Half-close just our read direction (STOP_SENDING), telling the peer to stop sending the
+   // request body while the response we are still writing keeps flowing. Fires the local
+   // stream_stop_sending callback, which is what tells nghttp3 about it.
+   //
+   void stop_reading(int64_t stream_id, uint64_t app_error_code)
+   {
+      ngtcp2_conn_shutdown_stream_read(conn_, 0, stream_id, app_error_code);
+      wake_write();
    }
 
    // Called from udp_on_read() when a packet arrives during the closing period.
@@ -700,9 +720,8 @@ Http3Stream::~Http3Stream()
       writer->detach();
    if (read_handler)
       swap_and_invoke(read_handler, errc::make_error_code(errc::connection_reset), 0);
-   for (auto& w : write_queue)
-      if (w.handler)
-         swap_and_invoke(w.handler, errc::make_error_code(errc::connection_reset));
+   if (write_active && write_handler)
+      swap_and_invoke(write_handler, errc::make_error_code(errc::connection_reset));
    mlogd("\x1b[33mStream: dtor... done\x1b[0m");
 }
 
@@ -843,32 +862,55 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer)
 {
    auto n = asio::buffer_size(buffer);
    const bool is_eof = (n == 0);
-   logd("[{}] start_write: n={} is_eof={} queue_depth={}", log_prefix, n, is_eof,
-        write_queue.size());
+   logd("[{}] start_write: n={} is_eof={}", log_prefix, n, is_eof);
+
+   // Only one async_write() may be active at a time -- see the class comment above write_active.
+   assert(!write_active);
 
    //
-   // Once accepted, the caller's intent to end the response body is final -- delete_writer() must
-   // not inject another one.
+   // Once accepted, the caller's intent to end the response body is final: this is what tells
+   // delete_writer() the body ended where it was meant to, so it need not reset the stream. An
+   // earlier cancellation just makes for a shorter body than planned -- legitimate here, and a
+   // declared content-length is still enforced by the peer.
    //
+   if (is_eof && eof_submitted)
+   {
+      //
+      // The body was already ended. If that FIN is still pending (its handler was detached by
+      // cancellation, see bind_write_cancellation()), adopt this handler so it completes when the
+      // FIN actually goes out; otherwise the FIN is long gone and there is nothing left to do.
+      //
+      if (write_active && write_is_eof)
+      {
+         logd("[{}] start_write: FIN already pending, adopting handler", log_prefix);
+         bind_write_cancellation(handler, write_token);
+         write_handler = std::move(handler);
+      }
+      else if (handler)
+      {
+         asio::any_completion_executor ex =
+            asio::get_associated_immediate_executor(handler, get_executor());
+         ex.execute([handler = std::move(handler)]() mutable
+         { std::move(handler)(boost::system::error_code{}); });
+      }
+      return;
+   }
+
    if (is_eof)
       eof_submitted = true;
 
    const uint64_t token = next_write_token++;
    bind_write_cancellation(handler, token);
 
-   const bool was_empty = write_queue.empty();
-   auto& w = write_queue.emplace_back();
-   if (n > 0)
-   {
-      auto* src = static_cast<const uint8_t*>(buffer.data());
-      w.storage.assign(src, src + n);
-   }
-   w.is_eof = is_eof;
-   w.handler = std::move(handler);
-   w.token = token;
-
-   if (!was_empty)
-      return; // queued behind whatever is currently draining
+   write_active = true;
+   write_source = buffer; // referenced, not copied -- see class comment above write_active
+   write_source_copied = 0;
+   write_chunk.clear();
+   write_offered = 0;
+   write_confirmed = 0;
+   write_is_eof = is_eof;
+   write_token = token;
+   write_handler = std::move(handler);
 
    if (auto h3 = session.h3())
       nghttp3_conn_resume_stream(h3, id);
@@ -877,7 +919,7 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer)
 
 void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
 {
-   // handler is empty for the synthetic EOF injected by delete_writer() -- nothing to bind.
+   // Nothing to bind for a caller that passed no completion handler.
    if (!handler)
       return;
 
@@ -888,25 +930,38 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
    cs.assign([this, token](asio::cancellation_type_t ct)
    {
       //
-      // The write this token names may currently be the one data_reader()/on_write_consumed()
-      // are draining, or still waiting behind it -- either way, only its completion handler is
-      // detached here. storage/offered/confirmed/is_eof are deliberately left untouched:
-      // nghttp3/ngtcp2 may already be relying on that exact memory to finish sending this
-      // stream's bytes in order (there is no way to "un-offer" data once handed over), so
-      // draining continues in the background and finish_active_write() retires the entry once
-      // that completes.
+      // Cancellation completes the write immediately: nghttp3/ngtcp2 only ever hold pointers into
+      // write_chunk (our own copy), never into the caller's buffer, so the un-copied remainder of
+      // write_source can simply be abandoned. Bytes already offered to nghttp3 still go out (they
+      // can't be un-offered), so write_chunk is retired to in_flight_writes to keep that memory
+      // alive. The caller may issue a fresh async_write() as soon as the handler fires.
       //
-      for (auto& w : write_queue)
+      if (write_token != token || !write_handler)
+         return; // already completed naturally before the cancellation was delivered
+
+      if (write_is_eof)
       {
-         if (w.token != token || !w.handler)
-            continue;
-         logd("[{}] async_write: \x1b[1;31mcancelled\x1b[0m ({})", log_prefix, ct);
-         // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
-         asio::post(get_executor(), [handler = std::move(w.handler)]() mutable
-         { std::move(handler)(errc::make_error_code(errc::operation_canceled)); });
+         //
+         // The body has already been declared ended, and a FIN cannot be un-sent -- it may just
+         // still be waiting for flow control credit. Detach the handler but leave the write
+         // active so it still goes out: abandoning it would leave the stream half-open forever,
+         // with the peer waiting for an end that never comes.
+         //
+         logd("[{}] async_write: \x1b[1;31mcancelled\x1b[0m ({}), FIN still pending", log_prefix,
+              ct);
+         asio::post(get_executor(), [handler = std::move(write_handler)]() mutable { //
+            std::move(handler)(errc::make_error_code(errc::operation_canceled));
+         });
          return;
       }
-      // Already completed naturally before the cancellation was delivered -- nothing to do.
+      logd("[{}] async_write: \x1b[1;31mcancelled\x1b[0m ({})", log_prefix, ct);
+      if (!write_chunk.empty())
+         in_flight_writes.emplace_back(std::move(write_chunk));
+      write_chunk.clear(); // moved-from
+      write_active = false;
+      // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
+      asio::post(get_executor(), [handler = std::move(write_handler)]() mutable
+      { std::move(handler)(errc::make_error_code(errc::operation_canceled)); });
    });
 }
 
@@ -915,27 +970,54 @@ nghttp3_ssize Http3Stream::data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t
    if (veccnt == 0)
       return 0;
 
-   if (write_queue.empty())
+   if (!write_active)
       return NGHTTP3_ERR_WOULDBLOCK;
 
-   auto& w = write_queue.front();
-   if (w.offered < w.storage.size())
+   if (write_offered < write_chunk.size())
    {
-      vec[0].base = w.storage.data() + w.offered;
-      vec[0].len = w.storage.size() - w.offered;
-      w.offered = w.storage.size(); // don't re-offer these bytes on a repeat call -- see
-                                     // Http3PendingWrite's comment
+      vec[0].base = write_chunk.data() + write_offered;
+      vec[0].len = write_chunk.size() - write_offered;
+      write_offered = write_chunk.size(); // don't re-offer these bytes on a repeat call -- see
+                                          // class comment above write_active
       return 1;
    }
 
    //
-   // Nothing new to offer for the head entry. If it's the EOF marker (storage is always empty),
-   // retire it now -- a FIN carries no stream bytes, so there is nothing for on_write_consumed()
-   // to report back. Otherwise this is nghttp3 asking again after already being offered
-   // everything we have; it must wait for that to be confirmed (on_write_consumed()) before
-   // there's anything new.
+   // Current chunk fully offered. If it hasn't been confirmed yet (on_write_consumed()), there's
+   // nothing new until that happens -- see the class comment above write_active on why we can't
+   // just carve off the next slice of write_source early.
    //
-   if (!w.is_eof)
+   if (write_confirmed < write_chunk.size())
+      return NGHTTP3_ERR_WOULDBLOCK;
+
+   //
+   // The current chunk is fully drained; retire it (ngtcp2 may still need this exact memory for
+   // retransmission until acked) and pull the next bounded slice out of write_source, if any.
+   //
+   if (!write_chunk.empty())
+      in_flight_writes.emplace_back(std::move(write_chunk));
+
+   const size_t remaining = asio::buffer_size(write_source) - write_source_copied;
+   if (remaining > 0)
+   {
+      const size_t take = std::min(remaining, kWriteChunkSize);
+      auto* src = static_cast<const uint8_t*>(write_source.data()) + write_source_copied;
+      write_chunk.assign(src, src + take);
+      write_source_copied += take;
+      write_offered = write_chunk.size();
+      write_confirmed = 0;
+      vec[0].base = write_chunk.data();
+      vec[0].len = write_chunk.size();
+      return 1;
+   }
+
+   //
+   // Nothing left in write_source either. If this is the EOF marker (write_source is always
+   // empty), retire it now -- a FIN carries no stream bytes, so there is nothing for
+   // on_write_consumed() to report back. A non-EOF write with nothing left to offer is instead
+   // retired from on_write_consumed() once its last chunk is confirmed (see there).
+   //
+   if (!write_is_eof)
       return NGHTTP3_ERR_WOULDBLOCK;
 
    *pflags |= NGHTTP3_DATA_FLAG_EOF;
@@ -949,45 +1031,42 @@ void Http3Stream::on_write_consumed(size_t n)
    //
    // n is the number of bytes of *stream* data ngtcp2 just committed to a packet, which also
    // includes the HTTP/3 HEADERS frame nghttp3 sends ahead of any body -- e.g. the very first
-   // write_pkt() call after submit_response() drains the headers before write_queue ever has an
-   // entry. Only attribute bytes to the head entry once there is one (and it isn't the EOF
-   // marker) to charge them against; clamp defensively in case a single packet still straddles
-   // the header/body boundary.
+   // write_pkt() call after submit_response() drains the headers before there is an active write
+   // yet. Only attribute bytes once there is an active, non-EOF write to charge them against;
+   // clamp defensively in case a single packet still straddles the header/body boundary.
    //
-   if (n == 0 || write_queue.empty() || write_queue.front().is_eof)
+   if (n == 0 || !write_active || write_is_eof)
       return;
 
-   auto& w = write_queue.front();
-   n = std::min(n, w.storage.size() - w.confirmed);
-   w.confirmed += n;
-   if (w.confirmed == w.storage.size())
+   n = std::min(n, write_chunk.size() - write_confirmed);
+   write_confirmed += n;
+
+   // The write is fully done once its current chunk is confirmed and there is no more of
+   // write_source left to carve into further chunks -- data_reader() advances write_chunk/
+   // write_source_copied otherwise, so this is the terminal state.
+   if (write_confirmed == write_chunk.size() &&
+       write_source_copied == asio::buffer_size(write_source))
       finish_active_write();
 }
 
 void Http3Stream::finish_active_write()
 {
-   assert(!write_queue.empty());
-   auto& w = write_queue.front();
+   assert(write_active);
 
    //
    // ngtcp2 may still need this memory for retransmission until the bytes are acked; rather than
    // tracking acks precisely, keep every chunk alive for the life of the stream (in_flight_writes
    // is freed on stream destruction).
    //
-   if (!w.storage.empty())
-      in_flight_writes.emplace_back(std::move(w.storage));
-   auto handler = std::move(w.handler);
-   write_queue.pop_front(); // invalidates w
+   if (!write_chunk.empty())
+      in_flight_writes.emplace_back(std::move(write_chunk));
+   write_chunk.clear(); // moved-from
+   auto handler = std::move(write_handler);
+   write_active = false;
 
    if (handler)
       swap_and_invoke(handler, boost::system::error_code{});
 
-   if (!write_queue.empty())
-   {
-      if (auto h3 = session.h3())
-         nghttp3_conn_resume_stream(h3, id);
-      session.wake_write();
-   }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -996,11 +1075,38 @@ void Http3Stream::delete_reader()
 {
    pending_read.clear();
    read_head = {};
+
+   //
+   // The handler dropped the Request without reading the body to its end (e.g. not_found(), which
+   // never looks at it). Stream-level flow control credit is only granted as the application
+   // actually reads (see Http3Session::consume_stream()), so a peer with more body to send would
+   // stall forever against a window that will now never reopen. Tell it to stop instead:
+   // STOP_SENDING half-closes only our read direction, leaving the response we are still writing
+   // to flow normally -- HTTP/2 has to submit a full RST_STREAM here for lack of a half-close.
+   //
+   if (!eof_received && !closed)
+   {
+      logd("[{}] delete_reader: request body not read to end, sending STOP_SENDING", log_prefix);
+      session.stop_reading(id, NGHTTP3_H3_NO_ERROR);
+   }
+
    maybe_close();
 }
 
 void Http3Stream::delete_writer()
 {
+   //
+   // Nothing to finalize on a stream ngtcp2 has already torn down (peer reset it, or we did):
+   // there is nothing left to reset, and submitting anything would leave nghttp3 holding data for
+   // a stream that no longer exists, which it would then offer for sending forever.
+   //
+   if (closed)
+   {
+      logd("[{}] delete_writer: stream already closed", log_prefix);
+      maybe_close();
+      return;
+   }
+
    if (!response_submitted)
    {
       //
@@ -1020,10 +1126,21 @@ void Http3Stream::delete_writer()
       return;
    }
 
-   // If the writer is deleted before EOF was submitted, synthesize one (staged behind whatever is
-   // currently active/queued, if anything) so nghttp3 finalizes the stream.
    if (!eof_submitted)
-      start_write(WriteHandler{}, asio::const_buffer{});
+   {
+      //
+      // The Response was dropped without ever ending the body (async_write({})), so wherever it
+      // stopped is not where it was meant to stop. Sending a FIN here would present that partial
+      // response to the client as a complete one -- reset the stream instead, the same way the
+      // no-response case above aborts at the transport level, and matching the client's
+      // Http3ClientStream::delete_writer().
+      //
+      logw("[{}] delete_writer: response body never ended, resetting stream", log_prefix);
+      session.reset_stream(id, NGHTTP3_H3_REQUEST_CANCELLED);
+      closed = true;
+      maybe_close();
+      return;
+   }
    maybe_close();
 }
 
@@ -1323,6 +1440,7 @@ ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uin
                                      size_t destlen, ngtcp2_tstamp ts)
 {
    std::array<nghttp3_vec, 16> vec;
+   int64_t shut_down_stream = -1; // see NGTCP2_ERR_STREAM_NOT_FOUND below
 
    for (;;)
    {
@@ -1368,6 +1486,24 @@ ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uin
             if (h3_ && stream_id >= 0)
                nghttp3_conn_shutdown_stream_write(h3_, stream_id);
             continue;
+         case NGTCP2_ERR_STREAM_NOT_FOUND:
+            //
+            // ngtcp2 has already torn the stream down (the peer reset it, or we did) while
+            // nghttp3 still had response data queued for it. That's a dead stream, not a dead
+            // connection -- tell nghttp3 so it stops offering it and keep serving the others.
+            // Should nghttp3 offer the same stream again anyway, stop packing this packet rather
+            // than spinning here forever.
+            //
+            if (h3_ && stream_id >= 0 && stream_id != shut_down_stream)
+            {
+               logw("[{}] write_pkt: stream {} is gone, shutting down its write side", log_prefix_,
+                    stream_id);
+               nghttp3_conn_shutdown_stream_write(h3_, stream_id);
+               nghttp3_conn_block_stream(h3_, stream_id);
+               shut_down_stream = stream_id;
+               continue;
+            }
+            return 0;
          case NGTCP2_ERR_WRITE_MORE:
             if (h3_ && stream_id >= 0 && ndatalen > 0)
             {
@@ -2015,7 +2151,7 @@ int Server::Impl::udp_on_read(Endpoint& ep)
    for (size_t pktcnt = 0; pktcnt < 32; ++pktcnt)
    {
       if (pktcnt)
-         std::println("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ", pktcnt);
+         logd("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ", pktcnt);
       msg.msg_namelen = sizeof(su);
       msg.msg_controllen = sizeof(msg_ctrl);
 

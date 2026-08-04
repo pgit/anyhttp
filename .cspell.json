@@ -56,7 +56,8 @@
         "STREQUAL",
         "testcases",
         "TLSEXT",
-        "TSAN"
+        "TSAN",
+        "WOULDBLOCK"
     ],
     "ignorePaths": [
         ".devcontainer/*",
