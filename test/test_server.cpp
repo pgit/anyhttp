@@ -572,18 +572,15 @@ TEST_P(ExternalTLS, h2load)
 // =================================================================================================
 
 //
-// Non-parametrized fixture for external tests that are inherently tied to a single protocol --
-// either because the tool itself only ever speaks one (h2spec, nc_crazy_chunked's raw chunked-
-// encoding probe), or because the test doesn't touch HTTP at all (echo). Keeping these out of the
-// External/Protocol::* matrix avoids dead skip branches and needless repetition.
+// Non-parametrized fixture for external tests that are tied to a specific protocol.
 //
-class ExternalSingleProtocol : public External
+class ExternalCustom : public External
 {
 };
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_F(ExternalSingleProtocol, netcat_crazy_chunked)
+TEST_F(ExternalCustom, netcat_crazy_chunked)
 {
    auto cmd =
       std::format("nc 127.0.0.2 {} <test/data/crazy-chunked.txt", server->local_endpoint().port());
@@ -595,7 +592,7 @@ TEST_F(ExternalSingleProtocol, netcat_crazy_chunked)
    EXPECT_TRUE(out.contains("Hello, World!\n"));
 }
 
-TEST_F(ExternalSingleProtocol, nghttp2)
+TEST_F(ExternalCustom, nghttp2)
 {
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    auto future = spawn(NGHTTP_PATH, {"-d", testFile.string(), url});
@@ -604,7 +601,7 @@ TEST_F(ExternalSingleProtocol, nghttp2)
    EXPECT_EQ(future.get().size(), testFileSize);
 }
 
-TEST_F(ExternalSingleProtocol, h2spec)
+TEST_F(ExternalCustom, h2spec)
 {
    auto future = spawn("bin/h2spec", {"--host", server->local_endpoint().address().to_string(),
                                       "--port", std::to_string(server->local_endpoint().port()),
@@ -758,8 +755,6 @@ TEST_P(ClientAsync, WHEN_server_discards_request_THEN_error_500)
       co_await send(request, 1024);
       auto [ec, response] = co_await request.async_get_response(as_tuple);
       EXPECT_TRUE(ec);
-      // EXPECT_EQ(response.status_code(), 500);
-      // auto received = co_await receive(response);
    };
 }
 
@@ -950,7 +945,6 @@ TEST_P(ClientAsync, HelloWorld)
    {
       co_await response.async_submit(200, {});
       co_await response.async_write_eof(asio::buffer(hello));
-      // co_await response.async_write({});
    };
    test = [this](Session session) -> awaitable<void>
    {
@@ -977,7 +971,7 @@ TEST_P(ClientAsync, ServerYieldFirst)
    {
       auto request = co_await session.async_submit(url);
       co_await request.async_write({});
-      co_await (read_response(request) || sleep(2s));
+      co_await read_response(request);
    };
 }
 
@@ -1396,10 +1390,7 @@ TEST_P(ClientAsync, CancelAfter)
    };
 }
 
-//
-// Send more than content length allows.
-//
-TEST_P(ClientAsync, SendMoreThanContentLength)
+TEST_P(ClientAsync, WHEN_send_more_than_content_length_THEN_connection_is_reset)
 {
    test = [this](Session session) -> awaitable<void>
    {
@@ -1408,7 +1399,10 @@ TEST_P(ClientAsync, SendMoreThanContentLength)
       auto request = co_await session.async_submit(url.set_path("eat_request"), fields);
       auto response = co_await request.async_get_response();
       co_await count(response);
-      co_await send(request, rv::iota(uint8_t(0)) | rv::take(10 * 1024 + 1));
+
+      auto ex = co_await this_coro::executor;
+      auto [ep] = co_await co_spawn(ex, send(request, rv::iota(uint8_t(0))), as_tuple);
+      EXPECT_EQ(code(ep), boost::system::errc::connection_reset);
    };
 }
 
