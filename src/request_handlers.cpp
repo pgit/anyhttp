@@ -279,7 +279,7 @@ awaitable<void> send_eof(client::Request& request)
 
 awaitable<void> h2spec(server::Request request, server::Response response)
 {
-   co_await yield(10);
+   co_await yield(10); // FIXME: without this, one more testcase fails
    std::array<uint8_t, 1024> buffer;
    size_t n = co_await request.async_read_some(asio::buffer(buffer));
 

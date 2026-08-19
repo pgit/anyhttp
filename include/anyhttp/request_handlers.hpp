@@ -3,8 +3,10 @@
 #include "anyhttp/client.hpp"
 #include "anyhttp/server.hpp"
 
+#include <charconv>
 #include <exception>
 #include <expected>
+#include <ranges>
 
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/awaitable.hpp>
@@ -89,23 +91,23 @@ concept ByteRange =
 // FIXME: Do we really need to restrict to "borrowed range" here? The range is kept alive in
 //        the coroutine frame, so we do not need to worry about it's lifetime.
 //
-template <ByteRange Range>
+template <typename Writer, ByteRange Range>
    requires std::ranges::contiguous_range<Range>
-awaitable<void> send(client::Request& request, Range range)
+awaitable<void> send(Writer& request, Range range)
 {
-   logi("send: (contiguous range)...");
+   logd("send: (contiguous range)...");
    co_await request.async_write(asio::buffer(range.data(), range.size()));
-   logi("send: (contiguous range)... done");
+   logd("send: (contiguous range)... done");
 }
 
 //
 // For a non-contiguous range, we need to copy into a buffer first.
 //
-template <ByteRange Range>
+template <typename Writer, ByteRange Range>
    requires (!std::ranges::contiguous_range<Range>)
-awaitable<void> send(client::Request& request, Range range)
+awaitable<void> send(Writer& request, Range range)
 {
-   logi("send:");
+   logd("send:");
    size_t bytes = 0;
    std::array<uint8_t, 16 * 1024> buffer;
    for (auto chunk : range | ranges::views::chunk(buffer.size()))
@@ -144,13 +146,12 @@ awaitable<void> send(client::Request& request, Range range)
 #endif
    }
 
-   logi("send: (range) sent {} bytes", bytes);
+   logd("send: (range) sent {} bytes", bytes);
 }
 
 // -------------------------------------------------------------------------------------------------
 
-template <typename Range>
-   requires ByteRange<Range>
+template <ByteRange Range>
 awaitable<void> sendAndDrop(client::Request request, Range range)
 {
 #if 0
@@ -176,21 +177,9 @@ awaitable<void> sendAndDrop(client::Request request, Range range)
 
 // -------------------------------------------------------------------------------------------------
 
-template <typename Range>
-   requires ByteRange<Range>
-awaitable<void> sendAndForceEOF(client::Request& request, Range range)
+template <typename Writer, ByteRange Range>
+awaitable<void> sendAndForceEOF(Writer& request, Range range)
 {
-#if 0
-   try
-   {
-      co_await send(request, range);
-   }
-   catch (const boost::system::system_error& ec)
-   {
-      loge("sendAndForceEOF: {}", ec.code().message());
-   }
-   co_await asio::this_coro::reset_cancellation_state();
-#else
    using namespace asio;
    auto ex = co_await this_coro::executor;
    if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
@@ -198,9 +187,33 @@ awaitable<void> sendAndForceEOF(client::Request& request, Range range)
       loge("sendAndForceEOF: {}", what(ep));
       co_await asio::this_coro::reset_cancellation_state();
    }
-#endif
    auto [ec] = co_await request.async_write({}, as_tuple(deferred));
-   // co_await send_eof(request);
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// Generate a body of the requested length, e.g. "/generate?length=1000000". The payload is a
+// repeating 0..255 byte pattern.
+//
+inline awaitable<void> generate(server::Request request, server::Response response)
+{
+   namespace rv = std::ranges::views;
+
+   size_t length = 0;
+   const auto param = request.url().params().get_or("length");
+   auto [ptr, ec] = std::from_chars(param.data(), param.data() + param.size(), length);
+   if (ec != std::errc{} || ptr != param.data() + param.size())
+   {
+      logw("generate: invalid length '{}'", param);
+      co_await response.async_submit(400, {});
+      co_await response.async_write({});
+      co_return;
+   }
+
+   logd("generate: {} bytes", length);
+   co_await response.async_submit(200, fields({{"Content-Length", length}}));
+   co_await sendAndForceEOF(response, rv::iota(uint8_t(0)) | rv::take(length));
 }
 
 // -------------------------------------------------------------------------------------------------
