@@ -270,7 +270,6 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    // socket.set_option(sb::send_buffer_size(8192));
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 
-
    auto executor = co_await boost::asio::this_coro::executor;
    auto buffer = boost::beast::flat_buffer();
 

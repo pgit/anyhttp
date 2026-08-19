@@ -12,6 +12,7 @@
         "darkbase",
         "dcid",
         "dcidlen",
+        "demuxed",
         "ECDH",
         "Eisenlohr",
         "epoll",
