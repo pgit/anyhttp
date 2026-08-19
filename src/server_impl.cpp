@@ -287,8 +287,8 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, NULL);
 
       //
-      // TODO: This is a testing key only. Still, we might want to remove it from the repository
-      //       to avoid flagging repository scanners.
+      // This is a testing key only. It is not in the repository, but generated at build time
+      // by the 'pki' target (see cmake/pki.cmake).
       //
       ctx.use_certificate_chain_file("pki/out/server-chain.pem");
       ctx.use_private_key_file("pki/out/server-key.pem", asio::ssl::context::pem);
