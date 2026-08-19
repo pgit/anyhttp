@@ -423,7 +423,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    }
 
    for (auto nv : nva)
-      mlogd("  {}", nv);
+      logd("[{0}]   \x1b[1;34m{1:n}\x1b[0m: {1:v}", stream->logPrefix, nv);
 
    //
    // https://nghttp2.org/documentation/types.html#c.nghttp2_data_source_read_callback
