@@ -7,6 +7,10 @@
 
 #include <memory>
 #include <set>
+#include <unordered_map>
+
+// Forward declaration so we don't drag <ngtcp2/ngtcp2.h> into every translation unit.
+struct ngtcp2_cid;
 
 namespace anyhttp
 {
@@ -48,6 +52,7 @@ public:
 // =================================================================================================
 
 struct Endpoint;
+class Http3Session;
 
 class Server::Impl : public std::enable_shared_from_this<Server::Impl>
 {
@@ -84,6 +89,14 @@ public:
    asio::awaitable<void> udp_receive_loop();
    int udp_on_read(Endpoint& ep);
 
+   //
+   // QUIC connection-ID demux table. Populated by QuicHandler as new source CIDs are minted,
+   // consulted by udp_on_read() to route packets to the right connection.
+   //
+   void associate_quic_cid(const ngtcp2_cid& cid, Http3Session* session);
+   void dissociate_quic_cid(const ngtcp2_cid& cid);
+   void erase_quic_session(Http3Session* h);
+
 private:
    Config m_config;
 
@@ -93,6 +106,8 @@ private:
 
    std::mutex m_sessionMutex;
    std::set<std::shared_ptr<Session::Impl>> m_sessions;
+
+   std::unordered_map<std::string, std::shared_ptr<Http3Session>> m_quic_handlers;
 
    RequestHandler m_requestHandler;
    RequestHandlerCoro m_requestHandlerCoro;

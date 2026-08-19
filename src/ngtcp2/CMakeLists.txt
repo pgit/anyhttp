@@ -1,6 +1,5 @@
-pkg_check_modules(NGHTTP3 REQUIRED IMPORTED_TARGET libnghttp3)
-pkg_check_modules(NGTCP2  REQUIRED IMPORTED_TARGET libngtcp2)
-pkg_check_modules(NGTCP2_CRYPTO_OSSL      REQUIRED IMPORTED_TARGET libngtcp2_crypto_ossl)
+# NGTCP2, NGHTTP3, NGTCP2_CRYPTO_OSSL are declared at parent scope in ../CMakeLists.txt
+# so they can be linked into the main anyhttp library as well.
 pkg_check_modules(NGTCP2_CRYPTO_BORINGSSL REQUIRED IMPORTED_TARGET libngtcp2_crypto_boringssl)
 
 #

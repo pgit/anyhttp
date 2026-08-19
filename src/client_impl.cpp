@@ -25,12 +25,21 @@
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
 
+#include <utility>
+
 using namespace std::chrono_literals;
 using namespace boost::asio;
 
 namespace anyhttp::client
 {
 using namespace asio::experimental::awaitable_operators;
+
+//
+// Defined in client_impl_udp.cpp -- kept out of client_impl.hpp so that this file doesn't need to
+// drag in ngtcp2/nghttp3 headers just to declare it.
+//
+awaitable<std::shared_ptr<Session::Impl>> async_connect_http3(asio::any_io_executor executor,
+                                                               std::string host, std::string port);
 
 // =================================================================================================
 
@@ -91,6 +100,13 @@ awaitable<Session> Client::Impl::async_connect()
    //
    std::string host = config().url.host_address();
    std::string port = config().url.port();
+
+   //
+   // HTTP/3 runs over QUIC (UDP), so it needs an entirely different transport setup (TLS,
+   // handshake, ...) than the TCP-based http11/h2 paths below.
+   //
+   if (config().protocol == Protocol::h3)
+      co_return Session{co_await async_connect_http3(m_executor, host, port)};
 
    std::vector<ip::tcp::endpoint> endpoints;
    logd("Client: resolving {}:{} ...", host, port);
@@ -157,8 +173,8 @@ awaitable<Session> Client::Impl::async_connect()
       break;
 
    case anyhttp::Protocol::h3:
-      using namespace boost::system;
-      throw system_error(errc::make_error_code(errc::invalid_argument));
+      // handled above, before the TCP resolve/connect
+      std::unreachable();
    };
 
    //

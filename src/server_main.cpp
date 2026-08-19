@@ -14,8 +14,8 @@
 
 #include <expected>
 #include <iostream>
-#include <ranges>
 #include <print>
+#include <ranges>
 
 namespace rv = std::ranges::views;
 
@@ -103,6 +103,8 @@ int main(int argc, char* argv[])
       std::string path = request.url().path();
       if (path == "/echo")
          co_await echo(std::move(request), std::move(response));
+      else if (path == "/generate")
+         co_await generate(std::move(request), std::move(response));
       else if (path == "/dump")
          co_await dump(std::move(request), std::move(response));
       else if (path == "/dump space")

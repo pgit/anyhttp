@@ -20,8 +20,10 @@
 #include <boost/url/pct_string_view.hpp>
 
 #include <chrono>
+#include <format>
 #include <iostream>
 #include <memory>
+#include <string_view>
 
 // =================================================================================================
 
@@ -36,8 +38,7 @@ using error_code = boost::system::error_code;
 
 enum class Protocol
 {
-   h1,
-   http11 = h1,
+   http11,
    h2,
    h3
 };
@@ -49,6 +50,53 @@ std::ostream& operator<<(std::ostream& str, Protocol protocol);
 
 using Fields = boost::beast::http::fields;
 static_assert(boost::beast::http::is_fields<Fields>::value);
+
+//
+// A header value as passed to fields() below: either something string-like, or anything
+// std::format can turn into a string, so sizes and counts need no conversion at the call site.
+//
+// String-like values are only referenced, never copied: a FieldValue lives just long enough for
+// fields() to hand the bytes to Beast, which copies them. Only formatted values need storage.
+//
+class FieldValue
+{
+public:
+   template <typename T>
+      requires std::formattable<const T&, char>
+   FieldValue(const T& value)
+   {
+      if constexpr (std::convertible_to<const T&, std::string_view>)
+         view = value;
+      else
+      {
+         buffer = std::format("{}", value);
+         view = buffer;
+      }
+   }
+
+   /// 'view' may point into 'buffer', so a copy would alias the original's storage.
+   FieldValue(const FieldValue&) = delete;
+
+   operator std::string_view() const noexcept { return view; }
+
+private:
+   std::string_view view;
+   std::string buffer; // only ever used for a value that had to be formatted
+};
+
+//
+// Beast's fields have no initializer-list constructor, so building a small, fixed set of headers
+// takes a statement per header. This lets it be spelled inline:
+//
+//    fields({{"Content-Length", body.size()}, {"Content-Type", "text/plain"}})
+//
+inline Fields fields(std::initializer_list<std::pair<std::string_view, FieldValue>> headers)
+{
+   Fields result;
+   for (auto&& [name, value] : headers)
+      result.set(name, std::string_view(value));
+   return result;
+}
 
 using ReadSome = void(boost::system::error_code, size_t);
 using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
@@ -94,7 +142,7 @@ public:
    virtual void destroy() {};
 };
 
-class Writer: public std::enable_shared_from_this<Writer>
+class Writer : public std::enable_shared_from_this<Writer>
 {
 public:
    virtual ~Writer() = default;

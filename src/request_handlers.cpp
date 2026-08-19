@@ -50,9 +50,8 @@ namespace anyhttp
 
 awaitable<void> yield(size_t count)
 {
-   auto executor = co_await asio::this_coro::executor;
    for (size_t i = 0; i < count; ++i)
-      co_await post(executor, asio::deferred);
+      co_await post(asio::deferred);
 }
 
 awaitable<void> dump(server::Request request, server::Response response)
@@ -72,11 +71,10 @@ awaitable<void> dump(server::Request request, server::Response response)
       std::println(str, "  {}={} ({})", key, EscapedString(value), _);
    std::println(str, "fragment: {} ({})", url.fragment(), url.encoded_fragment());
 
-   Fields fields;
-   fields.set("Content-Length", std::format("{}", str.str().size()));
-   fields.set("Content-Type", "text/plain");
-   co_await response.async_submit(200, fields);
-   co_await response.async_write(asio::buffer(str.str()));
+   auto body = str.str();
+   co_await response.async_submit(
+      200, fields({{"Content-Length", body.size()}, {"Content-Type", "text/plain"}}));
+   co_await response.async_write(asio::buffer(body));
    co_await response.async_write({}, deferred);
 }
 
@@ -281,11 +279,13 @@ awaitable<void> send_eof(client::Request& request)
 
 awaitable<void> h2spec(server::Request request, server::Response response)
 {
-   co_await yield(10);
+   co_await yield(10); // FIXME: without this, one more testcase fails
    std::array<uint8_t, 1024> buffer;
    size_t n = co_await request.async_read_some(asio::buffer(buffer));
-   co_await response.async_submit(200, {});
-   co_await response.async_write(asio::buffer("Hello, World!\n"sv));
+
+   constexpr auto hello = "Hello, World!\n"sv;
+   co_await response.async_submit(200, fields({{"Content-Length", hello.size()}}));
+   co_await response.async_write(asio::buffer(hello));
    co_await response.async_write({});
    while (co_await request.async_read_some(asio::buffer(buffer)) > 0)
       ;

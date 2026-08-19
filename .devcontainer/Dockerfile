@@ -2,7 +2,7 @@
 # The dependencies of this project have been moved into another Dockerfile that can be built
 # separately. This image can be pushed to the HUB, speeding up codespace creation considerably.
 #
-FROM docker.io/psedoc/anyhttp:0.26
+FROM docker.io/psedoc/anyhttp:0.27
 
 #
 # install some more interactive utils in the devcontainer
@@ -16,13 +16,13 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
 # TEST: claude code
 #
 # Install Node.js, npm, and git
-RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
-    apt-get -y install nodejs npm git && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
+#     apt-get -y install nodejs npm git && \
+#     apt-get clean && \
+#     rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code
-RUN npm install -g @anthropic-ai/claude-code
+# RUN npm install -g @anthropic-ai/claude-code
 
 #
 # enable persistent bash history in container

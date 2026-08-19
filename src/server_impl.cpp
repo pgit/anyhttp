@@ -103,6 +103,18 @@ void Server::Impl::destroy()
    if (m_acceptor)
       m_acceptor->close(); // breaks listen_loop()
 
+   //
+   // Destroy all active sessions (TCP and QUIC) so their timers and async operations are
+   // cancelled, allowing the io_context to drain. QUIC sessions send a final CONNECTION_CLOSE
+   // through the (still shared) UDP socket as part of destroy(), so this has to happen before
+   // that socket is closed below -- otherwise the peer only finds out via idle timeout.
+   //
+   {
+      auto lock = std::lock_guard(m_sessionMutex);
+      for (auto& session : m_sessions)
+         session->destroy();
+   }
+
    if (m_udp_socket)
       m_udp_socket->close(); // breaks udp_receive_loop()
 
@@ -147,21 +159,37 @@ void Server::Impl::listen_tcp()
 void Server::Impl::listen_udp()
 {
    //
-   // QUIC test -- open a UDP port
+   // Bind the UDP socket to the same address and port as the TCP acceptor so
+   // HTTP/3 and HTTP/1.1/2 can share one endpoint. Requires listen_tcp() to
+   // have run first, since we may have been given port=0 and want to reuse the
+   // kernel-assigned port here.
    //
-   // m_udp_socket.emplace(m_executor, ip::udp::endpoint(ip::udp::v6(), config().port));
+   assert(m_acceptor);
+   auto tcp_ep = m_acceptor->local_endpoint();
+   const bool is_v6 = tcp_ep.protocol() == ip::tcp::v6();
+
    m_udp_socket.emplace(m_executor);
-   m_udp_socket->open(ip::udp::v6());
-   // m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
-   // m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTTL>(1));
-   // m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_PKTINFO>(1));
-   // m_udp_socket->set_option(boost::asio::ip::v6_only{true});
-   m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVTCLASS>(1));
-   m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_MTU_DISCOVER>(1));
-   m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVPKTINFO>(1));
+   m_udp_socket->open(is_v6 ? ip::udp::v6() : ip::udp::v4());
+
+   if (is_v6)
+   {
+      boost::system::error_code ec;
+      std::ignore = m_udp_socket->set_option(ip::v6_only(false), ec);
+      m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVTCLASS>(1));
+      m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_MTU_DISCOVER>(1));
+      m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVPKTINFO>(1));
+   }
+   else
+   {
+      m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
+      m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_PKTINFO>(1));
+   }
    m_udp_socket->set_option(socket_option::integer<IPPROTO_UDP, UDP_GRO>(1));
    m_udp_socket->non_blocking(true);
-   m_udp_socket->bind(ip::udp::endpoint(ip::udp::v6(), config().port));
+
+   ip::udp::endpoint udp_ep(tcp_ep.address(), tcp_ep.port());
+   m_udp_socket->bind(udp_ep);
+   logi("Server: UDP listening on {}", udp_ep);
 }
 
 // =================================================================================================
@@ -242,7 +270,6 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
    // socket.set_option(sb::send_buffer_size(8192));
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 
-
    auto executor = co_await boost::asio::this_coro::executor;
    auto buffer = boost::beast::flat_buffer();
 
@@ -260,10 +287,10 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, NULL);
 
       //
-      // TODO: This is a testing key only. Still, we might want to remove it from the repository
-      //       to avoid flagging repository scanners.
+      // This is a testing key only. It is not in the repository, but generated at build time
+      // by the 'pki' target (see cmake/pki.cmake).
       //
-      ctx.use_certificate_chain_file("pki/out/server.pem");
+      ctx.use_certificate_chain_file("pki/out/server-chain.pem");
       ctx.use_private_key_file("pki/out/server-key.pem", asio::ssl::context::pem);
 
       ssl_stream.emplace(std::move(socket), ctx);

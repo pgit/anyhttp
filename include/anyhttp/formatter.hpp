@@ -4,6 +4,7 @@
 
 #include <boost/asio/cancellation_type.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ip/udp.hpp>
 
 #include <boost/beast/http/field.hpp>
 #include <boost/core/detail/string_view.hpp>
@@ -55,13 +56,13 @@ struct std::formatter<boost::core::string_view> : public std::formatter<std::str
 
 // -------------------------------------------------------------------------------------------------
 
-template <>
-struct std::formatter<boost::asio::ip::tcp::endpoint>
+template <class Proto>
+struct std::formatter<boost::asio::ip::basic_endpoint<Proto>>
 {
    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
 
    template <typename FormatContext>
-   auto format(const boost::asio::ip::tcp::endpoint& endpoint, FormatContext& ctx) const
+   auto format(const boost::asio::ip::basic_endpoint<Proto>& endpoint, FormatContext& ctx) const
    {
       const auto address = endpoint.address();
       if (address.is_v6())

@@ -102,6 +102,7 @@ check_include_file("linux/rtnetlink.h" HAVE_LINUX_RTNETLINK_H)
 # --------------------------------------------------------------------------------------------------
 
 enable_testing(false)
+include(cmake/pki.cmake)
 add_subdirectory(src)
 add_subdirectory(test)
 
