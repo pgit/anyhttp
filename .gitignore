@@ -5,6 +5,7 @@ docs/_build
 gtest-parallel-logs
 report.xml
 build
+build-*
 secrets
 Testing
 *.pcap
