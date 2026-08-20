@@ -56,6 +56,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <algorithm>
 #include <vector>
 
 #include "ngtcp2/shared.h"
@@ -424,6 +425,16 @@ public:
    int on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> data,
                const ngtcp2::Address& remote);
    int write_streams();
+
+   //
+   // on_read() does not write; it only marks the session here, and Server::Impl calls
+   // flush_write() once the whole receive batch has been fed to ngtcp2. Writing per datagram
+   // means every aggregate pass only sees what happened to be queued at that instant, so a
+   // response goes out as several small GSO batches instead of one big one.
+   //
+   void defer_write() noexcept { write_pending_ = true; }
+   int flush_write();
+
    ngtcp2_ssize write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uint8_t* dest, size_t destlen,
                           ngtcp2_tstamp ts);
    void update_timer();
@@ -571,6 +582,8 @@ private:
    bool closed_ = false;
 
    std::string log_prefix_;
+
+   bool write_pending_ = false; // set by on_read(), acted on by flush_write()
 
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
 
@@ -1304,8 +1317,7 @@ void Http3Session::wake_write()
       auto session = std::static_pointer_cast<Http3Session>(self.lock());
       if (!session || session->closed_)
          return;
-      if (session->write_streams() == 0)
-         session->update_timer();
+      session->flush_write();
    });
 }
 
@@ -1447,10 +1459,10 @@ int Http3Session::on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> da
       return handle_error(rv);
    }
 
-   if (auto wrv = write_streams(); wrv != 0)
-      return wrv;
-
-   update_timer();
+   //
+   // Deliberately no write here -- see defer_write().
+   //
+   defer_write();
    return 0;
 }
 
@@ -1608,6 +1620,22 @@ int Http3Session::write_streams()
 
 // -------------------------------------------------------------------------------------------------
 
+int Http3Session::flush_write()
+{
+   write_pending_ = false;
+
+   if (closed_ || !conn_)
+      return 0;
+
+   if (auto rv = write_streams(); rv != 0)
+      return rv;
+
+   update_timer();
+   return 0;
+}
+
+// -------------------------------------------------------------------------------------------------
+
 void Http3Session::update_timer() { arm_timer_from_ngtcp2(); }
 
 void Http3Session::arm_timer_from_ngtcp2()
@@ -1648,10 +1676,7 @@ int Http3Session::handle_expiry()
       ngtcp2_ccerr_set_liberr(&last_error_, rv, nullptr, 0);
       return handle_error(rv);
    }
-   if (auto rv = write_streams(); rv != 0)
-      return rv;
-   update_timer();
-   return 0;
+   return flush_write();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -2212,6 +2237,18 @@ int Server::Impl::udp_on_read(Endpoint& ep)
       msg_ctrl[CMSG_SPACE(sizeof(int)) + CMSG_SPACE(sizeof(in6_pktinfo)) + CMSG_SPACE(sizeof(int))];
    msg.msg_control = msg_ctrl;
 
+   //
+   // Sessions that received something in this batch. They are written once, below, after every
+   // datagram the socket had queued has been handed to ngtcp2 -- so one aggregate pass can pack
+   // a whole response into a single GSO sendmsg() instead of dribbling it out per datagram.
+   //
+   std::vector<std::shared_ptr<Http3Session>> pending;
+   auto mark_pending = [&pending](const std::shared_ptr<Http3Session>& session)
+   {
+      if (std::ranges::find(pending, session) == pending.end())
+         pending.push_back(session);
+   };
+
    for (size_t pktcnt = 0; pktcnt < 32; ++pktcnt)
    {
       if (pktcnt)
@@ -2225,7 +2262,7 @@ int Server::Impl::udp_on_read(Endpoint& ep)
       {
          if (errno != EAGAIN && errno != EWOULDBLOCK && errno != ENOTCONN)
             loge("recvmsg: {}", strerror(errno));
-         return 0;
+         break; // socket drained (or broken): fall through to the write pass
       }
 
       if (nread < 22)
@@ -2318,6 +2355,8 @@ int Server::Impl::udp_on_read(Endpoint& ep)
                auto lock = std::lock_guard(self->m_sessionMutex);
                self->m_sessions.erase(session);
             });
+
+            mark_pending(session);
          }
          else
          {
@@ -2341,7 +2380,11 @@ int Server::Impl::udp_on_read(Endpoint& ep)
                   continue;
             }
 
-            if (session->on_read(pi, data, *remote) != 0 && session->closed())
+            if (session->on_read(pi, data, *remote) == 0)
+            {
+               mark_pending(session);
+            }
+            else if (session->closed())
             {
                //
                // Only erase immediately when not in closing/draining period.
@@ -2359,6 +2402,21 @@ int Server::Impl::udp_on_read(Endpoint& ep)
          }
       }
    }
+
+   //
+   // One write pass per session, after the whole batch has been read.
+   //
+   for (const auto& session : pending)
+   {
+      if (session->flush_write() == 0 || !session->closed())
+         continue;
+
+      auto* conn = session->conn();
+      if (!conn || (!ngtcp2_conn_in_closing_period(conn) && !ngtcp2_conn_in_draining_period(conn)))
+         std::erase_if(m_quic_handlers,
+                       [&](const auto& kv) { return kv.second.get() == session.get(); });
+   }
+
    return 0;
 }
 
