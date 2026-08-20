@@ -764,8 +764,6 @@ void NGHttp2Stream::on_request()
    auto& server = dynamic_cast<ServerReference&>(parent).server();
    if (auto& handler = server.requestHandler())
       co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
-   else if (auto& handler = server.requestHandler())
-      server.requestHandler()(std::move(request), std::move(response));
    else
    {
       loge("[{}] on_request: no request handler!", logPrefix);

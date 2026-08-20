@@ -2092,8 +2092,6 @@ int Http3Session::h3_cb_end_headers(nghttp3_conn*, int64_t stream_id, int /*fin*
    auto& sv = self->server_;
    if (auto& handler = sv.requestHandler())
       co_spawn(self->get_executor(), handler(std::move(request), std::move(response)), detached);
-   else if (auto& handler = sv.requestHandler())
-      handler(std::move(request), std::move(response));
    else
    {
       loge("[{}] no request handler set", s->log_prefix);
