@@ -96,6 +96,15 @@ struct TlsClientContext
       SSL_CTX_set_alpn_protos(ctx, alpn, sizeof(alpn) - 1);
 
       //
+      // Same order as the server, so AES-128 GCM is also picked against peers that leave the
+      // choice to the client.
+      //
+      if (SSL_CTX_set_ciphersuites(ctx, "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:"
+                                        "TLS_CHACHA20_POLY1305_SHA256") != 1)
+         throw std::runtime_error(std::string{"SSL_CTX_set_ciphersuites: "} +
+                                  ERR_error_string(ERR_get_error(), nullptr));
+
+      //
       // TODO: verify the server certificate (e.g. against pki/out/root.pem) instead of accepting
       // anything.
       //
