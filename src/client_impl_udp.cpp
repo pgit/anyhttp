@@ -891,11 +891,29 @@ void Http3ClientStream::on_write_consumed(size_t n)
    n = std::min(n, write_chunk.size() - write_confirmed);
    write_confirmed += n;
 
+   if (write_confirmed < write_chunk.size())
+      return;
+
    // The write is fully done once its current chunk is confirmed and there is no more of
    // write_source left to carve into further chunks -- data_reader() advances write_chunk/
    // write_source_copied otherwise, so this is the terminal state.
-   if (write_confirmed == write_chunk.size() && write_source_copied == asio::buffer_size(write_source))
+   if (write_source_copied == asio::buffer_size(write_source))
+   {
       finish_active_write();
+      return;
+   }
+
+   //
+   // There is more of write_source to carve into chunks, but nghttp3 may have asked for data
+   // while this chunk was offered and still unconfirmed, in which case data_reader() answered
+   // NGHTTP3_ERR_WOULDBLOCK -- and a blocked stream is never polled again until it is explicitly
+   // resumed. Now that the chunk is confirmed, there is something new to hand out, so unblock
+   // the stream. Without this, any single async_write() larger than kWriteChunkSize stalls here
+   // forever, with the response body truncated and no FIN.
+   //
+   if (auto h3 = session.h3())
+      nghttp3_conn_resume_stream(h3, id);
+   session.wake_write();
 }
 
 void Http3ClientStream::finish_active_write()

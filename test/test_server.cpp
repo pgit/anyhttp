@@ -958,6 +958,41 @@ TEST_P(ClientAsync, HelloWorld)
 
 // -------------------------------------------------------------------------------------------------
 
+//
+// A single async_write() larger than what the transport hands to its peer in one go, i.e. the
+// whole body in one call instead of chunk by chunk. HTTP/3 used to stall here: with its response
+// chunk fully offered but not yet confirmed, nghttp3 got NGHTTP3_ERR_WOULDBLOCK and blocked the
+// stream, which nothing resumed once the chunk was confirmed.
+//
+TEST_P(ClientAsync, WHEN_server_writes_large_buffer_at_once_THEN_receives_all)
+{
+   static const std::vector<uint8_t> body = []
+   {
+      std::vector<uint8_t> data(256 * 1024);
+      std::ranges::generate(data, [i = uint8_t(0)]() mutable { return i++; });
+      return data;
+   }();
+
+   custom = [this](server::Request request, server::Response response) -> awaitable<void>
+   {
+      std::array<uint8_t, 1024> buffer;
+      while (co_await request.async_read_some(asio::buffer(buffer)) > 0)
+         ; // drain the request -- HTTP/1.1 closes the connection on an unfinished parser
+
+      co_await response.async_submit(200, fields({{"Content-Length", body.size()}}));
+      co_await response.async_write(asio::buffer(body));
+      co_await response.async_write({});
+   };
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url);
+      co_await request.async_write({});
+      EXPECT_EQ(co_await read_response(request), body.size());
+   };
+}
+
+// -------------------------------------------------------------------------------------------------
+
 TEST_P(ClientAsync, ServerYieldFirst)
 {
    custom = [this](server::Request request, server::Response response) -> awaitable<void>
