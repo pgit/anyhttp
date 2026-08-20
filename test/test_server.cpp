@@ -963,9 +963,9 @@ TEST_P(ClientAsync, HelloWorld)
 
 //
 // A single async_write() larger than what the transport hands to its peer in one go, i.e. the
-// whole body in one call instead of chunk by chunk. HTTP/3 used to stall here: with its response
-// chunk fully offered but not yet confirmed, nghttp3 got NGHTTP3_ERR_WOULDBLOCK and blocked the
-// stream, which nothing resumed once the chunk was confirmed.
+// whole body in one call instead of chunk by chunk. HTTP/3 has to keep offering the same buffer
+// to nghttp3 across many packets here, and complete the write only once all of it is
+// acknowledged.
 //
 TEST_P(ClientAsync, WHEN_server_writes_large_buffer_at_once_THEN_receives_all)
 {
@@ -991,6 +991,54 @@ TEST_P(ClientAsync, WHEN_server_writes_large_buffer_at_once_THEN_receives_all)
       auto request = co_await session.async_submit(url);
       co_await request.async_write({});
       EXPECT_EQ(co_await read_response(request), body.size());
+   };
+}
+
+//
+// Cancelling a response write mid-body. HTTP/3 hands the caller's buffer to nghttp3 by reference,
+// so bytes already offered and not yet acknowledged cannot simply be abandoned -- the stream is
+// reset instead, which is what the peer would see anyway for a body that stops short of its end.
+//
+TEST_P(ClientAsync, WHEN_server_cancels_write_THEN_client_sees_truncated_body)
+{
+   static const std::vector<uint8_t> body(8 * 1024 * 1024, 'x');
+
+   custom = [this](server::Request request, server::Response response) -> awaitable<void>
+   {
+      std::array<uint8_t, 1024> buffer;
+      while (co_await request.async_read_some(asio::buffer(buffer)) > 0)
+         ; // drain the request -- HTTP/1.1 closes the connection on an unfinished parser
+
+      co_await response.async_submit(200, {});
+
+      //
+      // Far more than the peer's receive window, and the client below doesn't read a byte until
+      // this is over, so the write is guaranteed to still be in progress when it is cancelled.
+      //
+      auto executor = co_await this_coro::executor;
+      auto [ep] = co_await co_spawn(executor, send(response, std::span(body)),
+                                    cancel_after(50ms, as_tuple));
+      EXPECT_EQ(code(ep), boost::system::errc::operation_canceled);
+   };
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url);
+      co_await request.async_write({});
+      auto response = co_await request.async_get_response();
+
+      //
+      // Leave the response body untouched for now: whatever the server manages to send fills up
+      // the receive window and stays there, so its write cannot run to completion before the
+      // cancellation above hits.
+      //
+      asio::steady_timer timer(co_await this_coro::executor, 150ms);
+      co_await timer.async_wait(deferred);
+
+      boost::system::error_code ec;
+      auto received = co_await try_receive(response, ec);
+      std::println("received {} of {} bytes ({})", received, body.size(), ec.message());
+      EXPECT_LT(received, body.size());
+      EXPECT_EQ(ec, boost::beast::http::error::partial_message);
    };
 }
 
@@ -1114,7 +1162,8 @@ TEST_P(FileHandler, WHEN_file_is_empty_THEN_serves_empty_body)
 }
 
 //
-// Larger than the 16K chunk the HTTP/3 write path carves a single async_write() into.
+// Large enough that a single async_write() spans many QUIC packets, so the HTTP/3 write path has
+// to keep handing out the caller's buffer across several write_pkt() rounds.
 //
 TEST_P(FileHandler, WHEN_file_is_large_THEN_serves_all_of_it)
 {
