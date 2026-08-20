@@ -183,7 +183,7 @@ protected:
       // strand is created after accepting a new connection.
       //
       server.emplace(context.get_executor(), config);
-      server->setRequestHandlerCoro(
+      server->setRequestHandler(
          [this](server::Request request, server::Response response) -> awaitable<void>
       {
          logd("{} ({})", request.url().path(), request.url().buffer());

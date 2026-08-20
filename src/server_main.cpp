@@ -97,7 +97,7 @@ int main(int argc, char* argv[])
       server.reset();
    });
 
-   server->setRequestHandlerCoro(
+   server->setRequestHandler(
       [](server::Request request, server::Response response) -> awaitable<void>
    {
       std::string path = request.url().path();

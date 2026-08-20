@@ -135,8 +135,7 @@ private:
 
 // =================================================================================================
 
-using RequestHandler = std::function<void(Request, Response)>;
-using RequestHandlerCoro = std::function<asio::awaitable<void>(Request, Response)>;
+using RequestHandler = std::function<asio::awaitable<void>(Request, Response)>;
 
 class Server
 {
@@ -151,7 +150,6 @@ public:
    executor_type get_executor() const noexcept;
 
    void setRequestHandler(RequestHandler&& handler);
-   void setRequestHandlerCoro(RequestHandlerCoro&& handler);
 
    asio::ip::tcp::endpoint local_endpoint() const;
 

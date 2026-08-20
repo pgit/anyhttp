@@ -716,7 +716,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       //
       server::Request request_wrapper(std::move(reader));
       server::Response response_wrapper(std::move(writer));
-      if (auto& handler = server().requestHandlerCoro())
+      if (auto& handler = server().requestHandler())
       {
          try
          {

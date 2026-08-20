@@ -762,7 +762,7 @@ void NGHttp2Stream::on_request()
    server::Response response(std::make_unique<NGHttp2Writer<server::Response::Impl>>(*this));
 
    auto& server = dynamic_cast<ServerReference&>(parent).server();
-   if (auto& handler = server.requestHandlerCoro())
+   if (auto& handler = server.requestHandler())
       co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
    else if (auto& handler = server.requestHandler())
       server.requestHandler()(std::move(request), std::move(response));
