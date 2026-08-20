@@ -842,7 +842,9 @@ void Http3Stream::submit_response()
    auto status_str = std::to_string(response_status);
    std::vector<nghttp3_nv> nva;
    nva.reserve(16); // small typical header count; vector will grow if needed
+   auto date_str = format_http_date(std::chrono::system_clock::now());
    nva.push_back(make_nv(":status", status_str));
+   nva.push_back(make_nv("date", date_str));
    nva.push_back(make_nv("server", "anyhttp-quic/0.1"));
 
    if (response_content_length)
