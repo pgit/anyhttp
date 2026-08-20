@@ -1,3 +1,4 @@
+#include "anyhttp/file_handler.hpp"
 #include "anyhttp/request_handlers.hpp"
 #include "anyhttp/server.hpp"
 #include "anyhttp/utils.hpp"
@@ -111,6 +112,8 @@ int main(int argc, char* argv[])
          co_await dump(std::move(request), std::move(response));
       else if (path == "/discard")
          co_return;
+      else if (path == "/test" || path.starts_with("/test/"))
+         co_await serve_file(std::move(request), std::move(response), "test", "/test");
       else if (path == "/eat_request")
          co_await eat_request(std::move(request), std::move(response));
       else if (path == "/" || path == "/h2spec")
