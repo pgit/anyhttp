@@ -1349,7 +1349,14 @@ int Http3Session::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t 
    ngtcp2_settings settings;
    ngtcp2_settings_default(&settings);
    settings.initial_ts = ngtcp2::util::timestamp();
-   settings.log_printf = &ngtcp2_log_printf;
+
+   //
+   // Only install the log callback when trace logging is actually enabled: ngtcp2 formats every
+   // frame of every packet into a string *before* invoking it, so a callback that discards its
+   // input still pays for the full formatting. A NULL log_printf makes ngtcp2 skip that work.
+   //
+   if (spdlog::default_logger_raw()->should_log(spdlog::level::trace))
+      settings.log_printf = &ngtcp2_log_printf;
 
    ngtcp2_transport_params params;
    ngtcp2_transport_params_default(&params);

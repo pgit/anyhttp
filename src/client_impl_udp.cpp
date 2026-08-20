@@ -1181,7 +1181,13 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote)
    ngtcp2_settings settings;
    ngtcp2_settings_default(&settings);
    settings.initial_ts = ngtcp2::util::timestamp();
-   settings.log_printf = &ngtcp2_log_printf;
+
+   //
+   // See the server-side counterpart: ngtcp2 does the full frame formatting before calling this,
+   // so only install it when trace logging is actually enabled.
+   //
+   if (spdlog::default_logger_raw()->should_log(spdlog::level::trace))
+      settings.log_printf = &ngtcp2_log_printf;
 
    ngtcp2_transport_params params;
    ngtcp2_transport_params_default(&params);
