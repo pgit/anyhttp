@@ -796,15 +796,30 @@ void Http3Stream::call_read_handler()
    {
       if (asio::buffer_size(read_head) > 0)
       {
-         auto copied = asio::buffer_copy(read_handler_buffer, read_head);
-         read_head += copied;
-         consumed += copied;
-         if (read_head.size() == 0)
+         //
+         // Fill the caller's buffer from as many queued chunks as it takes, rather than stopping
+         // at the end of the first one. Each chunk is what arrived in a single QUIC packet -- a
+         // little over a kilobyte -- so handing them out one per read turns a 64k body into ~48
+         // reads, and a handler that answers every read with a write (an echo) pays a full
+         // round trip for each of them, because a body write only completes once the peer has
+         // acknowledged it (see the comment above write_active).
+         //
+         auto dest = read_handler_buffer;
+         size_t copied = 0;
+         while (dest.size() > 0 && read_head.size() > 0)
          {
-            pending_read.pop_front();
-            read_head =
-               pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
+            auto n = asio::buffer_copy(dest, read_head);
+            dest += n;
+            read_head += n;
+            copied += n;
+            if (read_head.size() == 0)
+            {
+               pending_read.pop_front();
+               read_head =
+                  pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
+            }
          }
+         consumed += copied;
          swap_and_invoke(read_handler, boost::system::error_code{}, copied);
          continue;
       }
