@@ -1470,7 +1470,7 @@ int Http3Session::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t 
    params.initial_max_data = 1_m;
    params.initial_max_streams_bidi = 100;
    params.initial_max_streams_uni = 3;
-   params.max_idle_timeout = std::chrono::nanoseconds(30s).count();
+   params.max_idle_timeout = server_.config().idle_timeout.count();
    params.original_dcid = dcid;
    params.original_dcid_present = 1;
 
@@ -1763,7 +1763,18 @@ int Http3Session::handle_expiry()
    auto now = ngtcp2::util::timestamp();
    if (auto rv = ngtcp2_conn_handle_expiry(conn_, now); rv != 0)
    {
-      logw("[{}] ngtcp2_conn_handle_expiry: {}", log_prefix_, ngtcp2_strerror(rv));
+      //
+      // NGTCP2_ERR_IDLE_CLOSE is how a connection whose peer simply stopped talking ends --
+      // an interrupted client leaves one behind per connection it had open -- so it is a
+      // normal end of life, not a failure worth a warning. handle_error() takes it from here
+      // either way; what makes it special is that it discards the connection silently, see
+      // there.
+      //
+      if (rv == NGTCP2_ERR_IDLE_CLOSE)
+         logi("[{}] idle timeout, dropping connection", log_prefix_);
+      else
+         logw("[{}] ngtcp2_conn_handle_expiry: {}", log_prefix_, ngtcp2_strerror(rv));
+
       ngtcp2_ccerr_set_liberr(&last_error_, rv, nullptr, 0);
       return handle_error(rv);
    }
@@ -1778,10 +1789,20 @@ int Http3Session::handle_error(int /*rv*/)
       return -1;
    closed_ = true;
 
-   // Idle timeout and drop-conn need no CONNECTION_CLOSE packet.
+   //
+   // Idle timeout and drop-conn need no CONNECTION_CLOSE packet -- and with no packet there is
+   // no closing period either, so none of the cleanup in Server::Impl::udp_on_read() can ever
+   // run for this session: it is reached from the expiry timer precisely because nothing is
+   // arriving any more. Drop the session from the demux map right here instead, or it would sit
+   // in m_quic_handlers for the lifetime of the server, holding streams whose request handlers
+   // are still waiting on a peer that went away. What is left of it then dies with do_session().
+   //
    if (last_error_.type == NGTCP2_CCERR_TYPE_IDLE_CLOSE ||
        last_error_.type == NGTCP2_CCERR_TYPE_DROP_CONN)
    {
+      auto self = weak_from_this().lock(); // erase_quic_session() may drop the last reference
+      timer_.cancel();
+      server_.erase_quic_session(this);
       signal_done();
       return -1;
    }

@@ -1380,7 +1380,16 @@ void Http3ClientSession::close()
    for (auto& stream : streams)
       stream->fail(errc::make_error_code(errc::connection_reset));
 
-   if (conn_ && !ngtcp2_conn_in_closing_period(conn_) && !ngtcp2_conn_in_draining_period(conn_))
+   //
+   // An idle-timed-out (or dropped) connection is discarded silently: RFC 9000 has no
+   // CONNECTION_CLOSE for it, and there is nobody left listening anyway -- writing one would
+   // just put a packet on a path whose peer has been gone for a full idle period.
+   //
+   const bool silent = last_error_.type == NGTCP2_CCERR_TYPE_IDLE_CLOSE ||
+                       last_error_.type == NGTCP2_CCERR_TYPE_DROP_CONN;
+
+   if (conn_ && !silent && !ngtcp2_conn_in_closing_period(conn_) &&
+       !ngtcp2_conn_in_draining_period(conn_))
    {
       std::array<uint8_t, NGTCP2_MAX_UDP_PAYLOAD_SIZE> closebuf;
       ngtcp2_path_storage ps;
@@ -1631,7 +1640,16 @@ int Http3ClientSession::handle_expiry()
    auto now = ngtcp2::util::timestamp();
    if (auto rv = ngtcp2_conn_handle_expiry(conn_, now); rv != 0)
    {
-      logw("[{}] ngtcp2_conn_handle_expiry: {}", log_prefix_, ngtcp2_strerror(rv));
+      //
+      // NGTCP2_ERR_IDLE_CLOSE is how a connection whose peer stopped talking ends: a normal
+      // end of life, not a failure worth a warning. close() then discards it silently, see
+      // there.
+      //
+      if (rv == NGTCP2_ERR_IDLE_CLOSE)
+         logi("[{}] idle timeout, dropping connection", log_prefix_);
+      else
+         logw("[{}] ngtcp2_conn_handle_expiry: {}", log_prefix_, ngtcp2_strerror(rv));
+
       ngtcp2_ccerr_set_liberr(&last_error_, rv, nullptr, 0);
       return handle_error(rv);
    }

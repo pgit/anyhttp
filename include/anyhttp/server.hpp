@@ -21,6 +21,14 @@ struct Config
    std::string listen_address = "::";
    uint16_t port = 8080;
    bool use_strand = false;
+
+   //
+   // HTTP/3 only: how long a QUIC connection may go without a packet from its peer before it is
+   // dropped. This is the only way a peer that vanished without a CONNECTION_CLOSE -- a killed
+   // client, a machine that went to sleep -- is ever noticed, so it also bounds how long its
+   // session and streams stay around. 30s is what the ngtcp2 examples use.
+   //
+   std::chrono::nanoseconds idle_timeout = 30s;
 };
 
 // =================================================================================================
