@@ -324,6 +324,7 @@ public:
    //
    std::deque<std::vector<uint8_t>> pending_read;
    asio::const_buffer read_head; // view of pending_read.front() not yet delivered
+   asio::const_buffer incoming;  // chunk on_data_chunk() is delivering, not yet taken
    bool eof_received = false;
    ReadSomeHandler read_handler;
    asio::mutable_buffer read_handler_buffer;
@@ -756,10 +757,27 @@ void Http3Stream::on_data_chunk(const uint8_t* data, size_t len)
 {
    if (len == 0)
       return;
-   pending_read.emplace_back(data, data + len);
-   if (read_head.size() == 0)
-      read_head = asio::buffer(pending_read.front());
+
+   //
+   // nghttp3 hands us a view into the packet it is parsing, valid only until this callback
+   // returns. Offer it to a waiting reader as it stands before copying it anywhere: a handler
+   // that keeps a read outstanding -- the usual shape -- takes the bytes with a single copy, and
+   // the vector that would otherwise carry them (a malloc, a copy in, a copy out and a free, per
+   // QUIC packet, so about fifty of each per 64k of request body) is never created at all. Only
+   // what the reader could not take is parked for later.
+   //
+   auto self = shared_from_this(); // a resumed reader may drop the last reference to this stream
+   incoming = asio::const_buffer{data, len};
    call_read_handler();
+
+   if (incoming.size() > 0)
+   {
+      auto* rest = static_cast<const uint8_t*>(incoming.data());
+      pending_read.emplace_back(rest, rest + incoming.size());
+      if (read_head.size() == 0)
+         read_head = asio::buffer(pending_read.front());
+      incoming = {};
+   }
 }
 
 void Http3Stream::on_eof()
@@ -794,7 +812,7 @@ void Http3Stream::call_read_handler()
    size_t consumed = 0;
    while (read_handler)
    {
-      if (asio::buffer_size(read_head) > 0)
+      if (read_head.size() > 0 || incoming.size() > 0)
       {
          //
          // Fill the caller's buffer from as many queued chunks as it takes, rather than stopping
@@ -819,6 +837,19 @@ void Http3Stream::call_read_handler()
                   pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
             }
          }
+
+         //
+         // ... and last from the chunk being delivered right now, which on_data_chunk() offers
+         // through `incoming` instead of parking it in a vector of its own first. Queued chunks
+         // go first: they arrived earlier.
+         //
+         if (dest.size() > 0 && incoming.size() > 0)
+         {
+            auto n = asio::buffer_copy(dest, incoming);
+            incoming += n;
+            copied += n;
+         }
+
          consumed += copied;
          swap_and_invoke(read_handler, boost::system::error_code{}, copied);
          continue;
@@ -1124,6 +1155,7 @@ void Http3Stream::delete_reader()
    auto self = shared_from_this(); // see delete_writer()
    pending_read.clear();
    read_head = {};
+   incoming = {};
 
    //
    // The handler dropped the Request without reading the body to its end (e.g. not_found(), which
