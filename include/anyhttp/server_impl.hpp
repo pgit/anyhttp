@@ -79,12 +79,7 @@ public:
    }
 
    void setRequestHandler(RequestHandler&& handler) { m_requestHandler = std::move(handler); }
-   void setRequestHandler(RequestHandlerCoro&& handler)
-   {
-      m_requestHandlerCoro = std::move(handler);
-   }
    const RequestHandler& requestHandler() const { return m_requestHandler; }
-   const RequestHandlerCoro& requestHandlerCoro() const { return m_requestHandlerCoro; }
 
    asio::awaitable<void> udp_receive_loop();
    int udp_on_read(Endpoint& ep);
@@ -110,7 +105,6 @@ private:
    std::unordered_map<std::string, std::shared_ptr<Http3Session>> m_quic_handlers;
 
    RequestHandler m_requestHandler;
-   RequestHandlerCoro m_requestHandlerCoro;
    bool m_stopped = false;
 };
 

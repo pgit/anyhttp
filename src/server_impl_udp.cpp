@@ -46,12 +46,14 @@
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cstdarg>
 #include <cstring>
 #include <deque>
 #include <memory>
+#include <random>
 #include <span>
 #include <string>
 #include <string_view>
@@ -74,6 +76,10 @@ struct Endpoint
 {
    ngtcp2::Address addr;
    int fd;
+
+   // Testing aid, see server::Config::drop_rate_rx/tx.
+   double drop_rate_rx = 0.0;
+   double drop_rate_tx = 0.0;
 };
 
 // =================================================================================================
@@ -109,6 +115,15 @@ struct TlsServerContext
                                   SSL_OP_SINGLE_ECDH_USE | SSL_OP_CIPHER_SERVER_PREFERENCE |
                                   SSL_OP_NO_ANTI_REPLAY);
       SSL_CTX_set_mode(ctx, SSL_MODE_RELEASE_BUFFERS);
+
+      //
+      // Prefer AES-128 over AES-256 GCM, like ngtcp2's example server does. Combined with
+      // SSL_OP_CIPHER_SERVER_PREFERENCE above, this is what actually picks the bulk cipher.
+      //
+      if (SSL_CTX_set_ciphersuites(ctx, "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:"
+                                        "TLS_CHACHA20_POLY1305_SHA256") != 1)
+         throw std::runtime_error(std::string{"SSL_CTX_set_ciphersuites: "} +
+                                  ERR_error_string(ERR_get_error(), nullptr));
 
       SSL_CTX_set_alpn_select_cb(ctx, &TlsServerContext::alpn_select_cb, nullptr);
 
@@ -171,11 +186,34 @@ std::string cid_key(const uint8_t* data, size_t len)
 
 // -------------------------------------------------------------------------------------------------
 
-int send_udp(int fd, const sockaddr* sa, socklen_t salen, std::span<const uint8_t> data)
+//
+// Testing aid: rolls the dice for a single QUIC packet. `rate` is the probability of the packet
+// being dropped, 0.0 (never, the default) to 1.0 (always). The generator is deliberately not
+// seeded deterministically -- this is meant to shake out loss handling over many runs, not to
+// reproduce one exact sequence.
+//
+bool drop_packet(double rate)
 {
+   if (rate <= 0.0)
+      return false;
+
+   static thread_local std::mt19937 rng{std::random_device{}()};
+   return std::uniform_real_distribution<double>{0.0, 1.0}(rng) < rate;
+}
+
+// -------------------------------------------------------------------------------------------------
+
+int send_udp(const Endpoint& ep, const sockaddr* sa, socklen_t salen, std::span<const uint8_t> data)
+{
+   if (drop_packet(ep.drop_rate_tx))
+   {
+      // logw("*** dropping outgoing packet ({} bytes) ***", data.size());
+      return 0; // pretend it went out; ngtcp2 will retransmit
+   }
+
    for (;;)
    {
-      auto n = ::sendto(fd, data.data(), data.size(), 0, sa, salen);
+      auto n = ::sendto(ep.fd, data.data(), data.size(), 0, sa, salen);
       if (n == -1)
       {
          if (errno == EINTR)
@@ -195,15 +233,16 @@ int send_udp(int fd, const sockaddr* sa, socklen_t salen, std::span<const uint8_
 // the last exactly `gso_size` bytes) with a single sendmsg() using UDP_SEGMENT (GSO), so N QUIC
 // packets cost one syscall instead of N. Falls back to one sendto() per segment -- and remembers
 // to do so from then on -- if the kernel/NIC doesn't support UDP_SEGMENT here.
-int send_udp_gso(int fd, const sockaddr* sa, socklen_t salen, std::span<const uint8_t> data,
-                 size_t gso_size, bool& no_gso)
+int send_udp_gso(const Endpoint& ep, const sockaddr* sa, socklen_t salen,
+                 std::span<const uint8_t> data, size_t gso_size, bool& no_gso)
 {
-   if (no_gso || data.size() <= gso_size)
+   // With TX dropping enabled, go packet by packet so each one can be dropped individually.
+   if (no_gso || data.size() <= gso_size || ep.drop_rate_tx > 0.0)
    {
       for (; !data.empty();)
       {
          auto len = std::min(gso_size, data.size());
-         if (send_udp(fd, sa, salen, data.first(len)) != 0)
+         if (send_udp(ep, sa, salen, data.first(len)) != 0)
             return -1;
          data = data.subspan(len);
       }
@@ -229,7 +268,7 @@ int send_udp_gso(int fd, const sockaddr* sa, socklen_t salen, std::span<const ui
 
    for (;;)
    {
-      auto n = ::sendmsg(fd, &msg, 0);
+      auto n = ::sendmsg(ep.fd, &msg, 0);
       if (n == -1)
       {
          if (errno == EINTR)
@@ -241,7 +280,7 @@ int send_udp_gso(int fd, const sockaddr* sa, socklen_t salen, std::span<const ui
             // GSO unsupported on this socket/NIC: fall back permanently and resend as
             // individual datagrams.
             no_gso = true;
-            return send_udp_gso(fd, sa, salen, data, gso_size, no_gso);
+            return send_udp_gso(ep, sa, salen, data, gso_size, no_gso);
          }
          loge("sendmsg (GSO): {}", strerror(errno));
          return -1;
@@ -259,6 +298,23 @@ nghttp3_nv make_nv(std::string_view name, std::string_view value)
    nv.valuelen = value.size();
    nv.flags = NGHTTP3_NV_FLAG_NONE;
    return nv;
+}
+
+/// Logs a block of headers, one per line, in the same style as the received ones.
+void log_headers(std::string_view log_prefix, const std::vector<nghttp3_nv>& nva)
+{
+   for (const auto& nv : nva)
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", log_prefix,
+           std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen),
+           std::string_view(reinterpret_cast<const char*>(nv.value), nv.valuelen));
+}
+
+/// Same, for a header block buffered up by the recv_header callback.
+void log_headers(std::string_view log_prefix,
+                 const std::vector<std::pair<std::string, std::string>>& headers)
+{
+   for (const auto& [name, value] : headers)
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", log_prefix, name, value);
 }
 
 void ngtcp2_log_printf(void* /*user*/, const char* fmt, ...) noexcept
@@ -282,14 +338,6 @@ void ngtcp2_log_printf(void* /*user*/, const char* fmt, ...) noexcept
 class Http3Session;
 class Http3Stream;
 
-//
-// Bound on how much of the caller's async_write() buffer we copy into write_chunk at a time (see
-// Http3Stream's write_* members) -- copying is paced by how much nghttp3/ngtcp2 actually drains,
-// rather than copying a huge caller buffer in one synchronous allocation+memcpy, mirroring
-// nghttp2's own per-call copy into its frame buffer.
-//
-inline constexpr size_t kWriteChunkSize = 16 * 1024;
-
 class Http3Stream : public std::enable_shared_from_this<Http3Stream>
 {
 public:
@@ -309,6 +357,13 @@ public:
    Fields request_fields;
 
    //
+   // The header block as it arrived, buffered so that h3_cb_end_headers() can log it in one go,
+   // below the request line, instead of one stray line per header as they come in. Only filled
+   // when debug logging is on, and dropped again as soon as it has been logged.
+   //
+   std::vector<std::pair<std::string, std::string>> received_headers;
+
+   //
    // Response state (populated by user via Http3Writer).
    //
    unsigned int response_status = 0;
@@ -322,6 +377,7 @@ public:
    //
    std::deque<std::vector<uint8_t>> pending_read;
    asio::const_buffer read_head; // view of pending_read.front() not yet delivered
+   asio::const_buffer incoming; // chunk on_data_chunk() is delivering, not yet taken
    bool eof_received = false;
    ReadSomeHandler read_handler;
    asio::mutable_buffer read_handler_buffer;
@@ -333,35 +389,34 @@ public:
    // this is flat per-stream state rather than a queue of pending writes. See the client-side
    // counterpart (Http3ClientStream in client_impl_udp.cpp) for the fuller rationale.
    //
-   // write_source is the caller's buffer, referenced (not copied) the way asio::async_write
-   // generally requires -- it must stay valid until write_handler fires (and no longer: nghttp3
-   // only ever gets pointers into write_chunk, our own copy, so once the handler has fired --
-   // including via cancellation -- the caller's buffer is no longer touched).
+   // write_source is the caller's buffer, passed on to nghttp3 by reference: data_reader() points
+   // the nghttp3_vec straight into it, so the response body is never copied on its way down to the
+   // nghttp3/ngtcp2 boundary, however large it is -- the mmap()ed file of serve_file() travels
+   // from the page cache into QUIC packets without an intermediate byte.
    //
-   // write_chunk is a bounded (<= kWriteChunkSize) slice of write_source, lazily refilled by
-   // data_reader() as it's drained. write_offered and write_confirmed are tracked separately
-   // because nghttp3 may call data_reader() several times in a row for the same stream before ever
-   // reporting consumption back via on_write_consumed() -- e.g. to gather more vecs than fit in a
-   // single call. If data_reader() just kept re-handing out write_chunk[0, write_chunk.size())
-   // unconditionally (tracking only write_confirmed), nghttp3 would treat each repeat offer as
-   // *additional*, distinct stream bytes and duplicate the content on the wire. write_offered
-   // marks how much has already been handed to nghttp3 (whether or not it has been placed in a
-   // packet yet) so a repeat call sees nothing new and gets NGHTTP3_ERR_WOULDBLOCK instead.
+   // What that costs is *when* the write completes. ngtcp2 keeps pointing into this memory for as
+   // long as the bytes may still have to be retransmitted (it only ever copies the nghttp3_vec
+   // descriptors, never the payload), and running the write handler is what releases the caller's
+   // buffer -- so the handler has to wait for the data to be acknowledged. This is the model
+   // nghttp3 documents for its read_data callback: "the application must retain data until they
+   // are safe to free; it is notified by nghttp3_acked_stream_data". HTTP/2 completes a write as
+   // soon as nghttp2 has copied it into its own frame buffer, so a single async_write() there is
+   // done roughly a memcpy later, and here roughly a round trip later.
+   //
+   // write_offered tracks how much of write_source has been handed to nghttp3, which may ask
+   // again before any of it goes out and would take a repeated offer as *additional*, distinct
+   // stream bytes -- duplicating the body on the wire -- so a repeat call gets
+   // NGHTTP3_ERR_WOULDBLOCK instead. write_acked tracks what came back through nghttp3's
+   // acked_stream_data callback; the write is complete once that has caught up with write_source.
    //
    bool write_active = false;
    asio::const_buffer write_source;
-   size_t write_source_copied = 0;
-   std::vector<uint8_t> write_chunk;
    size_t write_offered = 0;
-   size_t write_confirmed = 0;
+   size_t write_acked = 0;
    bool write_is_eof = false;
    WriteHandler write_handler;
    uint64_t write_token = 0;
    uint64_t next_write_token = 1;
-
-   std::vector<std::vector<uint8_t>> in_flight_writes; // kept alive for the stream's lifetime --
-                                                        // ngtcp2 may still need this memory for
-                                                        // retransmission until acked
    bool eof_submitted = false; // user signalled EOF via empty write
    bool eof_sent_to_h3 = false; // NGHTTP3_DATA_FLAG_EOF returned
 
@@ -385,11 +440,11 @@ public:
    void submit_response();
    void start_write(WriteHandler&& handler, asio::const_buffer buffer);
    nghttp3_ssize data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t* pflags);
-   void on_write_consumed(size_t n);
+   void on_write_acked(size_t n);
 
 private:
    void bind_write_cancellation(WriteHandler& handler, uint64_t token); // arms cancellation
-   void finish_active_write(); // completes the active write once fully handed to nghttp3
+   void finish_active_write(); // completes the active write and releases the caller's buffer
 
 public:
    // Called from either reader or writer destructor.
@@ -424,6 +479,16 @@ public:
    int on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> data,
                const ngtcp2::Address& remote);
    int write_streams();
+
+   //
+   // on_read() does not write; it only marks the session here, and Server::Impl calls
+   // flush_write() once the whole receive batch has been fed to ngtcp2. Writing per datagram
+   // means every aggregate pass only sees what happened to be queued at that instant, so a
+   // response goes out as several small GSO batches instead of one big one.
+   //
+   void defer_write() noexcept { write_pending_ = true; }
+   int flush_write();
+
    ngtcp2_ssize write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uint8_t* dest, size_t destlen,
                           ngtcp2_tstamp ts);
    void update_timer();
@@ -527,6 +592,8 @@ public:
    //
    // nghttp3 callback bridges
    //
+   static int h3_cb_acked_stream_data(nghttp3_conn*, int64_t stream_id, uint64_t datalen,
+                                      void* user, void*);
    static int h3_cb_stream_close(nghttp3_conn*, int64_t stream_id, uint64_t app_error_code,
                                  void* user, void*);
    static int h3_cb_recv_data(nghttp3_conn*, int64_t stream_id, const uint8_t* data, size_t datalen,
@@ -569,6 +636,9 @@ private:
    bool closed_ = false;
 
    std::string log_prefix_;
+
+   bool write_pending_ = false; // set by on_read(), acted on by flush_write()
+   bool write_posted_ = false; // a wake_write() flush is already on the way
 
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
 
@@ -740,10 +810,27 @@ void Http3Stream::on_data_chunk(const uint8_t* data, size_t len)
 {
    if (len == 0)
       return;
-   pending_read.emplace_back(data, data + len);
-   if (read_head.size() == 0)
-      read_head = asio::buffer(pending_read.front());
+
+   //
+   // nghttp3 hands us a view into the packet it is parsing, valid only until this callback
+   // returns. Offer it to a waiting reader as it stands before copying it anywhere: a handler
+   // that keeps a read outstanding -- the usual shape -- takes the bytes with a single copy, and
+   // the vector that would otherwise carry them (a malloc, a copy in, a copy out and a free, per
+   // QUIC packet, so about fifty of each per 64k of request body) is never created at all. Only
+   // what the reader could not take is parked for later.
+   //
+   auto self = shared_from_this(); // a resumed reader may drop the last reference to this stream
+   incoming = asio::const_buffer{data, len};
    call_read_handler();
+
+   if (incoming.size() > 0)
+   {
+      auto* rest = static_cast<const uint8_t*>(incoming.data());
+      pending_read.emplace_back(rest, rest + incoming.size());
+      if (read_head.size() == 0)
+         read_head = asio::buffer(pending_read.front());
+      incoming = {};
+   }
 }
 
 void Http3Stream::on_eof()
@@ -778,17 +865,45 @@ void Http3Stream::call_read_handler()
    size_t consumed = 0;
    while (read_handler)
    {
-      if (asio::buffer_size(read_head) > 0)
+      if (read_head.size() > 0 || incoming.size() > 0)
       {
-         auto copied = asio::buffer_copy(read_handler_buffer, read_head);
-         read_head += copied;
-         consumed += copied;
-         if (read_head.size() == 0)
+         //
+         // Fill the caller's buffer from as many queued chunks as it takes, rather than stopping
+         // at the end of the first one. Each chunk is what arrived in a single QUIC packet -- a
+         // little over a kilobyte -- so handing them out one per read turns a 64k body into ~48
+         // reads, and a handler that answers every read with a write (an echo) pays a full
+         // round trip for each of them, because a body write only completes once the peer has
+         // acknowledged it (see the comment above write_active).
+         //
+         auto dest = read_handler_buffer;
+         size_t copied = 0;
+         while (dest.size() > 0 && read_head.size() > 0)
          {
-            pending_read.pop_front();
-            read_head =
-               pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
+            auto n = asio::buffer_copy(dest, read_head);
+            dest += n;
+            read_head += n;
+            copied += n;
+            if (read_head.size() == 0)
+            {
+               pending_read.pop_front();
+               read_head =
+                  pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
+            }
          }
+
+         //
+         // ... and last from the chunk being delivered right now, which on_data_chunk() offers
+         // through `incoming` instead of parking it in a vector of its own first. Queued chunks
+         // go first: they arrived earlier.
+         //
+         if (dest.size() > 0 && incoming.size() > 0)
+         {
+            auto n = asio::buffer_copy(dest, incoming);
+            incoming += n;
+            copied += n;
+         }
+
+         consumed += copied;
          swap_and_invoke(read_handler, boost::system::error_code{}, copied);
          continue;
       }
@@ -842,7 +957,9 @@ void Http3Stream::submit_response()
    auto status_str = std::to_string(response_status);
    std::vector<nghttp3_nv> nva;
    nva.reserve(16); // small typical header count; vector will grow if needed
+   auto date_str = format_http_date(std::chrono::system_clock::now());
    nva.push_back(make_nv(":status", status_str));
+   nva.push_back(make_nv("date", date_str));
    nva.push_back(make_nv("server", "anyhttp-quic/0.1"));
 
    if (response_content_length)
@@ -877,7 +994,10 @@ void Http3Stream::submit_response()
       return;
    }
    response_submitted = true;
-   logd("[{}] response submitted (status={})", log_prefix, response_status);
+
+   using namespace boost::beast::http;
+   logd("[{}] {} {}", log_prefix, response_status, obsolete_reason(int_to_status(response_status)));
+   log_headers(log_prefix, nva);
 }
 
 void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer)
@@ -885,9 +1005,6 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer)
    auto n = asio::buffer_size(buffer);
    const bool is_eof = (n == 0);
    logd("[{}] start_write: n={} is_eof={}", log_prefix, n, is_eof);
-
-   // Only one async_write() may be active at a time -- see the class comment above write_active.
-   assert(!write_active);
 
    //
    // Once accepted, the caller's intent to end the response body is final: this is what tells
@@ -918,6 +1035,13 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer)
       return;
    }
 
+   //
+   // Only one async_write() may be active at a time -- see the class comment above write_active.
+   // The re-issued EOF handled above is not an exception to that: it adopts the FIN that is
+   // already in flight instead of starting a write of its own, and has returned by now.
+   //
+   assert(!write_active);
+
    if (is_eof)
       eof_submitted = true;
 
@@ -926,10 +1050,8 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer)
 
    write_active = true;
    write_source = buffer; // referenced, not copied -- see class comment above write_active
-   write_source_copied = 0;
-   write_chunk.clear();
    write_offered = 0;
-   write_confirmed = 0;
+   write_acked = 0;
    write_is_eof = is_eof;
    write_token = token;
    write_handler = std::move(handler);
@@ -952,11 +1074,8 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
    cs.assign([this, token](asio::cancellation_type_t ct)
    {
       //
-      // Cancellation completes the write immediately: nghttp3/ngtcp2 only ever hold pointers into
-      // write_chunk (our own copy), never into the caller's buffer, so the un-copied remainder of
-      // write_source can simply be abandoned. Bytes already offered to nghttp3 still go out (they
-      // can't be un-offered), so write_chunk is retired to in_flight_writes to keep that memory
-      // alive. The caller may issue a fresh async_write() as soon as the handler fires.
+      // Cancellation completes the write immediately, without waiting for the acknowledgements
+      // it would normally complete on -- see below for what that costs.
       //
       if (write_token != token || !write_handler)
          return; // already completed naturally before the cancellation was delivered
@@ -977,10 +1096,28 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
          return;
       }
       logd("[{}] async_write: \x1b[1;31mcancelled\x1b[0m ({})", log_prefix, ct);
-      if (!write_chunk.empty())
-         in_flight_writes.emplace_back(std::move(write_chunk));
-      write_chunk.clear(); // moved-from
+
+      //
+      // The handler runs now, and the caller is free to destroy its buffer the moment it does --
+      // but nghttp3/ngtcp2 point straight into that buffer (see the class comment above
+      // write_active), so whatever was offered and is not acknowledged yet has to stop being
+      // referenced first. Only a reset can guarantee that: RESET_STREAM makes ngtcp2 drop the
+      // stream's queued data and keeps it from reclaiming in-flight bytes for retransmission.
+      // That costs nothing in expressiveness -- a body cut short mid-write is truncated, which
+      // is exactly what delete_writer() resets the stream for as well.
+      //
+      // A write that never got to offer a byte, or whose bytes are all acknowledged already,
+      // leaves nothing behind and lets the stream carry on unharmed.
+      //
+      if (write_offered > write_acked && !closed)
+      {
+         logw("[{}] async_write: cancelled with {} bytes unacknowledged, resetting stream",
+              log_prefix, write_offered - write_acked);
+         session.reset_stream(id, NGHTTP3_H3_REQUEST_CANCELLED);
+         closed = true;
+      }
       write_active = false;
+      write_source = {};
       // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
       asio::post(get_executor(), [handler = std::move(write_handler)]() mutable
       { std::move(handler)(errc::make_error_code(errc::operation_canceled)); });
@@ -995,79 +1132,61 @@ nghttp3_ssize Http3Stream::data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t
    if (!write_active)
       return NGHTTP3_ERR_WOULDBLOCK;
 
-   if (write_offered < write_chunk.size())
+   //
+   // Hand out what is left of the caller's buffer, by reference and in one go: a nghttp3_vec is
+   // just a pointer and a length, so there is nothing to be gained from slicing it up, and
+   // nghttp3 gets to frame the whole thing as a single DATA frame. It picks up the rest by
+   // itself as packets are filled -- see write_pkt(), which keeps feeding the same vec to
+   // ngtcp2_conn_writev_stream() and advances nghttp3 by whatever went into the packet.
+   //
+   const size_t total = asio::buffer_size(write_source);
+   if (write_offered < total)
    {
-      vec[0].base = write_chunk.data() + write_offered;
-      vec[0].len = write_chunk.size() - write_offered;
-      write_offered = write_chunk.size(); // don't re-offer these bytes on a repeat call -- see
-                                          // class comment above write_active
+      auto* base = static_cast<const uint8_t*>(write_source.data()) + write_offered;
+      vec[0].base = const_cast<uint8_t*>(base); // nghttp3 reads through this, never writes
+      vec[0].len = total - write_offered;
+      write_offered = total; // don't offer these bytes twice -- see class comment above
+                             // write_active
       return 1;
    }
 
    //
-   // Current chunk fully offered. If it hasn't been confirmed yet (on_write_consumed()), there's
-   // nothing new until that happens -- see the class comment above write_active on why we can't
-   // just carve off the next slice of write_source early.
-   //
-   if (write_confirmed < write_chunk.size())
-      return NGHTTP3_ERR_WOULDBLOCK;
-
-   //
-   // The current chunk is fully drained; retire it (ngtcp2 may still need this exact memory for
-   // retransmission until acked) and pull the next bounded slice out of write_source, if any.
-   //
-   if (!write_chunk.empty())
-      in_flight_writes.emplace_back(std::move(write_chunk));
-
-   const size_t remaining = asio::buffer_size(write_source) - write_source_copied;
-   if (remaining > 0)
-   {
-      const size_t take = std::min(remaining, kWriteChunkSize);
-      auto* src = static_cast<const uint8_t*>(write_source.data()) + write_source_copied;
-      write_chunk.assign(src, src + take);
-      write_source_copied += take;
-      write_offered = write_chunk.size();
-      write_confirmed = 0;
-      vec[0].base = write_chunk.data();
-      vec[0].len = write_chunk.size();
-      return 1;
-   }
-
-   //
-   // Nothing left in write_source either. If this is the EOF marker (write_source is always
-   // empty), retire it now -- a FIN carries no stream bytes, so there is nothing for
-   // on_write_consumed() to report back. A non-EOF write with nothing left to offer is instead
-   // retired from on_write_consumed() once its last chunk is confirmed (see there).
+   // Everything has been offered. For a body write there is nothing new until the caller starts
+   // the next one (which resumes the stream), so block here rather than returning 0 bytes --
+   // returning 0 without NGHTTP3_DATA_FLAG_EOF would tell nghttp3 the body ended.
    //
    if (!write_is_eof)
       return NGHTTP3_ERR_WOULDBLOCK;
 
+   //
+   // The EOF marker (write_source is always empty for it) completes as soon as nghttp3 has taken
+   // the FIN: unlike body data, a FIN carries no memory of the caller's that we would have to
+   // keep alive until it is acknowledged.
+   //
    *pflags |= NGHTTP3_DATA_FLAG_EOF;
    eof_sent_to_h3 = true;
    finish_active_write();
    return 0;
 }
 
-void Http3Stream::on_write_consumed(size_t n)
+void Http3Stream::on_write_acked(size_t n)
 {
    //
-   // n is the number of bytes of *stream* data ngtcp2 just committed to a packet, which also
-   // includes the HTTP/3 HEADERS frame nghttp3 sends ahead of any body -- e.g. the very first
-   // write_pkt() call after submit_response() drains the headers before there is an active write
-   // yet. Only attribute bytes once there is an active, non-EOF write to charge them against;
-   // clamp defensively in case a single packet still straddles the header/body boundary.
+   // n counts *application* data acknowledged on this stream -- nghttp3 accounts for the HTTP/3
+   // framing it puts around the body itself, so unlike ngtcp2's stream offsets these bytes are
+   // exactly the ones the caller handed us. All of them belong to the write currently active: a
+   // write only completes once every byte it offered is acknowledged, so nothing can still be
+   // outstanding from an earlier one. Clamp defensively anyway -- an accounting mismatch should
+   // complete the write early, not run write_acked past the end of the buffer.
    //
    if (n == 0 || !write_active || write_is_eof)
       return;
 
-   n = std::min(n, write_chunk.size() - write_confirmed);
-   write_confirmed += n;
+   write_acked = std::min(write_acked + n, asio::buffer_size(write_source));
+   logd("[{}] on_write_acked: {} bytes, {}/{} acknowledged", log_prefix, n, write_acked,
+        asio::buffer_size(write_source));
 
-   // The write is fully done once its current chunk is confirmed and there is no more of
-   // write_source left to carve into further chunks -- data_reader() advances write_chunk/
-   // write_source_copied otherwise, so this is the terminal state.
-   if (write_confirmed == write_chunk.size() &&
-       write_source_copied == asio::buffer_size(write_source))
+   if (write_acked == asio::buffer_size(write_source))
       finish_active_write();
 }
 
@@ -1076,19 +1195,16 @@ void Http3Stream::finish_active_write()
    assert(write_active);
 
    //
-   // ngtcp2 may still need this memory for retransmission until the bytes are acked; rather than
-   // tracking acks precisely, keep every chunk alive for the life of the stream (in_flight_writes
-   // is freed on stream destruction).
+   // Invoking the handler hands the caller's buffer back to it, so this must only ever run when
+   // nothing points into it any more: every offered byte acknowledged (on_write_acked()), or no
+   // bytes offered at all (the EOF marker).
    //
-   if (!write_chunk.empty())
-      in_flight_writes.emplace_back(std::move(write_chunk));
-   write_chunk.clear(); // moved-from
+   write_source = {};
    auto handler = std::move(write_handler);
    write_active = false;
 
    if (handler)
       swap_and_invoke(handler, boost::system::error_code{});
-
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1098,6 +1214,7 @@ void Http3Stream::delete_reader()
    auto self = shared_from_this(); // see delete_writer()
    pending_read.clear();
    read_head = {};
+   incoming = {};
 
    //
    // The handler dropped the Request without reading the body to its end (e.g. not_found(), which
@@ -1258,11 +1375,11 @@ void Http3Session::destroy() noexcept
       ngtcp2_pkt_info pi;
       ngtcp2_path_storage_zero(&ps);
 
-      auto nwrite = ngtcp2_conn_write_connection_close(conn_, &ps.path, &pi, closebuf.data(),
-                                                        closebuf.size(), &last_error_,
-                                                        ngtcp2::util::timestamp());
+      auto nwrite =
+         ngtcp2_conn_write_connection_close(conn_, &ps.path, &pi, closebuf.data(), closebuf.size(),
+                                            &last_error_, ngtcp2::util::timestamp());
       if (nwrite > 0)
-         send_udp(ep_.fd, ps.path.remote.addr, ps.path.remote.addrlen,
+         send_udp(ep_, ps.path.remote.addr, ps.path.remote.addrlen,
                   {closebuf.data(), static_cast<size_t>(nwrite)});
    }
 
@@ -1302,13 +1419,26 @@ void Http3Session::wake_write()
    // Reader/Writer destructor that runs as part of *this* session's own teardown (e.g. a
    // still-in-flight request/response destroyed by Server::Impl cancelling everything on
    // shutdown), at which point shared_from_this() would throw bad_weak_ptr.
+   //
+   // One flush per wake, not one per submission. A response submits its headers, its body and
+   // its EOF separately, and posting for each means the first pass writes everything and the
+   // rest walk the connection for nothing -- and still re-arm the timer on the way out. Arming
+   // once and clearing when the flush runs is what ngtcp2's example server gets for free from
+   // ev_io_start() on an already-active watcher.
+   //
+   if (write_posted_)
+      return;
+   write_posted_ = true;
+
    asio::post(get_executor(), [self = weak_from_this()]
    {
       auto session = std::static_pointer_cast<Http3Session>(self.lock());
-      if (!session || session->closed_)
+      if (!session)
          return;
-      if (session->write_streams() == 0)
-         session->update_timer();
+      session->write_posted_ = false;
+      if (session->closed_)
+         return;
+      session->flush_write();
    });
 }
 
@@ -1352,7 +1482,14 @@ int Http3Session::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t 
    ngtcp2_settings settings;
    ngtcp2_settings_default(&settings);
    settings.initial_ts = ngtcp2::util::timestamp();
-   settings.log_printf = &ngtcp2_log_printf;
+
+   //
+   // Only install the log callback when trace logging is actually enabled: ngtcp2 formats every
+   // frame of every packet into a string *before* invoking it, so a callback that discards its
+   // input still pays for the full formatting. A NULL log_printf makes ngtcp2 skip that work.
+   //
+   if (spdlog::default_logger_raw()->should_log(spdlog::level::trace))
+      settings.log_printf = &ngtcp2_log_printf;
 
    ngtcp2_transport_params params;
    ngtcp2_transport_params_default(&params);
@@ -1362,7 +1499,7 @@ int Http3Session::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t 
    params.initial_max_data = 1_m;
    params.initial_max_streams_bidi = 100;
    params.initial_max_streams_uni = 3;
-   params.max_idle_timeout = std::chrono::nanoseconds(30s).count();
+   params.max_idle_timeout = server_.config().idle_timeout.count();
    params.original_dcid = dcid;
    params.original_dcid_present = 1;
 
@@ -1443,10 +1580,10 @@ int Http3Session::on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> da
       return handle_error(rv);
    }
 
-   if (auto wrv = write_streams(); wrv != 0)
-      return wrv;
-
-   update_timer();
+   //
+   // Deliberately no write here -- see defer_write().
+   //
+   defer_write();
    return 0;
 }
 
@@ -1498,10 +1635,9 @@ ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uin
       if (fin)
          flags |= NGTCP2_WRITE_STREAM_FLAG_FIN;
 
-      auto nwrite =
-         ngtcp2_conn_writev_stream(conn_, path, pi, dest, destlen, &ndatalen, flags, stream_id,
-                                   reinterpret_cast<const ngtcp2_vec*>(vec.data()),
-                                   static_cast<size_t>(sveccnt), ts);
+      auto nwrite = ngtcp2_conn_writev_stream(
+         conn_, path, pi, dest, destlen, &ndatalen, flags, stream_id,
+         reinterpret_cast<const ngtcp2_vec*>(vec.data()), static_cast<size_t>(sveccnt), ts);
 
       if (nwrite < 0)
       {
@@ -1543,8 +1679,6 @@ ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uin
                   loge("[{}] nghttp3_conn_add_write_offset: {}", log_prefix_, nghttp3_strerror(rv));
                   return NGTCP2_ERR_CALLBACK_FAILURE;
                }
-               if (auto s = find_stream(stream_id))
-                  s->on_write_consumed(static_cast<size_t>(ndatalen));
             }
             continue;
          default:
@@ -1563,8 +1697,6 @@ ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uin
             loge("[{}] nghttp3_conn_add_write_offset: {}", log_prefix_, nghttp3_strerror(rv));
             return NGTCP2_ERR_CALLBACK_FAILURE;
          }
-         if (auto s = find_stream(stream_id))
-            s->on_write_consumed(static_cast<size_t>(ndatalen));
       }
 
       return nwrite;
@@ -1585,9 +1717,9 @@ int Http3Session::write_streams()
    ngtcp2_path_storage_zero(&ps);
 
    size_t gso_size = 0;
-   auto nwrite = ngtcp2_conn_write_aggregate_pkt2(conn_, &ps.path, &pi, tx_buf_.data(),
-                                                  tx_buf_.size(), &gso_size, &write_pkt_cb, 0,
-                                                  ngtcp2::util::timestamp());
+   auto nwrite =
+      ngtcp2_conn_write_aggregate_pkt2(conn_, &ps.path, &pi, tx_buf_.data(), tx_buf_.size(),
+                                       &gso_size, &write_pkt_cb, 0, ngtcp2::util::timestamp());
    if (nwrite < 0)
    {
       loge("[{}] ngtcp2_conn_write_aggregate_pkt2: {}", log_prefix_,
@@ -1602,8 +1734,24 @@ int Http3Session::write_streams()
    if (nwrite == 0)
       return 0;
 
-   return send_udp_gso(ep_.fd, ps.path.remote.addr, ps.path.remote.addrlen,
+   return send_udp_gso(ep_, ps.path.remote.addr, ps.path.remote.addrlen,
                        {tx_buf_.data(), static_cast<size_t>(nwrite)}, gso_size, no_gso_);
+}
+
+// -------------------------------------------------------------------------------------------------
+
+int Http3Session::flush_write()
+{
+   write_pending_ = false;
+
+   if (closed_ || !conn_)
+      return 0;
+
+   if (auto rv = write_streams(); rv != 0)
+      return rv;
+
+   update_timer();
+   return 0;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1644,14 +1792,22 @@ int Http3Session::handle_expiry()
    auto now = ngtcp2::util::timestamp();
    if (auto rv = ngtcp2_conn_handle_expiry(conn_, now); rv != 0)
    {
-      logw("[{}] ngtcp2_conn_handle_expiry: {}", log_prefix_, ngtcp2_strerror(rv));
+      //
+      // NGTCP2_ERR_IDLE_CLOSE is how a connection whose peer simply stopped talking ends --
+      // an interrupted client leaves one behind per connection it had open -- so it is a
+      // normal end of life, not a failure worth a warning. handle_error() takes it from here
+      // either way; what makes it special is that it discards the connection silently, see
+      // there.
+      //
+      if (rv == NGTCP2_ERR_IDLE_CLOSE)
+         logi("[{}] idle timeout, dropping connection", log_prefix_);
+      else
+         logw("[{}] ngtcp2_conn_handle_expiry: {}", log_prefix_, ngtcp2_strerror(rv));
+
       ngtcp2_ccerr_set_liberr(&last_error_, rv, nullptr, 0);
       return handle_error(rv);
    }
-   if (auto rv = write_streams(); rv != 0)
-      return rv;
-   update_timer();
-   return 0;
+   return flush_write();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1662,10 +1818,20 @@ int Http3Session::handle_error(int /*rv*/)
       return -1;
    closed_ = true;
 
-   // Idle timeout and drop-conn need no CONNECTION_CLOSE packet.
+   //
+   // Idle timeout and drop-conn need no CONNECTION_CLOSE packet -- and with no packet there is
+   // no closing period either, so none of the cleanup in Server::Impl::udp_on_read() can ever
+   // run for this session: it is reached from the expiry timer precisely because nothing is
+   // arriving any more. Drop the session from the demux map right here instead, or it would sit
+   // in m_quic_handlers for the lifetime of the server, holding streams whose request handlers
+   // are still waiting on a peer that went away. What is left of it then dies with do_session().
+   //
    if (last_error_.type == NGTCP2_CCERR_TYPE_IDLE_CLOSE ||
        last_error_.type == NGTCP2_CCERR_TYPE_DROP_CONN)
    {
+      auto self = weak_from_this().lock(); // erase_quic_session() may drop the last reference
+      timer_.cancel();
+      server_.erase_quic_session(this);
       signal_done();
       return -1;
    }
@@ -1686,7 +1852,7 @@ int Http3Session::handle_error(int /*rv*/)
       {
          conn_closebuf_.resize(static_cast<size_t>(nwrite));
          logi("[{}] sending CONNECTION_CLOSE", log_prefix_);
-         send_udp(ep_.fd, ps.path.remote.addr, ps.path.remote.addrlen,
+         send_udp(ep_, ps.path.remote.addr, ps.path.remote.addrlen,
                   {conn_closebuf_.data(), conn_closebuf_.size()});
       }
       else
@@ -1729,7 +1895,7 @@ void Http3Session::resend_conn_close()
    if (!path)
       return;
    logd("[{}] resending CONNECTION_CLOSE", log_prefix_);
-   send_udp(ep_.fd, path->remote.addr, path->remote.addrlen,
+   send_udp(ep_, path->remote.addr, path->remote.addrlen,
             {conn_closebuf_.data(), conn_closebuf_.size()});
 }
 
@@ -1908,6 +2074,7 @@ int Http3Session::setup_http3()
       return 0;
 
    nghttp3_callbacks h3cb{};
+   h3cb.acked_stream_data = &Http3Session::h3_cb_acked_stream_data;
    h3cb.stream_close = &Http3Session::h3_cb_stream_close;
    h3cb.recv_data = &Http3Session::h3_cb_recv_data;
    h3cb.deferred_consume = &Http3Session::h3_cb_deferred_consume;
@@ -1968,6 +2135,29 @@ int Http3Session::setup_http3()
 // nghttp3 callbacks
 // -------------------------------------------------------------------------------------------------
 
+//
+// The only notification that the peer is done with response body bytes we handed out by
+// reference, and hence that the caller's buffer may be released -- see the comment above
+// Http3Stream::write_active.
+//
+int Http3Session::h3_cb_acked_stream_data(nghttp3_conn*, int64_t stream_id, uint64_t datalen,
+                                          void* user, void*)
+{
+   auto self = static_cast<Http3Session*>(user);
+   auto stream = self->find_stream(stream_id);
+   if (!stream)
+      return 0;
+
+   //
+   // Completing a write resumes the application, which may drop the last reference to this
+   // session -- while ngtcp2 is still in the middle of processing the ACK that got us here.
+   // weak_from_this(), not shared_from_this(): the ACK may well arrive during teardown.
+   //
+   auto session_guard = self->weak_from_this().lock();
+   stream->on_write_acked(static_cast<size_t>(datalen));
+   return 0;
+}
+
 int Http3Session::h3_cb_stream_close(nghttp3_conn*, int64_t stream_id, uint64_t /*app_error*/,
                                      void* user, void*)
 {
@@ -1979,6 +2169,19 @@ int Http3Session::h3_cb_stream_close(nghttp3_conn*, int64_t stream_id, uint64_t 
       // Waiting readers/writers should see the close now.
       if (s->read_handler)
          swap_and_invoke(s->read_handler, boost::system::error_code{}, 0);
+
+      //
+      // A write waiting for its data to be acknowledged will never see those acknowledgements
+      // now: ngtcp2 drops whatever of this stream is still in flight. It also stops touching the
+      // caller's buffer, which is all the wait was ever for, so complete the write -- as failed,
+      // because the body did not make it -- instead of leaving it pending forever.
+      //
+      if (s->write_active && s->write_handler)
+      {
+         s->write_active = false;
+         s->write_source = {};
+         swap_and_invoke(s->write_handler, errc::make_error_code(errc::connection_reset));
+      }
       s->maybe_close();
    }
    if (ngtcp2_conn_is_server(self->conn_))
@@ -2036,7 +2239,8 @@ int Http3Session::h3_cb_recv_header(nghttp3_conn*, int64_t stream_id, int32_t /*
    if (!s)
       return 0;
 
-   logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", s->log_prefix, name_view, value_view);
+   if (spdlog::default_logger_raw()->should_log(spdlog::level::debug))
+      s->received_headers.emplace_back(name_view, value_view);
 
    try
    {
@@ -2082,6 +2286,7 @@ int Http3Session::h3_cb_end_headers(nghttp3_conn*, int64_t stream_id, int /*fin*
       return 0;
 
    logd("[{}] {} {}", s->log_prefix, s->method, s->url.buffer());
+   log_headers(s->log_prefix, std::exchange(s->received_headers, {}));
 
    //
    // Build user-facing Request/Response and dispatch through the shared handler.
@@ -2090,10 +2295,8 @@ int Http3Session::h3_cb_end_headers(nghttp3_conn*, int64_t stream_id, int /*fin*
    server::Response response(std::make_unique<Http3Writer<server::Response::Impl>>(*s));
 
    auto& sv = self->server_;
-   if (auto& handler = sv.requestHandlerCoro())
+   if (auto& handler = sv.requestHandler())
       co_spawn(self->get_executor(), handler(std::move(request), std::move(response)), detached);
-   else if (auto& handler = sv.requestHandler())
-      handler(std::move(request), std::move(response));
    else
    {
       loge("[{}] no request handler set", s->log_prefix);
@@ -2177,10 +2380,22 @@ int Server::Impl::udp_on_read(Endpoint& ep)
       msg_ctrl[CMSG_SPACE(sizeof(int)) + CMSG_SPACE(sizeof(in6_pktinfo)) + CMSG_SPACE(sizeof(int))];
    msg.msg_control = msg_ctrl;
 
+   //
+   // Sessions that received something in this batch. They are written once, below, after every
+   // datagram the socket had queued has been handed to ngtcp2 -- so one aggregate pass can pack
+   // a whole response into a single GSO sendmsg() instead of dribbling it out per datagram.
+   //
+   std::vector<std::shared_ptr<Http3Session>> pending;
+   auto mark_pending = [&pending](const std::shared_ptr<Http3Session>& session)
+   {
+      if (std::ranges::find(pending, session) == pending.end())
+         pending.push_back(session);
+   };
+
    for (size_t pktcnt = 0; pktcnt < 32; ++pktcnt)
    {
       if (pktcnt)
-         logd("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ", pktcnt);
+         logd("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ", pktcnt);
 
       msg.msg_namelen = sizeof(su);
       msg.msg_controllen = sizeof(msg_ctrl);
@@ -2190,7 +2405,7 @@ int Server::Impl::udp_on_read(Endpoint& ep)
       {
          if (errno != EAGAIN && errno != EWOULDBLOCK && errno != ENOTCONN)
             loge("recvmsg: {}", strerror(errno));
-         return 0;
+         break; // socket drained (or broken): fall through to the write pass
       }
 
       if (nread < 22)
@@ -2229,10 +2444,19 @@ int Server::Impl::udp_on_read(Endpoint& ep)
       auto all_data = std::span<const uint8_t>{buf.data(), static_cast<size_t>(nread)};
       const size_t seg_size = gro_size > 0 ? gro_size : all_data.size();
 
-      while (!all_data.empty())
+      for (size_t segcnt = 0; !all_data.empty(); ++segcnt)
       {
+         if (segcnt)
+            logd("-   {}     -   -   -   -   -   -   -   -   -   -   -   -   -   -   -", segcnt);
+
          auto data = all_data.subspan(0, std::min(seg_size, all_data.size()));
          all_data = all_data.subspan(data.size());
+
+         if (drop_packet(ep.drop_rate_rx))
+         {
+            // logw("*** dropping received packet ({} bytes) ***", data.size());
+            continue;
+         }
 
          ngtcp2_version_cid vc;
          auto rv = ngtcp2_pkt_decode_version_cid(&vc, data.data(), data.size(), QUIC_SCIDLEN);
@@ -2283,6 +2507,8 @@ int Server::Impl::udp_on_read(Endpoint& ep)
                auto lock = std::lock_guard(self->m_sessionMutex);
                self->m_sessions.erase(session);
             });
+
+            mark_pending(session);
          }
          else
          {
@@ -2306,7 +2532,11 @@ int Server::Impl::udp_on_read(Endpoint& ep)
                   continue;
             }
 
-            if (session->on_read(pi, data, *remote) != 0 && session->closed())
+            if (session->on_read(pi, data, *remote) == 0)
+            {
+               mark_pending(session);
+            }
+            else if (session->closed())
             {
                //
                // Only erase immediately when not in closing/draining period.
@@ -2324,6 +2554,21 @@ int Server::Impl::udp_on_read(Endpoint& ep)
          }
       }
    }
+
+   //
+   // One write pass per session, after the whole batch has been read.
+   //
+   for (const auto& session : pending)
+   {
+      if (session->flush_write() == 0 || !session->closed())
+         continue;
+
+      auto* conn = session->conn();
+      if (!conn || (!ngtcp2_conn_in_closing_period(conn) && !ngtcp2_conn_in_draining_period(conn)))
+         std::erase_if(m_quic_handlers,
+                       [&](const auto& kv) { return kv.second.get() == session.get(); });
+   }
+
    return 0;
 }
 
@@ -2347,6 +2592,8 @@ awaitable<void> Server::Impl::udp_receive_loop()
 
       Endpoint ep{};
       ep.fd = m_udp_socket->native_handle();
+      ep.drop_rate_rx = m_config.drop_rate_rx;
+      ep.drop_rate_tx = m_config.drop_rate_tx;
       auto local = m_udp_socket->local_endpoint();
       auto data = local.data();
       std::memcpy(&ep.addr.su, data, local.size());

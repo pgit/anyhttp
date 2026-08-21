@@ -109,7 +109,7 @@ awaitable<void> not_found(server::Request, server::Response response)
 
 awaitable<void> eat_request(server::Request request, server::Response response)
 {
-   logi("eat_request: going to eat {} bytes", request.content_length().value_or(-1));
+   logd("eat_request: going to eat {} bytes", request.content_length().value_or(-1));
 
    co_await response.async_submit(200, {});
    co_await response.async_write({});
@@ -127,7 +127,7 @@ awaitable<void> eat_request(server::Request request, server::Response response)
          logd("eat_request: ate {} bytes", n);
          bytes += n;
       }
-      logi("eat_request: ate {} bytes", bytes);
+      logd("eat_request: ate {} bytes", bytes);
    }
    catch (const boost::system::system_error& e)
    {

@@ -96,6 +96,15 @@ struct TlsClientContext
       SSL_CTX_set_alpn_protos(ctx, alpn, sizeof(alpn) - 1);
 
       //
+      // Same order as the server, so AES-128 GCM is also picked against peers that leave the
+      // choice to the client.
+      //
+      if (SSL_CTX_set_ciphersuites(ctx, "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:"
+                                        "TLS_CHACHA20_POLY1305_SHA256") != 1)
+         throw std::runtime_error(std::string{"SSL_CTX_set_ciphersuites: "} +
+                                  ERR_error_string(ERR_get_error(), nullptr));
+
+      //
       // TODO: verify the server certificate (e.g. against pki/out/root.pem) instead of accepting
       // anything.
       //
@@ -131,6 +140,23 @@ nghttp3_nv make_nv(std::string_view name, std::string_view value)
    nv.valuelen = value.size();
    nv.flags = NGHTTP3_NV_FLAG_NONE;
    return nv;
+}
+
+/// Logs a block of headers, one per line, in the same style as the received ones.
+void log_headers(std::string_view log_prefix, const std::vector<nghttp3_nv>& nva)
+{
+   for (const auto& nv : nva)
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", log_prefix,
+           std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen),
+           std::string_view(reinterpret_cast<const char*>(nv.value), nv.valuelen));
+}
+
+/// Same, for a header block buffered up by the recv_header callback.
+void log_headers(std::string_view log_prefix,
+                 const std::vector<std::pair<std::string, std::string>>& headers)
+{
+   for (const auto& [name, value] : headers)
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", log_prefix, name, value);
 }
 
 void ngtcp2_log_printf(void* /*user*/, const char* fmt, ...) noexcept
@@ -183,6 +209,13 @@ public:
    unsigned int status_code = 0;
    Fields response_fields;
    std::optional<size_t> content_length;
+
+   //
+   // The header block as it arrived, buffered so that h3_cb_end_headers() can log it in one go,
+   // below the status line, instead of one stray line per header as they come in. Only filled
+   // when debug logging is on, and dropped again as soon as it has been logged.
+   //
+   std::vector<std::pair<std::string, std::string>> received_headers;
    bool headers_received = false;
    bool response_delivered = false;
    client::Request::GetResponseHandler response_handler;
@@ -232,6 +265,7 @@ public:
    //
    std::deque<std::vector<uint8_t>> pending_read;
    asio::const_buffer read_head;
+   asio::const_buffer incoming; // chunk on_data_chunk() is delivering, not yet taken
    bool eof_received = false;
    ReadSomeHandler read_handler;
    asio::mutable_buffer read_handler_buffer;
@@ -623,10 +657,27 @@ void Http3ClientStream::on_data_chunk(const uint8_t* data, size_t len)
 {
    if (len == 0)
       return;
-   pending_read.emplace_back(data, data + len);
-   if (read_head.size() == 0)
-      read_head = asio::buffer(pending_read.front());
+
+   //
+   // nghttp3 hands us a view into the packet it is parsing, valid only until this callback
+   // returns. Offer it to a waiting reader as it stands before copying it anywhere: a handler
+   // that keeps a read outstanding -- the usual shape -- takes the bytes with a single copy, and
+   // the vector that would otherwise carry them (a malloc, a copy in, a copy out and a free, per
+   // QUIC packet, so about fifty of each per 64k of request body) is never created at all. Only
+   // what the reader could not take is parked for later.
+   //
+   auto self = shared_from_this(); // a resumed reader may drop the last reference to this stream
+   incoming = asio::const_buffer{data, len};
    call_read_handler();
+
+   if (incoming.size() > 0)
+   {
+      auto* rest = static_cast<const uint8_t*>(incoming.data());
+      pending_read.emplace_back(rest, rest + incoming.size());
+      if (read_head.size() == 0)
+         read_head = asio::buffer(pending_read.front());
+      incoming = {};
+   }
 }
 
 void Http3ClientStream::on_eof()
@@ -661,17 +712,45 @@ void Http3ClientStream::call_read_handler()
    size_t consumed = 0;
    while (read_handler)
    {
-      if (asio::buffer_size(read_head) > 0)
+      if (read_head.size() > 0 || incoming.size() > 0)
       {
-         auto copied = asio::buffer_copy(read_handler_buffer, read_head);
-         read_head += copied;
-         consumed += copied;
-         if (read_head.size() == 0)
+         //
+         // Fill the caller's buffer from as many queued chunks as it takes, rather than stopping
+         // at the end of the first one. Each chunk is what arrived in a single QUIC packet -- a
+         // little over a kilobyte -- so handing them out one per read turns a 64k body into ~48
+         // reads, and a handler that answers every read with a write (an echo) pays a full
+         // round trip for each of them, because a body write only completes once the peer has
+         // acknowledged it (see the comment above write_active).
+         //
+         auto dest = read_handler_buffer;
+         size_t copied = 0;
+         while (dest.size() > 0 && read_head.size() > 0)
          {
-            pending_read.pop_front();
-            read_head =
-               pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
+            auto n = asio::buffer_copy(dest, read_head);
+            dest += n;
+            read_head += n;
+            copied += n;
+            if (read_head.size() == 0)
+            {
+               pending_read.pop_front();
+               read_head =
+                  pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
+            }
          }
+
+         //
+         // ... and last from the chunk being delivered right now, which on_data_chunk() offers
+         // through `incoming` instead of parking it in a vector of its own first. Queued chunks
+         // go first: they arrived earlier.
+         //
+         if (dest.size() > 0 && incoming.size() > 0)
+         {
+            auto n = asio::buffer_copy(dest, incoming);
+            incoming += n;
+            copied += n;
+         }
+
+         consumed += copied;
          swap_and_invoke(read_handler, boost::system::error_code{}, copied);
          continue;
       }
@@ -712,9 +791,6 @@ void Http3ClientStream::start_write(WriteHandler&& handler, asio::const_buffer b
    const bool is_eof = (n == 0);
    logd("[{}] start_write: n={} is_eof={}", log_prefix, n, is_eof);
 
-   // Only one async_write() may be active at a time -- see the class comment above write_active.
-   assert(!write_active);
-
    //
    // Once accepted, the caller's intent to end the request body is final: this is what tells
    // delete_writer() the body ended where it was meant to, so it need not reset the stream. An
@@ -743,6 +819,13 @@ void Http3ClientStream::start_write(WriteHandler&& handler, asio::const_buffer b
       }
       return;
    }
+
+   //
+   // Only one async_write() may be active at a time -- see the class comment above write_active.
+   // The re-issued EOF handled above is not an exception to that: it adopts the FIN that is
+   // already in flight instead of starting a write of its own, and has returned by now.
+   //
+   assert(!write_active);
 
    if (is_eof)
       eof_submitted = true;
@@ -891,11 +974,29 @@ void Http3ClientStream::on_write_consumed(size_t n)
    n = std::min(n, write_chunk.size() - write_confirmed);
    write_confirmed += n;
 
+   if (write_confirmed < write_chunk.size())
+      return;
+
    // The write is fully done once its current chunk is confirmed and there is no more of
    // write_source left to carve into further chunks -- data_reader() advances write_chunk/
    // write_source_copied otherwise, so this is the terminal state.
-   if (write_confirmed == write_chunk.size() && write_source_copied == asio::buffer_size(write_source))
+   if (write_source_copied == asio::buffer_size(write_source))
+   {
       finish_active_write();
+      return;
+   }
+
+   //
+   // There is more of write_source to carve into chunks, but nghttp3 may have asked for data
+   // while this chunk was offered and still unconfirmed, in which case data_reader() answered
+   // NGHTTP3_ERR_WOULDBLOCK -- and a blocked stream is never polled again until it is explicitly
+   // resumed. Now that the chunk is confirmed, there is something new to hand out, so unblock
+   // the stream. Without this, any single async_write() larger than kWriteChunkSize stalls here
+   // forever, with the response body truncated and no FIN.
+   //
+   if (auto h3 = session.h3())
+      nghttp3_conn_resume_stream(h3, id);
+   session.wake_write();
 }
 
 void Http3ClientStream::finish_active_write()
@@ -1001,6 +1102,7 @@ void Http3ClientStream::delete_reader()
    auto self = shared_from_this(); // see delete_writer()
    pending_read.clear();
    read_head = {};
+   incoming = {};
    maybe_close();
 }
 
@@ -1154,7 +1256,13 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote)
    ngtcp2_settings settings;
    ngtcp2_settings_default(&settings);
    settings.initial_ts = ngtcp2::util::timestamp();
-   settings.log_printf = &ngtcp2_log_printf;
+
+   //
+   // See the server-side counterpart: ngtcp2 does the full frame formatting before calling this,
+   // so only install it when trace logging is actually enabled.
+   //
+   if (spdlog::default_logger_raw()->should_log(spdlog::level::trace))
+      settings.log_printf = &ngtcp2_log_printf;
 
    ngtcp2_transport_params params;
    ngtcp2_transport_params_default(&params);
@@ -1272,7 +1380,16 @@ void Http3ClientSession::close()
    for (auto& stream : streams)
       stream->fail(errc::make_error_code(errc::connection_reset));
 
-   if (conn_ && !ngtcp2_conn_in_closing_period(conn_) && !ngtcp2_conn_in_draining_period(conn_))
+   //
+   // An idle-timed-out (or dropped) connection is discarded silently: RFC 9000 has no
+   // CONNECTION_CLOSE for it, and there is nobody left listening anyway -- writing one would
+   // just put a packet on a path whose peer has been gone for a full idle period.
+   //
+   const bool silent = last_error_.type == NGTCP2_CCERR_TYPE_IDLE_CLOSE ||
+                       last_error_.type == NGTCP2_CCERR_TYPE_DROP_CONN;
+
+   if (conn_ && !silent && !ngtcp2_conn_in_closing_period(conn_) &&
+       !ngtcp2_conn_in_draining_period(conn_))
    {
       std::array<uint8_t, NGTCP2_MAX_UDP_PAYLOAD_SIZE> closebuf;
       ngtcp2_path_storage ps;
@@ -1523,7 +1640,16 @@ int Http3ClientSession::handle_expiry()
    auto now = ngtcp2::util::timestamp();
    if (auto rv = ngtcp2_conn_handle_expiry(conn_, now); rv != 0)
    {
-      logw("[{}] ngtcp2_conn_handle_expiry: {}", log_prefix_, ngtcp2_strerror(rv));
+      //
+      // NGTCP2_ERR_IDLE_CLOSE is how a connection whose peer stopped talking ends: a normal
+      // end of life, not a failure worth a warning. close() then discards it silently, see
+      // there.
+      //
+      if (rv == NGTCP2_ERR_IDLE_CLOSE)
+         logi("[{}] idle timeout, dropping connection", log_prefix_);
+      else
+         logw("[{}] ngtcp2_conn_handle_expiry: {}", log_prefix_, ngtcp2_strerror(rv));
+
       ngtcp2_ccerr_set_liberr(&last_error_, rv, nullptr, 0);
       return handle_error(rv);
    }
@@ -1832,7 +1958,8 @@ int Http3ClientSession::h3_cb_recv_header(nghttp3_conn*, int64_t stream_id, int3
    if (!s)
       return 0;
 
-   logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", s->log_prefix, name_view, value_view);
+   if (spdlog::default_logger_raw()->should_log(spdlog::level::debug))
+      s->received_headers.emplace_back(name_view, value_view);
 
    try
    {
@@ -1867,6 +1994,7 @@ int Http3ClientSession::h3_cb_end_headers(nghttp3_conn*, int64_t stream_id, int 
       return 0;
 
    logd("[{}] response headers: status={}", s->log_prefix, s->status_code);
+   log_headers(s->log_prefix, std::exchange(s->received_headers, {}));
    s->headers_received = true;
    s->deliver_response();
    return 0;
@@ -1967,6 +2095,7 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, boost::urls::url 
    }
 
    logd("[{}] async_submit: new stream ID: {}", stream->log_prefix, stream_id);
+   log_headers(stream->log_prefix, nva);
    wake_write();
 
    post(get_executor(), [handler = std::move(handler),

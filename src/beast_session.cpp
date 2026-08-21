@@ -395,6 +395,7 @@ class ResponseWriter
       WriterBase<server::Response::Impl, Stream, http::response_serializer<http::buffer_body>>;
 
 public:
+   using super::logPrefix;
    using super::message;
    using super::serializer;
    using super::stream;
@@ -425,6 +426,10 @@ public:
 
       if (message.find(http::field::server) == message.end())
          message.set(http::field::server, "anyhttp");
+
+      mlogd("{} {}", message.result_int(), message.reason());
+      for (const auto& header : message)
+         mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
 
       //
       // TODO: For bundling writing the header and body, we should just post the writing here,
@@ -716,7 +721,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       //
       server::Request request_wrapper(std::move(reader));
       server::Response response_wrapper(std::move(writer));
-      if (auto& handler = server().requestHandlerCoro())
+      if (auto& handler = server().requestHandler())
       {
          try
          {

@@ -21,6 +21,24 @@ struct Config
    std::string listen_address = "::";
    uint16_t port = 8080;
    bool use_strand = false;
+
+   //
+   // HTTP/3 only: how long a QUIC connection may go without a packet from its peer before it is
+   // dropped. This is the only way a peer that vanished without a CONNECTION_CLOSE -- a killed
+   // client, a machine that went to sleep -- is ever noticed, so it also bounds how long its
+   // session and streams stay around. 30s is what the ngtcp2 examples use.
+   //
+   std::chrono::nanoseconds idle_timeout = 30s;
+
+   //
+   // HTTP/3 only, testing aid: probability (0.0 ... 1.0) with which an individual QUIC datagram
+   // is thrown away instead of being processed (rx) or actually sent (tx). This exercises loss
+   // recovery -- retransmits, PTO, ACK handling -- without needing a lossy network. Dropping
+   // happens per QUIC packet, i.e. GRO-coalesced datagrams are dropped individually and TX
+   // GSO batching is bypassed while `drop_rate_tx` is non-zero.
+   //
+   double drop_rate_rx = 0.0;
+   double drop_rate_tx = 0.0;
 };
 
 // =================================================================================================
@@ -135,8 +153,7 @@ private:
 
 // =================================================================================================
 
-using RequestHandler = std::function<void(Request, Response)>;
-using RequestHandlerCoro = std::function<asio::awaitable<void>(Request, Response)>;
+using RequestHandler = std::function<asio::awaitable<void>(Request, Response)>;
 
 class Server
 {
@@ -151,7 +168,6 @@ public:
    executor_type get_executor() const noexcept;
 
    void setRequestHandler(RequestHandler&& handler);
-   void setRequestHandlerCoro(RequestHandlerCoro&& handler);
 
    asio::ip::tcp::endpoint local_endpoint() const;
 
