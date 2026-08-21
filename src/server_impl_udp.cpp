@@ -584,6 +584,7 @@ private:
    std::string log_prefix_;
 
    bool write_pending_ = false; // set by on_read(), acted on by flush_write()
+   bool write_posted_ = false;  // a wake_write() flush is already on the way
 
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
 
@@ -1312,10 +1313,24 @@ void Http3Session::wake_write()
    // Reader/Writer destructor that runs as part of *this* session's own teardown (e.g. a
    // still-in-flight request/response destroyed by Server::Impl cancelling everything on
    // shutdown), at which point shared_from_this() would throw bad_weak_ptr.
+   //
+   // One flush per wake, not one per submission. A response submits its headers, its body and
+   // its EOF separately, and posting for each means the first pass writes everything and the
+   // rest walk the connection for nothing -- and still re-arm the timer on the way out. Arming
+   // once and clearing when the flush runs is what ngtcp2's example server gets for free from
+   // ev_io_start() on an already-active watcher.
+   //
+   if (write_posted_)
+      return;
+   write_posted_ = true;
+
    asio::post(get_executor(), [self = weak_from_this()]
    {
       auto session = std::static_pointer_cast<Http3Session>(self.lock());
-      if (!session || session->closed_)
+      if (!session)
+         return;
+      session->write_posted_ = false;
+      if (session->closed_)
          return;
       session->flush_write();
    });
