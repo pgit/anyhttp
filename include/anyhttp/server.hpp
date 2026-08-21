@@ -29,6 +29,16 @@ struct Config
    // session and streams stay around. 30s is what the ngtcp2 examples use.
    //
    std::chrono::nanoseconds idle_timeout = 30s;
+
+   //
+   // HTTP/3 only, testing aid: probability (0.0 ... 1.0) with which an individual QUIC datagram
+   // is thrown away instead of being processed (rx) or actually sent (tx). This exercises loss
+   // recovery -- retransmits, PTO, ACK handling -- without needing a lossy network. Dropping
+   // happens per QUIC packet, i.e. GRO-coalesced datagrams are dropped individually and TX
+   // GSO batching is bypassed while `drop_rate_tx` is non-zero.
+   //
+   double drop_rate_rx = 0.0;
+   double drop_rate_tx = 0.0;
 };
 
 // =================================================================================================

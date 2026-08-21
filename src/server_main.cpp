@@ -45,6 +45,10 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
    opts("threads,t", po::value(&config.threads)->default_value(1), "number of threads to run");
    opts("port,p", po::value(&config.server.port)->default_value(config.server.port),
         "listening port");
+   opts("drop-rx", po::value(&config.server.drop_rate_rx)->default_value(0.0),
+        "HTTP/3 testing: probability (0.0 .. 1.0) of dropping a received QUIC packet");
+   opts("drop-tx", po::value(&config.server.drop_rate_tx)->default_value(0.0),
+        "HTTP/3 testing: probability (0.0 .. 1.0) of dropping a QUIC packet before sending it");
 
    po::variables_map vm;
    try
@@ -69,6 +73,16 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
    {
       std::println(std::cerr, "number of threads must be greater than 0");
       return std::unexpected(1);
+   }
+
+   for (auto [name, rate] : {std::pair{"drop-rx", config.server.drop_rate_rx},
+                             std::pair{"drop-tx", config.server.drop_rate_tx}})
+   {
+      if (rate < 0.0 || rate > 1.0)
+      {
+         std::println(std::cerr, "--{} must be between 0.0 and 1.0", name);
+         return std::unexpected(1);
+      }
    }
 
    return {std::move(config)};

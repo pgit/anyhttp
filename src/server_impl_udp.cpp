@@ -53,6 +53,7 @@
 #include <cstring>
 #include <deque>
 #include <memory>
+#include <random>
 #include <span>
 #include <string>
 #include <string_view>
@@ -75,6 +76,10 @@ struct Endpoint
 {
    ngtcp2::Address addr;
    int fd;
+
+   // Testing aid, see server::Config::drop_rate_rx/tx.
+   double drop_rate_rx = 0.0;
+   double drop_rate_tx = 0.0;
 };
 
 // =================================================================================================
@@ -181,11 +186,34 @@ std::string cid_key(const uint8_t* data, size_t len)
 
 // -------------------------------------------------------------------------------------------------
 
-int send_udp(int fd, const sockaddr* sa, socklen_t salen, std::span<const uint8_t> data)
+//
+// Testing aid: rolls the dice for a single QUIC packet. `rate` is the probability of the packet
+// being dropped, 0.0 (never, the default) to 1.0 (always). The generator is deliberately not
+// seeded deterministically -- this is meant to shake out loss handling over many runs, not to
+// reproduce one exact sequence.
+//
+bool drop_packet(double rate)
 {
+   if (rate <= 0.0)
+      return false;
+
+   static thread_local std::mt19937 rng{std::random_device{}()};
+   return std::uniform_real_distribution<double>{0.0, 1.0}(rng) < rate;
+}
+
+// -------------------------------------------------------------------------------------------------
+
+int send_udp(const Endpoint& ep, const sockaddr* sa, socklen_t salen, std::span<const uint8_t> data)
+{
+   if (drop_packet(ep.drop_rate_tx))
+   {
+      // logw("*** dropping outgoing packet ({} bytes) ***", data.size());
+      return 0; // pretend it went out; ngtcp2 will retransmit
+   }
+
    for (;;)
    {
-      auto n = ::sendto(fd, data.data(), data.size(), 0, sa, salen);
+      auto n = ::sendto(ep.fd, data.data(), data.size(), 0, sa, salen);
       if (n == -1)
       {
          if (errno == EINTR)
@@ -205,15 +233,16 @@ int send_udp(int fd, const sockaddr* sa, socklen_t salen, std::span<const uint8_
 // the last exactly `gso_size` bytes) with a single sendmsg() using UDP_SEGMENT (GSO), so N QUIC
 // packets cost one syscall instead of N. Falls back to one sendto() per segment -- and remembers
 // to do so from then on -- if the kernel/NIC doesn't support UDP_SEGMENT here.
-int send_udp_gso(int fd, const sockaddr* sa, socklen_t salen, std::span<const uint8_t> data,
-                 size_t gso_size, bool& no_gso)
+int send_udp_gso(const Endpoint& ep, const sockaddr* sa, socklen_t salen,
+                 std::span<const uint8_t> data, size_t gso_size, bool& no_gso)
 {
-   if (no_gso || data.size() <= gso_size)
+   // With TX dropping enabled, go packet by packet so each one can be dropped individually.
+   if (no_gso || data.size() <= gso_size || ep.drop_rate_tx > 0.0)
    {
       for (; !data.empty();)
       {
          auto len = std::min(gso_size, data.size());
-         if (send_udp(fd, sa, salen, data.first(len)) != 0)
+         if (send_udp(ep, sa, salen, data.first(len)) != 0)
             return -1;
          data = data.subspan(len);
       }
@@ -239,7 +268,7 @@ int send_udp_gso(int fd, const sockaddr* sa, socklen_t salen, std::span<const ui
 
    for (;;)
    {
-      auto n = ::sendmsg(fd, &msg, 0);
+      auto n = ::sendmsg(ep.fd, &msg, 0);
       if (n == -1)
       {
          if (errno == EINTR)
@@ -251,7 +280,7 @@ int send_udp_gso(int fd, const sockaddr* sa, socklen_t salen, std::span<const ui
             // GSO unsupported on this socket/NIC: fall back permanently and resend as
             // individual datagrams.
             no_gso = true;
-            return send_udp_gso(fd, sa, salen, data, gso_size, no_gso);
+            return send_udp_gso(ep, sa, salen, data, gso_size, no_gso);
          }
          loge("sendmsg (GSO): {}", strerror(errno));
          return -1;
@@ -1350,7 +1379,7 @@ void Http3Session::destroy() noexcept
          ngtcp2_conn_write_connection_close(conn_, &ps.path, &pi, closebuf.data(), closebuf.size(),
                                             &last_error_, ngtcp2::util::timestamp());
       if (nwrite > 0)
-         send_udp(ep_.fd, ps.path.remote.addr, ps.path.remote.addrlen,
+         send_udp(ep_, ps.path.remote.addr, ps.path.remote.addrlen,
                   {closebuf.data(), static_cast<size_t>(nwrite)});
    }
 
@@ -1705,7 +1734,7 @@ int Http3Session::write_streams()
    if (nwrite == 0)
       return 0;
 
-   return send_udp_gso(ep_.fd, ps.path.remote.addr, ps.path.remote.addrlen,
+   return send_udp_gso(ep_, ps.path.remote.addr, ps.path.remote.addrlen,
                        {tx_buf_.data(), static_cast<size_t>(nwrite)}, gso_size, no_gso_);
 }
 
@@ -1823,7 +1852,7 @@ int Http3Session::handle_error(int /*rv*/)
       {
          conn_closebuf_.resize(static_cast<size_t>(nwrite));
          logi("[{}] sending CONNECTION_CLOSE", log_prefix_);
-         send_udp(ep_.fd, ps.path.remote.addr, ps.path.remote.addrlen,
+         send_udp(ep_, ps.path.remote.addr, ps.path.remote.addrlen,
                   {conn_closebuf_.data(), conn_closebuf_.size()});
       }
       else
@@ -1866,7 +1895,7 @@ void Http3Session::resend_conn_close()
    if (!path)
       return;
    logd("[{}] resending CONNECTION_CLOSE", log_prefix_);
-   send_udp(ep_.fd, path->remote.addr, path->remote.addrlen,
+   send_udp(ep_, path->remote.addr, path->remote.addrlen,
             {conn_closebuf_.data(), conn_closebuf_.size()});
 }
 
@@ -2423,6 +2452,12 @@ int Server::Impl::udp_on_read(Endpoint& ep)
          auto data = all_data.subspan(0, std::min(seg_size, all_data.size()));
          all_data = all_data.subspan(data.size());
 
+         if (drop_packet(ep.drop_rate_rx))
+         {
+            // logw("*** dropping received packet ({} bytes) ***", data.size());
+            continue;
+         }
+
          ngtcp2_version_cid vc;
          auto rv = ngtcp2_pkt_decode_version_cid(&vc, data.data(), data.size(), QUIC_SCIDLEN);
          if (rv != 0)
@@ -2557,6 +2592,8 @@ awaitable<void> Server::Impl::udp_receive_loop()
 
       Endpoint ep{};
       ep.fd = m_udp_socket->native_handle();
+      ep.drop_rate_rx = m_config.drop_rate_rx;
+      ep.drop_rate_tx = m_config.drop_rate_tx;
       auto local = m_udp_socket->local_endpoint();
       auto data = local.data();
       std::memcpy(&ep.addr.su, data, local.size());
