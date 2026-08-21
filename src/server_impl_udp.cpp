@@ -2394,8 +2394,11 @@ int Server::Impl::udp_on_read(Endpoint& ep)
       auto all_data = std::span<const uint8_t>{buf.data(), static_cast<size_t>(nread)};
       const size_t seg_size = gro_size > 0 ? gro_size : all_data.size();
 
-      while (!all_data.empty())
+      for (size_t segcnt = 0; !all_data.empty(); ++segcnt)
       {
+         if (segcnt)
+            logd("-   {}     -   -   -   -   -   -   -   -   -   -   -   -   -   -   -", segcnt);
+
          auto data = all_data.subspan(0, std::min(seg_size, all_data.size()));
          all_data = all_data.subspan(data.size());
 
