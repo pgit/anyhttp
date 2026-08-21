@@ -950,9 +950,6 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer)
    const bool is_eof = (n == 0);
    logd("[{}] start_write: n={} is_eof={}", log_prefix, n, is_eof);
 
-   // Only one async_write() may be active at a time -- see the class comment above write_active.
-   assert(!write_active);
-
    //
    // Once accepted, the caller's intent to end the response body is final: this is what tells
    // delete_writer() the body ended where it was meant to, so it need not reset the stream. An
@@ -981,6 +978,13 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer)
       }
       return;
    }
+
+   //
+   // Only one async_write() may be active at a time -- see the class comment above write_active.
+   // The re-issued EOF handled above is not an exception to that: it adopts the FIN that is
+   // already in flight instead of starting a write of its own, and has returned by now.
+   //
+   assert(!write_active);
 
    if (is_eof)
       eof_submitted = true;
