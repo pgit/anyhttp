@@ -142,6 +142,23 @@ nghttp3_nv make_nv(std::string_view name, std::string_view value)
    return nv;
 }
 
+/// Logs a block of headers, one per line, in the same style as the received ones.
+void log_headers(std::string_view log_prefix, const std::vector<nghttp3_nv>& nva)
+{
+   for (const auto& nv : nva)
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", log_prefix,
+           std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen),
+           std::string_view(reinterpret_cast<const char*>(nv.value), nv.valuelen));
+}
+
+/// Same, for a header block buffered up by the recv_header callback.
+void log_headers(std::string_view log_prefix,
+                 const std::vector<std::pair<std::string, std::string>>& headers)
+{
+   for (const auto& [name, value] : headers)
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", log_prefix, name, value);
+}
+
 void ngtcp2_log_printf(void* /*user*/, const char* fmt, ...) noexcept
 {
    if (!spdlog::default_logger()->should_log(spdlog::level::trace))
@@ -192,6 +209,13 @@ public:
    unsigned int status_code = 0;
    Fields response_fields;
    std::optional<size_t> content_length;
+
+   //
+   // The header block as it arrived, buffered so that h3_cb_end_headers() can log it in one go,
+   // below the status line, instead of one stray line per header as they come in. Only filled
+   // when debug logging is on, and dropped again as soon as it has been logged.
+   //
+   std::vector<std::pair<std::string, std::string>> received_headers;
    bool headers_received = false;
    bool response_delivered = false;
    client::Request::GetResponseHandler response_handler;
@@ -1916,7 +1940,8 @@ int Http3ClientSession::h3_cb_recv_header(nghttp3_conn*, int64_t stream_id, int3
    if (!s)
       return 0;
 
-   logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", s->log_prefix, name_view, value_view);
+   if (spdlog::default_logger_raw()->should_log(spdlog::level::debug))
+      s->received_headers.emplace_back(name_view, value_view);
 
    try
    {
@@ -1951,6 +1976,7 @@ int Http3ClientSession::h3_cb_end_headers(nghttp3_conn*, int64_t stream_id, int 
       return 0;
 
    logd("[{}] response headers: status={}", s->log_prefix, s->status_code);
+   log_headers(s->log_prefix, std::exchange(s->received_headers, {}));
    s->headers_received = true;
    s->deliver_response();
    return 0;
@@ -2051,6 +2077,7 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, boost::urls::url 
    }
 
    logd("[{}] async_submit: new stream ID: {}", stream->log_prefix, stream_id);
+   log_headers(stream->log_prefix, nva);
    wake_write();
 
    post(get_executor(), [handler = std::move(handler),

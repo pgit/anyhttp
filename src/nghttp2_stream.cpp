@@ -17,6 +17,7 @@
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/beast/http/error.hpp>
+#include <boost/beast/http/status.hpp>
 
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
@@ -202,7 +203,8 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
       return;
    }
 
-   logd("[{}] async_submit: {}", stream->logPrefix, status_code);
+   logd("[{}] {} {}", stream->logPrefix, status_code,
+        boost::beast::http::obsolete_reason(boost::beast::http::int_to_status(status_code)));
 
    auto nva = std::vector<nghttp2_nv>();
    // nva.reserve(3 + headers.size());
@@ -226,6 +228,9 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
       length_str = std::format("{}", *m_content_length);
       nva.push_back(make_nv_ls("content-length", length_str));
    }
+
+   for (auto nv : nva)
+      logd("[{0}]   \x1b[1;34m{1:n}\x1b[0m: {1:v}", stream->logPrefix, nv);
 
    // TODO: If we already know that there is no body, don't set a producer.
    nghttp2_data_provider2 prd;

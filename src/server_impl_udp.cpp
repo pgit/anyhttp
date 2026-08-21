@@ -46,6 +46,7 @@
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cstdarg>
@@ -56,7 +57,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <algorithm>
 #include <vector>
 
 #include "ngtcp2/shared.h"
@@ -271,6 +271,23 @@ nghttp3_nv make_nv(std::string_view name, std::string_view value)
    return nv;
 }
 
+/// Logs a block of headers, one per line, in the same style as the received ones.
+void log_headers(std::string_view log_prefix, const std::vector<nghttp3_nv>& nva)
+{
+   for (const auto& nv : nva)
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", log_prefix,
+           std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen),
+           std::string_view(reinterpret_cast<const char*>(nv.value), nv.valuelen));
+}
+
+/// Same, for a header block buffered up by the recv_header callback.
+void log_headers(std::string_view log_prefix,
+                 const std::vector<std::pair<std::string, std::string>>& headers)
+{
+   for (const auto& [name, value] : headers)
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", log_prefix, name, value);
+}
+
 void ngtcp2_log_printf(void* /*user*/, const char* fmt, ...) noexcept
 {
    if (!spdlog::default_logger()->should_log(spdlog::level::trace))
@@ -311,6 +328,13 @@ public:
    Fields request_fields;
 
    //
+   // The header block as it arrived, buffered so that h3_cb_end_headers() can log it in one go,
+   // below the request line, instead of one stray line per header as they come in. Only filled
+   // when debug logging is on, and dropped again as soon as it has been logged.
+   //
+   std::vector<std::pair<std::string, std::string>> received_headers;
+
+   //
    // Response state (populated by user via Http3Writer).
    //
    unsigned int response_status = 0;
@@ -324,7 +348,7 @@ public:
    //
    std::deque<std::vector<uint8_t>> pending_read;
    asio::const_buffer read_head; // view of pending_read.front() not yet delivered
-   asio::const_buffer incoming;  // chunk on_data_chunk() is delivering, not yet taken
+   asio::const_buffer incoming; // chunk on_data_chunk() is delivering, not yet taken
    bool eof_received = false;
    ReadSomeHandler read_handler;
    asio::mutable_buffer read_handler_buffer;
@@ -585,7 +609,7 @@ private:
    std::string log_prefix_;
 
    bool write_pending_ = false; // set by on_read(), acted on by flush_write()
-   bool write_posted_ = false;  // a wake_write() flush is already on the way
+   bool write_posted_ = false; // a wake_write() flush is already on the way
 
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
 
@@ -941,7 +965,10 @@ void Http3Stream::submit_response()
       return;
    }
    response_submitted = true;
-   logd("[{}] response submitted (status={})", log_prefix, response_status);
+
+   using namespace boost::beast::http;
+   logd("[{}] {} {}", log_prefix, response_status, obsolete_reason(int_to_status(response_status)));
+   log_headers(log_prefix, nva);
 }
 
 void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer)
@@ -1149,7 +1176,6 @@ void Http3Stream::finish_active_write()
 
    if (handler)
       swap_and_invoke(handler, boost::system::error_code{});
-
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1320,9 +1346,9 @@ void Http3Session::destroy() noexcept
       ngtcp2_pkt_info pi;
       ngtcp2_path_storage_zero(&ps);
 
-      auto nwrite = ngtcp2_conn_write_connection_close(conn_, &ps.path, &pi, closebuf.data(),
-                                                        closebuf.size(), &last_error_,
-                                                        ngtcp2::util::timestamp());
+      auto nwrite =
+         ngtcp2_conn_write_connection_close(conn_, &ps.path, &pi, closebuf.data(), closebuf.size(),
+                                            &last_error_, ngtcp2::util::timestamp());
       if (nwrite > 0)
          send_udp(ep_.fd, ps.path.remote.addr, ps.path.remote.addrlen,
                   {closebuf.data(), static_cast<size_t>(nwrite)});
@@ -1580,10 +1606,9 @@ ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uin
       if (fin)
          flags |= NGTCP2_WRITE_STREAM_FLAG_FIN;
 
-      auto nwrite =
-         ngtcp2_conn_writev_stream(conn_, path, pi, dest, destlen, &ndatalen, flags, stream_id,
-                                   reinterpret_cast<const ngtcp2_vec*>(vec.data()),
-                                   static_cast<size_t>(sveccnt), ts);
+      auto nwrite = ngtcp2_conn_writev_stream(
+         conn_, path, pi, dest, destlen, &ndatalen, flags, stream_id,
+         reinterpret_cast<const ngtcp2_vec*>(vec.data()), static_cast<size_t>(sveccnt), ts);
 
       if (nwrite < 0)
       {
@@ -1663,9 +1688,9 @@ int Http3Session::write_streams()
    ngtcp2_path_storage_zero(&ps);
 
    size_t gso_size = 0;
-   auto nwrite = ngtcp2_conn_write_aggregate_pkt2(conn_, &ps.path, &pi, tx_buf_.data(),
-                                                  tx_buf_.size(), &gso_size, &write_pkt_cb, 0,
-                                                  ngtcp2::util::timestamp());
+   auto nwrite =
+      ngtcp2_conn_write_aggregate_pkt2(conn_, &ps.path, &pi, tx_buf_.data(), tx_buf_.size(),
+                                       &gso_size, &write_pkt_cb, 0, ngtcp2::util::timestamp());
    if (nwrite < 0)
    {
       loge("[{}] ngtcp2_conn_write_aggregate_pkt2: {}", log_prefix_,
@@ -2164,7 +2189,8 @@ int Http3Session::h3_cb_recv_header(nghttp3_conn*, int64_t stream_id, int32_t /*
    if (!s)
       return 0;
 
-   logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", s->log_prefix, name_view, value_view);
+   if (spdlog::default_logger_raw()->should_log(spdlog::level::debug))
+      s->received_headers.emplace_back(name_view, value_view);
 
    try
    {
@@ -2210,6 +2236,7 @@ int Http3Session::h3_cb_end_headers(nghttp3_conn*, int64_t stream_id, int /*fin*
       return 0;
 
    logd("[{}] {} {}", s->log_prefix, s->method, s->url.buffer());
+   log_headers(s->log_prefix, std::exchange(s->received_headers, {}));
 
    //
    // Build user-facing Request/Response and dispatch through the shared handler.
@@ -2318,7 +2345,7 @@ int Server::Impl::udp_on_read(Endpoint& ep)
    for (size_t pktcnt = 0; pktcnt < 32; ++pktcnt)
    {
       if (pktcnt)
-         logd("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ", pktcnt);
+         logd("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ", pktcnt);
 
       msg.msg_namelen = sizeof(su);
       msg.msg_controllen = sizeof(msg_ctrl);
