@@ -54,13 +54,4 @@ target_link_libraries(client PRIVATE anyhttp)
 add_executable(beast_issue_3032)
 target_sources(beast_issue_3032 PRIVATE "beast_issue_3032.cpp")
 
-#
-# ngtcp-test
-#
-add_executable(ngtcp-test)
-target_sources(ngtcp-test PRIVATE "ngtcp-test_main.cpp")
-target_include_directories(ngtcp-test PUBLIC "/opt/boringssl/include")
-target_link_directories(ngtcp-test PRIVATE "/opt/boringssl/lib")
-target_link_libraries(ngtcp-test ssl crypto ev ngtcp2 libngtcp2_crypto_boringssl.a)
-
 add_subdirectory(ngtcp2)
