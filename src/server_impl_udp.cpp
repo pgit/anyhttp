@@ -116,15 +116,6 @@ struct TlsServerContext
                                   SSL_OP_NO_ANTI_REPLAY);
       SSL_CTX_set_mode(ctx, SSL_MODE_RELEASE_BUFFERS);
 
-      //
-      // Prefer AES-128 over AES-256 GCM, like ngtcp2's example server does. Combined with
-      // SSL_OP_CIPHER_SERVER_PREFERENCE above, this is what actually picks the bulk cipher.
-      //
-      if (SSL_CTX_set_ciphersuites(ctx, "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:"
-                                        "TLS_CHACHA20_POLY1305_SHA256") != 1)
-         throw std::runtime_error(std::string{"SSL_CTX_set_ciphersuites: "} +
-                                  ERR_error_string(ERR_get_error(), nullptr));
-
       SSL_CTX_set_alpn_select_cb(ctx, &TlsServerContext::alpn_select_cb, nullptr);
 
       if (SSL_CTX_use_PrivateKey_file(ctx, "pki/out/server-key.pem", SSL_FILETYPE_PEM) != 1)
