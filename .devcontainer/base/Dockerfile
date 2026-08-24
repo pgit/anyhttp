@@ -86,6 +86,14 @@ RUN git clone --recursive --depth 1 --branch ${NGHTTP3_VERSION} https://github.c
 #
 # nghtcp2 is built with both 'boringssl' (actually, aws-lc) and 'ossl' support
 #
+# The example client/server are built as well. There is no --enable-examples switch: they are
+# enabled implicitly by configure as long as we don't pass --enable-lib-only and nghttp3, libev
+# and a C++23 compiler are present -- see the 'Examples:' line in the configure summary.
+#
+# They are noinst_PROGRAMS, so 'make install' ignores them and we have to install them by hand.
+# 'osslclient'/'osslserver' are the OpenSSL variants, replacing the copy of the example sources
+# that used to live in src/ngtcp2/ as 'ngtcp-client'/'ngtcp-server'.
+#
 ARG NGTCP2_VERSION=v1.25.0
 RUN git clone --recursive --depth 1 --branch ${NGTCP2_VERSION} https://github.com/ngtcp2/ngtcp2 && \
     cd ngtcp2 && \
@@ -95,12 +103,15 @@ RUN git clone --recursive --depth 1 --branch ${NGTCP2_VERSION} https://github.co
        BORINGSSL_LIBS="-L/opt/boringssl/lib -lssl -lcrypto" \
        --with-boringssl --with-ossl && \
     make -j$(nproc) check && make install && \
+    make -j$(nproc) -C examples osslclient osslserver && \
+    install -m 755 -t /usr/local/bin examples/osslclient examples/osslserver && \
     cd third-party/urlparse && \
     autoreconf -i && \
     ./configure --prefix=/usr/local && \
     make -j$(nproc) && make install && \
     cd ../.. && \
-    cd .. && rm -rf ngctp2
+    cd .. && rm -rf ngtcp2 && \
+    ldconfig
   
 # ==================================================================================================
 
