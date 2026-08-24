@@ -1306,7 +1306,7 @@ Http3Session::Http3Session(Server::Impl& server, Endpoint ep, ngtcp2::Address re
    log_prefix_ = std::format("h3:{}", ngtcp2::util::straddr(&remote_.su.sa, remote_.len));
    // done_signal_ is armed at "never" until signal_done() moves it to the past.
    done_signal_.expires_at(asio::steady_timer::time_point::max());
-   mlogi("session created");
+   mlogd("session created");
 }
 
 Http3Session::~Http3Session()
@@ -1876,7 +1876,7 @@ void Http3Session::schedule_close_timer()
       auto session = std::static_pointer_cast<Http3Session>(self.lock());
       if (!session)
          return;
-      logi("[{}] closing/draining period over", session->log_prefix_);
+      logd("[{}] closing/draining period over", session->log_prefix_);
       session->server_.erase_quic_session(session.get());
       session->signal_done();
    });

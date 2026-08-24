@@ -151,7 +151,7 @@ void Server::Impl::listen_tcp()
    acceptor.listen();
 
    endpoint = acceptor.local_endpoint();
-   logi("Server: listening on {}", endpoint);
+   logi("Server: TCP listening on {}", endpoint);
 }
 
 // -------------------------------------------------------------------------------------------------
