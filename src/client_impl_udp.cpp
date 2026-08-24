@@ -174,8 +174,8 @@ class Http3ClientStream;
 //
 // Bound on how much of the caller's async_write() buffer we copy into write_chunk at a time (see
 // Http3ClientStream's write_* members) -- copying is paced by how much nghttp3/ngtcp2 actually
-// drains, rather than copying a huge caller buffer (e.g. 50MB) in one synchronous allocation+memcpy,
-// mirroring nghttp2's own per-call copy into its frame buffer.
+// drains, rather than copying a huge caller buffer (e.g. 50MB) in one synchronous
+// allocation+memcpy, mirroring nghttp2's own per-call copy into its frame buffer.
 //
 inline constexpr size_t kWriteChunkSize = 16 * 1024;
 
@@ -1007,7 +1007,6 @@ void Http3ClientStream::finish_active_write()
 
    if (handler)
       swap_and_invoke(handler, boost::system::error_code{});
-
 }
 
 // -------------------------------------------------------------------------------------------------

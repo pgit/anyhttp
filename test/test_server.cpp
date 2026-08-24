@@ -1834,7 +1834,7 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
    //
    // The server has to keep running while the client is frozen, so it gets a thread of its own.
    //
-   std::jthread server_thread([this] { context.run(); });
+   std::jthread server_thread([this] { run(context); });
    boost::scope::scope_exit stop_server([this] { context.stop(); });
 
    //
