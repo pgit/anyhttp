@@ -24,6 +24,10 @@
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
+#include <boost/container/container_fwd.hpp>
+#include <boost/container/flat_set.hpp>
+#include <boost/container/small_vector.hpp>
+
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 
@@ -2376,13 +2380,7 @@ int Server::Impl::udp_on_read(Endpoint& ep)
    // datagram the socket had queued has been handed to ngtcp2 -- so one aggregate pass can pack
    // a whole response into a single GSO sendmsg() instead of dribbling it out per datagram.
    //
-   std::vector<std::shared_ptr<Http3Session>> pending;
-   auto mark_pending = [&pending](const std::shared_ptr<Http3Session>& session)
-   {
-      if (std::ranges::find(pending, session) == pending.end())
-         pending.push_back(session);
-   };
-
+   boost::container::small_flat_set<std::shared_ptr<Http3Session>, 32> pending;
    for (size_t pktcnt = 0; pktcnt < 32; ++pktcnt)
    {
       if (pktcnt)
@@ -2499,7 +2497,7 @@ int Server::Impl::udp_on_read(Endpoint& ep)
                self->m_sessions.erase(session);
             });
 
-            mark_pending(session);
+            pending.emplace(session);
          }
          else
          {
@@ -2525,7 +2523,7 @@ int Server::Impl::udp_on_read(Endpoint& ep)
 
             if (session->on_read(pi, data, *remote) == 0)
             {
-               mark_pending(session);
+               pending.emplace(session);
             }
             else if (session->closed())
             {
@@ -2556,8 +2554,9 @@ int Server::Impl::udp_on_read(Endpoint& ep)
 
       auto* conn = session->conn();
       if (!conn || (!ngtcp2_conn_in_closing_period(conn) && !ngtcp2_conn_in_draining_period(conn)))
-         std::erase_if(m_quic_handlers,
-                       [&](const auto& kv) { return kv.second.get() == session.get(); });
+         std::erase_if(m_quic_handlers, [&](const auto& kv) { //
+            return kv.second.get() == session.get();
+         });
    }
 
    return 0;
