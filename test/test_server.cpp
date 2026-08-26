@@ -25,8 +25,6 @@
 
 #include <boost/algorithm/string/join.hpp>
 
-#include <boost/filesystem/path.hpp>
-
 #include <boost/lexical_cast.hpp>
 #include <boost/lexical_cast/bad_lexical_cast.hpp>
 
@@ -52,6 +50,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <filesystem>
 
 #include <future>
 #include <print>
@@ -358,7 +357,7 @@ protected:
       co_return result;
    }
 
-   awaitable<std::string> spawn_process(bp::filesystem::path path, std::vector<std::string> args)
+   awaitable<std::string> spawn_process(std::filesystem::path path, std::vector<std::string> args)
    {
       logi("spawn: {} {}", path.generic_string(), boost::algorithm::join(args, " "));
 
@@ -393,7 +392,7 @@ protected:
       co_return result;
    }
 
-   std::future<std::string> spawn(bp::filesystem::path path, std::vector<std::string> args)
+   std::future<std::string> spawn(std::filesystem::path path, std::vector<std::string> args)
    {
       ++numSpawned;
       std::promise<std::string> promise;
@@ -427,9 +426,9 @@ protected:
    }
 
    any_io_executor strand{make_strand(context.get_executor())};
-   bp::filesystem::path testFile{"CMakeLists.txt"};
+   std::filesystem::path testFile{"CMakeLists.txt"};
    size_t testFileSize = file_size(testFile);
-   bp::filesystem::path dataFile{"test/data/64kminus1"}; // posted by h2load, one file per request
+   std::filesystem::path dataFile{"test/data/64kminus1"}; // posted by h2load, one file per request
    std::atomic<int> numSpawned = 0;
 };
 
