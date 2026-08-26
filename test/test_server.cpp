@@ -429,6 +429,7 @@ protected:
    any_io_executor strand{make_strand(context.get_executor())};
    bp::filesystem::path testFile{"CMakeLists.txt"};
    size_t testFileSize = file_size(testFile);
+   bp::filesystem::path dataFile{"test/data/64kminus1"}; // posted by h2load, one file per request
    std::atomic<int> numSpawned = 0;
 };
 
@@ -490,14 +491,14 @@ protected:
    }
 
    //
-   // Run h2load against /echo, posting 'data_size' bytes per request, and check that all of them
-   // came back. h2load speaks the protocol of the fixture parameter.
+   // Run h2load against /echo, posting the contents of 'dataFile' with every request, and check
+   // that all of it came back. h2load speaks the protocol of the fixture parameter.
    //
    void h2load(size_t n, size_t clients, size_t streams)
    {
-      const size_t data_size = 65535;
+      const size_t data_size = file_size(dataFile);
       auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-      Args args = {"-d", "test/data/64kminus1", "-n", std::to_string(n), //
+      Args args = {"-d", dataFile.string(), "-n", std::to_string(n), //
                    "-c", std::to_string(clients), "-m", std::to_string(streams), url};
 
       switch (GetParam())
