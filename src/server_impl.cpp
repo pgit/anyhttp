@@ -73,7 +73,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
  */
 void Server::Impl::start()
 {
-   co_spawn(m_executor, listen_loop(), [self = shared_from_this()](const std::exception_ptr& ex)
+   co_spawn(m_executor, tcp_listen_loop(), [self = shared_from_this()](const std::exception_ptr& ex)
    {
       if (ex)
          logw("TCP accept loop: {}", what(ex));
@@ -118,7 +118,7 @@ void Server::Impl::destroy()
    if (m_udp_socket)
       m_udp_socket->close(); // breaks udp_receive_loop()
 
-   m_stopped = true;
+   m_destroyed = true;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -126,7 +126,7 @@ void Server::Impl::destroy()
 Server::Impl::~Impl()
 {
    logi("Server: dtor");
-   assert(m_stopped);
+   assert(m_destroyed);
 }
 
 // =================================================================================================
@@ -378,7 +378,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
  * https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p3149r5.html#listener-loop-in-an-http-server
  *
  */
-awaitable<void> Server::Impl::listen_loop()
+awaitable<void> Server::Impl::tcp_listen_loop()
 {
    assert(m_acceptor);
    auto& acceptor = *m_acceptor;

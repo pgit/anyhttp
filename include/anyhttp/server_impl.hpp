@@ -69,7 +69,7 @@ public:
    const Config& config() const { return m_config; }
    boost::asio::any_io_executor get_executor() const noexcept { return m_executor; }
 
-   asio::awaitable<void> listen_loop();
+   asio::awaitable<void> tcp_listen_loop();
    asio::awaitable<void> handleConnection(asio::ip::tcp::socket socket);
 
    asio::ip::tcp::endpoint local_endpoint() const
@@ -105,7 +105,7 @@ private:
    std::unordered_map<std::string, std::shared_ptr<Http3Session>> m_quic_handlers;
 
    RequestHandler m_requestHandler;
-   bool m_stopped = false;
+   bool m_destroyed = false;
 };
 
 // =================================================================================================
