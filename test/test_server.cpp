@@ -59,6 +59,7 @@
 #include <ranges>
 #include <regex>
 #include <spdlog/common.h>
+#include <thread>
 
 using namespace std::string_view_literals;
 using namespace std::chrono_literals;
@@ -173,14 +174,26 @@ TEST_F(ClientConnect, WHEN_connect_to_broadcast_ip_THEN_completes_with_network_u
 class Server : public testing::TestWithParam<anyhttp::Protocol>
 {
 protected:
+   //
+   // Number of threads run() will run the io_context on. More than one makes the server put
+   // every connection on its own strand, see below.
+   //
+   virtual size_t threads() const
+   {
+#if defined(MULTITHREADED)
+      return std::max(2u, std::thread::hardware_concurrency());
+#else
+      return 1;
+#endif
+   }
+
    void SetUp() override
    {
       setupLogging();
 
       auto config = server::Config{.listen_address = "127.0.0.2", .port = 0};
-#if defined(MULTITHREADED)
-      config.use_strand = true;
-#endif
+      config.use_strand = threads() > 1;
+
       //
       // The main server acceptor loop does not need to run on a strand. Instead, a per-connection
       // strand is created after accepting a new connection.
@@ -230,16 +243,22 @@ protected:
 
    void run()
    {
-#if defined(MULTITHREADED)
-      auto threads =
-         rv::iota(0) | rv::take(std::max(1u, std::thread::hardware_concurrency())) |
-         rv::transform([this](int) { return std::jthread([this] { ::run(context); }); }) |
-         std::ranges::to<std::vector>();
+      const size_t n = threads();
+      if (n <= 1)
+      {
+         ::run(context);
+         return;
+      }
 
-      ::run(context);
-#else
-      ::run(context);
-#endif
+      //
+      // The extra threads use context.run() directly: the per-operation logging of ::run() is
+      // meant for single-threaded debugging and would just interleave into noise here.
+      //
+      auto pool = rv::iota(size_t{1}, n) |
+                  rv::transform([this](size_t) { return std::jthread([this] { context.run(); }); }) |
+                  std::ranges::to<std::vector>();
+
+      context.run();
    }
 
 protected:
@@ -469,6 +488,45 @@ protected:
          return "--http3-only";
       }
    }
+
+   //
+   // Run h2load against /echo, posting 'data_size' bytes per request, and check that all of them
+   // came back. h2load speaks the protocol of the fixture parameter.
+   //
+   void h2load(size_t n, size_t clients, size_t streams)
+   {
+      const size_t data_size = 65535;
+      auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+      Args args = {"-d", "test/data/64kminus1", "-n", std::to_string(n), //
+                   "-c", std::to_string(clients), "-m", std::to_string(streams), url};
+
+      switch (GetParam())
+      {
+      case anyhttp::Protocol::http11:
+         args.insert(args.begin(), "--h1");
+         break;
+      case anyhttp::Protocol::h3:
+         args.insert(args.begin(), "--h3"); // h2load negotiates h3 itself, http:// URL is fine
+         break;
+      default:
+         break; // h2load defaults to HTTP/2
+      }
+
+      auto future = spawn(H2LOAD_PATH, std::move(args));
+      run();
+
+      const std::string output = future.get();
+      std::smatch match;
+      std::regex regex(
+         R"((\d+) total, \d+ started, (\d+) done, (\d+) succeeded, (\d+) failed, \d+ errored)");
+      ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
+      EXPECT_EQ(std::stoul(match[3].str()), n) << match[1];
+      EXPECT_EQ(std::stoul(match[4].str()), 0) << match[1];
+
+      regex = std::regex(R"(\((\d+)\) data)");
+      ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
+      EXPECT_EQ(std::stoul(match[1].str()), n * data_size) << match[1];
+   }
 };
 
 INSTANTIATE_TEST_SUITE_P(ExternalTLS, ExternalTLS,
@@ -537,40 +595,28 @@ TEST_P(ExternalTLS, curl_multiple)
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_P(ExternalTLS, h2load)
+TEST_P(ExternalTLS, h2load) { h2load(100, 4, 3); }
+
+// =================================================================================================
+
+//
+// Same as ExternalTLS, but with the io_context run on multiple threads, so every connection gets
+// its own strand. For HTTP/3 this is the regression test for concurrent access to a single
+// ngtcp2_conn, which used to crash right away.
+//
+class ExternalTLSThreaded : public ExternalTLS
 {
-   const size_t n = 100; // number of requests, echoing 65535 bytes each
-   const size_t data_size = 65535;
-   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3", url};
+protected:
+   size_t threads() const override { return 8; }
+};
 
-   switch (GetParam())
-   {
-   case anyhttp::Protocol::http11:
-      args.insert(args.begin(), "--h1");
-      break;
-   case anyhttp::Protocol::h3:
-      args.insert(args.begin(), "--h3"); // h2load negotiates h3 itself, http:// URL is fine
-      break;
-   default:
-      break; // h2load defaults to HTTP/2
-   }
+INSTANTIATE_TEST_SUITE_P(ExternalTLSThreaded, ExternalTLSThreaded,
+                         ::testing::Values(anyhttp::Protocol::http11, // HTTP/1.1
+                                           anyhttp::Protocol::h2, // HTTP/2
+                                           anyhttp::Protocol::h3), // HTTP/3 (QUIC)
+                         NameGenerator);
 
-   auto future = spawn(H2LOAD_PATH, std::move(args));
-   run();
-
-   const std::string output = future.get();
-   std::smatch match;
-   std::regex regex(
-      R"((\d+) total, \d+ started, (\d+) done, (\d+) succeeded, (\d+) failed, \d+ errored)");
-   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
-   EXPECT_EQ(std::stoul(match[3].str()), n) << match[1];
-   EXPECT_EQ(std::stoul(match[4].str()), 0) << match[1];
-
-   regex = std::regex(R"(\((\d+)\) data)");
-   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
-   EXPECT_EQ(std::stoul(match[1].str()), n * data_size) << match[1];
-}
+TEST_P(ExternalTLSThreaded, h2load) { h2load(1000, 8, 5); }
 
 // =================================================================================================
 
