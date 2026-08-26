@@ -53,6 +53,7 @@ public:
 
 struct Endpoint;
 class Http3Session;
+struct QuicBatch;
 
 class Server::Impl : public std::enable_shared_from_this<Server::Impl>
 {
@@ -83,10 +84,13 @@ public:
 
    asio::awaitable<void> udp_receive_loop();
    int udp_on_read(Endpoint& ep);
+   void process_quic_batch(const std::shared_ptr<Http3Session>& session, QuicBatch&& batch);
 
    //
    // QUIC connection-ID demux table. Populated by QuicHandler as new source CIDs are minted,
-   // consulted by udp_on_read() to route packets to the right connection.
+   // consulted by udp_on_read() to route packets to the right connection. Guarded by
+   // m_quicMutex: the receive loop reads it while sessions mutate it from their own strands
+   // (get_new_connection_id/remove_connection_id callbacks, close timers).
    //
    void associate_quic_cid(const ngtcp2_cid& cid, Http3Session* session);
    void dissociate_quic_cid(const ngtcp2_cid& cid);
@@ -102,6 +106,7 @@ private:
    std::mutex m_sessionMutex;
    std::set<std::shared_ptr<Session::Impl>> m_sessions;
 
+   std::mutex m_quicMutex;
    std::unordered_map<std::string, std::shared_ptr<Http3Session>> m_quic_handlers;
 
    RequestHandler m_requestHandler;

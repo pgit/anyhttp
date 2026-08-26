@@ -6,6 +6,15 @@
 // (server::Response) into the same `RequestHandler` used by the HTTP/1.1 and HTTP/2
 // backends.
 //
+// Threading: with Config::use_strand, each Http3Session lives on its own strand -- the unit of
+// serialization is the QUIC *connection* (one ngtcp2_conn/nghttp3_conn pair), not the CID: many
+// CIDs alias one connection. udp_receive_loop() is a single coroutine that only demultiplexes:
+// it copies each datagram, groups them by session and posts one batch per session to that
+// session's strand (process_quic_batch()), where all ngtcp2/nghttp3 work, the timers and the
+// request handlers run. The CID demux table is the only cross-connection state and is guarded
+// by Server::Impl::m_quicMutex. Sends go straight out via a per-session dup() of the UDP fd --
+// sendto()/sendmsg() are atomic per datagram, so they need no serialization.
+//
 // Not yet implemented: retry tokens, version negotiation, stateless reset, connection
 // migration, ECN, client-side (async_submit is a no-op).
 //
@@ -25,7 +34,7 @@
 #include <boost/asio/use_awaitable.hpp>
 
 #include <boost/container/container_fwd.hpp>
-#include <boost/container/flat_set.hpp>
+#include <boost/container/flat_map.hpp>
 #include <boost/container/small_vector.hpp>
 
 #include <boost/system/detail/errc.hpp>
@@ -461,7 +470,13 @@ public:
    //
    // Session::Impl
    //
-   asio::any_io_executor get_executor() const noexcept override { return server_.get_executor(); }
+   // The executor is this connection's strand (when Config::use_strand is set): every touch of
+   // ngtcp2/nghttp3 state -- datagram batches from the UDP demux, the expiry timer, wake_write()
+   // flushes, and the request-handler coroutines spawned in h3_cb_end_headers() -- runs through
+   // it, giving one QUIC connection the same single-threaded world a TCP connection gets from
+   // the strand its socket lives on.
+   //
+   asio::any_io_executor get_executor() const noexcept override { return executor_; }
    void async_submit(SubmitHandler&& handler, boost::urls::url, const Fields&) override;
    awaitable<void> do_session(Buffer&& data) override;
    void destroy() noexcept override;
@@ -612,11 +627,14 @@ private:
    void arm_timer_from_ngtcp2();
    void signal_done();
    void schedule_close_timer();
+   void do_destroy() noexcept; // the body of destroy(), always run on executor_
 
 private:
    Server::Impl& server_;
    Endpoint ep_;
+   bool owns_fd_ = false; // ep_.fd was dup()ed in the ctor, close it in the dtor
    ngtcp2::Address remote_;
+   asio::any_io_executor executor_;
    ngtcp2_cid scid_{};
 
    ngtcp2_conn* conn_ = nullptr;
@@ -1299,11 +1317,30 @@ void Http3Stream::maybe_close()
 // =================================================================================================
 
 Http3Session::Http3Session(Server::Impl& server, Endpoint ep, ngtcp2::Address remote)
-   : server_(server), ep_(ep), remote_(remote), timer_(server.get_executor()),
-     done_signal_(server.get_executor())
+   : server_(server), ep_(ep), remote_(remote),
+     executor_(server.config().use_strand
+                  ? asio::any_io_executor{asio::make_strand(server.get_executor())}
+                  : server.get_executor()),
+     timer_(executor_), done_signal_(executor_)
 {
    ngtcp2_ccerr_default(&last_error_);
    log_prefix_ = std::format("h3:{}", ngtcp2::util::straddr(&remote_.su.sa, remote_.len));
+
+   //
+   // Own a dup() of the shared UDP fd rather than borrowing the server's. Sends happen from this
+   // session's strand, concurrently with everything else -- sendto()/sendmsg() on a shared
+   // datagram fd is fine, each call is atomic -- but at shutdown the server closes its socket
+   // right after posting destroy() to every session, and the final CONNECTION_CLOSE would
+   // otherwise race that close (and, worse, a recycled fd number).
+   //
+   if (int fd = ::dup(ep_.fd); fd >= 0)
+   {
+      ep_.fd = fd;
+      owns_fd_ = true;
+   }
+   else
+      loge("[{}] dup: {}", log_prefix_, strerror(errno));
+
    // done_signal_ is armed at "never" until signal_done() moves it to the past.
    done_signal_.expires_at(asio::steady_timer::time_point::max());
    mlogd("session created");
@@ -1327,6 +1364,8 @@ Http3Session::~Http3Session()
       }
       ngtcp2_crypto_ossl_ctx_del(ossl_ctx_);
    }
+   if (owns_fd_)
+      ::close(ep_.fd);
    mlogi("session destroyed");
 }
 
@@ -1350,6 +1389,31 @@ awaitable<void> Http3Session::do_session(Buffer&&)
 
 void Http3Session::destroy() noexcept
 {
+   //
+   // Called from wherever the Server is being torn down -- under multithreading that is some
+   // other thread's strand (e.g. the signal handler in server_main), while this session's own
+   // strand may be mid-flush. Everything below touches ngtcp2 state and the timers, so hop onto
+   // this session's executor first; with use_strand off and the caller already inside the
+   // io_context, dispatch() degenerates to an inline call.
+   //
+   asio::dispatch(executor_, [self = shared_from_this()] {
+      static_cast<Http3Session&>(*self).do_destroy();
+   });
+}
+
+void Http3Session::do_destroy() noexcept
+{
+   //
+   // Tear the streams down here, on the session's executor, rather than leaving it to the
+   // destructor. The destructor runs wherever the last shared_ptr happens to drop -- at server
+   // shutdown that can be Server::Impl::~Impl() on a foreign thread -- and destroying streams
+   // detaches readers/writers and fires pending handlers, state that request-handler coroutines
+   // still running on this session's strand look at. Done here, that teardown is serialized
+   // with them; a handler that resumes afterwards finds its Reader/Writer detached and fails
+   // cleanly, exactly as in the single-threaded case.
+   //
+   streams_.clear();
+
    if (std::exchange(closed_, true))
    {
       timer_.cancel();
@@ -2341,19 +2405,42 @@ std::optional<ngtcp2::Address> to_ngtcp2_address(const sockaddr_storage& src, so
 }
 } // namespace
 
+//
+// What one pass of udp_on_read() hands a session: every datagram of the receive batch that was
+// addressed to it, copied out of the receive buffer because the session consumes them on its own
+// strand, after udp_on_read() has moved on. `is_new` marks a batch whose first datagram is the
+// client Initial that created the session -- process_quic_batch() runs init() with it.
+//
+struct QuicBatch
+{
+   struct Datagram
+   {
+      ngtcp2_pkt_info pi;
+      ngtcp2::Address remote;
+      std::vector<uint8_t> data;
+   };
+
+   bool is_new = false;
+   ngtcp2_pkt_hd hd{}; // decoded Initial packet header, only valid when is_new
+   boost::container::small_vector<Datagram, 8> datagrams;
+};
+
 void Server::Impl::associate_quic_cid(const ngtcp2_cid& cid, Http3Session* h)
 {
+   auto lock = std::lock_guard(m_quicMutex);
    m_quic_handlers.emplace(cid_key(cid),
                            std::static_pointer_cast<Http3Session>(h->shared_from_this()));
 }
 
 void Server::Impl::dissociate_quic_cid(const ngtcp2_cid& cid)
 {
+   auto lock = std::lock_guard(m_quicMutex);
    m_quic_handlers.erase(cid_key(cid));
 }
 
 void Server::Impl::erase_quic_session(Http3Session* h)
 {
+   auto lock = std::lock_guard(m_quicMutex);
    std::erase_if(m_quic_handlers, [h](const auto& kv) { return kv.second.get() == h; });
 }
 
@@ -2376,11 +2463,12 @@ int Server::Impl::udp_on_read(Endpoint& ep)
    msg.msg_control = msg_ctrl;
 
    //
-   // Sessions that received something in this batch. They are written once, below, after every
-   // datagram the socket had queued has been handed to ngtcp2 -- so one aggregate pass can pack
-   // a whole response into a single GSO sendmsg() instead of dribbling it out per datagram.
+   // Datagrams collected per session over the whole batch. Each session gets its accumulated
+   // batch posted to its strand once, below, after every datagram the socket had queued has been
+   // demultiplexed -- so one aggregate pass on the strand can pack a whole response into a
+   // single GSO sendmsg() instead of dribbling it out per datagram.
    //
-   boost::container::small_flat_set<std::shared_ptr<Http3Session>, 32> pending;
+   boost::container::small_flat_map<std::shared_ptr<Http3Session>, QuicBatch, 32> batches;
    for (size_t pktcnt = 0; pktcnt < 32; ++pktcnt)
    {
       if (pktcnt)
@@ -2457,109 +2545,169 @@ int Server::Impl::udp_on_read(Endpoint& ep)
          }
 
          auto key = cid_key(vc.dcid, vc.dcidlen);
-         auto it = m_quic_handlers.find(key);
+         std::shared_ptr<Http3Session> session;
+         {
+            auto lock = std::lock_guard(m_quicMutex);
+            if (auto it = m_quic_handlers.find(key); it != m_quic_handlers.end())
+               session = it->second;
+         }
 
-         if (it == m_quic_handlers.end())
+         if (!session)
          {
             ngtcp2_pkt_hd hd;
             if (ngtcp2_accept(&hd, data.data(), data.size()) != 0)
                continue;
 
-            auto session = std::make_shared<Http3Session>(*this, ep, *remote);
-            if (session->init(hd.dcid, hd.scid, hd.version, pi, data) != 0)
-               continue;
+            session = std::make_shared<Http3Session>(*this, ep, *remote);
 
+            //
+            // Publish the client-chosen DCID right away, so retransmitted Initials and
+            // follow-up packets -- in this batch or a later one -- find the session and queue
+            // up behind init() on its strand instead of spawning a duplicate session. init()
+            // itself, like everything that touches the connection, runs on the strand in
+            // process_quic_batch().
+            //
+            auto lock = std::lock_guard(m_quicMutex);
             m_quic_handlers.emplace(std::move(key), session);
-            std::array<ngtcp2_cid, 8> scids;
-            auto num_scid = ngtcp2_conn_get_scid(session->conn(), nullptr);
-            if (num_scid <= scids.size())
-            {
-               ngtcp2_conn_get_scid(session->conn(), scids.data());
-               for (size_t i = 0; i < num_scid; ++i)
-                  m_quic_handlers.emplace(cid_key(scids[i]), session);
-            }
-
-            //
-            // Register with the shared session set + spawn the do_session() task so
-            // the session participates in server-wide shutdown, exactly like the
-            // TCP-based sessions.
-            //
-            {
-               auto lock = std::lock_guard(m_sessionMutex);
-               m_sessions.emplace(session);
-            }
-            co_spawn(get_executor(), session->do_session({}),
-                     [self = shared_from_this(), session](const std::exception_ptr& ex)
-            {
-               if (ex)
-                  logw("[{}] {}", session->logPrefix(), what(ex));
-               auto lock = std::lock_guard(self->m_sessionMutex);
-               self->m_sessions.erase(session);
-            });
-
-            pending.emplace(session);
+            auto& batch = batches[session];
+            batch.is_new = true;
+            batch.hd = hd;
          }
-         else
-         {
-            auto session = it->second;
 
-            //
-            // Handle closing / draining periods.  During closing we resend the
-            // buffered CONNECTION_CLOSE so the peer can tear down cleanly.
-            // During draining (peer sent CONNECTION_CLOSE) we just drop the packet.
-            // In both cases the session stays in m_quic_handlers until the 3-PTO
-            // close timer fires and calls erase_quic_session().
-            //
-            if (auto* conn = session->conn())
-            {
-               if (ngtcp2_conn_in_closing_period(conn))
-               {
-                  session->resend_conn_close();
-                  continue;
-               }
-               if (ngtcp2_conn_in_draining_period(conn))
-                  continue;
-            }
-
-            if (session->on_read(pi, data, *remote) == 0)
-            {
-               pending.emplace(session);
-            }
-            else if (session->closed())
-            {
-               //
-               // Only erase immediately when not in closing/draining period.
-               // If we are, the 3-PTO close timer in handle_error() will call
-               // erase_quic_session() once the period expires.
-               //
-               auto* conn = session->conn();
-               if (!conn ||
-                   (!ngtcp2_conn_in_closing_period(conn) && !ngtcp2_conn_in_draining_period(conn)))
-               {
-                  std::erase_if(m_quic_handlers,
-                                [&](const auto& kv) { return kv.second.get() == session.get(); });
-               }
-            }
-         }
+         batches[session].datagrams.push_back({pi, *remote, {data.begin(), data.end()}});
       }
    }
 
    //
-   // One write pass per session, after the whole batch has been read.
+   // One job per session: its whole share of the receive batch, processed -- and answered with
+   // a single write pass -- on its own strand.
    //
-   for (const auto& session : pending)
+   for (auto& [session, batch] : batches)
    {
-      if (session->flush_write() == 0 || !session->closed())
-         continue;
-
-      auto* conn = session->conn();
-      if (!conn || (!ngtcp2_conn_in_closing_period(conn) && !ngtcp2_conn_in_draining_period(conn)))
-         std::erase_if(m_quic_handlers, [&](const auto& kv) { //
-            return kv.second.get() == session.get();
-         });
+      asio::post(session->get_executor(),
+                 [self = shared_from_this(), session, batch = std::move(batch)]() mutable
+                 { self->process_quic_batch(session, std::move(batch)); });
    }
 
    return 0;
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// Runs on the session's strand: consumes the datagrams udp_on_read() collected for this session,
+// serialized against the session's timers, wake_write() flushes and request handlers. This is
+// what the demux loop used to do inline back when everything shared one implicit thread.
+//
+void Server::Impl::process_quic_batch(const std::shared_ptr<Http3Session>& session,
+                                      QuicBatch&& batch)
+{
+   size_t next = 0;
+   bool read_ok = false;
+
+   if (batch.is_new)
+   {
+      const auto& first = batch.datagrams[next++];
+      if (session->init(batch.hd.dcid, batch.hd.scid, batch.hd.version, first.pi, first.data) != 0)
+      {
+         // Matches the old inline behavior: a connection that failed at its Initial is
+         // forgotten; a retransmitted Initial starts over from scratch.
+         erase_quic_session(session.get());
+         return;
+      }
+      read_ok = true;
+
+      std::array<ngtcp2_cid, 8> scids;
+      auto num_scid = ngtcp2_conn_get_scid(session->conn(), nullptr);
+      if (num_scid <= scids.size())
+      {
+         ngtcp2_conn_get_scid(session->conn(), scids.data());
+         for (size_t i = 0; i < num_scid; ++i)
+            associate_quic_cid(scids[i], session.get());
+      }
+
+      //
+      // Register with the shared session set + spawn the do_session() task so the session
+      // participates in server-wide shutdown, exactly like the TCP-based sessions. Re-check
+      // m_destroyed under the lock: destroy() may have swept m_sessions between udp_on_read()
+      // accepting this connection and this job running, and a session registered after that
+      // sweep would never be destroyed.
+      //
+      {
+         auto lock = std::lock_guard(m_sessionMutex);
+         if (m_destroyed)
+         {
+            erase_quic_session(session.get());
+            session->destroy();
+            return;
+         }
+         m_sessions.emplace(session);
+      }
+      co_spawn(session->get_executor(), session->do_session({}),
+               [self = shared_from_this(), session](const std::exception_ptr& ex)
+      {
+         if (ex)
+            logw("[{}] {}", session->logPrefix(), what(ex));
+         auto lock = std::lock_guard(self->m_sessionMutex);
+         self->m_sessions.erase(session);
+      });
+   }
+
+   for (; next < batch.datagrams.size(); ++next)
+   {
+      const auto& d = batch.datagrams[next];
+
+      //
+      // Handle closing / draining periods.  During closing we resend the
+      // buffered CONNECTION_CLOSE so the peer can tear down cleanly.
+      // During draining (peer sent CONNECTION_CLOSE) we just drop the packet.
+      // In both cases the session stays in m_quic_handlers until the 3-PTO
+      // close timer fires and calls erase_quic_session().
+      //
+      if (auto* conn = session->conn())
+      {
+         if (ngtcp2_conn_in_closing_period(conn))
+         {
+            session->resend_conn_close();
+            continue;
+         }
+         if (ngtcp2_conn_in_draining_period(conn))
+            continue;
+      }
+
+      // A session that died earlier in this very batch has nothing left to feed.
+      if (session->closed())
+         continue;
+
+      if (session->on_read(d.pi, d.data, d.remote) == 0)
+      {
+         read_ok = true;
+      }
+      else if (session->closed())
+      {
+         //
+         // Only erase immediately when not in closing/draining period.
+         // If we are, the 3-PTO close timer in handle_error() will call
+         // erase_quic_session() once the period expires.
+         //
+         auto* conn = session->conn();
+         if (!conn ||
+             (!ngtcp2_conn_in_closing_period(conn) && !ngtcp2_conn_in_draining_period(conn)))
+            erase_quic_session(session.get());
+      }
+   }
+
+   //
+   // One write pass for the whole batch, mirroring the old per-receive-pass flush.
+   //
+   if (!read_ok)
+      return;
+   if (session->flush_write() == 0 || !session->closed())
+      return;
+
+   auto* conn = session->conn();
+   if (!conn || (!ngtcp2_conn_in_closing_period(conn) && !ngtcp2_conn_in_draining_period(conn)))
+      erase_quic_session(session.get());
 }
 
 // -------------------------------------------------------------------------------------------------
