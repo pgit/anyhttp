@@ -253,9 +253,9 @@ protected:
       // The extra threads use context.run() directly: the per-operation logging of ::run() is
       // meant for single-threaded debugging and would just interleave into noise here.
       //
-      auto pool = rv::iota(size_t{1}, n) |
-                  rv::transform([this](size_t) { return std::jthread([this] { context.run(); }); }) |
-                  std::ranges::to<std::vector>();
+      auto pool = rv::iota(size_t{1}, n) | rv::transform([this](size_t) {
+         return std::jthread([this] { context.run(); });
+      }) | std::ranges::to<std::vector>();
 
       context.run();
    }
@@ -427,7 +427,6 @@ protected:
 
    any_io_executor strand{make_strand(context.get_executor())};
    std::filesystem::path testFile{"CMakeLists.txt"};
-   size_t testFileSize = file_size(testFile);
    std::filesystem::path dataFile{"test/data/64kminus1"}; // posted by h2load, one file per request
    std::atomic<int> numSpawned = 0;
 };
@@ -454,7 +453,7 @@ TEST_P(External, curl)
    auto future = spawn(CURL_PATH, std::move(args));
    run();
 
-   EXPECT_EQ(future.get().size(), testFileSize);
+   EXPECT_EQ(future.get().size(), file_size(testFile));
 }
 
 TEST_P(External, curl_multiple)
@@ -468,7 +467,7 @@ TEST_P(External, curl_multiple)
    auto future = spawn(CURL_PATH, std::move(args));
    run();
 
-   EXPECT_EQ(future.get().size(), testFileSize * 2);
+   EXPECT_EQ(future.get().size(), file_size(testFile) * 2);
 }
 
 // =================================================================================================
@@ -495,9 +494,8 @@ protected:
    //
    void h2load(size_t n, size_t clients, size_t streams)
    {
-      const size_t data_size = file_size(dataFile);
       auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-      Args args = {"-d", dataFile.string(), "-n", std::to_string(n), //
+      Args args = {"-d", dataFile.string(),       "-n", std::to_string(n), //
                    "-c", std::to_string(clients), "-m", std::to_string(streams), url};
 
       switch (GetParam())
@@ -525,7 +523,7 @@ protected:
 
       regex = std::regex(R"(\((\d+)\) data)");
       ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
-      EXPECT_EQ(std::stoul(match[1].str()), n * data_size) << match[1];
+      EXPECT_EQ(std::stoul(match[1].str()), n * file_size(dataFile)) << match[1];
    }
 };
 
@@ -550,7 +548,7 @@ TEST_P(ExternalTLS, curl)
    auto future = spawn_curl(std::move(args));
    run();
 
-   EXPECT_EQ(future.get().size(), testFileSize);
+   EXPECT_EQ(future.get().size(), file_size(testFile));
 }
 
 TEST_P(ExternalTLS, curl_many)
@@ -574,7 +572,7 @@ TEST_P(ExternalTLS, curl_many)
    run();
 
    for (auto& future : futures)
-      EXPECT_EQ(future.get().size(), testFileSize);
+      EXPECT_EQ(future.get().size(), file_size(testFile));
 }
 
 TEST_P(ExternalTLS, curl_multiple)
@@ -590,7 +588,7 @@ TEST_P(ExternalTLS, curl_multiple)
    auto future = spawn_curl(std::move(args));
    run();
 
-   EXPECT_EQ(future.get().size(), testFileSize * 4);
+   EXPECT_EQ(future.get().size(), file_size(testFile) * 4);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -647,7 +645,7 @@ TEST_F(ExternalCustom, nghttp2)
    auto future = spawn(NGHTTP_PATH, {"-d", testFile.string(), url});
    run();
 
-   EXPECT_EQ(future.get().size(), testFileSize);
+   EXPECT_EQ(future.get().size(), file_size(testFile));
 }
 
 TEST_F(ExternalCustom, h2spec)
