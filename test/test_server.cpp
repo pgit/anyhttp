@@ -10,15 +10,17 @@
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/bind_immediate_executor.hpp>
+#include <boost/asio/buffer.hpp>
 #include <boost/asio/cancellation_signal.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
+#include <boost/asio/experimental/promise.hpp>
+#include <boost/asio/experimental/use_promise.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
-#include <boost/asio/use_future.hpp>
 
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/http/error.hpp>
@@ -162,7 +164,7 @@ TEST_F(ClientConnect, WHEN_connect_to_broadcast_ip_THEN_completes_with_network_u
 
 // =================================================================================================
 
-// #define MULTITHREADED
+#define MULTITHREADED
 
 //
 // Server fixture with some default request handlers.
@@ -963,6 +965,8 @@ TEST_P(ClientAsync, YieldFuzz)
       co_await yield(dist(gen));
       co_await response.async_write({});
       co_await yield(dist(gen));
+      std::array<uint8_t, 16> data;
+      co_await request.async_read_some(asio::buffer(data));
    };
    test = [this](Session session) -> awaitable<void>
    {
@@ -1745,7 +1749,15 @@ TEST_P(ClientAsync, WHEN_send_more_than_content_length_THEN_connection_is_reset)
 
       auto ex = co_await this_coro::executor;
       auto [ep] = co_await co_spawn(ex, send(request, rv::iota(uint8_t(0))), as_tuple);
-      EXPECT_EQ(code(ep), boost::system::errc::connection_reset);
+
+      //
+      // Which of the two the write reports is a matter of how far the kernel has gotten with the
+      // peer's RST by the time we get to write again -- the first write after it fails with
+      // ECONNRESET, any later one with EPIPE. Single-threaded we reliably hit the former, with
+      // more than one thread the latter; both mean the same thing here.
+      //
+      EXPECT_THAT(code(ep), testing::AnyOf(boost::system::errc::connection_reset,
+                                           boost::system::errc::broken_pipe));
    };
 }
 
@@ -1769,8 +1781,14 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       auto response = co_await request.async_get_response();
 
-      auto future = co_spawn(request.get_executor(), send(request, rv::iota(uint8_t(0))),
-                             use_future(as_tuple));
+      //
+      // Deliberately NOT use_future(): with more than one thread the client lives on a strand,
+      // and blocking that strand in future.get() below would keep the very handlers that
+      // complete this send from ever running. asio::experimental::promise starts the coroutine
+      // right away, just like use_future, but is awaited instead of waited on.
+      //
+      auto promise = co_spawn(request.get_executor(), send(request, rv::iota(uint8_t(0))),
+                              asio::experimental::use_promise);
 
       std::println("=============================================================================");
       for (size_t i = 0; i < 10; ++i)
@@ -1788,12 +1806,11 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
          co_await yield();
       }
 
-      auto exception_ptr = future.get();
+      auto exception_ptr = co_await std::move(promise)(as_tuple(use_awaitable));
 
       boost::system::error_code ec;
       auto received = co_await try_receive(response, ec);
       loge("received: {} ({} bytes)", ec.message(), received);
-      // future.wait_for(2s);
    };
 }
 
