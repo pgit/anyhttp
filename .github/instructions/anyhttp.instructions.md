@@ -2,7 +2,7 @@
 applyTo: '**'
 ---
 AnyHTTP is a type-erased interface for implementing HTTP Servers and Clients. It offers common
-interfaces for HTTP/1.1, HTTP/2 and HTTP/3 (QUIC, not implemented yet).
+interfaces for HTTP/1.1, HTTP/2 and HTTP/3 (QUIC).
 
 AnyHTTP is completely asynchronous and intended to be used with C++20 coroutines.
 It uses Boost ASIO as the underlying async runtime and tries to adhere to it's

@@ -13,7 +13,7 @@ None of those protocols are implemented from scratch. Instead, it is a wrapper a
 
 * Boost Beast
 * nghttp2
-* nghttp3 - not done yet.
+* ngtcp2/nghttp3
 
 ## Synopsis
 ### Server
