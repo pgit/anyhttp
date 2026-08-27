@@ -414,9 +414,9 @@ awaitable<void> Server::Impl::tcp_listen_loop()
       if (ec)
       {
          if (ec == boost::system::errc::operation_canceled)
-            logi("accept: {}", ec.message());
+            logi("TCP accept: {}", ec.message());
          else
-            logw("accept: {}", ec.message());
+            logw("TCP accept: {}", ec.message());
          break;
       }
 
