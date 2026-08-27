@@ -1336,6 +1336,17 @@ awaitable<void> Http3ClientSession::do_session(Buffer&&)
 
       if (on_read({buf.data(), n}) != 0)
          break; // handle_error() already tore things down.
+
+      //
+      // close() may have run from inside on_read(): handing a response chunk or EOF to the
+      // application resumes its coroutine, which may drop the last reference to the Session
+      // right there. Its socket_.cancel() then found no receive pending -- we are between two
+      // of them -- so nothing would stop us from arming a fresh one that no peer will ever
+      // complete. The server, already draining because it got our CONNECTION_CLOSE, does not
+      // even answer it.
+      //
+      if (closed_)
+         break;
    }
 
    //
