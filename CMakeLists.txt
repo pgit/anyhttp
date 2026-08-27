@@ -42,6 +42,14 @@ add_link_options(-stdlib=libc++ -lstdc++fs)
 # use std::filesystem instead of boost::filesystem
 add_compile_definitions(BOOST_PROCESS_USE_STD_FS)
 
+# Boost.Process v2's posix launcher calls asio's execution_context::notify_fork() in the forked
+# child, between fork() and execve(). That walks the io_context's services and locks their
+# mutexes -- and with more than one thread running the context, another thread may well have
+# been holding one of them at the moment of the fork, so the child inherits it locked and hangs
+# there forever, before it ever gets to dup2() its stdio or exec. The child does nothing but
+# exec, so it has no use for the notification in the first place.
+add_compile_definitions(BOOST_PROCESS_V2_DISABLE_NOTIFY_FORK)
+
 # we don't use fmtlib any more
 add_compile_definitions(SPDLOG_USE_STD_FORMAT)
 
