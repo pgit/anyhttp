@@ -164,7 +164,7 @@ TEST_F(ClientConnect, WHEN_connect_to_broadcast_ip_THEN_completes_with_network_u
 
 // =================================================================================================
 
-#define MULTITHREADED
+// #define MULTITHREADED
 
 //
 // Server fixture with some default request handlers.
@@ -437,6 +437,7 @@ using Args = std::vector<std::string>;
 
 // =================================================================================================
 
+// plain-text only, so no HTTP/3
 INSTANTIATE_TEST_SUITE_P(External, External,
                          ::testing::Values(anyhttp::Protocol::http11, // HTTP/1.1
                                            anyhttp::Protocol::h2), // HTTP/2
