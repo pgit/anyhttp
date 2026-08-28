@@ -8,6 +8,7 @@
 #include "anyhttp/detect_ssl.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/nghttp2_session.hpp"
+#include "anyhttp/tls.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_io_executor.hpp>
@@ -323,6 +324,9 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
          if (data)
             alpn = std::string_view(reinterpret_cast<const char*>(data), len);
       }
+
+      logi("[{}] TLS handshake completed: {}", prefix,
+           tls_handshake_info(ssl_stream->native_handle()));
 
       if (alpn == "h2")
          session =

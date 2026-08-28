@@ -16,6 +16,7 @@
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/literals.hpp"
 #include "anyhttp/session_impl.hpp"
+#include "anyhttp/tls.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_io_executor.hpp>
@@ -1675,7 +1676,8 @@ int Http3ClientSession::handle_error(int /*rv*/)
 int Http3ClientSession::cb_handshake_completed(ngtcp2_conn*, void* user)
 {
    auto self = static_cast<Http3ClientSession*>(user);
-   logi("[{}] TLS handshake complete", self->log_prefix_);
+   logi("[{}] TLS handshake completed: {}", self->log_prefix_,
+        tls_handshake_info(ngtcp2_crypto_ossl_ctx_get_ssl(self->ossl_ctx_)));
    if (!self->h3_ && self->setup_http3() != 0)
       return NGTCP2_ERR_CALLBACK_FAILURE;
    return 0;
