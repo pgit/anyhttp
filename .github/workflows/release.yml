@@ -15,7 +15,7 @@ jobs:
     name: RelWithDebInfo
     runs-on: ubuntu-latest
     container:
-      image: docker.io/psedoc/anyhttp:0.27
+      image: docker.io/psedoc/anyhttp:0.28
     
     steps:
     - &checkout
@@ -37,7 +37,7 @@ jobs:
     name: ASAN
     runs-on: ubuntu-latest
     container:
-      image: docker.io/psedoc/anyhttp:0.27
+      image: docker.io/psedoc/anyhttp:0.28
 
     steps:
       - *checkout
@@ -56,7 +56,7 @@ jobs:
     name: TSAN
     runs-on: ubuntu-latest
     container:
-      image: docker.io/psedoc/anyhttp:0.27
+      image: docker.io/psedoc/anyhttp:0.28
 
     steps:
       - *checkout
@@ -75,7 +75,7 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     container:
-      image: docker.io/psedoc/anyhttp:0.27
+      image: docker.io/psedoc/anyhttp:0.28
     permissions:
       contents: read
       pages: write
