@@ -16,6 +16,7 @@
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/literals.hpp"
 #include "anyhttp/session_impl.hpp"
+#include "anyhttp/tls.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_io_executor.hpp>
@@ -96,15 +97,6 @@ struct TlsClientContext
       SSL_CTX_set_alpn_protos(ctx, alpn, sizeof(alpn) - 1);
 
       //
-      // Same order as the server, so AES-128 GCM is also picked against peers that leave the
-      // choice to the client.
-      //
-      if (SSL_CTX_set_ciphersuites(ctx, "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:"
-                                        "TLS_CHACHA20_POLY1305_SHA256") != 1)
-         throw std::runtime_error(std::string{"SSL_CTX_set_ciphersuites: "} +
-                                  ERR_error_string(ERR_get_error(), nullptr));
-
-      //
       // TODO: verify the server certificate (e.g. against pki/out/root.pem) instead of accepting
       // anything.
       //
@@ -183,8 +175,8 @@ class Http3ClientStream;
 //
 // Bound on how much of the caller's async_write() buffer we copy into write_chunk at a time (see
 // Http3ClientStream's write_* members) -- copying is paced by how much nghttp3/ngtcp2 actually
-// drains, rather than copying a huge caller buffer (e.g. 50MB) in one synchronous allocation+memcpy,
-// mirroring nghttp2's own per-call copy into its frame buffer.
+// drains, rather than copying a huge caller buffer (e.g. 50MB) in one synchronous
+// allocation+memcpy, mirroring nghttp2's own per-call copy into its frame buffer.
 //
 inline constexpr size_t kWriteChunkSize = 16 * 1024;
 
@@ -1016,7 +1008,6 @@ void Http3ClientStream::finish_active_write()
 
    if (handler)
       swap_and_invoke(handler, boost::system::error_code{});
-
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1346,6 +1337,17 @@ awaitable<void> Http3ClientSession::do_session(Buffer&&)
 
       if (on_read({buf.data(), n}) != 0)
          break; // handle_error() already tore things down.
+
+      //
+      // close() may have run from inside on_read(): handing a response chunk or EOF to the
+      // application resumes its coroutine, which may drop the last reference to the Session
+      // right there. Its socket_.cancel() then found no receive pending -- we are between two
+      // of them -- so nothing would stop us from arming a fresh one that no peer will ever
+      // complete. The server, already draining because it got our CONNECTION_CLOSE, does not
+      // even answer it.
+      //
+      if (closed_)
+         break;
    }
 
    //
@@ -1674,7 +1676,8 @@ int Http3ClientSession::handle_error(int /*rv*/)
 int Http3ClientSession::cb_handshake_completed(ngtcp2_conn*, void* user)
 {
    auto self = static_cast<Http3ClientSession*>(user);
-   logi("[{}] TLS handshake complete", self->log_prefix_);
+   logi("[{}] TLS handshake completed: {}", self->log_prefix_,
+        tls_handshake_info(ngtcp2_crypto_ossl_ctx_get_ssl(self->ossl_ctx_)));
    if (!self->h3_ && self->setup_http3() != 0)
       return NGTCP2_ERR_CALLBACK_FAILURE;
    return 0;

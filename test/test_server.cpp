@@ -10,22 +10,22 @@
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/bind_immediate_executor.hpp>
+#include <boost/asio/buffer.hpp>
 #include <boost/asio/cancellation_signal.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
+#include <boost/asio/experimental/promise.hpp>
+#include <boost/asio/experimental/use_promise.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
-#include <boost/asio/use_future.hpp>
 
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/http/error.hpp>
 
 #include <boost/algorithm/string/join.hpp>
-
-#include <boost/filesystem/path.hpp>
 
 #include <boost/lexical_cast.hpp>
 #include <boost/lexical_cast/bad_lexical_cast.hpp>
@@ -52,6 +52,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <filesystem>
 
 #include <future>
 #include <print>
@@ -59,6 +60,7 @@
 #include <ranges>
 #include <regex>
 #include <spdlog/common.h>
+#include <thread>
 
 using namespace std::string_view_literals;
 using namespace std::chrono_literals;
@@ -173,14 +175,26 @@ TEST_F(ClientConnect, WHEN_connect_to_broadcast_ip_THEN_completes_with_network_u
 class Server : public testing::TestWithParam<anyhttp::Protocol>
 {
 protected:
+   //
+   // Number of threads run() will run the io_context on. More than one makes the server put
+   // every connection on its own strand, see below.
+   //
+   virtual size_t threads() const
+   {
+#if defined(MULTITHREADED)
+      return std::max(2u, std::thread::hardware_concurrency());
+#else
+      return 1;
+#endif
+   }
+
    void SetUp() override
    {
       setupLogging();
 
       auto config = server::Config{.listen_address = "127.0.0.2", .port = 0};
-#if defined(MULTITHREADED)
-      config.use_strand = true;
-#endif
+      config.use_strand = threads() > 1;
+
       //
       // The main server acceptor loop does not need to run on a strand. Instead, a per-connection
       // strand is created after accepting a new connection.
@@ -230,16 +244,22 @@ protected:
 
    void run()
    {
-#if defined(MULTITHREADED)
-      auto threads =
-         rv::iota(0) | rv::take(std::max(1u, std::thread::hardware_concurrency())) |
-         rv::transform([this](int) { return std::jthread([this] { ::run(context); }); }) |
-         std::ranges::to<std::vector>();
+      const size_t n = threads();
+      if (n <= 1)
+      {
+         ::run(context);
+         return;
+      }
 
-      ::run(context);
-#else
-      ::run(context);
-#endif
+      //
+      // The extra threads use context.run() directly: the per-operation logging of ::run() is
+      // meant for single-threaded debugging and would just interleave into noise here.
+      //
+      auto pool = rv::iota(size_t{1}, n) | rv::transform([this](size_t) {
+         return std::jthread([this] { context.run(); });
+      }) | std::ranges::to<std::vector>();
+
+      context.run();
    }
 
 protected:
@@ -339,7 +359,7 @@ protected:
       co_return result;
    }
 
-   awaitable<std::string> spawn_process(bp::filesystem::path path, std::vector<std::string> args)
+   awaitable<std::string> spawn_process(std::filesystem::path path, std::vector<std::string> args)
    {
       logi("spawn: {} {}", path.generic_string(), boost::algorithm::join(args, " "));
 
@@ -374,7 +394,7 @@ protected:
       co_return result;
    }
 
-   std::future<std::string> spawn(bp::filesystem::path path, std::vector<std::string> args)
+   std::future<std::string> spawn(std::filesystem::path path, std::vector<std::string> args)
    {
       ++numSpawned;
       std::promise<std::string> promise;
@@ -408,8 +428,8 @@ protected:
    }
 
    any_io_executor strand{make_strand(context.get_executor())};
-   bp::filesystem::path testFile{"CMakeLists.txt"};
-   size_t testFileSize = file_size(testFile);
+   std::filesystem::path testFile{"CMakeLists.txt"};
+   std::filesystem::path dataFile{"test/data/64kminus1"}; // posted by h2load, one file per request
    std::atomic<int> numSpawned = 0;
 };
 
@@ -417,6 +437,7 @@ using Args = std::vector<std::string>;
 
 // =================================================================================================
 
+// plain-text only, so no HTTP/3
 INSTANTIATE_TEST_SUITE_P(External, External,
                          ::testing::Values(anyhttp::Protocol::http11, // HTTP/1.1
                                            anyhttp::Protocol::h2), // HTTP/2
@@ -435,7 +456,7 @@ TEST_P(External, curl)
    auto future = spawn(CURL_PATH, std::move(args));
    run();
 
-   EXPECT_EQ(future.get().size(), testFileSize);
+   EXPECT_EQ(future.get().size(), file_size(testFile));
 }
 
 TEST_P(External, curl_multiple)
@@ -449,7 +470,7 @@ TEST_P(External, curl_multiple)
    auto future = spawn(CURL_PATH, std::move(args));
    run();
 
-   EXPECT_EQ(future.get().size(), testFileSize * 2);
+   EXPECT_EQ(future.get().size(), file_size(testFile) * 2);
 }
 
 // =================================================================================================
@@ -468,6 +489,44 @@ protected:
       case anyhttp::Protocol::h3:
          return "--http3-only";
       }
+   }
+
+   //
+   // Run h2load against /echo, posting the contents of 'dataFile' with every request, and check
+   // that all of it came back. h2load speaks the protocol of the fixture parameter.
+   //
+   void h2load(size_t n, size_t clients, size_t streams)
+   {
+      auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
+      Args args = {"-d", dataFile.string(),       "-n", std::to_string(n), //
+                   "-c", std::to_string(clients), "-m", std::to_string(streams), url};
+
+      switch (GetParam())
+      {
+      case anyhttp::Protocol::http11:
+         args.insert(args.begin(), "--h1");
+         break;
+      case anyhttp::Protocol::h3:
+         args.insert(args.begin(), "--h3"); // h2load negotiates h3 itself, http:// URL is fine
+         break;
+      default:
+         break; // h2load defaults to HTTP/2
+      }
+
+      auto future = spawn(H2LOAD_PATH, std::move(args));
+      run();
+
+      const std::string output = future.get();
+      std::smatch match;
+      std::regex regex(
+         R"((\d+) total, \d+ started, (\d+) done, (\d+) succeeded, (\d+) failed, \d+ errored)");
+      ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
+      EXPECT_EQ(std::stoul(match[3].str()), n) << match[1];
+      EXPECT_EQ(std::stoul(match[4].str()), 0) << match[1];
+
+      regex = std::regex(R"(\((\d+)\) data)");
+      ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
+      EXPECT_EQ(std::stoul(match[1].str()), n * file_size(dataFile)) << match[1];
    }
 };
 
@@ -492,7 +551,7 @@ TEST_P(ExternalTLS, curl)
    auto future = spawn_curl(std::move(args));
    run();
 
-   EXPECT_EQ(future.get().size(), testFileSize);
+   EXPECT_EQ(future.get().size(), file_size(testFile));
 }
 
 TEST_P(ExternalTLS, curl_many)
@@ -516,7 +575,7 @@ TEST_P(ExternalTLS, curl_many)
    run();
 
    for (auto& future : futures)
-      EXPECT_EQ(future.get().size(), testFileSize);
+      EXPECT_EQ(future.get().size(), file_size(testFile));
 }
 
 TEST_P(ExternalTLS, curl_multiple)
@@ -532,45 +591,33 @@ TEST_P(ExternalTLS, curl_multiple)
    auto future = spawn_curl(std::move(args));
    run();
 
-   EXPECT_EQ(future.get().size(), testFileSize * 4);
+   EXPECT_EQ(future.get().size(), file_size(testFile) * 4);
 }
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_P(ExternalTLS, h2load)
+TEST_P(ExternalTLS, h2load) { h2load(100, 4, 3); }
+
+// =================================================================================================
+
+//
+// Same as ExternalTLS, but with the io_context run on multiple threads, so every connection gets
+// its own strand. For HTTP/3 this is the regression test for concurrent access to a single
+// ngtcp2_conn, which used to crash right away.
+//
+class ExternalTLSThreaded : public ExternalTLS
 {
-   const size_t n = 100; // number of requests, echoing 65535 bytes each
-   const size_t data_size = 65535;
-   auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-d", "test/data/64kminus1", "-n", std::to_string(n), "-c", "4", "-m", "3", url};
+protected:
+   size_t threads() const override { return 8; }
+};
 
-   switch (GetParam())
-   {
-   case anyhttp::Protocol::http11:
-      args.insert(args.begin(), "--h1");
-      break;
-   case anyhttp::Protocol::h3:
-      args.insert(args.begin(), "--h3"); // h2load negotiates h3 itself, http:// URL is fine
-      break;
-   default:
-      break; // h2load defaults to HTTP/2
-   }
+INSTANTIATE_TEST_SUITE_P(ExternalTLSThreaded, ExternalTLSThreaded,
+                         ::testing::Values(anyhttp::Protocol::http11, // HTTP/1.1
+                                           anyhttp::Protocol::h2, // HTTP/2
+                                           anyhttp::Protocol::h3), // HTTP/3 (QUIC)
+                         NameGenerator);
 
-   auto future = spawn(H2LOAD_PATH, std::move(args));
-   run();
-
-   const std::string output = future.get();
-   std::smatch match;
-   std::regex regex(
-      R"((\d+) total, \d+ started, (\d+) done, (\d+) succeeded, (\d+) failed, \d+ errored)");
-   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
-   EXPECT_EQ(std::stoul(match[3].str()), n) << match[1];
-   EXPECT_EQ(std::stoul(match[4].str()), 0) << match[1];
-
-   regex = std::regex(R"(\((\d+)\) data)");
-   ASSERT_TRUE(std::regex_search(output.begin(), output.end(), match, regex)) << output;
-   EXPECT_EQ(std::stoul(match[1].str()), n * data_size) << match[1];
-}
+TEST_P(ExternalTLSThreaded, h2load) { h2load(1000, 8, 5); }
 
 // =================================================================================================
 
@@ -601,7 +648,7 @@ TEST_F(ExternalCustom, nghttp2)
    auto future = spawn(NGHTTP_PATH, {"-d", testFile.string(), url});
    run();
 
-   EXPECT_EQ(future.get().size(), testFileSize);
+   EXPECT_EQ(future.get().size(), file_size(testFile));
 }
 
 TEST_F(ExternalCustom, h2spec)
@@ -642,7 +689,6 @@ protected:
       Server::SetUp();
       url.set_port_number(server->local_endpoint().port());
       client::Config config{.url = url, .protocol = GetParam()};
-      config.url.set_port_number(server->local_endpoint().port());
 #if defined(MULTITHREADED)
       client.emplace(make_strand(context.get_executor()), config);
 #else
@@ -919,6 +965,8 @@ TEST_P(ClientAsync, YieldFuzz)
       co_await yield(dist(gen));
       co_await response.async_write({});
       co_await yield(dist(gen));
+      std::array<uint8_t, 16> data;
+      co_await request.async_read_some(asio::buffer(data));
    };
    test = [this](Session session) -> awaitable<void>
    {
@@ -1701,7 +1749,15 @@ TEST_P(ClientAsync, WHEN_send_more_than_content_length_THEN_connection_is_reset)
 
       auto ex = co_await this_coro::executor;
       auto [ep] = co_await co_spawn(ex, send(request, rv::iota(uint8_t(0))), as_tuple);
-      EXPECT_EQ(code(ep), boost::system::errc::connection_reset);
+
+      //
+      // Which of the two the write reports is a matter of how far the kernel has gotten with the
+      // peer's RST by the time we get to write again -- the first write after it fails with
+      // ECONNRESET, any later one with EPIPE. Single-threaded we reliably hit the former, with
+      // more than one thread the latter; both mean the same thing here.
+      //
+      EXPECT_THAT(code(ep), testing::AnyOf(boost::system::errc::connection_reset,
+                                           boost::system::errc::broken_pipe));
    };
 }
 
@@ -1725,8 +1781,14 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       auto response = co_await request.async_get_response();
 
-      auto future = co_spawn(request.get_executor(), send(request, rv::iota(uint8_t(0))),
-                             use_future(as_tuple));
+      //
+      // Deliberately NOT use_future(): with more than one thread the client lives on a strand,
+      // and blocking that strand in future.get() below would keep the very handlers that
+      // complete this send from ever running. asio::experimental::promise starts the coroutine
+      // right away, just like use_future, but is awaited instead of waited on.
+      //
+      auto promise = co_spawn(request.get_executor(), send(request, rv::iota(uint8_t(0))),
+                              asio::experimental::use_promise);
 
       std::println("=============================================================================");
       for (size_t i = 0; i < 10; ++i)
@@ -1744,12 +1806,11 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
          co_await yield();
       }
 
-      auto exception_ptr = future.get();
+      auto exception_ptr = co_await std::move(promise)(as_tuple(use_awaitable));
 
       boost::system::error_code ec;
       auto received = co_await try_receive(response, ec);
       loge("received: {} ({} bytes)", ec.message(), received);
-      // future.wait_for(2s);
    };
 }
 
@@ -1834,7 +1895,7 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
    //
    // The server has to keep running while the client is frozen, so it gets a thread of its own.
    //
-   std::jthread server_thread([this] { context.run(); });
+   std::jthread server_thread([this] { run(context); });
    boost::scope::scope_exit stop_server([this] { context.stop(); });
 
    //

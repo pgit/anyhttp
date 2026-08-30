@@ -1,7 +1,7 @@
 # HTTP/3 Manual Testing
 
 ```sh
-cmake --build build && build/src/ngtcp2/ngtcp-server ::1 8080 pki/out/server-key.pem pki/out/server-chain.pem
+osslserver ::1 8080 pki/out/server-key.pem pki/out/server-chain.pem
 ```
 
 ```sh

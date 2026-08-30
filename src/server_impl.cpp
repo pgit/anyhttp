@@ -8,6 +8,7 @@
 #include "anyhttp/detect_ssl.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/nghttp2_session.hpp"
+#include "anyhttp/tls.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_io_executor.hpp>
@@ -73,7 +74,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
  */
 void Server::Impl::start()
 {
-   co_spawn(m_executor, listen_loop(), [self = shared_from_this()](const std::exception_ptr& ex)
+   co_spawn(m_executor, tcp_listen_loop(), [self = shared_from_this()](const std::exception_ptr& ex)
    {
       if (ex)
          logw("TCP accept loop: {}", what(ex));
@@ -83,7 +84,8 @@ void Server::Impl::start()
 
    if (m_udp_socket)
    {
-      co_spawn(m_executor, udp_receive_loop(),
+      // On the socket's strand -- see listen_udp().
+      co_spawn(m_udp_socket->get_executor(), udp_receive_loop(),
                [self = shared_from_this()](const std::exception_ptr& ex)
       {
          if (ex)
@@ -106,19 +108,28 @@ void Server::Impl::destroy()
    //
    // Destroy all active sessions (TCP and QUIC) so their timers and async operations are
    // cancelled, allowing the io_context to drain. QUIC sessions send a final CONNECTION_CLOSE
-   // through the (still shared) UDP socket as part of destroy(), so this has to happen before
-   // that socket is closed below -- otherwise the peer only finds out via idle timeout.
+   // as part of destroy() -- through their own dup()ed fd, so closing the shared UDP socket
+   // below doesn't race with it. Setting m_destroyed under the same lock is what keeps
+   // process_quic_batch(), running on some session strand, from registering a new session
+   // after this loop has run: it re-checks the flag under the lock before inserting.
    //
    {
       auto lock = std::lock_guard(m_sessionMutex);
+      m_destroyed = true;
       for (auto& session : m_sessions)
          session->destroy();
    }
 
+   //
+   // The socket lives on its own strand (see listen_udp()) and udp_receive_loop() keeps
+   // re-arming async_wait() on it there -- asio sockets are not thread-safe, so the close
+   // has to go through the same strand instead of racing that from here.
+   //
    if (m_udp_socket)
-      m_udp_socket->close(); // breaks udp_receive_loop()
-
-   m_stopped = true;
+   {
+      asio::dispatch(m_udp_socket->get_executor(), [self = shared_from_this()]
+      { self->m_udp_socket->close(); }); // breaks udp_receive_loop()
+   }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -126,7 +137,7 @@ void Server::Impl::destroy()
 Server::Impl::~Impl()
 {
    logi("Server: dtor");
-   assert(m_stopped);
+   assert(m_destroyed);
 }
 
 // =================================================================================================
@@ -151,7 +162,7 @@ void Server::Impl::listen_tcp()
    acceptor.listen();
 
    endpoint = acceptor.local_endpoint();
-   logi("Server: listening on {}", endpoint);
+   logi("Server: TCP listening on {}", endpoint);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -168,7 +179,12 @@ void Server::Impl::listen_udp()
    auto tcp_ep = m_acceptor->local_endpoint();
    const bool is_v6 = tcp_ep.protocol() == ip::tcp::v6();
 
-   m_udp_socket.emplace(m_executor);
+   //
+   // The socket gets its own strand: udp_receive_loop() runs on it (see start()), and destroy()
+   // dispatches the shutdown close() through it, so the two never touch the socket concurrently.
+   //
+   m_udp_socket.emplace(config().use_strand ? asio::any_io_executor{asio::make_strand(m_executor)}
+                                            : m_executor);
    m_udp_socket->open(is_v6 ? ip::udp::v6() : ip::udp::v4());
 
    if (is_v6)
@@ -309,6 +325,9 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
             alpn = std::string_view(reinterpret_cast<const char*>(data), len);
       }
 
+      logi("[{}] TLS handshake completed: {}", prefix,
+           tls_handshake_info(ssl_stream->native_handle()));
+
       if (alpn == "h2")
          session =
             std::make_shared<nghttp2::ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>> //
@@ -378,7 +397,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
  * https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p3149r5.html#listener-loop-in-an-http-server
  *
  */
-awaitable<void> Server::Impl::listen_loop()
+awaitable<void> Server::Impl::tcp_listen_loop()
 {
    assert(m_acceptor);
    auto& acceptor = *m_acceptor;
@@ -399,9 +418,9 @@ awaitable<void> Server::Impl::listen_loop()
       if (ec)
       {
          if (ec == boost::system::errc::operation_canceled)
-            logi("accept: {}", ec.message());
+            logi("TCP accept: {}", ec.message());
          else
-            logw("accept: {}", ec.message());
+            logw("TCP accept: {}", ec.message());
          break;
       }
 

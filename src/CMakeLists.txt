@@ -4,8 +4,7 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 # https://github.com/andrewmd5/libwtf/blob/main/CMakeLists.txt
 
 #
-# QUIC / HTTP3 libraries -- shared between the anyhttp library below and the
-# stand-alone ngtcp2 example binaries in the ngtcp2/ subdirectory.
+# QUIC / HTTP3 libraries
 #
 pkg_check_modules(NGTCP2              REQUIRED IMPORTED_TARGET libngtcp2)
 pkg_check_modules(NGHTTP3             REQUIRED IMPORTED_TARGET libnghttp3)
@@ -22,14 +21,16 @@ target_sources(anyhttp PRIVATE ${anyhttp_sources})
 target_include_directories(anyhttp PUBLIC ../include)
 
 target_include_directories(anyhttp PRIVATE "/opt/nghttp3/build/include")
-target_sources(anyhttp PRIVATE ngtcp2/shared.cc)
+#
+# Small helpers taken from the ngtcp2 examples (see ngtcp2/README.md).
+#
+target_sources(anyhttp PRIVATE ngtcp2/shared.cc ngtcp2/util.cc)
 
 target_link_libraries(anyhttp PRIVATE Threads::Threads)
 target_link_libraries(anyhttp PRIVATE OpenSSL::SSL)
 target_link_libraries(anyhttp PRIVATE Boost::thread Boost::atomic Boost::url Boost::filesystem)
 target_link_libraries(anyhttp PRIVATE spdlog::spdlog_header_only)
 target_link_libraries(anyhttp PRIVATE PkgConfig::NGHTTP2)
-target_link_libraries(anyhttp PRIVATE ngtcp2_common)
 target_link_libraries(anyhttp PRIVATE PkgConfig::NGTCP2 PkgConfig::NGHTTP3 PkgConfig::NGTCP2_CRYPTO_OSSL)
 
 #
@@ -53,14 +54,3 @@ target_link_libraries(client PRIVATE anyhttp)
 #
 add_executable(beast_issue_3032)
 target_sources(beast_issue_3032 PRIVATE "beast_issue_3032.cpp")
-
-#
-# ngtcp-test
-#
-add_executable(ngtcp-test)
-target_sources(ngtcp-test PRIVATE "ngtcp-test_main.cpp")
-target_include_directories(ngtcp-test PUBLIC "/opt/boringssl/include")
-target_link_directories(ngtcp-test PRIVATE "/opt/boringssl/lib")
-target_link_libraries(ngtcp-test ssl crypto ev ngtcp2 libngtcp2_crypto_boringssl.a)
-
-add_subdirectory(ngtcp2)
