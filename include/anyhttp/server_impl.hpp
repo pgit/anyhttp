@@ -70,8 +70,8 @@ public:
    const Config& config() const { return m_config; }
    boost::asio::any_io_executor get_executor() const noexcept { return m_executor; }
 
-   asio::awaitable<void> tcp_listen_loop();
-   asio::awaitable<void> handleConnection(asio::ip::tcp::socket socket);
+   asio::awaitable<void> tcp_accept_loop();
+   asio::awaitable<void> handle_connection(asio::ip::tcp::socket socket);
 
    asio::ip::tcp::endpoint local_endpoint() const
    {

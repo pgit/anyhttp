@@ -74,7 +74,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
  */
 void Server::Impl::start()
 {
-   co_spawn(m_executor, tcp_listen_loop(), [self = shared_from_this()](const std::exception_ptr& ex)
+   co_spawn(m_executor, tcp_accept_loop(), [self = shared_from_this()](const std::exception_ptr& ex)
    {
       if (ex)
          logw("TCP accept loop: {}", what(ex));
@@ -152,17 +152,17 @@ void Server::Impl::listen_tcp()
    if (ec)
       logw("Server: error resolving '{}': {}", config().listen_address, ec.what());
 
-   ip::tcp::endpoint endpoint(address, config().port);
-   if (endpoint.protocol() == ip::tcp::v6())
+   ip::tcp::endpoint ep(address, config().port);
+   if (ep.protocol() == ip::tcp::v6())
       std::ignore = acceptor.set_option(ip::v6_only(false), ec);
 
-   acceptor.open(endpoint.protocol());
+   acceptor.open(ep.protocol());
    acceptor.set_option(asio::socket_base::reuse_address(true));
-   acceptor.bind(endpoint);
+   acceptor.bind(ep);
    acceptor.listen();
 
-   endpoint = acceptor.local_endpoint();
-   logi("Server: TCP listening on {}", endpoint);
+   ep = acceptor.local_endpoint();
+   logi("Server: TCP listening on {}", ep);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -264,7 +264,7 @@ private:
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
+awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
 {
    const auto prefix = normalize(socket.remote_endpoint());
    logi("[{}] new connection", prefix);
@@ -388,7 +388,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 // -------------------------------------------------------------------------------------------------
 
 /**
- * Typically, a listen loop "spawns" a new thread of execution for each connection it accepts.
+ * Typically, an accept loop "spawns" a new thread of execution for each connection it accepts.
  * Doing that in a "detached" fashion violates the principles of structured concurrency, as we
  * don't have a clear way of cancelling those threads.
  *
@@ -397,7 +397,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
  * https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p3149r5.html#listener-loop-in-an-http-server
  *
  */
-awaitable<void> Server::Impl::tcp_listen_loop()
+awaitable<void> Server::Impl::tcp_accept_loop()
 {
    assert(m_acceptor);
    auto& acceptor = *m_acceptor;
@@ -443,7 +443,7 @@ awaitable<void> Server::Impl::tcp_listen_loop()
       //       or explicit thread pools where really needed.
       //
       co_spawn(config().use_strand ? boost::asio::make_strand(executor) : executor,
-               handleConnection(std::move(socket)), [&, ep](const std::exception_ptr& ex) mutable
+               handle_connection(std::move(socket)), [&, ep](const std::exception_ptr& ex) mutable
       {
          auto lock = std::lock_guard(m_sessionMutex);
          --sessionCounter;
@@ -459,7 +459,7 @@ awaitable<void> Server::Impl::tcp_listen_loop()
    //
    auto lock = std::unique_lock(m_sessionMutex);
    const auto waitingFor = sessionCounter;
-   logi("listen loop terminated, waiting for {} sessions...", waitingFor);
+   logi("accept terminated, waiting for {} sessions...", waitingFor);
 
    size_t i = 0;
    for (; sessionCounter; ++i)
@@ -473,7 +473,7 @@ awaitable<void> Server::Impl::tcp_listen_loop()
       lock.lock();
    }
 
-   logi("listen loop terminated, waiting for {} sessions... done, {} iterations", waitingFor, i);
+   logi("accept terminated, waiting for {} sessions... done, {} iterations", waitingFor, i);
 }
 
 // =================================================================================================
