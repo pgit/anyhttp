@@ -1,10 +1,10 @@
 //
 // Http3Session: one QUIC connection carrying HTTP/3, shared by the server and the client.
-// See anyhttp/http3_session.hpp; the role-specific ends live in server_impl_udp.cpp and
-// client_impl_udp.cpp.
+// See anyhttp/h3_session.hpp; the role-specific ends live in h3_server.cpp and
+// h3_client.cpp.
 //
-#include "anyhttp/http3_session.hpp"
-#include "anyhttp/http3_stream.hpp"
+#include "anyhttp/h3_session.hpp"
+#include "anyhttp/h3_stream.hpp"
 #include "anyhttp/literals.hpp"
 #include "anyhttp/tls.hpp"
 

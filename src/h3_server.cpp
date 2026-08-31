@@ -2,7 +2,7 @@
 // anyhttp QUIC / HTTP/3 server.
 //
 // Nearly everything that makes a QUIC connection work is shared with the client and lives in
-// anyhttp/http3_session.hpp and anyhttp/http3_stream.hpp: `Http3ServerSession` is an
+// anyhttp/h3_session.hpp and anyhttp/h3_stream.hpp: `Http3ServerSession` is an
 // `http3::Http3Session` that knows how packets reach it and how it dies, and `Http3ServerStream`
 // is an `http3::Http3Stream` that reads a request and writes a response, where the client's does
 // the opposite. Per-request state feeds an `Http3Reader` (server::Request) and `Http3Writer`
@@ -10,7 +10,9 @@
 //
 // What is genuinely server-side here: the TLS server context, the UDP receive path (many
 // connections over one socket, demultiplexed by connection ID) and the closing/draining period
-// bookkeeping that goes with being the endpoint that stays around.
+// bookkeeping that goes with being the endpoint that stays around. All of it sits behind
+// `Http3Server` (anyhttp/h3_backend.hpp), so the generic server in server_impl.cpp dispatches to
+// HTTP/3 without ever seeing an ngtcp2 or nghttp3 type.
 //
 // Threading: with Config::use_strand, each Http3ServerSession lives on its own strand -- the unit
 // of serialization is the QUIC *connection* (one ngtcp2_conn/nghttp3_conn pair), not the CID: many
@@ -18,7 +20,7 @@
 // copies each datagram, groups them by session and posts one batch per session to that session's
 // strand (process_quic_batch()), where all ngtcp2/nghttp3 work, the timers and the request
 // handlers run. The CID demux table is the only cross-connection state and is guarded by
-// Server::Impl::m_quicMutex. Sends go straight out via a per-session dup() of the UDP fd --
+// Http3ServerImpl::mutex_. Sends go straight out via a per-session dup() of the UDP fd --
 // sendto()/sendmsg() are atomic per datagram, so they need no serialization.
 //
 // Not yet implemented: retry tokens, version negotiation, stateless reset, connection
@@ -27,9 +29,10 @@
 
 #include "anyhttp/client_impl.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
-#include "anyhttp/http3_common.hpp"
-#include "anyhttp/http3_session.hpp"
-#include "anyhttp/http3_stream.hpp"
+#include "anyhttp/h3_backend.hpp"
+#include "anyhttp/h3_common.hpp"
+#include "anyhttp/h3_session.hpp"
+#include "anyhttp/h3_stream.hpp"
 #include "anyhttp/literals.hpp"
 #include "anyhttp/request_handlers.hpp" // IWYU pragma: keep
 #include "anyhttp/server_impl.hpp"
@@ -306,6 +309,7 @@ int send_udp_gso(const Endpoint& ep, const sockaddr* sa, socklen_t salen,
 // Http3ServerStream / Http3ServerSession: the server's end of the shared HTTP/3 implementation.
 // =================================================================================================
 
+class Http3ServerImpl;
 class Http3ServerSession;
 
 class Http3ServerStream : public http3::Http3Stream
@@ -328,7 +332,7 @@ public:
 class Http3ServerSession : public http3::Http3Session
 {
 public:
-   Http3ServerSession(Server::Impl& server, Endpoint ep, ngtcp2::Address remote);
+   Http3ServerSession(Http3ServerImpl& server, Endpoint ep, ngtcp2::Address remote);
    ~Http3ServerSession() override;
 
    //
@@ -352,11 +356,12 @@ public:
    int on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> data,
                const ngtcp2::Address& remote);
 
-   /// Called from process_quic_batch() when a packet arrives during the closing period.
+   /// Called from Http3ServerImpl::process_quic_batch() when a packet arrives during the
+   /// closing period.
    void resend_conn_close();
 
    const ngtcp2_cid& scid() const noexcept { return scid_; }
-   Server::Impl& server() noexcept { return server_; }
+   Http3ServerImpl& server() noexcept { return server_; }
 
 protected:
    int handle_error(int rv) override;
@@ -372,7 +377,7 @@ private:
    void do_destroy() noexcept; // the body of destroy(), always run on executor_
 
 private:
-   Server::Impl& server_;
+   Http3ServerImpl& server_;
    Endpoint ep_;
    bool owns_fd_ = false; // ep_.fd was dup()ed in the ctor, close it in the dtor
    ngtcp2::Address remote_;
@@ -381,6 +386,98 @@ private:
    asio::steady_timer done_signal_; // used to wake do_session() on connection close
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
    bool no_gso_ = false;
+};
+
+namespace
+{
+std::optional<ngtcp2::Address> to_ngtcp2_address(const sockaddr_storage& src, socklen_t len)
+{
+   ngtcp2::Address addr{};
+   if (len > sizeof(addr.su))
+      return std::nullopt;
+   std::memcpy(&addr.su, &src, len);
+   addr.len = len;
+   return addr;
+}
+} // namespace
+
+//
+// What one pass of udp_on_read() hands a session: every datagram of the receive batch that was
+// addressed to it, copied out of the receive buffer because the session consumes them on its own
+// strand, after udp_on_read() has moved on. `is_new` marks a batch whose first datagram is the
+// client Initial that created the session -- process_quic_batch() runs init() with it.
+//
+struct QuicBatch
+{
+   struct Datagram
+   {
+      ngtcp2_pkt_info pi;
+      ngtcp2::Address remote;
+      std::vector<uint8_t> data;
+   };
+
+   bool is_new = false;
+   ngtcp2_pkt_hd hd{}; // decoded Initial packet header, only valid when is_new
+   boost::container::small_vector<Datagram, 8> datagrams;
+};
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// The server's HTTP/3 half (see anyhttp/h3_backend.hpp): the UDP socket every QUIC connection
+// shares, the receive loop demultiplexing datagrams onto them by connection ID, and the table
+// doing that lookup. The sessions themselves are owned by Server::Impl's session registry, like
+// the TCP-based ones -- what is kept here is only what routing packets needs.
+//
+class Http3ServerImpl : public Http3Server, public std::enable_shared_from_this<Http3ServerImpl>
+{
+public:
+   Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endpoint& endpoint);
+
+   //
+   // Http3Server
+   //
+   void start() override;
+   void destroy() override;
+
+   //
+   // The server this is a part of. Sessions reach the configuration, the request handler and the
+   // session registry through here.
+   //
+   Server::Impl& parent() noexcept { return parent_; }
+   const Config& config() const noexcept { return parent_.config(); }
+   const RequestHandler& requestHandler() const { return parent_.requestHandler(); }
+   asio::any_io_executor get_executor() const noexcept { return parent_.get_executor(); }
+
+   //
+   // QUIC connection-ID demux table. Populated as new source CIDs are minted, consulted by
+   // udp_on_read() to route packets to the right connection. Guarded by mutex_: the receive loop
+   // reads it while sessions mutate it from their own strands (get_new_connection_id /
+   // remove_connection_id callbacks, close timers).
+   //
+   void associate_quic_cid(const ngtcp2_cid& cid, Http3ServerSession* session);
+   void dissociate_quic_cid(const ngtcp2_cid& cid);
+   void erase_quic_session(Http3ServerSession* session);
+
+private:
+   awaitable<void> udp_receive_loop();
+   int udp_on_read(Endpoint& ep);
+   void process_quic_batch(const std::shared_ptr<Http3ServerSession>& session, QuicBatch&& batch);
+
+   /// Keeps the owning Server::Impl alive for as long as a pending operation of ours runs.
+   std::shared_ptr<Server::Impl> owner() { return parent_.shared_from_this(); }
+
+private:
+   Server::Impl& parent_;
+
+   //
+   // The socket gets its own strand: udp_receive_loop() runs on it, and destroy() dispatches the
+   // shutdown close() through it, so the two never touch the socket concurrently.
+   //
+   std::optional<asio::ip::udp::socket> socket_;
+
+   std::mutex mutex_;
+   std::unordered_map<std::string, std::shared_ptr<Http3ServerSession>> sessions_;
 };
 
 // =================================================================================================
@@ -476,7 +573,7 @@ void Http3ServerStream::submit_response(unsigned int status, const Fields& user_
 // Http3ServerSession implementation
 // =================================================================================================
 
-Http3ServerSession::Http3ServerSession(Server::Impl& server, Endpoint ep, ngtcp2::Address remote)
+Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, ngtcp2::Address remote)
    : http3::Http3Session(server.config().use_strand
                             ? asio::any_io_executor{asio::make_strand(server.get_executor())}
                             : server.get_executor()),
@@ -681,10 +778,10 @@ int Http3ServerSession::handle_error(int /*rv*/)
 
    //
    // Idle timeout and drop-conn need no CONNECTION_CLOSE packet -- and with no packet there is
-   // no closing period either, so none of the cleanup in Server::Impl::process_quic_batch() can
+   // no closing period either, so none of the cleanup in Http3ServerImpl::process_quic_batch() can
    // ever run for this session: it is reached from the expiry timer precisely because nothing is
    // arriving any more. Drop the session from the demux map right here instead, or it would sit
-   // in m_quic_handlers for the lifetime of the server, holding streams whose request handlers
+   // in sessions_ for the lifetime of the server, holding streams whose request handlers
    // are still waiting on a peer that went away. What is left of it then dies with do_session().
    //
    if (last_error_.type == NGTCP2_CCERR_TYPE_IDLE_CLOSE ||
@@ -754,64 +851,92 @@ void Http3ServerSession::resend_conn_close()
 }
 
 // =================================================================================================
-// Server::Impl QUIC glue.
+// Http3ServerImpl: the UDP socket, the receive loop and the connection-ID demux.
 // =================================================================================================
 
-namespace
+Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endpoint& endpoint)
+   : parent_(parent)
 {
-std::optional<ngtcp2::Address> to_ngtcp2_address(const sockaddr_storage& src, socklen_t len)
-{
-   ngtcp2::Address addr{};
-   if (len > sizeof(addr.su))
-      return std::nullopt;
-   std::memcpy(&addr.su, &src, len);
-   addr.len = len;
-   return addr;
-}
-} // namespace
+   namespace socket_option = boost::asio::detail::socket_option;
 
-//
-// What one pass of udp_on_read() hands a session: every datagram of the receive batch that was
-// addressed to it, copied out of the receive buffer because the session consumes them on its own
-// strand, after udp_on_read() has moved on. `is_new` marks a batch whose first datagram is the
-// client Initial that created the session -- process_quic_batch() runs init() with it.
-//
-struct QuicBatch
-{
-   struct Datagram
+   const bool is_v6 = endpoint.protocol() == ip::udp::v6();
+
+   socket_.emplace(config().use_strand ? asio::make_strand(parent_.get_executor())
+                                       : parent_.get_executor());
+   socket_->open(is_v6 ? ip::udp::v6() : ip::udp::v4());
+
+   if (is_v6)
    {
-      ngtcp2_pkt_info pi;
-      ngtcp2::Address remote;
-      std::vector<uint8_t> data;
-   };
+      boost::system::error_code ec;
+      std::ignore = socket_->set_option(ip::v6_only(false), ec);
+      socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVTCLASS>(1));
+      socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_MTU_DISCOVER>(1));
+      socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVPKTINFO>(1));
+   }
+   else
+   {
+      socket_->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
+      socket_->set_option(socket_option::integer<IPPROTO_IP, IP_PKTINFO>(1));
+   }
+   socket_->set_option(socket_option::integer<IPPROTO_UDP, UDP_GRO>(1));
+   socket_->non_blocking(true);
 
-   bool is_new = false;
-   ngtcp2_pkt_hd hd{}; // decoded Initial packet header, only valid when is_new
-   boost::container::small_vector<Datagram, 8> datagrams;
-};
-
-void Server::Impl::associate_quic_cid(const ngtcp2_cid& cid, Http3ServerSession* h)
-{
-   auto lock = std::lock_guard(m_quicMutex);
-   m_quic_handlers.emplace(cid_key(cid),
-                           std::static_pointer_cast<Http3ServerSession>(h->shared_from_this()));
-}
-
-void Server::Impl::dissociate_quic_cid(const ngtcp2_cid& cid)
-{
-   auto lock = std::lock_guard(m_quicMutex);
-   m_quic_handlers.erase(cid_key(cid));
-}
-
-void Server::Impl::erase_quic_session(Http3ServerSession* h)
-{
-   auto lock = std::lock_guard(m_quicMutex);
-   std::erase_if(m_quic_handlers, [h](const auto& kv) { return kv.second.get() == h; });
+   socket_->bind(endpoint);
+   logi("Server: UDP listening on {}", endpoint);
 }
 
 // -------------------------------------------------------------------------------------------------
 
-int Server::Impl::udp_on_read(Endpoint& ep)
+void Http3ServerImpl::start()
+{
+   // On the socket's strand, so that the loop and destroy()'s close() never race on the socket.
+   co_spawn(socket_->get_executor(), udp_receive_loop(),
+            [self = shared_from_this(), owner = owner()](const std::exception_ptr& ex)
+   {
+      if (ex)
+         logw("UDP receive loop: {}", what(ex));
+      else
+         logi("UDP receive loop: done");
+   });
+}
+
+void Http3ServerImpl::destroy()
+{
+   //
+   // The socket lives on its own strand and udp_receive_loop() keeps re-arming async_wait() on
+   // it there -- asio sockets are not thread-safe, so the close has to go through the same
+   // strand instead of racing that from here. The QUIC sessions have already been destroyed by
+   // Server::Impl at this point, each sending its final CONNECTION_CLOSE through its own
+   // dup()ed fd, so closing this socket doesn't race that.
+   //
+   asio::dispatch(socket_->get_executor(), [self = shared_from_this(), owner = owner()]
+   { self->socket_->close(); }); // breaks udp_receive_loop()
+}
+
+// -------------------------------------------------------------------------------------------------
+
+void Http3ServerImpl::associate_quic_cid(const ngtcp2_cid& cid, Http3ServerSession* h)
+{
+   auto lock = std::lock_guard(mutex_);
+   sessions_.emplace(cid_key(cid),
+                     std::static_pointer_cast<Http3ServerSession>(h->shared_from_this()));
+}
+
+void Http3ServerImpl::dissociate_quic_cid(const ngtcp2_cid& cid)
+{
+   auto lock = std::lock_guard(mutex_);
+   sessions_.erase(cid_key(cid));
+}
+
+void Http3ServerImpl::erase_quic_session(Http3ServerSession* h)
+{
+   auto lock = std::lock_guard(mutex_);
+   std::erase_if(sessions_, [h](const auto& kv) { return kv.second.get() == h; });
+}
+
+// -------------------------------------------------------------------------------------------------
+
+int Http3ServerImpl::udp_on_read(Endpoint& ep)
 {
    ngtcp2::sockaddr_union su;
    std::array<uint8_t, 64_k> buf;
@@ -912,8 +1037,8 @@ int Server::Impl::udp_on_read(Endpoint& ep)
          auto key = cid_key(vc.dcid, vc.dcidlen);
          std::shared_ptr<Http3ServerSession> session;
          {
-            auto lock = std::lock_guard(m_quicMutex);
-            if (auto it = m_quic_handlers.find(key); it != m_quic_handlers.end())
+            auto lock = std::lock_guard(mutex_);
+            if (auto it = sessions_.find(key); it != sessions_.end())
                session = it->second;
          }
 
@@ -932,8 +1057,8 @@ int Server::Impl::udp_on_read(Endpoint& ep)
             // itself, like everything that touches the connection, runs on the strand in
             // process_quic_batch().
             //
-            auto lock = std::lock_guard(m_quicMutex);
-            m_quic_handlers.emplace(std::move(key), session);
+            auto lock = std::lock_guard(mutex_);
+            sessions_.emplace(std::move(key), session);
             auto& batch = batches[session];
             batch.is_new = true;
             batch.hd = hd;
@@ -950,7 +1075,8 @@ int Server::Impl::udp_on_read(Endpoint& ep)
    for (auto& [session, batch] : batches)
    {
       asio::post(session->get_executor(),
-                 [self = shared_from_this(), session, batch = std::move(batch)]() mutable
+                 [self = shared_from_this(), owner = owner(), session,
+                  batch = std::move(batch)]() mutable
       { self->process_quic_batch(session, std::move(batch)); });
    }
 
@@ -964,8 +1090,8 @@ int Server::Impl::udp_on_read(Endpoint& ep)
 // serialized against the session's timers, wake_write() flushes and request handlers. This is
 // what the demux loop used to do inline back when everything shared one implicit thread.
 //
-void Server::Impl::process_quic_batch(const std::shared_ptr<Http3ServerSession>& session,
-                                      QuicBatch&& batch)
+void Http3ServerImpl::process_quic_batch(const std::shared_ptr<Http3ServerSession>& session,
+                                         QuicBatch&& batch)
 {
    size_t next = 0;
    bool read_ok = false;
@@ -992,29 +1118,24 @@ void Server::Impl::process_quic_batch(const std::shared_ptr<Http3ServerSession>&
       }
 
       //
-      // Register with the shared session set + spawn the do_session() task so the session
-      // participates in server-wide shutdown, exactly like the TCP-based sessions. Re-check
-      // m_destroyed under the lock: destroy() may have swept m_sessions between udp_on_read()
-      // accepting this connection and this job running, and a session registered after that
-      // sweep would never be destroyed.
+      // Register with the server's session registry + spawn the do_session() task so the
+      // session participates in server-wide shutdown, exactly like the TCP-based ones.
+      // Registration fails if the server was destroyed between udp_on_read() accepting this
+      // connection and this job running; the session is then ours to tear down.
       //
+      if (!parent_.add_session(session))
       {
-         auto lock = std::lock_guard(m_sessionMutex);
-         if (m_destroyed)
-         {
-            erase_quic_session(session.get());
-            session->destroy();
-            return;
-         }
-         m_sessions.emplace(session);
+         erase_quic_session(session.get());
+         session->destroy();
+         return;
       }
+
       co_spawn(session->get_executor(), session->do_session({}),
-               [self = shared_from_this(), session](const std::exception_ptr& ex)
+               [self = shared_from_this(), owner = owner(), session](const std::exception_ptr& ex)
       {
          if (ex)
             logw("[{}] {}", session->logPrefix(), what(ex));
-         auto lock = std::lock_guard(self->m_sessionMutex);
-         self->m_sessions.erase(session);
+         self->parent_.remove_session(session);
       });
    }
 
@@ -1026,7 +1147,7 @@ void Server::Impl::process_quic_batch(const std::shared_ptr<Http3ServerSession>&
       // Handle closing / draining periods.  During closing we resend the
       // buffered CONNECTION_CLOSE so the peer can tear down cleanly.
       // During draining (peer sent CONNECTION_CLOSE) we just drop the packet.
-      // In both cases the session stays in m_quic_handlers until the 3-PTO
+      // In both cases the session stays in sessions_ until the 3-PTO
       // close timer fires and calls erase_quic_session().
       //
       if (auto* conn = session->conn())
@@ -1077,13 +1198,13 @@ void Server::Impl::process_quic_batch(const std::shared_ptr<Http3ServerSession>&
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> Server::Impl::udp_receive_loop()
+awaitable<void> Http3ServerImpl::udp_receive_loop()
 {
    for (;;)
    {
       boost::system::error_code ec;
-      co_await m_udp_socket->async_wait(boost::asio::socket_base::wait_read,
-                                        redirect_error(use_awaitable, ec));
+      co_await socket_->async_wait(boost::asio::socket_base::wait_read,
+                                   redirect_error(use_awaitable, ec));
       if (ec)
       {
          if (ec == boost::asio::error::operation_aborted)
@@ -1094,16 +1215,24 @@ awaitable<void> Server::Impl::udp_receive_loop()
       }
 
       Endpoint ep{};
-      ep.fd = m_udp_socket->native_handle();
-      ep.drop_rate_rx = m_config.drop_rate_rx;
-      ep.drop_rate_tx = m_config.drop_rate_tx;
-      auto local = m_udp_socket->local_endpoint();
+      ep.fd = socket_->native_handle();
+      ep.drop_rate_rx = config().drop_rate_rx;
+      ep.drop_rate_tx = config().drop_rate_tx;
+      auto local = socket_->local_endpoint();
       auto data = local.data();
       std::memcpy(&ep.addr.su, data, local.size());
       ep.addr.len = local.size();
 
       udp_on_read(ep);
    }
+}
+
+// =================================================================================================
+
+std::shared_ptr<Http3Server> make_http3_server(Server::Impl& server,
+                                               const asio::ip::udp::endpoint& endpoint)
+{
+   return std::make_shared<Http3ServerImpl>(server, endpoint);
 }
 
 // =================================================================================================

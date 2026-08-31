@@ -2,7 +2,7 @@
 
 #include "anyhttp/common.hpp"
 #include "client_impl.hpp"
-#include "nghttp2_stream.hpp"
+#include "h2_stream.hpp"
 #include "server_impl.hpp"
 #include "session_impl.hpp"
 

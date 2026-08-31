@@ -1,10 +1,10 @@
-#include "anyhttp/nghttp2_stream.hpp"
+#include "anyhttp/h2_stream.hpp"
 
 #include "anyhttp/client.hpp"
 #include "anyhttp/common.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
-#include "anyhttp/nghttp2_common.hpp"
-#include "anyhttp/nghttp2_session.hpp"
+#include "anyhttp/h2_common.hpp"
+#include "anyhttp/h2_session.hpp"
 #include "anyhttp/request_handlers.hpp" // IWYU pragma: keep
 
 #include <boost/algorithm/string/predicate.hpp>

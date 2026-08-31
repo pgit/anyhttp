@@ -11,7 +11,8 @@ pkg_check_modules(NGHTTP3             REQUIRED IMPORTED_TARGET libnghttp3)
 pkg_check_modules(NGTCP2_CRYPTO_OSSL  REQUIRED IMPORTED_TARGET libngtcp2_crypto_ossl)
 
 #
-# lib
+# lib -- the protocol backends are the h1_*, h2_* and h3_* sources; only the h2_* ones use
+# nghttp2 and only the h3_* ones ngtcp2/nghttp3, everything else is protocol-agnostic.
 #
 add_library(anyhttp)
 file(GLOB anyhttp_sources CONFIGURE_DEPENDS *.cpp)
@@ -40,7 +41,6 @@ add_executable(server)
 target_sources(server PRIVATE "server_main.cpp")
 target_link_libraries(server PRIVATE anyhttp)
 target_link_libraries(server PRIVATE Boost::program_options)
-target_link_libraries(server PRIVATE PkgConfig::NGHTTP2)
 
 #
 # client

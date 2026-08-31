@@ -1,11 +1,11 @@
 //
 // Http3Stream: one HTTP/3 request/response exchange, shared by the server and the client.
-// See anyhttp/http3_stream.hpp for the model; the role-specific ends of it live in
-// server_impl_udp.cpp and client_impl_udp.cpp.
+// See anyhttp/h3_stream.hpp for the model; the role-specific ends of it live in
+// h3_server.cpp and h3_client.cpp.
 //
-#include "anyhttp/http3_stream.hpp"
+#include "anyhttp/h3_stream.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
-#include "anyhttp/http3_session.hpp"
+#include "anyhttp/h3_session.hpp"
 
 #include <boost/asio/post.hpp>
 #include <boost/beast/http/error.hpp>

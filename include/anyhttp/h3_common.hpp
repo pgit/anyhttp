@@ -12,7 +12,7 @@
 
 //
 // Shared HTTP/3 building blocks. Everything in this namespace is used by both roles: the server
-// (src/server_impl_udp.cpp) and the client (src/client_impl_udp.cpp) differ only in the direction
+// (src/h3_server.cpp) and the client (src/h3_client.cpp) differ only in the direction
 // their messages travel, not in how a QUIC connection or an HTTP/3 stream is driven.
 //
 namespace anyhttp::http3

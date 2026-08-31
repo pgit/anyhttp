@@ -1,7 +1,7 @@
 //
-// Small helpers shared by the HTTP/3 server and client, see anyhttp/http3_common.hpp.
+// Small helpers shared by the HTTP/3 server and client, see anyhttp/h3_common.hpp.
 //
-#include "anyhttp/http3_common.hpp"
+#include "anyhttp/h3_common.hpp"
 
 #include <spdlog/spdlog.h>
 

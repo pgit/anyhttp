@@ -1,7 +1,5 @@
 #pragma once
 
-#include <nghttp2/nghttp2.h>
-
 #include <boost/asio/cancellation_type.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ip/udp.hpp>
@@ -118,60 +116,6 @@ struct std::formatter<boost::asio::cancellation_type> : std::formatter<std::stri
          std::format_to(ctx.out(), "{}0x{:x}", first ? "" : "|", to_underlying(type));
 
       return ctx.out();
-   }
-};
-
-// =================================================================================================
-
-/// Formats an HTTP/2 name-value pair (nghttp2_nv).
-/// Format specifiers: 'n' = name only, 'v' = value only, default = "name=value".
-/// Example: {:n} → "content-type", {:v} → "application/json", {} → "content-type=application/json"
-template <>
-struct std::formatter<nghttp2_nv>
-{
-   enum class part
-   {
-      name_and_value,
-      name,
-      value
-   } what = part::name_and_value;
-
-   constexpr auto parse(std::format_parse_context& ctx)
-   {
-      auto it = ctx.begin();
-      if (it == ctx.end())
-         return it;
-
-      if (*it == 'n')
-      {
-         what = part::name;
-         ++it;
-      }
-      else if (*it == 'v')
-      {
-         what = part::value;
-         ++it;
-      }
-
-      if (it != ctx.end() && *it != '}')
-         throw std::format_error("invalid format args for nghttp2_nv, expected 'n' or 'v'");
-
-      return it;
-   }
-
-   auto format(const nghttp2_nv& nv, std::format_context& ctx) const
-   {
-      auto out = ctx.out();
-      if (what == part::name || what == part::name_and_value)
-         std::ranges::copy(rv::counted(nv.name, nv.namelen), out);
-
-      if (what == part::name_and_value)
-         *out++ = '=';
-
-      if (what == part::value || what == part::name_and_value)
-         std::ranges::copy(rv::counted(nv.value, nv.valuelen), out);
-
-      return out;
    }
 };
 

@@ -1,6 +1,12 @@
+#pragma once
+
+//
+// Definitions of the HTTP/2 session templates, instantiated only by src/h2_session.cpp -- the
+// factories in anyhttp/h2_backend.hpp are what the generic server and client use instead.
+//
 
 #include "anyhttp/any_async_stream.hpp"
-#include "anyhttp/nghttp2_session.hpp"
+#include "anyhttp/h2_session.hpp"
 #include "anyhttp/session.hpp"
 
 #include <boost/asio/basic_stream_socket.hpp>

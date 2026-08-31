@@ -2,8 +2,8 @@
 // anyhttp QUIC / HTTP/3 client.
 //
 // Almost all of it is shared with the server: `Http3ClientSession` is an `http3::Http3Session`
-// (see anyhttp/http3_session.hpp) that knows how packets reach it and how it is torn down, and
-// `Http3ClientStream` is an `http3::Http3Stream` (anyhttp/http3_stream.hpp) that writes a request
+// (see anyhttp/h3_session.hpp) that knows how packets reach it and how it is torn down, and
+// `Http3ClientStream` is an `http3::Http3Stream` (anyhttp/h3_stream.hpp) that writes a request
 // and reads a response, where the server's does the opposite.
 //
 // What is genuinely client-side here: the TLS client context, one `connect()`ed UDP socket per
@@ -17,9 +17,10 @@
 
 #include "anyhttp/client_impl.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
-#include "anyhttp/http3_common.hpp"
-#include "anyhttp/http3_session.hpp"
-#include "anyhttp/http3_stream.hpp"
+#include "anyhttp/h3_backend.hpp"
+#include "anyhttp/h3_common.hpp"
+#include "anyhttp/h3_session.hpp"
+#include "anyhttp/h3_stream.hpp"
 #include "anyhttp/literals.hpp"
 #include "anyhttp/session_impl.hpp"
 
