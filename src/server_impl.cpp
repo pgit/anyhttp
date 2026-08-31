@@ -1,5 +1,4 @@
 #include "anyhttp/server_impl.hpp"
-#include "anyhttp/literals.hpp"
 
 #include "anyhttp/any_async_stream.hpp"
 #include "anyhttp/beast_session.hpp"
@@ -183,7 +182,7 @@ void Server::Impl::listen_udp()
    // The socket gets its own strand: udp_receive_loop() runs on it (see start()), and destroy()
    // dispatches the shutdown close() through it, so the two never touch the socket concurrently.
    //
-   m_udp_socket.emplace(config().use_strand ? asio::any_io_executor{asio::make_strand(m_executor)}
+   m_udp_socket.emplace(config().use_strand ? asio::make_strand(m_executor)
                                             : m_executor);
    m_udp_socket->open(is_v6 ? ip::udp::v6() : ip::udp::v4());
 
