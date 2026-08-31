@@ -45,7 +45,7 @@ void NGHttp2SessionImpl<Stream>::destroy() noexcept
 {
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
-   std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
+   get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
    logwi(ec, "[{}] destroy: socket shutdown: {}", m_logPrefix, ec.message());
    // });
 }

@@ -158,7 +158,7 @@ void Server::Impl::listen_tcp()
 
    ip::tcp::endpoint ep(address, config().port);
    if (ep.protocol() == ip::tcp::v6())
-      std::ignore = acceptor.set_option(ip::v6_only(false), ec);
+      acceptor.set_option(ip::v6_only(false), ec);
 
    acceptor.open(ep.protocol());
    acceptor.set_option(asio::socket_base::reuse_address(true));

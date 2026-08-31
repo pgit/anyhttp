@@ -868,7 +868,7 @@ Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endp
    if (is_v6)
    {
       boost::system::error_code ec;
-      std::ignore = socket_->set_option(ip::v6_only(false), ec);
+      socket_->set_option(ip::v6_only(false), ec);
       socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVTCLASS>(1));
       socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_MTU_DISCOVER>(1));
       socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVPKTINFO>(1));

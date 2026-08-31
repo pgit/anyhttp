@@ -606,7 +606,7 @@ void BeastSession<Stream>::destroy() noexcept
 
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
-   std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
+   get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
    logwi(ec, "[{}] destroy: socket shutdown: {}", m_logPrefix, ec.message());
    // });
 }
@@ -769,7 +769,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
    // FIXME: close() before shutdown()?!
    get_socket(m_stream).close();
-   std::ignore = get_socket(m_stream).shutdown(asio::ip::tcp::socket::shutdown_send, ec);
+   get_socket(m_stream).shutdown(asio::ip::tcp::socket::shutdown_send, ec);
 
    mlogd("session done");
 }
