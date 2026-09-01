@@ -3,6 +3,7 @@
 #include "anyhttp/client.hpp"
 #include "anyhttp/server.hpp"
 
+#include <array>
 #include <charconv>
 #include <exception>
 #include <expected>
@@ -12,9 +13,11 @@
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/deferred.hpp>
+#include <boost/asio/error.hpp>
 #include <boost/asio/this_coro.hpp>
 
 #include <boost/system/detail/error_code.hpp>
+#include <boost/system/system_error.hpp>
 
 #include <range/v3/view/chunk.hpp>
 
@@ -74,6 +77,30 @@ awaitable<void> discard(server::Request request, server::Response response);
 
 awaitable<void> send(client::Request& request, size_t bytes);
 awaitable<std::string> read(client::Response& response);
+
+//
+// Reads and discards whatever is left of an incoming body, and returns how much that was.
+//
+// This is the plain shape of an ASIO read loop against the anyhttp reader interface: read until
+// \c asio::error::eof, and let anything else -- a reset stream, a connection that went away
+// mid-body -- come out as an exception.
+//
+template <typename Reader>
+awaitable<size_t> drain(Reader& reader)
+{
+   size_t bytes = 0;
+   std::array<uint8_t, 16 * 1024> buffer;
+   for (;;)
+   {
+      auto [ec, n] = co_await reader.async_read_some(asio::buffer(buffer), asio::as_tuple);
+      bytes += n;
+      if (ec == asio::error::eof)
+         co_return bytes;
+      if (ec)
+         throw boost::system::system_error(ec);
+   }
+}
+
 awaitable<size_t> count(client::Response& response);
 awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response);
 awaitable<size_t> try_receive(client::Response& response, boost::system::error_code& ec);
@@ -187,7 +214,7 @@ awaitable<void> sendAndForceEOF(Writer& request, Range range)
       loge("sendAndForceEOF: {}", what(ep));
       co_await asio::this_coro::reset_cancellation_state();
    }
-   auto [ec] = co_await request.async_write({}, as_tuple(deferred));
+   auto [ec] = co_await request.async_write_eof(as_tuple(deferred));
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -207,7 +234,7 @@ inline awaitable<void> generate(server::Request request, server::Response respon
    {
       logw("generate: invalid length '{}'", param);
       co_await response.async_submit(400, {});
-      co_await response.async_write({});
+      co_await response.async_write_eof();
       co_return;
    }
 

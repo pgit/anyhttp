@@ -1,6 +1,6 @@
 #include "anyhttp/file_handler.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
-#include "anyhttp/request_handlers.hpp" // for send()
+#include "anyhttp/request_handlers.hpp" // for drain()
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -197,7 +197,7 @@ unsigned status_for(const error_code& ec)
 awaitable<void> respond(server::Response& response, unsigned status)
 {
    co_await response.async_submit(status, fields({{"Content-Length", 0}}));
-   co_await response.async_write({});
+   co_await response.async_write_eof();
 }
 
 //
@@ -330,9 +330,7 @@ awaitable<void> serve_file(server::Request request, server::Response response, f
    // has to close the connection when a handler leaves the request unparsed, which would
    // truncate the response we are about to write.
    //
-   std::array<uint8_t, 4096> discard;
-   while (co_await request.async_read_some(asio::buffer(discard)) > 0)
-      ;
+   co_await drain(request);
 
    const std::string path = request.url().path();
    const auto entry = g_cache.get(path, prefix, root);
@@ -355,10 +353,12 @@ awaitable<void> serve_file(server::Request request, server::Response response, f
    // evicted or replaced meanwhile. Note that touching a mapped page may block on disk I/O,
    // which no amount of chunking would avoid.
    //
-   if (file.size() > 0)
-      co_await send(response, file.bytes()); // an empty write already means EOF, don't send two
-
-   co_await response.async_write({});
+   // Body and the end of it go out in one call: the mapped pages reach the transport by
+   // reference, and whatever ends the message -- last chunk, END_STREAM, FIN -- travels with the
+   // last of them instead of costing a write of its own. An empty file, which cannot be mmap()ed
+   // at all, is then simply an empty buffer and ends the same way.
+   //
+   co_await response.async_write_eof(asio::buffer(file.bytes()));
 }
 
 } // namespace anyhttp
