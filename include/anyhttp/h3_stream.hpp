@@ -141,11 +141,19 @@ public:
    std::vector<std::vector<uint8_t>> in_flight_writes; // Staged: retired chunks, kept alive for
                                                        // the stream's lifetime because ngtcp2 may
                                                        // still retransmit from them
+   //
+   // Whether the active write ends the body. data_reader() then hands nghttp3
+   // NGHTTP3_DATA_FLAG_EOF along with the write's last bytes -- one QUIC STREAM frame carrying
+   // both the tail of the body and the FIN -- rather than needing a write of its own for it.
+   //
    bool write_is_eof = false;
    WriteHandler write_handler;
    uint64_t write_token = 0;
    uint64_t next_write_token = 1;
-   bool eof_submitted = false; // user signalled EOF via an empty write
+   bool eof_submitted = false; // user ended the body via async_write_eof()
+   bool fin_offered = false; // ... and data_reader() has handed the FIN flag to nghttp3; between
+                             // the two lies a cancelled async_write_eof(), which rolls
+                             // eof_submitted back when the FIN is still owed
 
    //
    // Lifecycle.
@@ -164,10 +172,16 @@ public:
    void on_eof();
    void call_read_handler();
 
+   /// True once the peer ended the body and every byte of it has been delivered to the reader.
+   bool reading_finished() const noexcept
+   {
+      return eof_received && read_head.size() == 0 && incoming.size() == 0;
+   }
+
    //
    // Data flow from user land back to nghttp3 (outgoing body).
    //
-   void start_write(WriteHandler&& handler, asio::const_buffer buffer);
+   void start_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof);
    nghttp3_ssize data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t* pflags);
    void on_write_acked(size_t n); // ZeroCopy: nghttp3 acked_stream_data
    void on_write_offered(size_t n); // Staged: bytes ngtcp2 committed to a packet
@@ -221,7 +235,10 @@ template <typename Interface>
 class Http3Reader : public Interface
 {
 public:
-   explicit Http3Reader(Http3Stream& s) : stream(&s) { s.reader = this; }
+   explicit Http3Reader(Http3Stream& s) : stream(&s), executor(s.get_executor())
+   {
+      s.reader = this;
+   }
    ~Http3Reader() override
    {
       if (stream)
@@ -231,11 +248,7 @@ public:
       }
    }
 
-   asio::any_io_executor get_executor() const noexcept override
-   {
-      assert(stream);
-      return stream->get_executor();
-   }
+   asio::any_io_executor get_executor() const noexcept override { return executor; }
 
    std::optional<size_t> content_length() const noexcept override
    {
@@ -253,17 +266,25 @@ public:
 
    void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) override
    {
-      if (!stream)
-      {
-         std::move(handler)(boost::beast::http::error::partial_message, 0);
-         return;
-      }
+      //
+      // An empty buffer is not a request to read anything: complete right away, without looking
+      // at whether the body has ended or the stream is even still there -- as ASIO does for a
+      // zero-length read.
+      //
       if (asio::buffer_size(buffer) == 0)
       {
-         asio::any_completion_executor ex =
-            asio::get_associated_immediate_executor(handler, stream->get_executor());
-         ex.execute([handler = std::move(handler)]() mutable
-         { std::move(handler)(boost::system::error_code{}, 0); });
+         complete_immediately(std::move(handler), executor, error_code{}, size_t{0});
+         return;
+      }
+
+      //
+      // The stream is gone; detach() latched how the body stood at that point, so a cleanly
+      // finished body keeps reporting eof (as the Reader contract requires) and a truncated one
+      // keeps reporting partial_message.
+      //
+      if (!stream)
+      {
+         complete_immediately(std::move(handler), executor, detached_ec, size_t{0});
          return;
       }
 
@@ -291,9 +312,24 @@ public:
       stream->call_read_handler();
    }
 
-   void detach() override { stream = nullptr; }
+   void detach() override
+   {
+      //
+      // The stream is going away first (session teardown outliving this exchange). Remember how
+      // the body stood, so that reads issued from now on keep answering per the Reader contract.
+      //
+      assert(stream);
+      detached_ec = stream->reading_finished()
+                       ? error_code{asio::error::eof}
+                       : error_code{boost::beast::http::error::partial_message};
+      stream = nullptr;
+   }
 
    Http3Stream* stream;
+   asio::any_io_executor executor; // kept as a copy so a detached reader can still complete
+
+   /// What a read past detach() reports: eof for a body read to its clean end, else truncation.
+   error_code detached_ec{boost::beast::http::error::partial_message};
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -302,7 +338,10 @@ template <typename Base>
 class Http3Writer : public Base
 {
 public:
-   explicit Http3Writer(Http3Stream& s) : stream(&s) { s.writer = this; }
+   explicit Http3Writer(Http3Stream& s) : stream(&s), executor(s.get_executor())
+   {
+      s.writer = this;
+   }
    ~Http3Writer() override
    {
       if (stream)
@@ -312,11 +351,7 @@ public:
       }
    }
 
-   asio::any_io_executor get_executor() const noexcept override
-   {
-      assert(stream);
-      return stream->get_executor();
-   }
+   asio::any_io_executor get_executor() const noexcept override { return executor; }
 
    void content_length(std::optional<size_t> len) override
    {
@@ -324,16 +359,33 @@ public:
       stream->response_content_length = len;
    }
 
-   void async_write(WriteHandler&& handler, asio::const_buffer buffer) override
+   void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) override
    {
-      if (!stream || stream->closed)
+      if (stream)
       {
-         std::move(handler)(
-            boost::system::errc::make_error_code(boost::system::errc::connection_reset));
+         // everything -- including a write against a stream ngtcp2 has already torn down -- is
+         // start_write()'s to decide, so that ending a body twice and writing past its end are
+         // answered the same way whatever became of the stream since
+         stream->start_write(std::move(handler), buffer, eof);
          return;
       }
 
-      stream->start_write(std::move(handler), buffer);
+      //
+      // The stream itself is gone, but the entry ladder of the Writer contract still applies,
+      // answered from the state detach() latched: an empty non-EOF write stays a free no-op, a
+      // body that was cleanly ended keeps answering as such -- bare re-end idempotent, data
+      // broken_pipe -- and only a stream that vanished mid-body is a connection error.
+      //
+      const bool empty = asio::buffer_size(buffer) == 0;
+      error_code ec;
+      if (empty && !eof)
+         ec = {};
+      else if (detached_body_ended)
+         ec = empty ? error_code{}
+                    : boost::system::errc::make_error_code(boost::system::errc::broken_pipe);
+      else
+         ec = boost::system::errc::make_error_code(boost::system::errc::connection_reset);
+      complete_immediately(std::move(handler), executor, ec);
    }
 
    void async_submit(StatusHandler&& handler, unsigned int status_code, const Fields& fields)
@@ -348,9 +400,18 @@ public:
       std::move(handler)(boost::system::error_code{});
    }
 
-   void detach() override { stream = nullptr; }
+   void detach() override
+   {
+      // remember whether the body was cleanly ended -- intent accepted *and* the FIN handed to
+      // nghttp3 -- so writes issued after this still answer per the Writer contract
+      assert(stream);
+      detached_body_ended = stream->eof_submitted && stream->fin_offered;
+      stream = nullptr;
+   }
 
    Http3Stream* stream;
+   asio::any_io_executor executor; // kept as a copy so a detached writer can still complete
+   bool detached_body_ended = false; // latched by detach(), see there
 };
 
 // =================================================================================================

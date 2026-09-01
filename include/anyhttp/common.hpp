@@ -6,6 +6,7 @@
 
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/associated_immediate_executor.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/ip/address.hpp>
@@ -131,6 +132,31 @@ inline void swap_and_invoke(F&& function, Args&&... args)
 
 // =================================================================================================
 
+/**
+ * Completes \p handler without doing any I/O, through its associated immediate executor (with
+ * \p fallback standing in when the handler has none). This is the one way an operation that has
+ * nothing asynchronous left to do may finish: invoking the handler straight from the initiating
+ * function would surprise callers that rely on the ASIO guarantee of not being re-entered.
+ *
+ * A handler that is empty (an \c any_completion_handler detached by cancellation) is quietly
+ * dropped -- there is nobody left to tell.
+ */
+template <typename Handler, typename... Args>
+inline void complete_immediately(Handler&& handler, const asio::any_io_executor& fallback,
+                                 Args&&... args)
+{
+   if (!handler)
+      return;
+
+   asio::any_completion_executor ex = asio::get_associated_immediate_executor(handler, fallback);
+   ex.execute([handler = std::forward<Handler>(handler),
+               ... args = std::forward<Args>(args)]() mutable { //
+      std::move(handler)(std::move(args)...);
+   });
+}
+
+// =================================================================================================
+
 namespace impl
 {
 class Reader : public std::enable_shared_from_this<Reader>
@@ -139,6 +165,18 @@ public:
    virtual ~Reader() = default;
    virtual asio::any_io_executor get_executor() const noexcept = 0;
    virtual std::optional<size_t> content_length() const noexcept = 0;
+
+   //
+   // Reads at most one buffer worth of the incoming body. The end of the body is reported the way
+   // ASIO reports it everywhere else: \c asio::error::eof with zero bytes, and again for every
+   // further read -- including reads issued after the underlying stream object is long gone. A
+   // body that ends before it was supposed to -- a reset stream, a connection that went away
+   // mid-message -- is reported as \c http::error::partial_message instead, so the two cases stay
+   // distinguishable.
+   //
+   // An empty buffer is not a request to do anything; it completes immediately with success and
+   // zero bytes, wherever the body stands.
+   //
    virtual void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) = 0;
    virtual void detach() = 0;
    virtual void destroy() {};
@@ -150,7 +188,22 @@ public:
    virtual ~Writer() = default;
    virtual asio::any_io_executor get_executor() const noexcept = 0;
    virtual void content_length(std::optional<size_t> content_length) = 0;
-   virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer) = 0;
+
+   //
+   // Writes \p buffer and, if \p eof is set, ends the outgoing body after it. The two travel
+   // together on purpose: every backend can put the last bytes of a body and the flag that ends
+   // it into the same protocol element -- one DATA frame with END_STREAM (HTTP/2), one QUIC
+   // STREAM frame with FIN (HTTP/3), one last chunk (HTTP/1.1) -- so a message that ends with
+   // data needs no second, empty write to close it out.
+   //
+   // Every implementation answers the same entry ladder, in this order: an empty buffer with
+   // \p eof clear writes nothing at all and completes immediately with success, wherever the
+   // body stands -- it is not, as it once was, how a body is ended. Once the body has been ended,
+   // writing data -- through either entry point -- completes with \c errc::broken_pipe, while
+   // re-ending it with no data attached is an idempotent no-op. Only then do stream-level
+   // failures (closed, cancelled) get their say.
+   //
+   virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) = 0;
    virtual void detach() = 0;
    virtual void destroy() {};
 };

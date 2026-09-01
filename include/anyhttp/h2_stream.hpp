@@ -7,6 +7,7 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/buffer.hpp>
+#include <boost/beast/http/error.hpp>
 #include <boost/asio/cancellation_signal.hpp>
 #include <boost/asio/cancellation_type.hpp>
 #include <boost/asio/error.hpp>
@@ -41,6 +42,11 @@ public:
    boost::url_view url() const override;
 
    NGHttp2Stream* stream;
+   asio::any_io_executor executor; // kept as a copy so a detached reader can still complete
+
+   /// What a read past detach() reports, latched by detach(): the stream may be gone, but a body
+   /// that was read to its clean end keeps ending in \c eof, a truncated one in partial_message.
+   error_code detached_ec{boost::beast::http::error::partial_message};
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -54,13 +60,15 @@ public:
 
    asio::any_io_executor get_executor() const noexcept override;
    void content_length(std::optional<size_t> content_length) override;
-   void async_write(WriteHandler&& handler, asio::const_buffer buffer) override;
+   void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) override;
    void detach() override;
 
    void async_submit(StatusHandler&& handler, unsigned int status_code, const Fields& headers);
    void async_get_response(client::Request::GetResponseHandler&& handler);
 
    NGHttp2Stream* stream;
+   asio::any_io_executor executor; // kept as a copy so a detached writer can still complete
+   bool detached_eof_submitted = false; // latched by detach(): the body was cleanly ended
    std::optional<size_t> m_content_length;
 };
 
@@ -133,6 +141,16 @@ public:
    asio::const_buffer write_buffer;  // undefined unless write_handler is set
    WriteHandler write_handler;
    bool is_deferred = false;
+
+   //
+   // How the end of the outgoing body travels: async_write_eof() sets \c eof_requested, and the
+   // producer callback turns that into NGHTTP2_DATA_FLAG_EOF on the very DATA frame that carries
+   // the write's last bytes -- so a body that ends with data needs no second, empty frame.
+   // \c eof_requested says the user has ended the body (only a bare re-end is accepted after
+   // that), \c eof_submitted that nghttp2 has actually been told; between the two lies a
+   // cancelled async_write_eof(), whose re-issue delivers the still-owed EOF flag.
+   //
+   bool eof_requested = false;
    bool eof_submitted = false;
 
    //
@@ -243,7 +261,7 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   void async_write(WriteHandler handler, asio::const_buffer buffer);
+   void async_write(WriteHandler handler, asio::const_buffer buffer, bool eof);
 
    void resume();
 

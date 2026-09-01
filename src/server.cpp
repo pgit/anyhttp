@@ -90,10 +90,10 @@ void Response::async_submit_any(StatusHandler&& handler, unsigned int status_cod
    impl->async_submit(std::move(handler), status_code, std::move(headers));
 }
 
-void Response::async_write_any(WriteHandler&& handler, asio::const_buffer buffer)
+void Response::async_write_any(WriteHandler&& handler, asio::const_buffer buffer, bool eof)
 {
    assert(impl);
-   impl->async_write(std::move(handler), buffer);
+   impl->async_write(std::move(handler), buffer, eof);
 }
 
 // =================================================================================================

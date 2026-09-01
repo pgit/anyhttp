@@ -36,7 +36,8 @@ namespace anyhttp::nghttp2
 // =================================================================================================
 
 template <typename Base>
-NGHttp2Reader<Base>::NGHttp2Reader(NGHttp2Stream& stream) : stream(&stream)
+NGHttp2Reader<Base>::NGHttp2Reader(NGHttp2Stream& stream)
+   : stream(&stream), executor(stream.get_executor())
 {
    stream.reader = this;
 }
@@ -54,6 +55,15 @@ NGHttp2Reader<Base>::~NGHttp2Reader()
 template <typename Base>
 void NGHttp2Reader<Base>::detach()
 {
+   //
+   // The stream is going away first (session teardown, or the stream close outliving this
+   // exchange). Remember how the body stood, so that reads issued from now on keep answering per
+   // the Reader contract: a body that was read to its clean end keeps reporting \c eof, anything
+   // else is a truncation.
+   //
+   assert(stream);
+   detached_ec = stream->reading_finished() ? error_code{asio::error::eof}
+                                            : error_code{boost::beast::http::error::partial_message};
    stream = nullptr;
 }
 
@@ -62,8 +72,7 @@ void NGHttp2Reader<Base>::detach()
 template <typename Base>
 asio::any_io_executor NGHttp2Reader<Base>::get_executor() const noexcept
 {
-   assert(stream);
-   return stream->get_executor();
+   return executor;
 }
 
 template <typename Base>
@@ -93,37 +102,26 @@ template <typename Base>
 void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
                                           ReadSomeHandler&& handler)
 {
-   if (!stream)
+   //
+   // An empty buffer is not a request to read anything: complete right away, without looking at
+   // whether the body has ended or the stream is even still there -- as ASIO does for a
+   // zero-length read.
+   //
+   if (asio::buffer_size(buffer) == 0)
    {
-      logw("[] async_read_some: stream already gone");
-      //
-      // FIXME: This may return the wrong error code in some situations. For example, in the
-      //        cancellation testcases, it may happen that the stream gets destroyed before the
-      //        user has seen the 'partial_message' error from async_read_some().
-      //
-      //        As a solution, we might need to store the error code in the reader, so it can be
-      //        delivered on the next call to async_read_some().
-      //
-      //        It is still a bit unclear what should happen if the user calls async_read_some()
-      //        after that. This is arguably a misuse of the interface, when the user knows that
-      //        the stream is gone, but it should still be handled gracefully.
-      //
-      std::move(handler)(boost::beast::http::error::partial_message, 0);
-      // std::move(handler)(boost::asio::error::operation_aborted, 0);
+      complete_immediately(std::move(handler), get_executor(), error_code{}, size_t{0});
       return;
    }
 
    //
-   // Given an empty buffer, we can't do anything. This includes signalling EOF, because that is
-   // done using an empty buffer as well. TODO: That design doesn't match the way ASIO usually
-   // signals EOF, which is using asio::error::eof. We should do it like that, too.
+   // The stream is gone; detach() latched how the body stood at that point, so a cleanly finished
+   // body keeps reporting eof (as the Reader contract requires) and a truncated one keeps
+   // reporting partial_message.
    //
-   if (asio::buffer_size(buffer) == 0)
+   if (!stream)
    {
-      any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
-      ex.execute([handler = std::move(handler)]() mutable { //
-         std::move(handler)(boost::system::error_code{}, 0);
-      });
+      logw("[] async_read_some: stream already gone ({})", detached_ec.message());
+      complete_immediately(std::move(handler), get_executor(), detached_ec, size_t{0});
       return;
    }
 
@@ -156,7 +154,8 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
 // =================================================================================================
 
 template <typename Base>
-NGHttp2Writer<Base>::NGHttp2Writer(NGHttp2Stream& stream) : stream(&stream)
+NGHttp2Writer<Base>::NGHttp2Writer(NGHttp2Stream& stream)
+   : stream(&stream), executor(stream.get_executor())
 {
    stream.writer = this;
 }
@@ -174,6 +173,10 @@ NGHttp2Writer<Base>::~NGHttp2Writer()
 template <typename Base>
 void NGHttp2Writer<Base>::detach()
 {
+   // remember whether the body was cleanly ended, so writes issued after this still answer
+   // per the Writer contract -- see async_write() above
+   assert(stream);
+   detached_eof_submitted = stream->eof_submitted;
    stream = nullptr;
 }
 
@@ -182,8 +185,7 @@ void NGHttp2Writer<Base>::detach()
 template <typename Base>
 asio::any_io_executor NGHttp2Writer<Base>::get_executor() const noexcept
 {
-   assert(stream);
-   return stream->get_executor();
+   return executor;
 }
 
 template <typename Base>
@@ -251,15 +253,32 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
 }
 
 template <typename Base>
-void NGHttp2Writer<Base>::async_write(WriteHandler&& handler, asio::const_buffer buffer)
+void NGHttp2Writer<Base>::async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof)
 {
-   if (!stream)
+   if (stream)
+   {
+      stream->async_write(std::move(handler), buffer, eof);
+      return;
+   }
+
+   //
+   // The stream is gone, but the entry ladder of the Writer contract still applies, answered
+   // from the state detach() latched: an empty non-EOF write stays a free no-op, a body that was
+   // cleanly ended keeps answering as such -- bare re-end idempotent, data broken_pipe -- and
+   // only a stream that vanished mid-body is a connection error.
+   //
+   const bool empty = asio::buffer_size(buffer) == 0;
+   error_code ec;
+   if (empty && !eof)
+      ec = {};
+   else if (detached_eof_submitted)
+      ec = empty ? error_code{} : errc::make_error_code(errc::broken_pipe);
+   else
    {
       logw("[] async_write: stream already gone");
-      swap_and_invoke(handler, boost::asio::error::basic_errors::connection_aborted);
+      ec = boost::asio::error::basic_errors::connection_aborted;
    }
-   else
-      stream->async_write(std::move(handler), buffer);
+   complete_immediately(std::move(handler), executor, ec);
 }
 
 template <typename Base>
@@ -438,15 +457,16 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    }
 
    //
-   // Signal EOF if there is no more data to read.
-   // TODO: Use errc::eof instead, like ASIO does.
+   // No data left and the peer is done: report the end of the body the way ASIO does everywhere
+   // else. Keep reporting it for as long as reads keep being issued -- a handler may re-arm from
+   // within, and every read past the end of a body ends the same way.
    //
-   else
+   else if (eof_received)
    {
-      if (eof_received && m_read_handler)
+      while (m_read_handler)
       {
          logd("[{}] read_callback: delivering EOF...", logPrefix);
-         swap_and_invoke(m_read_handler, boost::system::error_code{}, 0);
+         swap_and_invoke(m_read_handler, error_code{asio::error::eof}, 0);
          //
          // At this point, in testcases like "IgnoreRequest", the stream may already have been
          // deleted. This is because invoking the read handler eventually continues a coroutine,
@@ -455,8 +475,8 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
          // To avoid this, deleting the stream is post()ed in on_stream_close_callback()
          //
          logd("[{}] read_callback: delivering EOF... done", logPrefix);
-         return;
       }
+      return;
    }
 
    //
@@ -558,21 +578,61 @@ NGHttp2Stream::~NGHttp2Stream()
 
 // =================================================================================================
 
-void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer)
+void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer, bool eof)
 {
+   const bool empty = buffer.size() == 0;
+
+   //
+   // The protocol-independent entry ladder, in the order the Writer contract in common.hpp
+   // prescribes: a zero-length non-EOF write is a free no-op wherever the body stands; after the
+   // body has been ended, data has no body left to belong to -- through either entry point --
+   // while a bare re-end is answered by how far the end has actually gotten.
+   //
+   if (empty && !eof)
+   {
+      complete_immediately(std::move(handler), get_executor(), error_code{});
+      return;
+   }
+
+   if (eof_requested)
+   {
+      if (!empty)
+      {
+         loge("[{}] async_write: body has already been ended", logPrefix);
+         complete_immediately(std::move(handler), get_executor(),
+                              errc::make_error_code(errc::broken_pipe));
+         return;
+      }
+
+      //
+      // A bare re-end. If nghttp2 already knows about the end, there is nothing left to do. If
+      // not -- a cancelled async_write_eof() leaves the intent standing but takes its handler
+      // away, so the flag never reached the producer callback -- fall through to the normal path
+      // below: the re-issued write picks up where the cancelled one left off, which is what lets
+      // an upload be ended once the peer's flow control window reopens.
+      //
+      if (eof_submitted)
+      {
+         complete_immediately(std::move(handler), get_executor(), error_code{});
+         return;
+      }
+   }
+
    if (closed)
    {
       logw("[{}] async_write: stream already closed", logPrefix);
-      std::move(handler)(errc::make_error_code(errc::operation_canceled));
+      complete_immediately(std::move(handler), get_executor(),
+                           errc::make_error_code(errc::operation_canceled));
       return;
    }
 
    assert(!write_handler);
 
-   logd("[{}] async_write: buffer={} is_deferred={}", logPrefix, buffer.size(), is_deferred);
+   logd("[{}] async_write: buffer={} eof={} is_deferred={}", logPrefix, buffer.size(), eof,
+        is_deferred);
 
-   assert(!write_handler);
    write_buffer = buffer;
+   eof_requested |= eof;
    write_handler = std::move(handler);
 
    auto slot = asio::get_associated_cancellation_slot(write_handler);
@@ -680,14 +740,6 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
       return NGHTTP2_ERR_DEFERRED;
    }
 
-   //
-   // TODO: Try to avoid the extra round trip through this callback on EOF. Currently, EOF is
-   //       signalled by an empty send buffer, but if that was done using an extra flag, we could
-   //       return NGHTTP2_DATA_FLAG_EOF earlier.
-   //
-   // However, that is not supported by the interface of an async write stream. Writing an empty
-   // buffer shouldn't do anything special.
-   //
    size_t copied = 0;
    if (write_buffer.size())
    {
@@ -702,6 +754,19 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
       write_buffer += copied;
       if (write_buffer.size() == 0)
       {
+         //
+         // The last bytes of a write that ends the body carry END_STREAM themselves: setting the
+         // flag on this very DATA frame is what spares an async_write_eof() with a payload the
+         // extra, empty frame -- and the extra round trip through this callback -- that ending a
+         // body used to cost.
+         //
+         if (eof_requested)
+         {
+            logd("[{}] write callback: EOF along with the last {} bytes", logPrefix, copied);
+            eof_submitted = true;
+            *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+         }
+
          logd("[{}] write callback: running handler...", logPrefix);
          swap_and_invoke(write_handler, boost::system::error_code{});
          if (write_handler)
@@ -714,10 +779,12 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
    }
    else
    {
+      // an empty write is only ever accepted as the end of the body, see async_write()
+      assert(eof_requested);
       logd("[{}] write callback: EOF", logPrefix);
       eof_submitted = true;
-      swap_and_invoke(write_handler, boost::system::error_code{});
       *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+      swap_and_invoke(write_handler, boost::system::error_code{});
    }
 
    return copied;
