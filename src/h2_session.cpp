@@ -1,11 +1,12 @@
-#include "anyhttp/nghttp2_session.hpp"
+#include "anyhttp/h2_session.hpp"
+#include "anyhttp/h2_backend.hpp"
 
 #include "anyhttp/client.hpp"
 #include "anyhttp/common.hpp"
-#include "anyhttp/detail/nghttp2_session_details.hpp"
+#include "anyhttp/detail/h2_session_details.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
-#include "anyhttp/nghttp2_common.hpp"
-#include "anyhttp/nghttp2_stream.hpp"
+#include "anyhttp/h2_common.hpp"
+#include "anyhttp/h2_stream.hpp"
 
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
@@ -607,6 +608,43 @@ void NGHttp2Session::start_write()
       swap_and_invoke(m_send_handler);
       logd("[{}] start_write: signalling write loop... done", m_logPrefix);
    }
+}
+
+// =================================================================================================
+// Factories, see anyhttp/h2_backend.hpp. Instantiating the session templates is kept to this
+// translation unit, so that the generic server and client never see an nghttp2 type.
+// =================================================================================================
+
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
+                                                   asio::any_io_executor executor,
+                                                   SslStream&& stream)
+{
+   return std::make_shared<ServerSession<SslStream>>(server, std::move(executor),
+                                                     std::move(stream));
+}
+
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
+                                                   asio::any_io_executor executor,
+                                                   AnyAsyncStream&& stream)
+{
+   return std::make_shared<ServerSession<AnyAsyncStream>>(server, std::move(executor),
+                                                          std::move(stream));
+}
+
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
+                                                   asio::any_io_executor executor,
+                                                   asio::ip::tcp::socket&& socket)
+{
+   return std::make_shared<ServerSession<asio::ip::tcp::socket>>(server, std::move(executor),
+                                                                 std::move(socket));
+}
+
+std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
+                                                   asio::any_io_executor executor,
+                                                   asio::ip::tcp::socket&& socket)
+{
+   return std::make_shared<ClientSession<asio::ip::tcp::socket>>(client, std::move(executor),
+                                                                 std::move(socket));
 }
 
 // =================================================================================================

@@ -1,12 +1,12 @@
 #include <gtest/gtest.h>
 #include <anyhttp/formatter.hpp>
+#include <anyhttp/h2_common.hpp> // the nghttp2_nv formatter lives with the rest of the h2 glue
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/http/field.hpp>
 #include <boost/core/detail/string_view.hpp>
 #include <boost/url/authority_view.hpp>
 #include <boost/url/pct_string_view.hpp>
-#include <nghttp2/nghttp2.h>
 
 #include <format>
 #include <thread>

@@ -1,10 +1,9 @@
 #include "anyhttp/client_impl.hpp"
-#include "anyhttp/beast_session.hpp"
 #include "anyhttp/common.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
-#include "anyhttp/nghttp2_session.hpp"
-
-#include "anyhttp/detail/nghttp2_session_details.hpp"
+#include "anyhttp/h1_backend.hpp"
+#include "anyhttp/h2_backend.hpp"
+#include "anyhttp/h3_backend.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/error.hpp>
@@ -33,13 +32,6 @@ using namespace boost::asio;
 namespace anyhttp::client
 {
 using namespace asio::experimental::awaitable_operators;
-
-//
-// Defined in client_impl_udp.cpp -- kept out of client_impl.hpp so that this file doesn't need to
-// drag in ngtcp2/nghttp3 headers just to declare it.
-//
-awaitable<std::shared_ptr<Session::Impl>> async_connect_http3(asio::any_io_executor executor,
-                                                               std::string host, std::string port);
 
 // =================================================================================================
 
@@ -163,13 +155,11 @@ awaitable<Session> Client::Impl::async_connect()
    switch (config().protocol)
    {
    case Protocol::http11:
-      impl = std::make_shared<beast_impl::ClientSession<boost::beast::tcp_stream>>(
-         *this, m_executor, boost::beast::tcp_stream(std::move(socket)));
+      impl = beast_impl::make_client_session(*this, m_executor, std::move(socket));
       break;
 
    case Protocol::h2:
-      impl = std::make_shared<nghttp2::ClientSession<asio::ip::tcp::socket>>(*this, m_executor,
-                                                                             std::move(socket));
+      impl = nghttp2::make_client_session(*this, m_executor, std::move(socket));
       break;
 
    case anyhttp::Protocol::h3:

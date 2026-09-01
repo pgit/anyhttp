@@ -1,13 +1,12 @@
 #include "anyhttp/server_impl.hpp"
-#include "anyhttp/literals.hpp"
 
 #include "anyhttp/any_async_stream.hpp"
-#include "anyhttp/beast_session.hpp"
-#include "anyhttp/detail/nghttp2_session_details.hpp"
-#include "anyhttp/detect_http2.hpp"
 #include "anyhttp/detect_ssl.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
-#include "anyhttp/nghttp2_session.hpp"
+#include "anyhttp/h1_backend.hpp"
+#include "anyhttp/h2_backend.hpp"
+#include "anyhttp/h2_detect.hpp"
+#include "anyhttp/h3_backend.hpp"
 #include "anyhttp/tls.hpp"
 
 #include <boost/asio.hpp>
@@ -29,11 +28,11 @@
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
 
-#include <netinet/udp.h>
+#include <span>
+#include <string_view>
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
-namespace socket_option = boost::asio::detail::socket_option;
 
 namespace anyhttp::server
 {
@@ -61,7 +60,13 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
 {
    logi("Server: ctor");
    listen_tcp();
-   listen_udp();
+
+   //
+   // HTTP/3 shares the endpoint the TCP acceptor is listening on, so it has to be set up after
+   // listen_tcp(): with port=0 the actual port is only known once the acceptor is bound.
+   //
+   auto tcp_ep = m_acceptor->local_endpoint();
+   m_http3 = make_http3_server(*this, ip::udp::endpoint{tcp_ep.address(), tcp_ep.port()});
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -74,7 +79,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
  */
 void Server::Impl::start()
 {
-   co_spawn(m_executor, tcp_listen_loop(), [self = shared_from_this()](const std::exception_ptr& ex)
+   co_spawn(m_executor, tcp_accept_loop(), [self = shared_from_this()](const std::exception_ptr& ex)
    {
       if (ex)
          logw("TCP accept loop: {}", what(ex));
@@ -82,18 +87,8 @@ void Server::Impl::start()
          logi("TCP accept loop: done");
    });
 
-   if (m_udp_socket)
-   {
-      // On the socket's strand -- see listen_udp().
-      co_spawn(m_udp_socket->get_executor(), udp_receive_loop(),
-               [self = shared_from_this()](const std::exception_ptr& ex)
-      {
-         if (ex)
-            logw("UDP receive loop: {}", what(ex));
-         else
-            logi("UDP receive loop: done");
-      });
-   }
+   if (m_http3)
+      m_http3->start();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -120,16 +115,8 @@ void Server::Impl::destroy()
          session->destroy();
    }
 
-   //
-   // The socket lives on its own strand (see listen_udp()) and udp_receive_loop() keeps
-   // re-arming async_wait() on it there -- asio sockets are not thread-safe, so the close
-   // has to go through the same strand instead of racing that from here.
-   //
-   if (m_udp_socket)
-   {
-      asio::dispatch(m_udp_socket->get_executor(), [self = shared_from_this()]
-      { self->m_udp_socket->close(); }); // breaks udp_receive_loop()
-   }
+   if (m_http3)
+      m_http3->destroy();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -138,6 +125,23 @@ Server::Impl::~Impl()
 {
    logi("Server: dtor");
    assert(m_destroyed);
+}
+
+// -------------------------------------------------------------------------------------------------
+
+bool Server::Impl::add_session(std::shared_ptr<Session::Impl> session)
+{
+   auto lock = std::lock_guard(m_sessionMutex);
+   if (m_destroyed)
+      return false;
+   m_sessions.emplace(std::move(session));
+   return true;
+}
+
+void Server::Impl::remove_session(const std::shared_ptr<Session::Impl>& session)
+{
+   auto lock = std::lock_guard(m_sessionMutex);
+   m_sessions.erase(session);
 }
 
 // =================================================================================================
@@ -152,64 +156,24 @@ void Server::Impl::listen_tcp()
    if (ec)
       logw("Server: error resolving '{}': {}", config().listen_address, ec.what());
 
-   ip::tcp::endpoint endpoint(address, config().port);
-   if (endpoint.protocol() == ip::tcp::v6())
-      std::ignore = acceptor.set_option(ip::v6_only(false), ec);
+   ip::tcp::endpoint ep(address, config().port);
+   if (ep.protocol() == ip::tcp::v6())
+      acceptor.set_option(ip::v6_only(false), ec);
 
-   acceptor.open(endpoint.protocol());
+   acceptor.open(ep.protocol());
    acceptor.set_option(asio::socket_base::reuse_address(true));
-   acceptor.bind(endpoint);
+   acceptor.bind(ep);
    acceptor.listen();
 
-   endpoint = acceptor.local_endpoint();
-   logi("Server: TCP listening on {}", endpoint);
-}
-
-// -------------------------------------------------------------------------------------------------
-
-void Server::Impl::listen_udp()
-{
-   //
-   // Bind the UDP socket to the same address and port as the TCP acceptor so
-   // HTTP/3 and HTTP/1.1/2 can share one endpoint. Requires listen_tcp() to
-   // have run first, since we may have been given port=0 and want to reuse the
-   // kernel-assigned port here.
-   //
-   assert(m_acceptor);
-   auto tcp_ep = m_acceptor->local_endpoint();
-   const bool is_v6 = tcp_ep.protocol() == ip::tcp::v6();
-
-   //
-   // The socket gets its own strand: udp_receive_loop() runs on it (see start()), and destroy()
-   // dispatches the shutdown close() through it, so the two never touch the socket concurrently.
-   //
-   m_udp_socket.emplace(config().use_strand ? asio::any_io_executor{asio::make_strand(m_executor)}
-                                            : m_executor);
-   m_udp_socket->open(is_v6 ? ip::udp::v6() : ip::udp::v4());
-
-   if (is_v6)
-   {
-      boost::system::error_code ec;
-      std::ignore = m_udp_socket->set_option(ip::v6_only(false), ec);
-      m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVTCLASS>(1));
-      m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_MTU_DISCOVER>(1));
-      m_udp_socket->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVPKTINFO>(1));
-   }
-   else
-   {
-      m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
-      m_udp_socket->set_option(socket_option::integer<IPPROTO_IP, IP_PKTINFO>(1));
-   }
-   m_udp_socket->set_option(socket_option::integer<IPPROTO_UDP, UDP_GRO>(1));
-   m_udp_socket->non_blocking(true);
-
-   ip::udp::endpoint udp_ep(tcp_ep.address(), tcp_ep.port());
-   m_udp_socket->bind(udp_ep);
-   logi("Server: UDP listening on {}", udp_ep);
+   ep = acceptor.local_endpoint();
+   logi("Server: TCP listening on {}", ep);
 }
 
 // =================================================================================================
 
+//
+// The protocols we speak over TLS on TCP, in descending order of preference. HTTP/3 is not in
+// here: it is offered on the UDP endpoint instead, see anyhttp/h3_backend.hpp.
 //
 // https://nghttp2.org/documentation/tutorial-server.html
 //
@@ -223,20 +187,29 @@ static int next_proto_cb(SSL* s, const unsigned char** data, unsigned int* len, 
    return SSL_TLSEXT_ERR_OK;
 }
 
+//
+// ALPN, picking the first protocol of ours the client offers -- our preference wins, not the
+// client's order.
+//
 static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned char* outlen,
                                 const unsigned char* in, unsigned int inlen, void* arg)
 {
-   int rv = nghttp2_select_next_protocol((unsigned char**)out, outlen, in, inlen);
-   switch (rv)
+   for (std::string_view wanted : {"h2", "http/1.1"})
    {
-   case 0:
-      return SSL_TLSEXT_ERR_OK; // http/1.1
-   case 1:
-      return SSL_TLSEXT_ERR_OK; // h2
-   case -1:
-   default:
-      return SSL_TLSEXT_ERR_NOACK;
+      // The wire format is a sequence of length-prefixed, non-empty protocol names.
+      for (auto list = std::span{in, inlen}; !list.empty() && list.size() > list[0];
+           list = list.subspan(1 + list[0]))
+      {
+         if (std::string_view{reinterpret_cast<const char*>(&list[1]), list[0]} != wanted)
+            continue;
+
+         *out = &list[1];
+         *outlen = list[0];
+         return SSL_TLSEXT_ERR_OK;
+      }
    }
+
+   return SSL_TLSEXT_ERR_NOACK;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -264,7 +237,7 @@ private:
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
+awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
 {
    const auto prefix = normalize(socket.remote_endpoint());
    logi("[{}] new connection", prefix);
@@ -329,13 +302,9 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
            tls_handshake_info(ssl_stream->native_handle()));
 
       if (alpn == "h2")
-         session =
-            std::make_shared<nghttp2::ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>> //
-            (*this, executor, std::move(*ssl_stream));
+         session = nghttp2::make_server_session(*this, executor, std::move(*ssl_stream));
       else if (alpn == "http/1.1")
-         session =
-            std::make_shared<beast_impl::ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>> //
-            (*this, executor, std::move(*ssl_stream));
+         session = beast_impl::make_server_session(*this, executor, std::move(*ssl_stream));
    }
 
    //
@@ -346,11 +315,9 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
 #if 1
       AnyAsyncStream stream(std::make_unique<TestStream>(std::move(socket)));
-      session = std::make_shared<nghttp2::ServerSession<AnyAsyncStream>> //
-         (*this, executor, std::move(stream));
+      session = nghttp2::make_server_session(*this, executor, std::move(stream));
 #else
-      session = std::make_shared<nghttp2::ServerSession<asio::ip::tcp::socket>> //
-         (*this, executor, std::move(socket));
+      session = nghttp2::make_server_session(*this, executor, std::move(socket));
 #endif
    }
 
@@ -362,25 +329,25 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
       logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", prefix);
 #if 1
       AnyAsyncStream stream(std::make_unique<TestStream>(std::move(socket)));
-      session = std::make_shared<beast_impl::ServerSession<AnyAsyncStream>> //
-         (*this, executor, std::move(stream));
+      session = beast_impl::make_server_session(*this, executor, std::move(stream));
 #else
-      session = std::make_shared<beast_impl::ServerSession<boost::beast::tcp_stream>> //
-         (*this, executor, boost::beast::tcp_stream(std::move(socket)));
+      session = beast_impl::make_server_session(*this, executor, std::move(socket));
 #endif
    }
 
+   //
+   // Registration fails only if the server is already being destroyed, in which case this
+   // session has to go away right here: nothing else knows about it any more.
+   //
+   if (!add_session(session))
    {
-      auto lock = std::lock_guard(m_sessionMutex);
-      m_sessions.emplace(session);
+      logi("[{}] server is shutting down, dropping connection", prefix);
+      session->destroy();
+      co_return;
    }
 
    co_await session->do_session(std::move(buffer));
-
-   {
-      auto lock = std::lock_guard(m_sessionMutex);
-      m_sessions.erase(session);
-   }
+   remove_session(session);
 
    logi("[{}] session finished", prefix);
 }
@@ -388,7 +355,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
 // -------------------------------------------------------------------------------------------------
 
 /**
- * Typically, a listen loop "spawns" a new thread of execution for each connection it accepts.
+ * Typically, an accept loop "spawns" a new thread of execution for each connection it accepts.
  * Doing that in a "detached" fashion violates the principles of structured concurrency, as we
  * don't have a clear way of cancelling those threads.
  *
@@ -397,7 +364,7 @@ awaitable<void> Server::Impl::handleConnection(ip::tcp::socket socket)
  * https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p3149r5.html#listener-loop-in-an-http-server
  *
  */
-awaitable<void> Server::Impl::tcp_listen_loop()
+awaitable<void> Server::Impl::tcp_accept_loop()
 {
    assert(m_acceptor);
    auto& acceptor = *m_acceptor;
@@ -443,7 +410,7 @@ awaitable<void> Server::Impl::tcp_listen_loop()
       //       or explicit thread pools where really needed.
       //
       co_spawn(config().use_strand ? boost::asio::make_strand(executor) : executor,
-               handleConnection(std::move(socket)), [&, ep](const std::exception_ptr& ex) mutable
+               handle_connection(std::move(socket)), [&, ep](const std::exception_ptr& ex) mutable
       {
          auto lock = std::lock_guard(m_sessionMutex);
          --sessionCounter;
@@ -459,7 +426,7 @@ awaitable<void> Server::Impl::tcp_listen_loop()
    //
    auto lock = std::unique_lock(m_sessionMutex);
    const auto waitingFor = sessionCounter;
-   logi("listen loop terminated, waiting for {} sessions...", waitingFor);
+   logi("accept terminated, waiting for {} sessions...", waitingFor);
 
    size_t i = 0;
    for (; sessionCounter; ++i)
@@ -473,7 +440,7 @@ awaitable<void> Server::Impl::tcp_listen_loop()
       lock.lock();
    }
 
-   logi("listen loop terminated, waiting for {} sessions... done, {} iterations", waitingFor, i);
+   logi("accept terminated, waiting for {} sessions... done, {} iterations", waitingFor, i);
 }
 
 // =================================================================================================

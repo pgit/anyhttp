@@ -53,6 +53,9 @@ add_compile_definitions(BOOST_PROCESS_V2_DISABLE_NOTIFY_FORK)
 # we don't use fmtlib any more
 add_compile_definitions(SPDLOG_USE_STD_FORMAT)
 
+# don't allow use of deprecated ASIO interfaces
+add_compile_definitions(BOOST_ASIO_NO_DEPRECATED)
+
 # needed for ranges/v3 starting with clang 19
 add_compile_options(-Wno-deprecated-declarations)
 

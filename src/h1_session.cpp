@@ -1,7 +1,9 @@
-#include "anyhttp/beast_session.hpp"
+#include "anyhttp/h1_session.hpp"
+
 #include "anyhttp/any_async_stream.hpp"
 #include "anyhttp/common.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
+#include "anyhttp/h1_backend.hpp"
 #include "anyhttp/server.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
@@ -604,7 +606,7 @@ void BeastSession<Stream>::destroy() noexcept
 
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
-   std::ignore = get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
+   get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
    logwi(ec, "[{}] destroy: socket shutdown: {}", m_logPrefix, ec.message());
    // });
 }
@@ -767,7 +769,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
    // FIXME: close() before shutdown()?!
    get_socket(m_stream).close();
-   std::ignore = get_socket(m_stream).shutdown(asio::ip::tcp::socket::shutdown_send, ec);
+   get_socket(m_stream).shutdown(asio::ip::tcp::socket::shutdown_send, ec);
 
    mlogd("session done");
 }
@@ -868,5 +870,44 @@ template class ClientSession<boost::beast::tcp_stream>;
 template class ServerSession<boost::beast::tcp_stream>;
 template class ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>;
 template class ServerSession<AnyAsyncStream>;
+
+// =================================================================================================
+// Factories, see anyhttp/h1_backend.hpp. Instantiating the session templates is kept to this
+// translation unit, so that the generic server and client stay free of beast's HTTP machinery.
+// =================================================================================================
+
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
+                                                   asio::any_io_executor executor,
+                                                   SslStream&& stream)
+{
+   return std::make_shared<ServerSession<SslStream>>(server, std::move(executor),
+                                                     std::move(stream));
+}
+
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
+                                                   asio::any_io_executor executor,
+                                                   AnyAsyncStream&& stream)
+{
+   return std::make_shared<ServerSession<AnyAsyncStream>>(server, std::move(executor),
+                                                          std::move(stream));
+}
+
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
+                                                   asio::any_io_executor executor,
+                                                   asio::ip::tcp::socket&& socket)
+{
+   return std::make_shared<ServerSession<boost::beast::tcp_stream>>(
+      server, std::move(executor), boost::beast::tcp_stream(std::move(socket)));
+}
+
+std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
+                                                   asio::any_io_executor executor,
+                                                   asio::ip::tcp::socket&& socket)
+{
+   return std::make_shared<ClientSession<boost::beast::tcp_stream>>(
+      client, std::move(executor), boost::beast::tcp_stream(std::move(socket)));
+}
+
+// =================================================================================================
 
 } // namespace anyhttp::beast_impl

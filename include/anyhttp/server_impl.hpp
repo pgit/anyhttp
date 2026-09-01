@@ -7,10 +7,6 @@
 
 #include <memory>
 #include <set>
-#include <unordered_map>
-
-// Forward declaration so we don't drag <ngtcp2/ngtcp2.h> into every translation unit.
-struct ngtcp2_cid;
 
 namespace anyhttp
 {
@@ -51,9 +47,11 @@ public:
 
 // =================================================================================================
 
-struct Endpoint;
-class Http3Session;
-struct QuicBatch;
+//
+// The HTTP/3 half of the server, behind anyhttp/h3_backend.hpp: it owns the UDP socket and
+// everything QUIC, so that nothing of ngtcp2/nghttp3 reaches this header.
+//
+class Http3Server;
 
 class Server::Impl : public std::enable_shared_from_this<Server::Impl>
 {
@@ -65,13 +63,12 @@ public:
    void destroy();
 
    void listen_tcp();
-   void listen_udp();
 
    const Config& config() const { return m_config; }
    boost::asio::any_io_executor get_executor() const noexcept { return m_executor; }
 
-   asio::awaitable<void> tcp_listen_loop();
-   asio::awaitable<void> handleConnection(asio::ip::tcp::socket socket);
+   asio::awaitable<void> tcp_accept_loop();
+   asio::awaitable<void> handle_connection(asio::ip::tcp::socket socket);
 
    asio::ip::tcp::endpoint local_endpoint() const
    {
@@ -82,32 +79,25 @@ public:
    void setRequestHandler(RequestHandler&& handler) { m_requestHandler = std::move(handler); }
    const RequestHandler& requestHandler() const { return m_requestHandler; }
 
-   asio::awaitable<void> udp_receive_loop();
-   int udp_on_read(Endpoint& ep);
-   void process_quic_batch(const std::shared_ptr<Http3Session>& session, QuicBatch&& batch);
-
    //
-   // QUIC connection-ID demux table. Populated by QuicHandler as new source CIDs are minted,
-   // consulted by udp_on_read() to route packets to the right connection. Guarded by
-   // m_quicMutex: the receive loop reads it while sessions mutate it from their own strands
-   // (get_new_connection_id/remove_connection_id callbacks, close timers).
+   // Session registry, shared by all three protocols: every session is destroyed from here when
+   // the server goes away. Adding fails once destroy() has swept the registry -- a session
+   // registered after that sweep would never be torn down -- and the caller has to destroy the
+   // session itself.
    //
-   void associate_quic_cid(const ngtcp2_cid& cid, Http3Session* session);
-   void dissociate_quic_cid(const ngtcp2_cid& cid);
-   void erase_quic_session(Http3Session* h);
+   [[nodiscard]] bool add_session(std::shared_ptr<Session::Impl> session);
+   void remove_session(const std::shared_ptr<Session::Impl>& session);
 
 private:
    Config m_config;
 
    boost::asio::any_io_executor m_executor;
    std::optional<asio::ip::tcp::acceptor> m_acceptor;
-   std::optional<asio::ip::udp::socket> m_udp_socket;
 
    std::mutex m_sessionMutex;
    std::set<std::shared_ptr<Session::Impl>> m_sessions;
 
-   std::mutex m_quicMutex;
-   std::unordered_map<std::string, std::shared_ptr<Http3Session>> m_quic_handlers;
+   std::shared_ptr<Http3Server> m_http3;
 
    RequestHandler m_requestHandler;
    bool m_destroyed = false;

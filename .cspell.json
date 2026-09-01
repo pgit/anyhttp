@@ -55,6 +55,7 @@
         "spdlog",
         "SSLKEYLOGFILE",
         "STREQUAL",
+        "sveccnt",
         "testcases",
         "TLSEXT",
         "TSAN",
