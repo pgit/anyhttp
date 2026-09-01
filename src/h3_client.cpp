@@ -435,7 +435,7 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote)
       return -1;
    }
 
-   log_prefix_ = std::format("h3c:{}", ngtcp2::util::straddr(remote.data(), remote.size()));
+   log_prefix_ = std::format("h3:{}", ngtcp2::util::straddr(remote.data(), remote.size()));
 
    ngtcp2_cid scid{};
    scid.datalen = 17;

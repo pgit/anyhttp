@@ -270,6 +270,7 @@ ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uin
    }
 }
 
+// https://nghttp2.org/ngtcp2/programmers-guide.html#pseudo-code-for-writing-packets-with-gso
 int Http3Session::write_streams()
 {
    if (!conn_)
@@ -294,8 +295,6 @@ int Http3Session::write_streams()
          ngtcp2_ccerr_set_liberr(&last_error_, static_cast<int>(nwrite), nullptr, 0);
       return handle_error(static_cast<int>(nwrite));
    }
-
-   ngtcp2_conn_update_pkt_tx_time(conn_, ngtcp2::util::timestamp());
 
    if (nwrite == 0)
       return 0;
