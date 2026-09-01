@@ -313,9 +313,13 @@ public:
       // 'more' cleared, beast emits the data and the terminating chunk (or just the data, for a
       // content-length delimited body) in one go, so ending a body costs no extra write.
       //
+#if BOOST_BEAST_VERSION < 359
       // https://github.com/boostorg/beast/issues/3032
       // make sure to set 'nullptr' on empty size, otherwise beast may serialize an empty chunk
       message.body().data = buffer.size() ? const_cast<void*>(buffer.data()) : nullptr;
+#else
+      message.body().data = const_cast<void*>(buffer.data());
+#endif      
       message.body().size = buffer.size();
       message.body().more = !eof;
 
