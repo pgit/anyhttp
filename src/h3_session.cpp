@@ -153,7 +153,7 @@ ngtcp2_ssize Http3Session::write_pkt_cb(ngtcp2_conn*, ngtcp2_path* path, ngtcp2_
 }
 
 //
-// Writes a single QUIC packet's worth of stream data into [dest, dest+destlen). Called repeatedly
+// Writes a single QUIC packet's worth of stream data into [dest, dest+destlen[. Called repeatedly
 // by ngtcp2_conn_write_aggregate_pkt2() (once per packet it wants to pack into the shared TX
 // buffer), so this must never send anything itself -- write_streams() decides when and how the
 // accumulated packets go out.

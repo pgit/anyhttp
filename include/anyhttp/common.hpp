@@ -98,6 +98,8 @@ inline Fields fields(std::initializer_list<std::pair<std::string_view, FieldValu
    return result;
 }
 
+// =================================================================================================
+
 using ReadSome = void(boost::system::error_code, size_t);
 using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
 

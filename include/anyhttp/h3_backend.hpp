@@ -8,7 +8,6 @@
 // session running on it (src/h3_client.cpp).
 //
 
-#include "anyhttp/client_impl.hpp"
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
 
@@ -26,9 +25,10 @@ namespace anyhttp::server
 
 //
 // The server's HTTP/3 half: one UDP socket shared by all QUIC connections, the receive loop
-// demultiplexing datagrams onto them by connection ID, and the connections themselves. Sessions
-// register with the owning Server::Impl just like the TCP-based ones, so they take part in
-// server-wide shutdown.
+// de-multiplexing datagrams onto them by connection ID, and the connections themselves.
+// 
+// Sessions register with the owning Server::Impl just like the TCP-based ones, so they
+// take part in server-wide shutdown.
 //
 class Http3Server
 {
