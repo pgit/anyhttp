@@ -183,12 +183,11 @@ ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uin
       if (h3_ && ngtcp2_conn_get_max_data_left(conn_))
       {
          sveccnt = nghttp3_conn_writev_stream(h3_, &stream_id, &fin, vec.data(), vec.size());
-         logd("[{}] write_pkt: nghttp3_conn_writev_stream -> stream={} sveccnt={} fin={}",
-              log_prefix_, stream_id, sveccnt, fin);
+         mlogd("write_pkt: nghttp3_conn_writev_stream -> stream={} sveccnt={} fin={}", stream_id,
+               sveccnt, fin);
          if (sveccnt < 0)
          {
-            loge("[{}] nghttp3_conn_writev_stream: {}", log_prefix_,
-                 nghttp3_strerror(static_cast<int>(sveccnt)));
+            mloge("nghttp3_conn_writev_stream: {}", nghttp3_strerror(static_cast<int>(sveccnt)));
             ngtcp2_ccerr_set_application_error(
                &last_error_, nghttp3_err_infer_quic_app_error_code(static_cast<int>(sveccnt)),
                nullptr, 0);
@@ -227,8 +226,7 @@ ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uin
             //
             if (h3_ && stream_id >= 0 && stream_id != shut_down_stream)
             {
-               logw("[{}] write_pkt: stream {} is gone, shutting down its write side", log_prefix_,
-                    stream_id);
+               mlogw("write_pkt: stream {} is gone, shutting down its write side", stream_id);
                nghttp3_conn_shutdown_stream_write(h3_, stream_id);
                nghttp3_conn_block_stream(h3_, stream_id);
                shut_down_stream = stream_id;
@@ -242,7 +240,7 @@ ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uin
                       nghttp3_conn_add_write_offset(h3_, stream_id, static_cast<size_t>(ndatalen));
                    rv != 0)
                {
-                  loge("[{}] nghttp3_conn_add_write_offset: {}", log_prefix_, nghttp3_strerror(rv));
+                  mloge("nghttp3_conn_add_write_offset: {}", nghttp3_strerror(rv));
                   return NGTCP2_ERR_CALLBACK_FAILURE;
                }
                if (auto s = find_stream(stream_id))
@@ -250,8 +248,7 @@ ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uin
             }
             continue;
          default:
-            loge("[{}] ngtcp2_conn_writev_stream: {}", log_prefix_,
-                 ngtcp2_strerror(static_cast<int>(nwrite)));
+            mloge("ngtcp2_conn_writev_stream: {}", ngtcp2_strerror(static_cast<int>(nwrite)));
             ngtcp2_ccerr_set_liberr(&last_error_, static_cast<int>(nwrite), nullptr, 0);
             return NGTCP2_ERR_CALLBACK_FAILURE;
          }
@@ -262,7 +259,7 @@ ngtcp2_ssize Http3Session::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uin
          if (auto rv = nghttp3_conn_add_write_offset(h3_, stream_id, static_cast<size_t>(ndatalen));
              rv != 0)
          {
-            loge("[{}] nghttp3_conn_add_write_offset: {}", log_prefix_, nghttp3_strerror(rv));
+            mloge("nghttp3_conn_add_write_offset: {}", nghttp3_strerror(rv));
             return NGTCP2_ERR_CALLBACK_FAILURE;
          }
          if (auto s = find_stream(stream_id))
@@ -280,7 +277,7 @@ int Http3Session::write_streams()
    if (ngtcp2_conn_in_closing_period(conn_) || ngtcp2_conn_in_draining_period(conn_))
       return 0;
 
-   logd("[{}] write_streams: max_data_left={}", log_prefix_, ngtcp2_conn_get_max_data_left(conn_));
+   mlogd("write_streams: max_data_left={}", ngtcp2_conn_get_max_data_left(conn_));
 
    ngtcp2_path_storage ps;
    ngtcp2_pkt_info pi;
@@ -292,8 +289,7 @@ int Http3Session::write_streams()
                                        &gso_size, &write_pkt_cb, 0, ngtcp2::util::timestamp());
    if (nwrite < 0)
    {
-      loge("[{}] ngtcp2_conn_write_aggregate_pkt2: {}", log_prefix_,
-           ngtcp2_strerror(static_cast<int>(nwrite)));
+      mloge("ngtcp2_conn_write_aggregate_pkt2: {}", ngtcp2_strerror(static_cast<int>(nwrite)));
       if (!last_error_.error_code)
          ngtcp2_ccerr_set_liberr(&last_error_, static_cast<int>(nwrite), nullptr, 0);
       return handle_error(static_cast<int>(nwrite));
@@ -355,9 +351,9 @@ int Http3Session::handle_expiry()
       // special is that the connection is then discarded silently, see there.
       //
       if (rv == NGTCP2_ERR_IDLE_CLOSE)
-         logi("[{}] idle timeout, dropping connection", log_prefix_);
+         mlogi("idle timeout, dropping connection");
       else
-         logw("[{}] ngtcp2_conn_handle_expiry: {}", log_prefix_, ngtcp2_strerror(rv));
+         mlogw("ngtcp2_conn_handle_expiry: {}", ngtcp2_strerror(rv));
 
       ngtcp2_ccerr_set_liberr(&last_error_, rv, nullptr, 0);
       return handle_error(rv);
@@ -370,16 +366,16 @@ int Http3Session::handle_expiry()
 int Http3Session::on_read(const ngtcp2_path& path, const ngtcp2_pkt_info& pi,
                           std::span<const uint8_t> data)
 {
-   logd("[{}] on_read: {} bytes", log_prefix_, data.size());
+   mlogd("on_read: {} bytes", data.size());
 
    auto rv =
       ngtcp2_conn_read_pkt(conn_, &path, &pi, data.data(), data.size(), ngtcp2::util::timestamp());
    if (rv != 0)
    {
       if (rv == NGTCP2_ERR_DRAINING)
-         logd("[{}] ngtcp2_conn_read_pkt: draining", log_prefix_);
+         mlogd("ngtcp2_conn_read_pkt: draining");
       else
-         logw("[{}] ngtcp2_conn_read_pkt: {}", log_prefix_, ngtcp2_strerror(rv));
+         mlogw("ngtcp2_conn_read_pkt: {}", ngtcp2_strerror(rv));
 
       if (rv == NGTCP2_ERR_CRYPTO && !last_error_.error_code)
          ngtcp2_ccerr_set_tls_alert(&last_error_, ngtcp2_conn_get_tls_alert(conn_), nullptr, 0);
@@ -465,7 +461,7 @@ int Http3Session::setup_tls(SSL_CTX* ssl_ctx, bool is_server)
    auto* ssl = SSL_new(ssl_ctx);
    if (!ssl)
    {
-      loge("[{}] SSL_new failed", log_prefix_);
+      mloge("SSL_new failed");
       return -1;
    }
 
@@ -482,15 +478,14 @@ int Http3Session::setup_tls(SSL_CTX* ssl_ctx, bool is_server)
                               : &ngtcp2_crypto_ossl_configure_client_session;
    if (configure(ssl) != 0)
    {
-      loge("[{}] ngtcp2_crypto_ossl_configure_{}_session failed", log_prefix_,
-           is_server ? "server" : "client");
+      mloge("ngtcp2_crypto_ossl_configure_{}_session failed", is_server ? "server" : "client");
       SSL_free(ssl);
       return -1;
    }
 
    if (ngtcp2_crypto_ossl_ctx_new(&ossl_ctx_, ssl) != 0)
    {
-      loge("[{}] ngtcp2_crypto_ossl_ctx_new failed", log_prefix_);
+      mloge("ngtcp2_crypto_ossl_ctx_new failed");
       SSL_free(ssl);
       return -1;
    }
@@ -527,7 +522,7 @@ int Http3Session::setup_http3()
    {
       if (auto rv = nghttp3_conn_server_new(&h3_, &h3cb, &settings, nullptr, this); rv != 0)
       {
-         loge("[{}] nghttp3_conn_server_new: {}", log_prefix_, nghttp3_strerror(rv));
+         mloge("nghttp3_conn_server_new: {}", nghttp3_strerror(rv));
          return -1;
       }
       auto params = ngtcp2_conn_get_local_transport_params(conn_);
@@ -535,19 +530,19 @@ int Http3Session::setup_http3()
    }
    else if (auto rv = nghttp3_conn_client_new(&h3_, &h3cb, &settings, nullptr, this); rv != 0)
    {
-      loge("[{}] nghttp3_conn_client_new: {}", log_prefix_, nghttp3_strerror(rv));
+      mloge("nghttp3_conn_client_new: {}", nghttp3_strerror(rv));
       return -1;
    }
 
    int64_t ctrl_stream_id = -1;
    if (auto rv = ngtcp2_conn_open_uni_stream(conn_, &ctrl_stream_id, nullptr); rv != 0)
    {
-      loge("[{}] open control stream: {}", log_prefix_, ngtcp2_strerror(rv));
+      mloge("open control stream: {}", ngtcp2_strerror(rv));
       return -1;
    }
    if (auto rv = nghttp3_conn_bind_control_stream(h3_, ctrl_stream_id); rv != 0)
    {
-      loge("[{}] nghttp3_conn_bind_control_stream: {}", log_prefix_, nghttp3_strerror(rv));
+      mloge("nghttp3_conn_bind_control_stream: {}", nghttp3_strerror(rv));
       return -1;
    }
 
@@ -556,18 +551,18 @@ int Http3Session::setup_http3()
    if (ngtcp2_conn_open_uni_stream(conn_, &qpack_enc_stream_id, nullptr) != 0 ||
        ngtcp2_conn_open_uni_stream(conn_, &qpack_dec_stream_id, nullptr) != 0)
    {
-      loge("[{}] open qpack streams failed", log_prefix_);
+      mloge("open qpack streams failed");
       return -1;
    }
    if (auto rv = nghttp3_conn_bind_qpack_streams(h3_, qpack_enc_stream_id, qpack_dec_stream_id);
        rv != 0)
    {
-      loge("[{}] nghttp3_conn_bind_qpack_streams: {}", log_prefix_, nghttp3_strerror(rv));
+      mloge("nghttp3_conn_bind_qpack_streams: {}", nghttp3_strerror(rv));
       return -1;
    }
 
-   logi("[{}] HTTP/3 ready (ctrl={} qpack_enc={} qpack_dec={})", log_prefix_, ctrl_stream_id,
-        qpack_enc_stream_id, qpack_dec_stream_id);
+   mlogi("HTTP/3 ready (ctrl={} qpack_enc={} qpack_dec={})", ctrl_stream_id, qpack_enc_stream_id,
+         qpack_dec_stream_id);
 
    on_http3_ready();
    return 0;
