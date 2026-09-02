@@ -82,7 +82,8 @@ public:
    template <typename T>
    std::optional<T> get_param_as(std::string_view name) const
    {
-      const auto params = url().params();
+      const auto u = url(); // keep the url_view alive: params() only references it
+      const auto params = u.params();
       const auto it = params.find(name);
       if (it == params.end() || !(*it).has_value)
          return std::nullopt;
