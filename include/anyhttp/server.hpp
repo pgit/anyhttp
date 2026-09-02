@@ -7,7 +7,12 @@
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/co_spawn.hpp>
 
+#include <boost/lexical_cast/try_lexical_convert.hpp>
+
 #include <boost/url/urls.hpp>
+
+#include <optional>
+#include <string_view>
 
 using namespace std::chrono_literals;
 
@@ -60,6 +65,32 @@ public:
 
    boost::url_view url() const;
    std::optional<size_t> content_length() const noexcept;
+
+   /**
+    * Looks up a query parameter and converts its value to \c T.
+    *
+    * Returns \c std::nullopt if the parameter is missing, has no value at all, or if its value
+    * does not convert to \c T -- the latter is logged as a warning. Use \c value_or() for a
+    * default:
+    *
+    * \code
+    * auto delay = request.get_param_as<size_t>("delay").value_or(0);
+    * \endcode
+    */
+   template <typename T>
+   std::optional<T> get_param_as(std::string_view name) const
+   {
+      const auto params = url().params();
+      const auto it = params.find(name);
+      if (it == params.end() || !(*it).has_value)
+         return std::nullopt;
+
+      if (T value; boost::conversion::try_lexical_convert((*it).value, value))
+         return value;
+
+      logw("get_param_as: invalid value '{}' for parameter '{}'", (*it).value, name);
+      return std::nullopt;
+   }
 
 public:
    /**

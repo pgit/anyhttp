@@ -27,9 +27,6 @@
 
 #include <boost/algorithm/string/join.hpp>
 
-#include <boost/lexical_cast.hpp>
-#include <boost/lexical_cast/bad_lexical_cast.hpp>
-
 #include <boost/process/v2/environment.hpp>
 #include <boost/process/v2/process.hpp>
 #include <boost/process/v2/stdio.hpp>
@@ -205,21 +202,8 @@ protected:
       {
          logd("{} ({})", request.url().path(), request.url().buffer());
 
-         auto url = request.url();
-         auto params = url.params();
-         if (auto it = params.find("delay"); it != params.end())
-         {
-            try
-            {
-               using ms = std::chrono::milliseconds;
-               auto delay_ms = boost::lexical_cast<ms::rep>((*it).value);
-               co_await sleep(ms{delay_ms});
-            }
-            catch (boost::bad_lexical_cast&)
-            {
-               loge("invalid number: {}", (*it).value);
-            }
-         }
+         if (auto delay = request.get_param_as<std::chrono::milliseconds::rep>("delay"))
+            co_await sleep(std::chrono::milliseconds{*delay});
 
          if (request.url().path() == "/echo")
             co_await echo(std::move(request), std::move(response));
