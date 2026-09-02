@@ -4,7 +4,6 @@
 #include "anyhttp/server.hpp"
 
 #include <array>
-#include <charconv>
 #include <exception>
 #include <expected>
 #include <ranges>
@@ -227,20 +226,17 @@ inline awaitable<void> generate(server::Request request, server::Response respon
 {
    namespace rv = std::ranges::views;
 
-   size_t length = 0;
-   const auto param = request.url().params().get_or("length");
-   auto [ptr, ec] = std::from_chars(param.data(), param.data() + param.size(), length);
-   if (ec != std::errc{} || ptr != param.data() + param.size())
+   const auto length = request.get_param_as<size_t>("length");
+   if (!length)
    {
-      logw("generate: invalid length '{}'", param);
       co_await response.async_submit(400, {});
       co_await response.async_write_eof();
       co_return;
    }
 
-   logd("generate: {} bytes", length);
-   co_await response.async_submit(200, fields({{"Content-Length", length}}));
-   co_await sendAndForceEOF(response, rv::iota(uint8_t(0)) | rv::take(length));
+   logd("generate: {} bytes", *length);
+   co_await response.async_submit(200, fields({{"Content-Length", *length}}));
+   co_await sendAndForceEOF(response, rv::iota(uint8_t(0)) | rv::take(*length));
 }
 
 // -------------------------------------------------------------------------------------------------
