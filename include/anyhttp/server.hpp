@@ -12,7 +12,9 @@
 #include <boost/url/urls.hpp>
 
 #include <optional>
+#include <string>
 #include <string_view>
+#include <type_traits>
 
 using namespace std::chrono_literals;
 
@@ -85,10 +87,19 @@ public:
       if (it == params.end() || !(*it).has_value)
          return std::nullopt;
 
-      if (T value; boost::conversion::try_lexical_convert((*it).value, value))
-         return value;
+      const std::string& value = (*it).value;
 
-      logw("get_param_as: invalid value '{}' for parameter '{}'", (*it).value, name);
+      //
+      // lexical_cast wraps a negative number around into an unsigned type -- "-1" arrives as
+      // SIZE_MAX -- which is never what a caller asking for an unsigned type wants.
+      //
+      const bool negative_unsigned =
+         std::is_integral_v<T> && std::is_unsigned_v<T> && value.starts_with('-');
+
+      if (T converted; !negative_unsigned && boost::conversion::try_lexical_convert(value, converted))
+         return converted;
+
+      logw("get_param_as: invalid value '{}' for parameter '{}'", value, name);
       return std::nullopt;
    }
 
