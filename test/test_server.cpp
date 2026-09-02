@@ -1125,8 +1125,7 @@ TEST_P(ClientAsync, WHEN_server_writes_large_buffer_at_once_THEN_receives_all)
       co_await drain(request);
 
       co_await response.async_submit(200, fields({{"Content-Length", body.size()}}));
-      co_await response.async_write(asio::buffer(body));
-      co_await response.async_write_eof();
+      co_await response.async_write_eof(asio::buffer(body));
    };
    test = [this](Session session) -> awaitable<void>
    {
@@ -1897,8 +1896,9 @@ TEST_P(ClientAsync, CancelAfter)
       std::tie(ec, response) = co_await request.async_get_response(as_tuple);
       EXPECT_FALSE(ec);
 
-      co_await request.async_write_eof(asio::buffer("Hello, Client!"sv));
-      auto received = co_await count(response);
+      constexpr auto msg = "Hello, Client!"sv;
+      co_await request.async_write_eof(asio::buffer(msg));
+      EXPECT_EQ(co_await read(response), msg);
    };
 }
 

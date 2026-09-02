@@ -955,7 +955,7 @@ int Http3ServerImpl::udp_on_read(Endpoint& ep)
    //
    // Datagrams collected per session over the whole batch. Each session gets its accumulated
    // batch posted to its strand once, below, after every datagram the socket had queued has been
-   // demultiplexed -- so one aggregate pass on the strand can pack a whole response into a
+   // de-multiplexed -- so one aggregate pass on the strand can pack a whole response into a
    // single GSO sendmsg() instead of dribbling it out per datagram.
    //
    boost::container::small_flat_map<std::shared_ptr<Http3ServerSession>, QuicBatch, 32> batches;
@@ -1076,8 +1076,9 @@ int Http3ServerImpl::udp_on_read(Endpoint& ep)
    {
       asio::post(session->get_executor(),
                  [self = shared_from_this(), owner = owner(), session,
-                  batch = std::move(batch)]() mutable
-      { self->process_quic_batch(session, std::move(batch)); });
+                  batch = std::move(batch)]() mutable { // 
+          self->process_quic_batch(session, std::move(batch));
+      });
    }
 
    return 0;

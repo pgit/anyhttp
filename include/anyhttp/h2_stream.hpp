@@ -87,7 +87,7 @@ public:
 
    /**
     * True after we have received an EOF flag from the peer. After this, no more buffers will be
-    * added. But the might be still some buffers left to be deliver to the user.
+    * added. But there might be still some buffers left to be deliver to the user.
     */
    bool eof_received = false;
 
