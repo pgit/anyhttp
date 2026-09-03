@@ -136,7 +136,7 @@ awaitable<void> send(Writer& request, Range range)
 // For a non-contiguous range, we need to copy into a buffer first.
 //
 template <typename Writer, ByteRange Range>
-   requires (!std::ranges::contiguous_range<Range>)
+   requires(!std::ranges::contiguous_range<Range>)
 awaitable<void> send(Writer& request, Range range)
 {
    logd("send:");
@@ -146,7 +146,7 @@ awaitable<void> send(Writer& request, Range range)
    {
       const auto end = std::ranges::copy(chunk, buffer.data()).out;
       const auto n = end - buffer.data();
-      bytes += n;  // FIXME: count after async_write
+      bytes += n; // FIXME: count after async_write
 #if 0
 #if defined(NDEBUG)
       co_await request.async_write(asio::buffer(buffer.data(), n));
