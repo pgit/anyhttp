@@ -1,6 +1,7 @@
 #include "anyhttp/request_handlers.hpp"
 #include "anyhttp/client.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
+#include "anyhttp/literals.hpp"
 #include "anyhttp/server.hpp"
 
 #include <boost/asio/deferred.hpp>
@@ -84,7 +85,7 @@ awaitable<void> echo(server::Request request, server::Response response)
 
    co_await response.async_submit(200, {});
 
-   std::array<uint8_t, 64 * 1024> buffer;
+   std::array<uint8_t, 64_k> buffer;
    for (;;)
    {
       auto [ec, n] = co_await request.async_read_some(asio::buffer(buffer), as_tuple);
@@ -183,7 +184,7 @@ awaitable<size_t> count(client::Response& response)
 awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response)
 {
    size_t bytes = 0;
-   std::array<uint8_t, 16 * 1024> buffer;
+   std::array<uint8_t, 16_k> buffer;
    for (;;)
    {
       auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);

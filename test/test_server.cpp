@@ -1,6 +1,7 @@
 #include "anyhttp/client.hpp"
 #include "anyhttp/file_handler.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
+#include "anyhttp/literals.hpp"
 #include "anyhttp/request_handlers.hpp"
 #include "anyhttp/server.hpp"
 #include "anyhttp/session.hpp"
@@ -773,7 +774,7 @@ TEST_P(ClientAsync, WHEN_post_to_unknown_path_THEN_error_404)
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("unknown"), {});
-      co_await send(request, 1024 * 1024);
+      co_await send(request, 1_m);
       auto response = co_await request.async_get_response();
       EXPECT_EQ(response.status_code(), 404);
       auto received = co_await count(response);
@@ -1114,7 +1115,7 @@ TEST_P(ClientAsync, WHEN_server_writes_large_buffer_at_once_THEN_receives_all)
 {
    static const std::vector<uint8_t> body = []
    {
-      std::vector<uint8_t> data(256 * 1024);
+      std::vector<uint8_t> data(256_k);
       std::ranges::generate(data, [i = uint8_t(0)]() mutable { return i++; });
       return data;
    }();
@@ -1143,7 +1144,7 @@ TEST_P(ClientAsync, WHEN_server_writes_large_buffer_at_once_THEN_receives_all)
 //
 TEST_P(ClientAsync, WHEN_server_cancels_write_eof_THEN_client_sees_truncated_body)
 {
-   static const std::vector<uint8_t> body(8 * 1024 * 1024, 'x');
+   static const std::vector<uint8_t> body(8_m, 'x');
 
    custom = [this](server::Request request, server::Response response) -> awaitable<void>
    {
@@ -1185,7 +1186,7 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_eof_THEN_can_still_end)
    if (GetParam() == anyhttp::Protocol::http11)
       GTEST_SKIP(); // a chunked body cannot be cancelled correctly --> disconnects
 
-   static const std::vector<uint8_t> body(8 * 1024 * 1024, 'x');
+   static const std::vector<uint8_t> body(8_m, 'x');
 
    test = [this](Session session) -> awaitable<void>
    {
@@ -1214,7 +1215,7 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_eof_THEN_can_still_end)
 //
 TEST_P(ClientAsync, WHEN_server_cancels_write_THEN_client_sees_truncated_body)
 {
-   static const std::vector<uint8_t> body(8 * 1024 * 1024, 'x');
+   static const std::vector<uint8_t> body(8_m, 'x');
 
    custom = [this](server::Request request, server::Response response) -> awaitable<void>
    {
@@ -1273,7 +1274,7 @@ public:
       write(root / "hello.txt", "Hello, File!");
       write(root / "empty.txt", "");
       write(root / "sub" / "nested.txt", "Nested!");
-      write(root / "large.bin", std::string(256 * 1024, 'x'));
+      write(root / "large.bin", std::string(256_k, 'x'));
       write(root / "secret.txt", "no peeking");
       write(root / "er.txt", "leaked"); // what "/customer.txt" resolves to without a segment check
       std::filesystem::permissions(root / "secret.txt", std::filesystem::perms::none);
@@ -1383,7 +1384,7 @@ TEST_P(FileHandler, WHEN_file_is_large_THEN_serves_all_of_it)
    {
       auto [status, body] = co_await get(session, "/custom/large.bin");
       EXPECT_EQ(status, 200);
-      EXPECT_EQ(body, std::string(256 * 1024, 'x'));
+      EXPECT_EQ(body, std::string(256_k, 'x'));
    };
 }
 
@@ -1613,13 +1614,13 @@ TEST_P(ClientAsync, PostRange)
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       // co_await request.async_write(asio::buffer("ping"sv)); // FIXME:
       auto response = co_await request.async_get_response();
-      // std::string s(10ul * 1024 * 1024, 'a');
+      // std::string s(10_m, 'a');
       // auto sender = send(request, std::string_view("blah"));
-      // auto sender = send(request, std::string(10ul * 1024 * 1024, 'a'));
-      auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1 * 1024 * 1024));
+      // auto sender = send(request, std::string(10_m, 'a'));
+      auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1_m));
       auto received = co_await (std::move(sender) && count(response));
       loge("received: {}", received);
-      EXPECT_EQ(received, 1 * 1024 * 1024);
+      EXPECT_EQ(received, 1_m);
    };
 }
 
@@ -1628,10 +1629,10 @@ TEST_P(ClientAsync, PostRangeImmediate)
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {});
-      auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1 * 1024 * 1024));
+      auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1_m));
       auto received = co_await (std::move(sender) && read_response(request));
       loge("received: {}", received);
-      EXPECT_EQ(received, 1 * 1024 * 1024);
+      EXPECT_EQ(received, 1_m);
    };
 }
 
@@ -1754,7 +1755,7 @@ TEST_P(ClientAsync, CancellationContentLength)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      const size_t length = 50ul * 1024 * 1024;
+      const size_t length = 50_m;
       const std::vector<char> buffer(length);
       for (size_t i = 0; i <= 20; ++i)
       {
@@ -1801,7 +1802,7 @@ TEST_P(ClientAsync, Cancellation)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      const size_t length = 50ul * 1024 * 1024;
+      const size_t length = 50_m;
       const std::vector<char> buffer(length, 'a');
       for (size_t i = 0; i <= 20; ++i)
       {
