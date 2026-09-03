@@ -81,8 +81,8 @@ awaitable<std::string> read(client::Response& response);
 // Reads and discards whatever is left of an incoming body, and returns how much that was.
 //
 // This is the plain shape of an ASIO read loop against the anyhttp reader interface: read until
-// \c asio::error::eof, and let anything else -- a reset stream, a connection that went away
-// mid-body -- come out as an exception.
+// EOF, and let anything else -- a reset stream, a connection that went away mid-body -- come out
+// as an exception.
 //
 template <typename Reader>
 awaitable<size_t> drain(Reader& reader)
@@ -94,9 +94,15 @@ awaitable<size_t> drain(Reader& reader)
       auto [ec, n] = co_await reader.async_read_some(asio::buffer(buffer), asio::as_tuple);
       bytes += n;
       if (ec == asio::error::eof)
+      {
+         logi("drain: EOF after reading {} bytes", bytes);
          co_return bytes;
+      }
       if (ec)
+      {
+         logw("drain: \x1b[1;31m{}\x1b[0m after reading {} bytes, throwing", what(ec), bytes);
          throw boost::system::system_error(ec);
+      }
    }
 }
 
