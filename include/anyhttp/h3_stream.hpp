@@ -1,7 +1,6 @@
 #pragma once
 
 #include "anyhttp/common.hpp"
-#include "anyhttp/h3_common.hpp"
 
 #include <boost/asio/any_completion_executor.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>

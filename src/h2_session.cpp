@@ -1,10 +1,10 @@
 #include "anyhttp/h2_session.hpp"
-#include "anyhttp/h2_backend.hpp"
 
 #include "anyhttp/client.hpp"
 #include "anyhttp/common.hpp"
-#include "anyhttp/detail/h2_session_details.hpp"
+#include "anyhttp/detail/h2_session_details.hpp" // IWYU pragma: keep
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
+#include "anyhttp/h2_backend.hpp"
 #include "anyhttp/h2_common.hpp"
 #include "anyhttp/h2_stream.hpp"
 

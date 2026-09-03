@@ -7,7 +7,6 @@
 
 #include "anyhttp/any_async_stream.hpp"
 #include "anyhttp/h2_session.hpp"
-#include "anyhttp/session.hpp"
 
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>

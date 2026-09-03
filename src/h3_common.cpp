@@ -2,6 +2,7 @@
 // Small helpers shared by the HTTP/3 server and client, see anyhttp/h3_common.hpp.
 //
 #include "anyhttp/h3_common.hpp"
+#include "anyhttp/common.hpp" // IWYU pragma: keep
 
 #include <spdlog/spdlog.h>
 

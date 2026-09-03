@@ -2,17 +2,14 @@
 
 #include <boost/asio/ip/tcp.hpp>
 
-#include <print>
-
 // =================================================================================================
 
+#if defined(GITHUB_ACTIONS) || defined(NDEBUG)
+size_t run(boost::asio::io_context& context) { return context.run(); }
+#else
+#include <print>
 size_t run(boost::asio::io_context& context)
 {
-#if defined(GITHUB_ACTIONS)
-   return context.run();
-#elif defined(NDEBUG) 
-   return context.run();
-#else
    size_t i = 0;
    using namespace std::chrono;
    auto t0 = steady_clock::now();
@@ -29,8 +26,8 @@ size_t run(boost::asio::io_context& context)
       // clang-format off
    }
    return i;
-#endif
 }
+#endif
 
 // =================================================================================================
 

@@ -14,11 +14,8 @@
 #include <anyhttp/concepts.hpp>
 
 #include <boost/asio/buffer.hpp>
-// #include <boost/beast/core/detail/config.hpp>
-// #include <boost/beast/core/detail/buffer_traits.hpp>
 
 #include <cstddef>
-#include <new>
 #include <span>
 #include <utility>
 

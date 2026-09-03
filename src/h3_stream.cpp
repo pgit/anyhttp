@@ -5,6 +5,7 @@
 //
 #include "anyhttp/h3_stream.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
+#include "anyhttp/h3_common.hpp"
 #include "anyhttp/h3_session.hpp"
 
 #include <boost/asio/post.hpp>
@@ -241,9 +242,8 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer,
          return;
       }
 
-      complete_immediately(closed && !fin_offered
-                              ? errc::make_error_code(errc::connection_reset)
-                              : error_code{});
+      complete_immediately(closed && !fin_offered ? errc::make_error_code(errc::connection_reset)
+                                                  : error_code{});
       return;
    }
 
