@@ -22,8 +22,6 @@
 
 using namespace std::chrono_literals;
 
-using namespace boost::asio;
-
 namespace anyhttp
 {
 template <typename T>
@@ -34,6 +32,7 @@ using expected = std::expected<T, boost::system::error_code>;
 template <typename T>
 awaitable<void> sleep(T duration)
 {
+   using namespace asio;
 
 #if 0
 #if 1
@@ -186,6 +185,7 @@ awaitable<void> send(Writer& request, Range range)
 template <ByteRange Range>
 awaitable<void> sendAndDrop(client::Request request, Range range)
 {
+   using namespace asio;
    auto ex = co_await this_coro::executor;
    if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
    {
@@ -199,6 +199,7 @@ awaitable<void> sendAndDrop(client::Request request, Range range)
 template <typename Writer, ByteRange Range>
 awaitable<void> sendAndForceEOF(Writer& request, Range range)
 {
+   using namespace asio;
    auto ex = co_await this_coro::executor;
    if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
    {
