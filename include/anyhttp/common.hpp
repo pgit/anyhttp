@@ -248,6 +248,9 @@ boost::system::error_code code(const std::exception_ptr& ptr);
 /// Get error message from exception pointer, as used in the completion signature of \c co_spawn().
 std::string what(const std::exception_ptr& ptr);
 
+/// Get error message from a boost::system_error, as thrown by boost ASIO if not caught.
+std::string what(const boost::system::system_error& ex);
+
 /// Get error message from \c boost::system::error_code, used by ASIO.
 std::string what(const boost::system::error_code& ec);
 

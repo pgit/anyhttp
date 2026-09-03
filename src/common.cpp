@@ -1,4 +1,5 @@
 #include <anyhttp/common.hpp>
+#include <boost/system/system_error.hpp>
 
 namespace anyhttp
 {
@@ -69,7 +70,7 @@ boost::system::error_code code(const std::exception_ptr& ptr)
 }
 
 std::string what(const boost::system::error_code& ec) { return ec.message(); }
-
+std::string what(const boost::system::system_error& ex) { return what(ex.code()); }
 std::string what(const std::exception_ptr& ptr)
 {
    if (!ptr)

@@ -22,6 +22,8 @@
 
 using namespace std::chrono_literals;
 
+using namespace boost::asio;
+
 namespace anyhttp
 {
 template <typename T>
@@ -32,7 +34,6 @@ using expected = std::expected<T, boost::system::error_code>;
 template <typename T>
 awaitable<void> sleep(T duration)
 {
-   using namespace asio;
 
 #if 0
 #if 1
@@ -185,25 +186,12 @@ awaitable<void> send(Writer& request, Range range)
 template <ByteRange Range>
 awaitable<void> sendAndDrop(client::Request request, Range range)
 {
-#if 0
-   try
-   {
-      co_return co_await send(request, std::move(range));
-   }
-   catch (const boost::system::system_error& ec)
-   {
-      loge("sendAndDrop: (range) {}", ec.code().message());
-      throw;
-   }
-#else
-   using namespace asio;
    auto ex = co_await this_coro::executor;
    if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
    {
       loge("sendAndDrop: {}", what(ep));
       std::rethrow_exception(ep);
    }
-#endif
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -211,14 +199,13 @@ awaitable<void> sendAndDrop(client::Request request, Range range)
 template <typename Writer, ByteRange Range>
 awaitable<void> sendAndForceEOF(Writer& request, Range range)
 {
-   using namespace asio;
    auto ex = co_await this_coro::executor;
    if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
    {
       loge("sendAndForceEOF: {}", what(ep));
-      co_await asio::this_coro::reset_cancellation_state();
+      co_await this_coro::reset_cancellation_state();
    }
-   auto [ec] = co_await request.async_write_eof(as_tuple(deferred));
+   std::ignore = co_await request.async_write_eof(as_tuple);
 }
 
 // -------------------------------------------------------------------------------------------------

@@ -94,10 +94,9 @@ public:
       // lexical_cast wraps a negative number around into an unsigned type -- "-1" arrives as
       // SIZE_MAX -- which is never what a caller asking for an unsigned type wants.
       //
-      const bool negative_unsigned =
-         std::is_integral_v<T> && std::is_unsigned_v<T> && value.starts_with('-');
-
-      if (T converted; !negative_unsigned && boost::conversion::try_lexical_convert(value, converted))
+      if (std::is_integral_v<T> && std::is_unsigned_v<T> && value.starts_with('-'))
+         ; // invalid value (reported below)
+      else if (T converted; boost::conversion::try_lexical_convert(value, converted))
          return converted;
 
       logw("get_param_as: invalid value '{}' for parameter '{}'", value, name);
