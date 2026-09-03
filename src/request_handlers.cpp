@@ -149,7 +149,7 @@ awaitable<void> discard(server::Request request, server::Response response) { co
 
 // =================================================================================================
 
-awaitable<void> send(client::Request& request, size_t bytes)
+awaitable<void> generate(client::Request& request, size_t bytes)
 {
    return sendAndForceEOF(request, rv::iota(uint8_t{0}) | rv::take(bytes));
 }
@@ -172,13 +172,6 @@ awaitable<std::string> read(client::Response& response)
 
    logi("read: EOF after reading {} bytes", body.size());
    co_return body;
-}
-
-awaitable<size_t> count(client::Response& response)
-{
-   size_t bytes = co_await drain(response);
-   logi("count: EOF after reading {} bytes", bytes);
-   co_return bytes;
 }
 
 awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response)
@@ -210,10 +203,10 @@ awaitable<size_t> try_receive(client::Response& response, error_code& ec)
    co_return bytes;
 }
 
-awaitable<size_t> read_response(client::Request& request)
+awaitable<size_t> count_response(client::Request& request)
 {
    auto response = co_await request.async_get_response();
-   co_return co_await count(response);
+   co_return co_await drain(response);
 }
 
 awaitable<expected<size_t>> try_read_response(client::Request& request)
@@ -221,7 +214,7 @@ awaitable<expected<size_t>> try_read_response(client::Request& request)
    try
    {
       auto response = co_await request.async_get_response();
-      co_return co_await count(response);
+      co_return co_await drain(response);
    }
    catch (const boost::system::system_error& ex)
    {

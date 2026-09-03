@@ -43,7 +43,7 @@ awaitable<void> do_request(Session& session, boost::urls::url url)
    auto result = co_await (send(request, bytes) && receive(request));
    assert(bytes == result);
 #else
-   co_await (send(request, hello) && read_response(request));
+   co_await (send(request, hello) && count_response(request));
    logi("do_request: done");
 #endif
 }

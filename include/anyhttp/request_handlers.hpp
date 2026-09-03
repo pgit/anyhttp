@@ -74,7 +74,7 @@ awaitable<void> discard(server::Request request, server::Response response);
 
 // =================================================================================================
 
-awaitable<void> send(client::Request& request, size_t bytes);
+awaitable<void> generate(client::Request& request, size_t bytes);
 awaitable<std::string> read(client::Response& response);
 
 //
@@ -106,10 +106,9 @@ awaitable<size_t> drain(Reader& reader)
    }
 }
 
-awaitable<size_t> count(client::Response& response);
 awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response);
 awaitable<size_t> try_receive(client::Response& response, boost::system::error_code& ec);
-awaitable<size_t> read_response(client::Request& request);
+awaitable<size_t> count_response(client::Request& request);
 awaitable<expected<size_t>> try_read_response(client::Request& request);
 awaitable<void> send_eof(client::Request& request);
 

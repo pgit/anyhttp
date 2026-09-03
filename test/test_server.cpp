@@ -752,8 +752,8 @@ TEST_P(ClientAsync, WHEN_post_data_THEN_receive_echo)
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {});
-      size_t bytes = 1024; //  * 1024 * 1024;
-      auto count = co_await (send(request, bytes) && read_response(request));
+      size_t bytes = 1024;
+      auto count = co_await (generate(request, bytes) && count_response(request));
       EXPECT_EQ(bytes, count);
    };
 }
@@ -763,7 +763,7 @@ TEST_P(ClientAsync, WHEN_post_without_path_THEN_error_404)
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path(""), {});
-      co_await send(request, 1024);
+      co_await generate(request, 1024);
       auto [ec, response] = co_await request.async_get_response(as_tuple);
       EXPECT_TRUE(ec);
    };
@@ -774,10 +774,10 @@ TEST_P(ClientAsync, WHEN_post_to_unknown_path_THEN_error_404)
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("unknown"), {});
-      co_await send(request, 1_m);
+      co_await generate(request, 1_m);
       auto response = co_await request.async_get_response();
       EXPECT_EQ(response.status_code(), 404);
-      auto received = co_await count(response);
+      auto received = co_await drain(response);
    };
 }
 
@@ -786,7 +786,7 @@ TEST_P(ClientAsync, WHEN_server_discards_request_THEN_error_500)
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("discard"), {});
-      co_await send(request, 1024);
+      co_await generate(request, 1024);
       auto [ec, response] = co_await request.async_get_response(as_tuple);
       EXPECT_TRUE(ec);
    };
@@ -797,7 +797,7 @@ TEST_P(ClientAsync, WHEN_server_discards_request_delayed_THEN_error_500)
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("detach"), {});
-      co_await send(request, 1024);
+      co_await generate(request, 1024);
       auto [ec, response] = co_await request.async_get_response(as_tuple);
       EXPECT_TRUE(ec);
    };
@@ -821,7 +821,7 @@ TEST_P(ClientAsync, WHEN_invalid_port_in_host_header_THEN_reports_error)
       Fields fields;
       fields.set("Host", "host:12345x");
       auto request = co_await session.async_submit(url.set_path("echo"), fields);
-      auto response = co_await (send_eof(request) && read_response(request));
+      auto response = co_await (send_eof(request) && count_response(request));
    };
 }
 
@@ -910,7 +910,7 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_THEN_can_resume)
          // control timing, so don't assert either way here. What matters is that ending the
          // upload and draining the response together complete the exchange.
          //
-         auto received = co_await (send_eof(request) && count(response));
+         auto received = co_await (send_eof(request) && drain(response));
          EXPECT_GT(received, 0);
       }
       else
@@ -920,7 +920,7 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_THEN_can_resume)
          EXPECT_EQ(code(ep), boost::system::errc::operation_canceled);
 
          // as we have no control over when the send window is re-opened, wait for it in parallel
-         auto received = co_await (send_eof(request) && count(response));
+         auto received = co_await (send_eof(request) && drain(response));
          EXPECT_GT(received, 0);
       }
    };
@@ -969,7 +969,7 @@ TEST_P(ClientAsync, YieldFuzz)
          co_await yield(dist(gen));
          co_await request.async_write_eof();
          co_await yield(dist(gen));
-         co_await read_response(request);
+         co_await count_response(request);
       }
    };
 }
@@ -1132,7 +1132,7 @@ TEST_P(ClientAsync, WHEN_server_writes_large_buffer_at_once_THEN_receives_all)
    {
       auto request = co_await session.async_submit(url);
       co_await request.async_write_eof();
-      EXPECT_EQ(co_await read_response(request), body.size());
+      EXPECT_EQ(co_await count_response(request), body.size());
    };
 }
 
@@ -1202,7 +1202,7 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_eof_THEN_can_still_end)
       EXPECT_EQ(code(ep), boost::system::errc::operation_canceled);
 
       // the FIN never went out with the cancelled write, so the body can still be ended
-      auto received = co_await (send_eof(request) && count(response));
+      auto received = co_await (send_eof(request) && drain(response));
       EXPECT_GT(received, 0u);
       EXPECT_LT(received, body.size());
    };
@@ -1483,7 +1483,7 @@ TEST_P(ClientAsync, ServerYieldFirst)
    {
       auto request = co_await session.async_submit(url);
       co_await request.async_write_eof();
-      co_await read_response(request);
+      co_await count_response(request);
    };
 }
 
@@ -1566,9 +1566,9 @@ TEST_P(ClientAsync, Custom)
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url, {});
-      size_t bytes = 1024;
-      auto res = co_await (send(request, bytes) && read_response(request));
-      EXPECT_EQ(bytes, res);
+      constexpr size_t bytes = 1024;
+      auto count = co_await (generate(request, bytes) && count_response(request));
+      EXPECT_EQ(bytes, count);
    };
 }
 
@@ -1584,7 +1584,8 @@ TEST_P(ClientAsync, IgnoreRequest)
       Fields fields;
       fields.set("content-length", "0");
       auto request = co_await session.async_submit(url, fields);
-      auto res = co_await (send(request, 0) && read_response(request));
+      auto count = co_await (generate(request, 0) && count_response(request));
+      EXPECT_EQ(count, 0);
    };
 }
 
@@ -1599,7 +1600,7 @@ TEST_P(ClientAsync, IgnoreRequestAndResponse)
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url, {});
-      auto res = co_await (send(request, 0) && try_read_response(request));
+      auto res = co_await (generate(request, 0) && try_read_response(request));
       EXPECT_FALSE(res.has_value());
       std::println("ERROR: {}", res.error().message());
    };
@@ -1618,7 +1619,7 @@ TEST_P(ClientAsync, PostRange)
       // auto sender = send(request, std::string_view("blah"));
       // auto sender = send(request, std::string(10_m, 'a'));
       auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1_m));
-      auto received = co_await (std::move(sender) && count(response));
+      auto received = co_await (std::move(sender) && drain(response));
       loge("received: {}", received);
       EXPECT_EQ(received, 1_m);
    };
@@ -1630,7 +1631,7 @@ TEST_P(ClientAsync, PostRangeImmediate)
    {
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1_m));
-      auto received = co_await (std::move(sender) && read_response(request));
+      auto received = co_await (std::move(sender) && count_response(request));
       loge("received: {}", received);
       EXPECT_EQ(received, 1_m);
    };
@@ -1645,8 +1646,8 @@ TEST_P(ClientAsync, WHEN_request_is_sent_THEN_response_is_received_before_body_i
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       auto response = co_await request.async_get_response();
       constexpr size_t bytes = 1024;
-      co_await send(request, bytes);
-      EXPECT_EQ(co_await count(response), bytes);
+      co_await generate(request, bytes);
+      EXPECT_EQ(co_await drain(response), bytes);
    };
 }
 
@@ -1670,10 +1671,10 @@ TEST_P(ClientAsync, WHEN_multiple_request_are_made_THEN_responses_are_received_i
       co_await request2.async_write_eof(asio::buffer("Hello, Server #2! XYZ"sv));
 
       auto response1 = co_await request1.async_get_response();
-      EXPECT_EQ(co_await count(response1), 17);
+      EXPECT_EQ(co_await drain(response1), 17);
 
       auto response2 = co_await request2.async_get_response();
-      EXPECT_EQ(co_await count(response2), 21);
+      EXPECT_EQ(co_await drain(response2), 21);
    };
 }
 
@@ -1684,9 +1685,9 @@ TEST_P(ClientAsync, EatRequest)
    test = [this](Session session) -> awaitable<void>
    {
       auto request = co_await session.async_submit(url.set_path("eat_request"), {});
-      co_await send(request, 1024);
+      co_await generate(request, 1024);
       auto response = co_await request.async_get_response();
-      auto received = co_await count(response);
+      auto received = co_await drain(response);
       EXPECT_EQ(received, 0);
    };
 }
@@ -1911,7 +1912,7 @@ TEST_P(ClientAsync, WHEN_send_more_than_content_length_THEN_connection_is_reset)
       fields.set("content-length", "1024");
       auto request = co_await session.async_submit(url.set_path("eat_request"), fields);
       auto response = co_await request.async_get_response();
-      co_await count(response);
+      co_await drain(response);
 
       auto ex = co_await this_coro::executor;
       auto [ep] = co_await co_spawn(ex, send(request, rv::iota(uint8_t(0))), as_tuple);
