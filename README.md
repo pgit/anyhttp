@@ -28,12 +28,31 @@ awaitable<void> echo(server::Request request, server::Response response)
    std::array<uint8_t, 64 * 1024> buffer;
    for (;;)
    {
-      size_t n = co_await request.async_read_some(asio::buffer(buffer));
-      co_await response.async_write(asio::buffer(buffer, n));
-      if (n == 0)
+      auto [ec, n] = co_await request.async_read_some(asio::buffer(buffer), as_tuple);
+      if (ec == asio::error::eof)
          break;
+      if (ec)
+         throw boost::system::system_error(ec);
+
+      co_await response.async_write(asio::buffer(buffer, n));
    }
+
+   co_await response.async_write_eof();
 }
+```
+
+The end of an incoming body is reported the way ASIO reports it everywhere else: `asio::error::eof`
+with zero bytes. A body cut short -- a reset stream, a connection that went away mid-message --
+completes with `http::error::partial_message` instead, so the two stay distinguishable.
+
+The end of an *outgoing* body is stated explicitly, with `async_write_eof()`. It takes a buffer of
+its own, so the last of the body and the end of it go out together -- one DATA frame with
+END_STREAM, one QUIC STREAM frame with FIN, one last chunk -- instead of costing a second, empty
+write:
+
+```C++
+   co_await response.async_submit(200, fields({{"Content-Length", body.size()}}));
+   co_await response.async_write_eof(asio::buffer(body));
 ```
 ### Client
 ```c++
@@ -66,6 +85,7 @@ namespace client {
    class Request {
       async_get_response()
       async_write(buffer)
+      async_write_eof(buffer)
    }
    class Client {
       async_connect()
@@ -87,7 +107,7 @@ namespace impl {
    class Writer {
       get_executor()
       content_length(optional<size_t>)
-      async_write(buffer)
+      async_write(buffer, eof)
       detach()
       destroy()
    }

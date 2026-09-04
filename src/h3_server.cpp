@@ -9,14 +9,14 @@
 // (server::Response) into the same `RequestHandler` used by the HTTP/1.1 and HTTP/2 backends.
 //
 // What is genuinely server-side here: the TLS server context, the UDP receive path (many
-// connections over one socket, demultiplexed by connection ID) and the closing/draining period
+// connections over one socket, de-multiplexed by connection ID) and the closing/draining period
 // bookkeeping that goes with being the endpoint that stays around. All of it sits behind
 // `Http3Server` (anyhttp/h3_backend.hpp), so the generic server in server_impl.cpp dispatches to
 // HTTP/3 without ever seeing an ngtcp2 or nghttp3 type.
 //
 // Threading: with Config::use_strand, each Http3ServerSession lives on its own strand -- the unit
 // of serialization is the QUIC *connection* (one ngtcp2_conn/nghttp3_conn pair), not the CID: many
-// CIDs alias one connection. udp_receive_loop() is a single coroutine that only demultiplexes: it
+// CIDs alias one connection. udp_receive_loop() is a single coroutine that only de-multiplexes: it
 // copies each datagram, groups them by session and posts one batch per session to that session's
 // strand (process_quic_batch()), where all ngtcp2/nghttp3 work, the timers and the request
 // handlers run. The CID demux table is the only cross-connection state and is guarded by
@@ -27,7 +27,7 @@
 // migration, ECN.
 //
 
-#include "anyhttp/client_impl.hpp"
+#include "anyhttp/client_impl.hpp" // IWYU pragma: keep
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/h3_backend.hpp"
 #include "anyhttp/h3_common.hpp"
@@ -425,7 +425,7 @@ struct QuicBatch
 
 //
 // The server's HTTP/3 half (see anyhttp/h3_backend.hpp): the UDP socket every QUIC connection
-// shares, the receive loop demultiplexing datagrams onto them by connection ID, and the table
+// shares, the receive loop de-multiplexing datagrams onto them by connection ID, and the table
 // doing that lookup. The sessions themselves are owned by Server::Impl's session registry, like
 // the TCP-based ones -- what is kept here is only what routing packets needs.
 //
@@ -955,7 +955,7 @@ int Http3ServerImpl::udp_on_read(Endpoint& ep)
    //
    // Datagrams collected per session over the whole batch. Each session gets its accumulated
    // batch posted to its strand once, below, after every datagram the socket had queued has been
-   // demultiplexed -- so one aggregate pass on the strand can pack a whole response into a
+   // de-multiplexed -- so one aggregate pass on the strand can pack a whole response into a
    // single GSO sendmsg() instead of dribbling it out per datagram.
    //
    boost::container::small_flat_map<std::shared_ptr<Http3ServerSession>, QuicBatch, 32> batches;
@@ -1076,8 +1076,9 @@ int Http3ServerImpl::udp_on_read(Endpoint& ep)
    {
       asio::post(session->get_executor(),
                  [self = shared_from_this(), owner = owner(), session,
-                  batch = std::move(batch)]() mutable
-      { self->process_quic_batch(session, std::move(batch)); });
+                  batch = std::move(batch)]() mutable { // 
+          self->process_quic_batch(session, std::move(batch));
+      });
    }
 
    return 0;

@@ -4,10 +4,17 @@
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/awaitable.hpp>
-#include <boost/asio/co_composed.hpp>
+#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/co_spawn.hpp>
 
+#include <boost/lexical_cast/try_lexical_convert.hpp>
+
 #include <boost/url/urls.hpp>
+
+#include <optional>
+#include <string>
+#include <string_view>
+#include <type_traits>
 
 using namespace std::chrono_literals;
 
@@ -61,7 +68,49 @@ public:
    boost::url_view url() const;
    std::optional<size_t> content_length() const noexcept;
 
+   /**
+    * Looks up a query parameter and converts its value to \c T.
+    *
+    * Returns \c std::nullopt if the parameter is missing, has no value at all, or if its value
+    * does not convert to \c T -- the latter is logged as a warning. Use \c value_or() for a
+    * default:
+    *
+    * \code
+    * auto delay = request.get_param_as<size_t>("delay").value_or(0);
+    * \endcode
+    */
+   template <typename T>
+   std::optional<T> get_param_as(std::string_view name) const
+   {
+      const auto u = url(); // keep the url_view alive: params() only references it
+      const auto params = u.params();
+      const auto it = params.find(name);
+      if (it == params.end() || !(*it).has_value)
+         return std::nullopt;
+
+      const std::string& value = (*it).value;
+
+      //
+      // lexical_cast wraps a negative number around into an unsigned type -- "-1" arrives as
+      // SIZE_MAX -- which is never what a caller asking for an unsigned type wants.
+      //
+      if (std::is_integral_v<T> && std::is_unsigned_v<T> && value.starts_with('-'))
+         ; // invalid value (reported below)
+      else if (T converted; boost::conversion::try_lexical_convert(value, converted))
+         return converted;
+
+      logw("get_param_as: invalid value '{}' for parameter '{}'", value, name);
+      return std::nullopt;
+   }
+
 public:
+   /**
+    * Reads a part of the request body.
+    *
+    * The end of the body is reported as \c asio::error::eof with zero bytes, as ASIO does
+    * everywhere else, and so is every read after it. A body cut short by a reset stream or a lost
+    * connection completes with \c http::error::partial_message instead.
+    */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
    auto async_read_some(boost::asio::mutable_buffer buffer,
                         CompletionToken&& token = CompletionToken())
@@ -111,43 +160,65 @@ public:
    auto async_submit(unsigned int status_code, const Fields& headers,
                      CompletionToken&& token = CompletionToken())
    {
+      // binding the executor lets tokens that need one -- cancel_after's timer -- find it here
       return boost::asio::async_initiate<CompletionToken, Status>(
-         [this](StatusHandler handler, unsigned int status_code, const Fields& headers) { //
-            async_submit_any(std::move(handler), status_code, headers);
-         },
+         asio::bind_executor(get_executor(),
+                             [this](StatusHandler handler, unsigned int status_code,
+                                    const Fields& headers) { //
+                                async_submit_any(std::move(handler), status_code, headers);
+                             }),
          token, status_code, headers);
    }
 
+   /**
+    * Writes \p buffer as part of the response body, which stays open for more.
+    *
+    * An empty buffer writes nothing and completes immediately -- use \c async_write_eof() to end
+    * the body.
+    */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
    auto async_write(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
    {
+      // binding the executor lets tokens that need one -- cancel_after's timer -- find it here
       return boost::asio::async_initiate<CompletionToken, Write>(
-         [this](WriteHandler handler, asio::const_buffer buffer) { //
-            async_write_any(std::move(handler), buffer);
-         },
+         asio::bind_executor(get_executor(),
+                             [this](WriteHandler handler, asio::const_buffer buffer) { //
+                                async_write_any(std::move(handler), buffer, false);
+                             }),
          token, buffer);
    }
 
-   // https://github.com/chriskohlhoff/asio/blob/231cb29bab30f82712fcd54faaea42424cc6e710/asio/src/tests/unit/co_composed.cpp#L45
+   /**
+    * Writes \p buffer as the last part of the response body and ends it.
+    *
+    * Both go out together, so ending a body that has a tail of data left costs no more than
+    * writing that tail: no second, empty write and no extra round trip through the protocol
+    * stack. Re-ending an already-ended body with an empty buffer completes immediately and
+    * changes nothing; with data attached it completes with \c errc::broken_pipe, just as writing
+    * that data would -- there is no body left for it to belong to.
+    */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
    auto async_write_eof(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
    {
-      return asio::async_initiate<CompletionToken, Write>(
-         asio::co_composed<Write>(
-            [this](auto state, asio::const_buffer buffer,
-                   asio::any_io_executor executor) mutable -> void { //
-               // FIXME: error handling
-               co_await async_write(buffer);
-               co_await async_write({});
-               co_return {boost::system::error_code{}};
-            },
-            get_executor()),
-         token, buffer, get_executor());
+      // binding the executor lets tokens that need one -- cancel_after's timer -- find it here
+      return boost::asio::async_initiate<CompletionToken, Write>(
+         asio::bind_executor(get_executor(),
+                             [this](WriteHandler handler, asio::const_buffer buffer) { //
+                                async_write_any(std::move(handler), buffer, true);
+                             }),
+         token, buffer);
+   }
+
+   /// Ends the response body without writing anything more.
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
+   auto async_write_eof(CompletionToken&& token = CompletionToken())
+   {
+      return async_write_eof(asio::const_buffer{}, std::forward<CompletionToken>(token));
    }
 
 private:
    void async_submit_any(StatusHandler&& handler, unsigned int status_code, const Fields& headers);
-   void async_write_any(WriteHandler&& handler, asio::const_buffer buffer);
+   void async_write_any(WriteHandler&& handler, asio::const_buffer buffer, bool eof);
    std::shared_ptr<Impl> impl;
 };
 

@@ -1,6 +1,7 @@
 #include "anyhttp/request_handlers.hpp"
 #include "anyhttp/client.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
+#include "anyhttp/literals.hpp"
 #include "anyhttp/server.hpp"
 
 #include <boost/asio/deferred.hpp>
@@ -74,8 +75,7 @@ awaitable<void> dump(server::Request request, server::Response response)
    auto body = str.str();
    co_await response.async_submit(
       200, fields({{"Content-Length", body.size()}, {"Content-Type", "text/plain"}}));
-   co_await response.async_write(asio::buffer(body));
-   co_await response.async_write({}, deferred);
+   co_await response.async_write_eof(asio::buffer(body));
 }
 
 awaitable<void> echo(server::Request request, server::Response response)
@@ -85,26 +85,31 @@ awaitable<void> echo(server::Request request, server::Response response)
 
    co_await response.async_submit(200, {});
 
-   std::array<uint8_t, 64 * 1024> buffer;
+   std::array<uint8_t, 64_k> buffer;
    for (;;)
    {
-      size_t n = co_await request.async_read_some(asio::buffer(buffer));
-      co_await response.async_write(asio::buffer(buffer, n));
-      if (n == 0)
+      auto [ec, n] = co_await request.async_read_some(asio::buffer(buffer), as_tuple);
+      if (ec == asio::error::eof)
          break;
+      if (ec)
+         throw boost::system::system_error(ec);
+
+      co_await response.async_write(asio::buffer(buffer, n));
    }
+
+   co_await response.async_write_eof();
 }
 
 awaitable<void> not_found(server::Response response)
 {
    co_await response.async_submit(404, {});
-   co_await response.async_write({});
+   co_await response.async_write_eof();
 }
 
 awaitable<void> not_found(server::Request, server::Response response)
 {
    co_await response.async_submit(404, {});
-   co_await response.async_write({});
+   co_await response.async_write_eof();
 }
 
 awaitable<void> eat_request(server::Request request, server::Response response)
@@ -112,26 +117,15 @@ awaitable<void> eat_request(server::Request request, server::Response response)
    logd("eat_request: going to eat {} bytes", request.content_length().value_or(-1));
 
    co_await response.async_submit(200, {});
-   co_await response.async_write({});
+   co_await response.async_write_eof();
 
-   size_t bytes = 0;
    try
    {
-      std::array<uint8_t, 1024> buffer;
-      for (;;)
-      {
-         size_t n = co_await request.async_read_some(asio::buffer(buffer));
-         if (n == 0)
-            break;
-
-         logd("eat_request: ate {} bytes", n);
-         bytes += n;
-      }
-      logd("eat_request: ate {} bytes", bytes);
+      logd("eat_request: ate {} bytes", co_await drain(request));
    }
    catch (const boost::system::system_error& e)
    {
-      logi("eat_request: ate {} bytes, then caught exception: {}", bytes, e.code().message());
+      logi("eat_request: caught exception: {}", e.code().message());
       throw;
    }
 
@@ -155,7 +149,7 @@ awaitable<void> discard(server::Request request, server::Response response) { co
 
 // =================================================================================================
 
-awaitable<void> send(client::Request& request, size_t bytes)
+awaitable<void> generate(client::Request& request, size_t bytes)
 {
    return sendAndForceEOF(request, rv::iota(uint8_t{0}) | rv::take(bytes));
 }
@@ -163,97 +157,60 @@ awaitable<void> send(client::Request& request, size_t bytes)
 awaitable<std::string> read(client::Response& response)
 {
    std::string body;
-   std::array<char, 1024> buffer;
+   std::array<char, 16_k> buffer;
    for (;;)
    {
-      size_t n = co_await response.async_read_some(asio::buffer(buffer));
-      if (n == 0)
-         break;
-
+      auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
       body += std::string_view(buffer.data(), n);
+      if (ec == asio::error::eof)
+      {
+         logi("read: EOF after reading {} bytes", body.size());
+         co_return std::move(body);
+      }
+      else if (ec)
+      {
+         loge("receive: \x1b[1;31m{}\x1b[0m after reading {} bytes", ec.message(), body.size());
+         throw boost::system::system_error(ec);
+      }
+
       logd("read: {}, total {}", n, body.size());
    }
-
-   logi("read: EOF after reading {} bytes", body.size());
-   co_return body;
-}
-
-awaitable<size_t> count(client::Response& response)
-{
-   size_t bytes = 0;
-   std::array<uint8_t, 16 * 1024> buffer;
-   for (;;)
-   {
-      size_t n = co_await response.async_read_some(asio::buffer(buffer));
-      if (n == 0)
-         break;
-
-      bytes += n;
-      logd("count: {}, total {}", n, bytes);
-   }
-
-   logi("count: EOF after reading {} bytes", bytes);
-   co_return bytes;
 }
 
 awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response)
 {
    size_t bytes = 0;
-   std::array<uint8_t, 16 * 1024> buffer;
+   std::array<uint8_t, 16_k> buffer;
    for (;;)
    {
       auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
-      // co_await yield();
       bytes += n;
-      if (ec || n == 0)
+
+      // the regular end of the body is not something to report as an error
+      if (ec == asio::error::eof)
+      {
+         logi("receive: EOF after reading {} bytes", bytes);
+         co_return std::make_tuple(bytes, error_code{});
+      }
+      else if (ec)
+      {
+         loge("receive: \x1b[1;31m{}\x1b[0m after reading {} bytes", ec.message(), bytes);
          co_return std::make_tuple(bytes, ec);
+      }
    }
 }
 
 awaitable<size_t> try_receive(client::Response& response, error_code& ec)
 {
-#if 0
    size_t bytes;
    std::tie(bytes, ec) = co_await try_receive(response);
-#else
-   ec = {};
-   size_t bytes = 0, count = 0;
-   std::array<uint8_t, 16 * 1024> buffer;
-   try
-   {
-      for (;;)
-      {
-         size_t n = co_await response.async_read_some(asio::buffer(buffer));
-         if (n == 0)
-            break;
-
-         // do NOT 'respawn' read handler in first round, see NGHttp2Stream::call_handler_loop()
-         // if (count++ == 0)
-         //    co_await yield();
-         // co_await yield();
-
-         bytes += n;
-         logd("receive: {}, total {}", n, bytes);
-      }
-   }
-   catch (const boost::system::system_error& ex)
-   {
-      ec = ex.code();
-      loge("receive: \x1b[1;31n{}\x1b[0m after reading {} bytes", ex.code().message(), bytes);
-      co_return bytes;
-   }
-
-   // co_await sleep(100ms);
-
-   logi("receive: EOF after reading {} bytes", bytes);
    co_return bytes;
-#endif
 }
 
-awaitable<size_t> read_response(client::Request& request)
+awaitable<size_t> count_response(client::Request& request)
 {
    auto response = co_await request.async_get_response();
-   co_return co_await count(response);
+   co_return co_await drain(response);
 }
 
 awaitable<expected<size_t>> try_read_response(client::Request& request)
@@ -261,7 +218,7 @@ awaitable<expected<size_t>> try_read_response(client::Request& request)
    try
    {
       auto response = co_await request.async_get_response();
-      co_return co_await count(response);
+      co_return co_await drain(response);
    }
    catch (const boost::system::system_error& ex)
    {
@@ -269,26 +226,18 @@ awaitable<expected<size_t>> try_read_response(client::Request& request)
    }
 }
 
-awaitable<void> send_eof(client::Request& request)
-{
-   co_await request.async_write({});
-   // logi("send: finishing request...");
-   // auto [ec] = co_await request.async_write({}, as_tuple(deferred));
-   // logi("send: finishing request... done ({})", ec.message());
-}
+awaitable<void> send_eof(client::Request& request) { co_await request.async_write_eof(); }
 
 awaitable<void> h2spec(server::Request request, server::Response response)
 {
    co_await yield(10); // FIXME: without this, one more testcase fails
    std::array<uint8_t, 1024> buffer;
-   size_t n = co_await request.async_read_some(asio::buffer(buffer));
+   co_await request.async_read_some(asio::buffer(buffer), as_tuple);
 
    constexpr auto hello = "Hello, World!\n"sv;
    co_await response.async_submit(200, fields({{"Content-Length", hello.size()}}));
-   co_await response.async_write(asio::buffer(hello));
-   co_await response.async_write({});
-   while (co_await request.async_read_some(asio::buffer(buffer)) > 0)
-      ;
+   co_await response.async_write_eof(asio::buffer(hello));
+   co_await drain(request);
 }
 
 // =================================================================================================

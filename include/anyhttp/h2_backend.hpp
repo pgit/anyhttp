@@ -27,15 +27,17 @@ using SslStream = boost::asio::ssl::stream<boost::asio::ip::tcp::socket>;
 
 std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
                                                    boost::asio::any_io_executor executor,
+                                                   boost::asio::ip::tcp::socket&& socket);
+
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
+                                                   boost::asio::any_io_executor executor,
                                                    SslStream&& stream);
 
 std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
                                                    boost::asio::any_io_executor executor,
                                                    AnyAsyncStream&& stream);
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   boost::asio::any_io_executor executor,
-                                                   boost::asio::ip::tcp::socket&& socket);
+// -------------------------------------------------------------------------------------------------
 
 std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
                                                    boost::asio::any_io_executor executor,

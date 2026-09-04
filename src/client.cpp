@@ -35,10 +35,10 @@ Request::~Request() { reset(); }
 
 // -------------------------------------------------------------------------------------------------
 
-void Request::async_write_any(WriteHandler&& handler, asio::const_buffer buffer)
+void Request::async_write_any(WriteHandler&& handler, asio::const_buffer buffer, bool eof)
 {
    if (impl)
-      impl->async_write(std::move(handler), buffer);
+      impl->async_write(std::move(handler), buffer, eof);
    else
       std::move(handler)(boost::asio::error::bad_descriptor);
 }

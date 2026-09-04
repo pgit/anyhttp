@@ -13,6 +13,7 @@
 
 #include <boost/program_options.hpp>
 
+#include <algorithm>
 #include <expected>
 #include <iostream>
 #include <print>
@@ -27,7 +28,7 @@ namespace po = boost::program_options;
 
 struct Config
 {
-   bool verbose = false;
+   size_t verbose = 0;
    size_t threads = 1;
    server::Config server{.port = 8080};
 };
@@ -40,8 +41,8 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
    po::options_description desc("Allowed options");
    auto opts = desc.add_options();
    opts("help,h", "produce help message");
-   opts("verbose,v", po::bool_switch(&config.verbose)->default_value(false),
-        "enable verbose logging");
+   opts("verbose,v", po::value<std::vector<std::string>>()->zero_tokens()->composing(),
+        "enable verbose logging (repeat for trace level)");
    opts("threads,t", po::value(&config.threads)->default_value(1), "number of threads to run");
    opts("port,p", po::value(&config.server.port)->default_value(config.server.port),
         "listening port");
@@ -53,8 +54,13 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
    po::variables_map vm;
    try
    {
-      po::store(po::parse_command_line(argc, argv, desc), vm);
+      auto parsed = po::parse_command_line(argc, argv, desc);
+      po::store(parsed, vm);
       po::notify(vm);
+
+      // 'verbose' takes no argument, so its parsed value is always empty -- count occurrences
+      config.verbose = std::ranges::count_if(parsed.options, [](const po::option& option)
+                                             { return option.string_key == "verbose"; });
    }
    catch (const po::error& error)
    {
@@ -94,7 +100,9 @@ int main(int argc, char* argv[])
    if (!config)
       return config.error();
 
-   if (config->verbose)
+   if (config->verbose >= 2)
+      spdlog::set_level(spdlog::level::trace);
+   else if (config->verbose)
       spdlog::set_level(spdlog::level::debug);
    else
       spdlog::set_level(spdlog::level::info);

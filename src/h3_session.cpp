@@ -5,6 +5,7 @@
 //
 #include "anyhttp/h3_session.hpp"
 #include "anyhttp/h3_stream.hpp"
+#include "anyhttp/h3_common.hpp"
 #include "anyhttp/literals.hpp"
 #include "anyhttp/tls.hpp"
 
