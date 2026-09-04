@@ -18,6 +18,9 @@
 #include <boost/url/url.hpp>
 
 #include <deque>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace anyhttp::nghttp2
 {
@@ -167,6 +170,13 @@ public:
    std::string logPrefix;
    std::string method;
    boost::urls::url url;
+
+   //
+   // Headers as they arrive from the peer. They are only collected while debug logging is on,
+   // because they are logged as one block after the request or status line, which is only known
+   // once all headers of the frame have been seen. See log_received_headers().
+   //
+   std::vector<std::pair<std::string, std::string>> received_headers;
    std::optional<unsigned int> status_code;
    std::optional<size_t> content_length;
 
@@ -274,6 +284,9 @@ public:
    void on_response();
    void deliver_response();
    void on_request();
+
+   /// Log and discard the headers collected by on_header_callback().
+   void log_received_headers();
 
    impl::Reader* reader = nullptr;
    impl::Writer* writer = nullptr;

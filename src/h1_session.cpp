@@ -579,7 +579,9 @@ public:
          if (!ec)
          {
             http::response_parser<http::buffer_body>::value_type& msg = reader->parser.get();
-            mlogd("async_read_header: len={} {} {}", len, msg.result_int(), msg.reason());
+            mlogd("{} {}", msg.result_int(), msg.reason());
+            for (const auto& header : msg)
+               mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
          }
          else
             mlogw("async_read_header: {} len={}", ec.message(), len);
@@ -718,9 +720,6 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
       auto& request = parser.get();
       const bool need_eof = request.need_eof();
-      mlogd("{} {} (need_eof={})", request.method_string(), request.target(), request.need_eof());
-      for (auto& header : request)
-         mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
 
       // if (auto url = boost::urls::parse_relative_ref(request.target()); url.has_value())
       if (auto url = boost::urls::parse_uri_reference(request.target()); url.has_value())
@@ -745,6 +744,10 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       {
          mlogw("ignoring invalid host header: {}", request[http::field::host]);
       }
+
+      mlogd("{} {} (need_eof={})", request.method_string(), reader->m_url.buffer(), need_eof);
+      for (auto& header : request)
+         mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
 
       //
       // Prepare response.
@@ -880,8 +883,6 @@ template <typename Stream>
 void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::url url,
                                          const Fields& headers)
 {
-   mlogd("submit: {}", url.buffer());
-
    auto writer = std::make_unique<RequestWriter<Stream>>(*this, m_stream);
    wx = writer.get();
    auto& request = writer->message;
@@ -895,6 +896,10 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
       request.set(http::field::host, url.encoded_authority());
    if (!request.has_content_length())
       request.chunked(true);
+
+   mlogd("{} {}", request.method_string(), url.buffer());
+   for (const auto& header : request)
+      mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
 
    //
    // TODO: make writer shared? put into queue

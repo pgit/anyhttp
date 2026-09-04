@@ -36,6 +36,7 @@
 #include <boost/system/detail/error_code.hpp>
 
 #include <boost/beast/http/error.hpp>
+#include <boost/beast/http/status.hpp>
 #include <boost/url/url.hpp>
 
 #include <spdlog/logger.h>
@@ -272,7 +273,8 @@ void Http3ClientStream::on_pseudo_header(std::string_view name, std::string_view
 
 void Http3ClientStream::on_headers_complete()
 {
-   logd("[{}] response headers: status={}", log_prefix, status_code);
+   using namespace boost::beast::http;
+   logd("[{}] {} {}", log_prefix, status_code, obsolete_reason(int_to_status(status_code)));
    log_headers(log_prefix, std::exchange(received_headers, {}));
    deliver_response();
 }
@@ -324,6 +326,7 @@ bool Http3ClientStream::submit_request(const boost::urls::url& request_url, cons
       nva.push_back(make_nv(item.name_string(), item.value()));
    }
 
+   logd("[{}] {} {}", log_prefix, method_str, request_url.buffer());
    return submit_headers(nva, true /* request */);
 }
 

@@ -19,6 +19,7 @@
 #include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/http/error.hpp>
 #include <boost/beast/http/impl/error.hpp>
+#include <boost/beast/http/status.hpp>
 
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
@@ -81,8 +82,6 @@ int on_begin_headers_callback(nghttp2_session*, const nghttp2_frame* frame, void
 {
    auto handler = static_cast<NGHttp2Session*>(user_data);
 
-   logd("[{}] on_begin_header_callback:", handler->logPrefix(frame));
-
    if (frame->hd.type != NGHTTP2_HEADERS || frame->headers.cat != NGHTTP2_HCAT_REQUEST)
       return 0;
 
@@ -103,10 +102,15 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
    auto handler = static_cast<NGHttp2Session*>(user_data);
    auto name = make_string_view(name_, namelen_);
    auto value = make_string_view(value_, valuelen_);
-   logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", handler->logPrefix(frame), name, value);
 
    auto stream = handler->find_stream(frame->hd.stream_id);
    assert(stream);
+
+   //
+   // Headers are logged as a block, after the request or status line, see on_frame_recv_callback().
+   //
+   if (spdlog::default_logger_raw()->should_log(spdlog::level::debug))
+      stream->received_headers.emplace_back(name, value);
 
    try
    {
@@ -234,6 +238,14 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
    case NGHTTP2_HEADERS:
    {
       assert(stream);
+      using namespace boost::beast::http;
+      if (frame->headers.cat == NGHTTP2_HCAT_REQUEST)
+         logd("[{}] {} {}", stream->logPrefix, stream->method, stream->url.buffer());
+      else if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE && stream->status_code)
+         logd("[{}] {} {}", stream->logPrefix, *stream->status_code,
+              obsolete_reason(int_to_status(*stream->status_code)));
+      stream->log_received_headers();
+
       if (frame->headers.cat == NGHTTP2_HCAT_REQUEST)
          stream->on_request();
       else if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE)
@@ -424,10 +436,10 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
          logw("[{}] async_submit: invalid header '{}': setting pseudo headers is not allowed",
               stream->logPrefix, item.name_string());
 
-      logi("[{}] async_submit: {}: {}", stream->logPrefix, item.name_string(), item.value());
       nva.push_back(make_nv_ls(item.name_string(), item.value()));
    }
 
+   logd("[{}] {} {}", stream->logPrefix, method, url.buffer());
    for (auto nv : nva)
       logd("[{0}]   \x1b[1;34m{1:n}\x1b[0m: {1:v}", stream->logPrefix, nv);
 

@@ -795,9 +795,15 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
    return copied;
 }
 
+void NGHttp2Stream::log_received_headers()
+{
+   for (const auto& [name, value] : received_headers)
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", logPrefix, name, value);
+   received_headers.clear();
+}
+
 void NGHttp2Stream::on_response()
 {
-   logd("[{}] on_response:", logPrefix);
    has_response = true;
    deliver_response();
 }
@@ -824,8 +830,6 @@ void NGHttp2Stream::deliver_response()
 
 void NGHttp2Stream::on_request()
 {
-   logd("[{}] on_request: {}", logPrefix, url.buffer());
-
    //
    // An incoming new request should be put into a queue of the server session. From there,
    // new requests can then be retrieved asynchronously by the user.
