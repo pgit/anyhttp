@@ -164,7 +164,7 @@ awaitable<std::string> read(client::Response& response)
       body += std::string_view(buffer.data(), n);
       if (ec == asio::error::eof)
       {
-         logi("read: EOF after reading {} bytes", body.size());
+         logd("read: EOF after reading {} bytes", body.size());
          co_return std::move(body);
       }
       else if (ec)
@@ -189,7 +189,7 @@ awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response
       // the regular end of the body is not something to report as an error
       if (ec == asio::error::eof)
       {
-         logi("receive: EOF after reading {} bytes", bytes);
+         logd("receive: EOF after reading {} bytes", bytes);
          co_return std::make_tuple(bytes, error_code{});
       }
       else if (ec)

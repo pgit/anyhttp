@@ -2,6 +2,7 @@
 
 #include "anyhttp/client.hpp"
 #include "anyhttp/server.hpp"
+#include "anyhttp/literals.hpp"
 
 #include <array>
 #include <exception>
@@ -88,17 +89,19 @@ template <typename Reader>
 awaitable<size_t> drain(Reader& reader)
 {
    size_t bytes = 0;
-   std::array<uint8_t, 16 * 1024> buffer;
+   std::array<uint8_t, 16_k> buffer;
    for (;;)
    {
       auto [ec, n] = co_await reader.async_read_some(asio::buffer(buffer), asio::as_tuple);
       bytes += n;
+
+      // the regular end of the body is not something to report as an error
       if (ec == asio::error::eof)
       {
-         logi("drain: EOF after reading {} bytes", bytes);
+         logd("drain: EOF after reading {} bytes", bytes);
          co_return bytes;
       }
-      if (ec)
+      else if (ec)
       {
          logw("drain: \x1b[1;31m{}\x1b[0m after reading {} bytes, throwing", what(ec), bytes);
          throw boost::system::system_error(ec);
