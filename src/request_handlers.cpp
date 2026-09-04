@@ -157,21 +157,24 @@ awaitable<void> generate(client::Request& request, size_t bytes)
 awaitable<std::string> read(client::Response& response)
 {
    std::string body;
-   std::array<char, 1024> buffer;
+   std::array<char, 16_k> buffer;
    for (;;)
    {
       auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
       body += std::string_view(buffer.data(), n);
       if (ec == asio::error::eof)
-         break;
-      if (ec)
+      {
+         logi("read: EOF after reading {} bytes", body.size());
+         co_return std::move(body);
+      }
+      else if (ec)
+      {
+         loge("receive: \x1b[1;31m{}\x1b[0m after reading {} bytes", ec.message(), body.size());
          throw boost::system::system_error(ec);
+      }
 
       logd("read: {}, total {}", n, body.size());
    }
-
-   logi("read: EOF after reading {} bytes", body.size());
-   co_return body;
 }
 
 awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response)
@@ -181,14 +184,19 @@ awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response
    for (;;)
    {
       auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
-      // co_await yield();
       bytes += n;
 
       // the regular end of the body is not something to report as an error
       if (ec == asio::error::eof)
+      {
+         logi("receive: EOF after reading {} bytes", bytes);
          co_return std::make_tuple(bytes, error_code{});
-      if (ec)
+      }
+      else if (ec)
+      {
+         loge("receive: \x1b[1;31m{}\x1b[0m after reading {} bytes", ec.message(), bytes);
          co_return std::make_tuple(bytes, ec);
+      }
    }
 }
 
@@ -196,10 +204,6 @@ awaitable<size_t> try_receive(client::Response& response, error_code& ec)
 {
    size_t bytes;
    std::tie(bytes, ec) = co_await try_receive(response);
-   if (ec)
-      loge("receive: \x1b[1;31m{}\x1b[0m after reading {} bytes", ec.message(), bytes);
-   else
-      logi("receive: EOF after reading {} bytes", bytes);
    co_return bytes;
 }
 
