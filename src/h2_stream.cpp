@@ -16,11 +16,15 @@
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/this_coro.hpp>
+
 #include <boost/beast/http/error.hpp>
 #include <boost/beast/http/status.hpp>
 
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
+
+#include <boost/container/small_vector.hpp>
+
 #include <nghttp2/nghttp2.h>
 
 #include <ranges>
@@ -62,8 +66,9 @@ void NGHttp2Reader<Base>::detach()
    // else is a truncation.
    //
    assert(stream);
-   detached_ec = stream->reading_finished() ? error_code{asio::error::eof}
-                                            : error_code{boost::beast::http::error::partial_message};
+   detached_ec = stream->reading_finished()
+                    ? error_code{asio::error::eof}
+                    : error_code{boost::beast::http::error::partial_message};
    stream = nullptr;
 }
 
@@ -205,15 +210,15 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
       return;
    }
 
-   logd("[{}] {} {}", stream->logPrefix, status_code,
-        boost::beast::http::obsolete_reason(boost::beast::http::int_to_status(status_code)));
+   using namespace boost::beast::http;
+   logd("[{}] {} {}", stream->logPrefix, status_code, obsolete_reason(int_to_status(status_code)));
 
-   auto nva = std::vector<nghttp2_nv>();
-   // nva.reserve(3 + headers.size());
+   const std::string status_code_str = std::format("{}", status_code);
+   const std::string date = format_http_date(std::chrono::system_clock::now());
 
-   std::string status_code_str = std::format("{}", status_code);
+   auto nva = boost::container::small_vector<nghttp2_nv, 16>();
+   nva.reserve(3 + std::distance(headers.begin(), headers.end()));
    nva.push_back(make_nv_ls(":status", status_code_str));
-   std::string date = format_http_date(std::chrono::system_clock::now());
    nva.push_back(make_nv_ls("date", date));
 
    for (auto&& item : headers)

@@ -8,18 +8,23 @@
 #include "anyhttp/h2_common.hpp"
 #include "anyhttp/h2_stream.hpp"
 
+#include <boost/algorithm/string/predicate.hpp>
+
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ssl/stream.hpp>
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/beast/core/static_buffer.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/http/error.hpp>
 #include <boost/beast/http/impl/error.hpp>
+
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
+
+#include <boost/container/small_vector.hpp>
+
 #include <boost/url/format.hpp>
 #include <boost/url/parse.hpp>
 
@@ -406,8 +411,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    std::string scheme(url.scheme());
    std::string target(url.encoded_target());
    std::string authority(url.host_address());
-   auto nva = std::vector<nghttp2_nv>();
-   // nva.reserve(4 + headers.size());
+   auto nva = boost::container::small_vector<nghttp2_nv, 16>();
+   nva.reserve(4 + std::distance(headers.begin(), headers.end()));
    nva.push_back(make_nv_ls(":method", method));
    nva.push_back(make_nv_ls(":scheme", scheme));
    nva.push_back(make_nv_ls(":path", target));
