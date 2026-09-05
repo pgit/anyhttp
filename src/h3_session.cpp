@@ -313,7 +313,7 @@ void Http3Session::arm_timer_from_ngtcp2()
    if (closed_ || !conn_)
       return;
 
-   auto expiry = ngtcp2_conn_get_expiry(conn_);
+   auto expiry = ngtcp2_conn_get_expiry2(conn_);
    if (expiry == UINT64_MAX)
    {
       //

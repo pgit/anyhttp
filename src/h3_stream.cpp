@@ -99,6 +99,8 @@ void Http3Stream::call_read_handler()
    if (!read_handler || call_read_handler_active)
       return;
 
+   call_read_handler_active = true;
+
    //
    // The loop below may resume a coroutine that drops the last owning reference to this stream
    // (e.g. the Response gets destroyed once EOF is delivered) -- or to the whole Session, when
@@ -109,7 +111,6 @@ void Http3Stream::call_read_handler()
    auto self = shared_from_this();
    auto session_guard = session.shared_from_this();
 
-   call_read_handler_active = true;
    size_t consumed = 0;
    while (read_handler)
    {
@@ -194,8 +195,9 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer,
    auto n = asio::buffer_size(buffer);
    logd("[{}] start_write: n={} eof={}", log_prefix, n, eof);
 
-   auto complete_immediately = [&](error_code ec)
-   { anyhttp::complete_immediately(std::move(handler), get_executor(), ec); };
+   auto complete_immediately = [&](error_code ec) { //
+      anyhttp::complete_immediately(std::move(handler), get_executor(), ec);
+   };
 
    //
    // The protocol-independent entry ladder, in the order the Writer contract in common.hpp
@@ -602,8 +604,9 @@ void Http3Stream::finish_active_write()
    // pass this is nested in and at worst trips ngtcp2's own "time must not go backwards"
    // assertion. Post instead -- one hop, on a path that is not latency critical.
    //
-   asio::post(get_executor(), [self = shared_from_this(), handler = std::move(handler)]() mutable
-   { swap_and_invoke(handler, boost::system::error_code{}); });
+   asio::post(get_executor(), [self = shared_from_this(), handler = std::move(handler)]() mutable {
+      std::move(handler)(boost::system::error_code{});
+   });
 }
 
 // =================================================================================================
