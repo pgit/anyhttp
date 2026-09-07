@@ -1,7 +1,5 @@
 #pragma once
 
-#include "anyhttp/common.hpp"
-
 #include <nghttp3/nghttp3.h>
 
 #include <span>

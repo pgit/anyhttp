@@ -67,7 +67,8 @@ class BeastReader : public Interface
 {
 public:
    inline BeastReader(BeastSession<Stream>& session_, Stream& stream_, Buffer& buffer_)
-      : session(&session_), stream(stream_), buffer(buffer_)
+      : session(&session_), stream(stream_), buffer(buffer_),
+        m_executor(session_.get_executor()) // survives detach(), see get_executor()
    {
       parser.body_limit(std::numeric_limits<uint64_t>::max());
    }
@@ -127,12 +128,24 @@ public:
 
       assert(!reading);
 
-      if (body_buffer.size() == 0 || parser.is_done())
+      //
+      // Everything that can be answered without touching the connection, each case with the error
+      // code the Reader contract prescribes for it (see common.hpp): a zero-length read is not a
+      // read and reports nothing, wherever the body stands; a parser that is done keeps reporting
+      // the end of the body, ASIO-style, session or no session; and a read past a detached,
+      // unfinished parser is a truncation the caller must hear about.
+      //
+      if (body_buffer.size() == 0 || parser.is_done() || !session)
       {
-         any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
-         ex.execute([handler = std::move(handler)]() mutable { //
-            std::move(handler)(boost::system::error_code{}, 0);
-         });
+         error_code ec;
+         if (body_buffer.size() == 0)
+            ec = {};
+         else if (parser.is_done())
+            ec = asio::error::eof;
+         else
+            ec = boost::beast::http::error::partial_message;
+
+         complete_immediately(std::move(handler), get_executor(), ec, size_t{0});
          return;
       }
 
@@ -154,6 +167,11 @@ public:
          if (ec == beast::http::error::need_buffer)
             ec = {}; // FIXME: maybe we should keep 'need_buffer' to avoid extra empty round trip
 
+         //
+         // Nothing of the body came out of this round -- either the parser is now done, in which
+         // case the retry below turns straight into the EOF completion above, or it just needs
+         // more input. Either way there is nothing to hand to the caller yet.
+         //
          if (!ec && payload == 0)
             async_read_some(body_buffer, std::move(handler));
          else
@@ -172,13 +190,14 @@ public:
          stream, buffer, parser, bind_executor(ex, bind_cancellation_slot(cs, std::move(cb))));
    }
 
-   asio::any_io_executor get_executor() const noexcept { return session->get_executor(); }
+   asio::any_io_executor get_executor() const noexcept { return m_executor; }
    inline auto logPrefix() const { return session ? session->logPrefix() : "DETACHED"; }
 
    BeastSession<Stream>* session;
    Stream& stream;
    Buffer& buffer;
    Parser parser;
+   asio::any_io_executor m_executor; // kept as a copy so a detached reader can still complete
    std::optional<unsigned int> m_status_code = 0;
    boost::url m_url;
    bool reading = false;
@@ -226,7 +245,8 @@ class WriterBase : public Parent
 {
 public:
    inline WriterBase(BeastSession<Stream>& session_, Stream& stream_)
-      : session(&session_), stream(stream_)
+      : session(&session_), stream(stream_),
+        m_executor(session_.get_executor()) // survives detach(), see get_executor()
    {
    }
 
@@ -241,7 +261,7 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   asio::any_io_executor get_executor() const noexcept override { return session->get_executor(); }
+   asio::any_io_executor get_executor() const noexcept override { return m_executor; }
 
    void detach() override
    {
@@ -249,41 +269,59 @@ public:
       session = nullptr;
    }
 
-   template <typename Handler, typename... Args>
-      requires std::invocable<Handler, Args...>
-   inline void complete_immediately(Handler&& handler, Args&&... args)
+   void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) override
    {
-      auto ex = asio::get_associated_immediate_executor(handler, get_executor());
-      ex.execute([handler = std::forward<Handler>(handler), ...args = std::forward<Args>(args)] mutable { //
-           std::move(handler)(std::move(args)...);
-      });
-   }
+      const bool empty = buffer.size() == 0;
 
-   void async_write(WriteHandler&& handler, asio::const_buffer buffer) override
-   {
-      if (cancelled)
+      //
+      // The protocol-independent entry ladder, in the order the Writer contract in common.hpp
+      // prescribes: a zero-length non-EOF write is a free no-op wherever the body stands (it
+      // would otherwise turn into an empty chunk); after the body has ended, data has no body
+      // left to belong to -- through either entry point -- while a bare re-end is idempotent.
+      //
+      if (empty && !eof)
       {
-         mloge("async_write: already canceled");
-         complete_immediately(std::move(handler), errc::make_error_code(errc::operation_canceled));
+         complete_immediately(std::move(handler), get_executor(), error_code{});
          return;
       }
 
-      logd("async_write: {} bytes", buffer.size());
+      if (eof_submitted)
+      {
+         if (!empty)
+            mloge("async_write: body has already been ended");
+         complete_immediately(std::move(handler), get_executor(),
+                              empty ? error_code{} : errc::make_error_code(errc::broken_pipe));
+         return;
+      }
+
+      if (cancelled)
+      {
+         mloge("async_write: already canceled");
+         complete_immediately(std::move(handler), get_executor(),
+                              errc::make_error_code(errc::operation_canceled));
+         return;
+      }
 
       assert(!writing);
       writing = true;
 
-      if (buffer.size() == 0)
-         mlogd("async_write: write EOF");
-      else
-         mlogd("async_write: {} bytes (chunked={} content_length={})", buffer.size(),
-               message.chunked(), message.has_content_length());
+      mlogd("async_write: {} bytes (eof={} chunked={} content_length={})", buffer.size(), eof,
+            message.chunked(), message.has_content_length());
 
+      //
+      // The last body buffer and the end of the body go into the same serializer pass: with
+      // 'more' cleared, beast emits the data and the terminating chunk (or just the data, for a
+      // content-length delimited body) in one go, so ending a body costs no extra write.
+      //
+#if BOOST_BEAST_VERSION < 359
       // https://github.com/boostorg/beast/issues/3032
       // make sure to set 'nullptr' on empty size, otherwise beast may serialize an empty chunk
       message.body().data = buffer.size() ? const_cast<void*>(buffer.data()) : nullptr;
+#else
+      message.body().data = const_cast<void*>(buffer.data());
+#endif      
       message.body().size = buffer.size();
-      message.body().more = buffer.size() != 0; // empty buffer --> EOF
+      message.body().more = !eof;
 
       //
       // With 'chunked' transfer encoding, the serializer will automatically emit a chunk as
@@ -298,7 +336,7 @@ public:
       auto ex = get_associated_executor(handler, get_executor());
       auto alloc = get_associated_allocator(handler);
 
-      auto cb = [this, self = Parent::shared_from_this(), expected = buffer.size(),
+      auto cb = [this, self = Parent::shared_from_this(), expected = buffer.size(), eof,
                  handler = std::move(handler)] //
          (boost::system::error_code ec, size_t n) mutable
       {
@@ -348,6 +386,14 @@ public:
          }
          */
 
+         //
+         // Only now is the body really ended: a cancelled or failed EOF write never got its
+         // terminating bytes onto the wire, and latching the flag at accept time would let a
+         // retried async_write_eof() report success for a body the peer sees as truncated.
+         //
+         if (!ec && eof)
+            eof_submitted = true;
+
          std::move(handler)(ec);
       };
 
@@ -382,9 +428,11 @@ public:
    Stream& stream;
    Message message;
    Serializer serializer{message};
+   asio::any_io_executor m_executor; // kept as a copy so a detached writer can still complete
    bool writing = false;
    bool cancelled = false;
    bool response_requested = false;
+   bool eof_submitted = false;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -478,7 +526,7 @@ public:
          message.content_length(boost::none);
    }
 
-   asio::any_io_executor get_executor() const noexcept { return session->get_executor(); }
+   using super::get_executor;
 
    void async_submit(StatusHandler&& handler, unsigned int status_code,
                      const Fields& headers) override
@@ -531,7 +579,9 @@ public:
          if (!ec)
          {
             http::response_parser<http::buffer_body>::value_type& msg = reader->parser.get();
-            mlogd("async_read_header: len={} {} {}", len, msg.result_int(), msg.reason());
+            mlogd("{} {}", msg.result_int(), msg.reason());
+            for (const auto& header : msg)
+               mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
          }
          else
             mlogw("async_read_header: {} len={}", ec.message(), len);
@@ -670,9 +720,6 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
       auto& request = parser.get();
       const bool need_eof = request.need_eof();
-      mlogd("{} {} (need_eof={})", request.method_string(), request.target(), request.need_eof());
-      for (auto& header : request)
-         mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
 
       // if (auto url = boost::urls::parse_relative_ref(request.target()); url.has_value())
       if (auto url = boost::urls::parse_uri_reference(request.target()); url.has_value())
@@ -697,6 +744,10 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       {
          mlogw("ignoring invalid host header: {}", request[http::field::host]);
       }
+
+      mlogd("{} {} (need_eof={})", request.method_string(), reader->m_url.buffer(), need_eof);
+      for (auto& header : request)
+         mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
 
       //
       // Prepare response.
@@ -832,8 +883,6 @@ template <typename Stream>
 void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::url url,
                                          const Fields& headers)
 {
-   mlogd("submit: {}", url.buffer());
-
    auto writer = std::make_unique<RequestWriter<Stream>>(*this, m_stream);
    wx = writer.get();
    auto& request = writer->message;
@@ -847,6 +896,10 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
       request.set(http::field::host, url.encoded_authority());
    if (!request.has_content_length())
       request.chunked(true);
+
+   mlogd("{} {}", request.method_string(), url.buffer());
+   for (const auto& header : request)
+      mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
 
    //
    // TODO: make writer shared? put into queue

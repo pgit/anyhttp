@@ -32,11 +32,15 @@
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
+#include <boost/beast/http/error.hpp>
+#include <boost/beast/http/status.hpp>
+
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 
-#include <boost/beast/http/error.hpp>
 #include <boost/url/url.hpp>
+
+#include <boost/container/small_vector.hpp>
 
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
@@ -272,7 +276,8 @@ void Http3ClientStream::on_pseudo_header(std::string_view name, std::string_view
 
 void Http3ClientStream::on_headers_complete()
 {
-   logd("[{}] response headers: status={}", log_prefix, status_code);
+   using namespace boost::beast::http;
+   logd("[{}] {} {}", log_prefix, status_code, obsolete_reason(int_to_status(status_code)));
    log_headers(log_prefix, std::exchange(received_headers, {}));
    deliver_response();
 }
@@ -309,8 +314,8 @@ bool Http3ClientStream::submit_request(const boost::urls::url& request_url, cons
    std::string target(request_url.encoded_target());
    std::string authority(request_url.host_address());
 
-   std::vector<nghttp3_nv> nva;
-   nva.reserve(16); // small typical header count; vector will grow if needed
+   auto nva = boost::container::small_vector<nghttp3_nv, 16>();
+   nva.reserve(4 + std::distance(headers.begin(), headers.end()));
    nva.push_back(make_nv(":method", method_str));
    nva.push_back(make_nv(":scheme", scheme));
    nva.push_back(make_nv(":path", target));
@@ -321,9 +326,11 @@ bool Http3ClientStream::submit_request(const boost::urls::url& request_url, cons
       if (item.name_string().starts_with(':'))
          logw("[{}] async_submit: invalid header '{}': setting pseudo headers is not allowed",
               log_prefix, item.name_string());
+
       nva.push_back(make_nv(item.name_string(), item.value()));
    }
 
+   logd("[{}] {} {}", log_prefix, method_str, request_url.buffer());
    return submit_headers(nva, true /* request */);
 }
 
@@ -331,11 +338,11 @@ void Http3ClientStream::async_get_response(client::Request::GetResponseHandler&&
 {
    if (response_delivered)
    {
-      auto ec = asio::error::basic_errors::already_started;
       asio::any_completion_executor ex =
          asio::get_associated_immediate_executor(handler, get_executor());
-      ex.execute([handler = std::move(handler), ec]() mutable
-      { std::move(handler)(ec, client::Response{nullptr}); });
+      ex.execute([handler = std::move(handler)]() mutable { //
+         std::move(handler)(asio::error::basic_errors::already_started, client::Response{nullptr});
+      });
       return;
    }
 
@@ -663,8 +670,9 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, boost::urls::url 
    wake_write();
 
    post(get_executor(), [handler = std::move(handler),
-                         writer = std::make_unique<Http3ClientWriter>(*stream)]() mutable
-   { std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)}); });
+                         writer = std::make_unique<Http3ClientWriter>(*stream)]() mutable { //
+      std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)});
+   });
 }
 
 // =================================================================================================
@@ -705,7 +713,7 @@ awaitable<std::shared_ptr<Session::Impl>> async_connect_http3(asio::any_io_execu
    if (!session->ready())
       throw boost::system::system_error(errc::make_error_code(errc::connection_refused));
 
-   co_return std::static_pointer_cast<Session::Impl>(session);
+   co_return session;
 }
 
 // =================================================================================================

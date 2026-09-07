@@ -160,6 +160,8 @@ private:
    server::Server::Impl* m_server = nullptr;
 };
 
+// -------------------------------------------------------------------------------------------------
+
 template <typename Stream>
 class ServerSession : public ServerReference, public NGHttp2SessionImpl<Stream>
 {
@@ -178,12 +180,10 @@ class ServerSession : public ServerReference, public NGHttp2SessionImpl<Stream>
 public:
    ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
 
-   // void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
-   // override;
    awaitable<void> do_session(Buffer&& data) override;
 };
 
-// -------------------------------------------------------------------------------------------------
+// =================================================================================================
 
 class ClientReference
 {
@@ -198,6 +198,8 @@ public:
 private:
    client::Client::Impl* m_client = nullptr;
 };
+
+// -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
 class ClientSession : public ClientReference, public NGHttp2SessionImpl<Stream>
@@ -217,8 +219,6 @@ class ClientSession : public ClientReference, public NGHttp2SessionImpl<Stream>
 public:
    ClientSession(client::Client::Impl& parent, any_io_executor executor, Stream&& stream);
 
-   // void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
-   // override;
    awaitable<void> do_session(Buffer&& data) override;
 };
 

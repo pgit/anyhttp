@@ -11,11 +11,7 @@
 #include <boost/url/pct_string_view.hpp>
 
 #include <thread>
-
 #include <format>
-#include <ranges>
-
-namespace rv = std::ranges::views;
 
 // =================================================================================================
 

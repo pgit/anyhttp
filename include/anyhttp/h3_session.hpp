@@ -1,7 +1,5 @@
 #pragma once
 
-#include "anyhttp/common.hpp"
-#include "anyhttp/h3_common.hpp"
 #include "anyhttp/session_impl.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
@@ -35,7 +33,7 @@ class Http3Stream;
 // loop, the write loop, the timers, the flow control and every callback bridge below are shared.
 //
 // What the roles still own themselves is how datagrams reach the connection (the server
-// demultiplexes many connections over one shared socket by connection ID, the client owns a
+// de-multiplexes many connections over one shared socket by connection ID, the client owns a
 // connect()ed socket with exactly one peer), how a dead connection is torn down, and how streams
 // come into being (accepted from the peer vs. opened by async_submit()). Those are the virtuals
 // at the bottom.
