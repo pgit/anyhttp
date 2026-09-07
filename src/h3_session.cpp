@@ -4,8 +4,8 @@
 // h3_client.cpp.
 //
 #include "anyhttp/h3_session.hpp"
-#include "anyhttp/h3_stream.hpp"
 #include "anyhttp/h3_common.hpp"
+#include "anyhttp/h3_stream.hpp"
 #include "anyhttp/literals.hpp"
 #include "anyhttp/tls.hpp"
 
@@ -17,8 +17,6 @@
 #include <array>
 #include <chrono>
 #include <cstring>
-
-#include "ngtcp2/util.h"
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
@@ -288,7 +286,7 @@ int Http3Session::write_streams()
    size_t gso_size = 0;
    auto nwrite =
       ngtcp2_conn_write_aggregate_pkt2(conn_, &ps.path, &pi, tx_buf_.data(), tx_buf_.size(),
-                                       &gso_size, &write_pkt_cb, 0, ngtcp2::util::timestamp());
+                                       &gso_size, &write_pkt_cb, 0, timestamp());
    if (nwrite < 0)
    {
       mloge("ngtcp2_conn_write_aggregate_pkt2: {}", ngtcp2_strerror(static_cast<int>(nwrite)));
@@ -325,7 +323,7 @@ void Http3Session::arm_timer_from_ngtcp2()
       return;
    }
 
-   auto now = ngtcp2::util::timestamp();
+   auto now = timestamp();
    asio::steady_timer::duration delay =
       expiry <= now ? std::chrono::nanoseconds{1} : std::chrono::nanoseconds{expiry - now};
 
@@ -341,7 +339,7 @@ void Http3Session::arm_timer_from_ngtcp2()
 
 int Http3Session::handle_expiry()
 {
-   auto now = ngtcp2::util::timestamp();
+   auto now = timestamp();
    if (auto rv = ngtcp2_conn_handle_expiry(conn_, now); rv != 0)
    {
       //
@@ -368,8 +366,7 @@ int Http3Session::on_read(const ngtcp2_path& path, const ngtcp2_pkt_info& pi,
 {
    mlogd("on_read: {} bytes", data.size());
 
-   auto rv =
-      ngtcp2_conn_read_pkt(conn_, &path, &pi, data.data(), data.size(), ngtcp2::util::timestamp());
+   auto rv = ngtcp2_conn_read_pkt(conn_, &path, &pi, data.data(), data.size(), timestamp());
    if (rv != 0)
    {
       if (rv == NGTCP2_ERR_DRAINING)
@@ -401,7 +398,7 @@ std::span<const uint8_t> Http3Session::write_connection_close(std::span<uint8_t>
    ngtcp2_path_storage_zero(&ps);
 
    auto nwrite = ngtcp2_conn_write_connection_close(conn_, &ps.path, &pi, buf.data(), buf.size(),
-                                                    &last_error_, ngtcp2::util::timestamp());
+                                                    &last_error_, timestamp());
    if (nwrite <= 0)
       return {};
    return buf.first(static_cast<size_t>(nwrite));
@@ -442,7 +439,7 @@ void Http3Session::fill_settings(ngtcp2_settings& settings, ngtcp2_transport_par
                                  std::chrono::nanoseconds idle_timeout)
 {
    ngtcp2_settings_default(&settings);
-   settings.initial_ts = ngtcp2::util::timestamp();
+   settings.initial_ts = timestamp();
    if (spdlog::default_logger_raw()->should_log(spdlog::level::trace))
       settings.log_printf = &http3::ngtcp2_log_printf;
 

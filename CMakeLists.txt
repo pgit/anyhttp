@@ -116,7 +116,7 @@ if (ENABLE_COVERAGE)
     set(COVERAGE_HTML_DIR "${CMAKE_BINARY_DIR}/coverage_report")
     set(COVERAGE_MERGE_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/merge_profraw.cmake")
     set(COVERAGE_TEST_BIN "${CMAKE_BINARY_DIR}/test/test_all")
-    set(LLVM_COV_IGNORE_REGEX "/usr/|${CMAKE_BINARY_DIR}/|${CMAKE_SOURCE_DIR}/test/|${CMAKE_SOURCE_DIR}/src/ngtcp2/")
+    set(LLVM_COV_IGNORE_REGEX "/usr/|${CMAKE_BINARY_DIR}/|${CMAKE_SOURCE_DIR}/test/")
 
     add_custom_target(coverage
         COMMAND ${CMAKE_COMMAND} -E rm -rf ${COVERAGE_RAW_DIR} ${COVERAGE_HTML_DIR}

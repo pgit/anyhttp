@@ -63,14 +63,14 @@
 #include <string_view>
 #include <vector>
 
-#include "ngtcp2/util.h"
-
 using namespace std::chrono_literals;
 using namespace boost::asio;
 namespace errc = boost::system::errc;
 
+using anyhttp::http3::format_hex;
 using anyhttp::http3::log_headers;
 using anyhttp::http3::make_nv;
+using anyhttp::http3::straddr;
 
 namespace anyhttp::client
 {
@@ -442,7 +442,7 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote)
       return -1;
    }
 
-   log_prefix_ = std::format("h3:{}", ngtcp2::util::straddr(remote.data(), remote.size()));
+   log_prefix_ = std::format("h3:{}", straddr(remote.data(), remote.size()));
 
    ngtcp2_cid scid{};
    scid.datalen = 17;
@@ -485,7 +485,7 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote)
    if (setup_tls(tls_context().ctx, false /* client */) != 0)
       return -1;
 
-   logi("[{}] connecting, scid={}", log_prefix_, ngtcp2::util::format_hex(scid.data, scid.datalen));
+   logi("[{}] connecting, scid={}", log_prefix_, format_hex(scid.data, scid.datalen));
    return 0;
 }
 

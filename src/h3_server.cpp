@@ -81,16 +81,19 @@
 #include <string_view>
 #include <vector>
 
-#include "ngtcp2/shared.h"
-#include "ngtcp2/util.h"
-
 using namespace std::chrono_literals;
 using namespace boost::asio;
 namespace errc = boost::system::errc;
 
+using anyhttp::http3::Address;
+using anyhttp::http3::format_hex;
 using anyhttp::http3::log_headers;
 using anyhttp::http3::make_nv;
+using anyhttp::http3::msghdr_get_local_addr;
 using anyhttp::http3::QUIC_SCIDLEN;
+using anyhttp::http3::set_port;
+using anyhttp::http3::sockaddr_union;
+using anyhttp::http3::straddr;
 
 namespace anyhttp::server
 {
@@ -99,7 +102,7 @@ namespace anyhttp::server
 
 struct Endpoint
 {
-   ngtcp2::Address addr;
+   Address addr;
    int fd;
 
    // Testing aid, see server::Config::drop_rate_rx/tx.
@@ -332,7 +335,7 @@ public:
 class Http3ServerSession : public http3::Http3Session
 {
 public:
-   Http3ServerSession(Http3ServerImpl& server, Endpoint ep, ngtcp2::Address remote);
+   Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Address remote);
    ~Http3ServerSession() override;
 
    //
@@ -353,8 +356,7 @@ public:
    //
    int init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t version,
             const ngtcp2_pkt_info& pi, std::span<const uint8_t> data);
-   int on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> data,
-               const ngtcp2::Address& remote);
+   int on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> data, const Address& remote);
 
    /// Called from Http3ServerImpl::process_quic_batch() when a packet arrives during the
    /// closing period.
@@ -380,7 +382,7 @@ private:
    Http3ServerImpl& server_;
    Endpoint ep_;
    bool owns_fd_ = false; // ep_.fd was dup()ed in the ctor, close it in the dtor
-   ngtcp2::Address remote_;
+   Address remote_;
    ngtcp2_cid scid_{};
 
    asio::steady_timer done_signal_; // used to wake do_session() on connection close
@@ -390,9 +392,9 @@ private:
 
 namespace
 {
-std::optional<ngtcp2::Address> to_ngtcp2_address(const sockaddr_storage& src, socklen_t len)
+std::optional<Address> to_address(const sockaddr_storage& src, socklen_t len)
 {
-   ngtcp2::Address addr{};
+   Address addr{};
    if (len > sizeof(addr.su))
       return std::nullopt;
    std::memcpy(&addr.su, &src, len);
@@ -412,7 +414,7 @@ struct QuicBatch
    struct Datagram
    {
       ngtcp2_pkt_info pi;
-      ngtcp2::Address remote;
+      Address remote;
       std::vector<uint8_t> data;
    };
 
@@ -573,13 +575,13 @@ void Http3ServerStream::submit_response(unsigned int status, const Fields& user_
 // Http3ServerSession implementation
 // =================================================================================================
 
-Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, ngtcp2::Address remote)
+Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Address remote)
    : http3::Http3Session(server.config().use_strand
                             ? asio::any_io_executor{asio::make_strand(server.get_executor())}
                             : server.get_executor()),
      server_(server), ep_(ep), remote_(remote), done_signal_(get_executor())
 {
-   log_prefix_ = std::format("h3:{}", ngtcp2::util::straddr(&remote_.su.sa, remote_.len));
+   log_prefix_ = std::format("h3:{}", straddr(&remote_.su.sa, remote_.len));
 
    //
    // Own a dup() of the shared UDP fd rather than borrowing the server's. Sends happen from this
@@ -749,7 +751,7 @@ int Http3ServerSession::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uin
       return -1;
 
    logi("[{}] new connection, scid={} version=0x{:x}", log_prefix_,
-        ngtcp2::util::format_hex(scid_.data, scid_.datalen), version);
+        format_hex(scid_.data, scid_.datalen), version);
 
    return on_read(pi, data, remote_);
 }
@@ -757,7 +759,7 @@ int Http3ServerSession::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uin
 // -------------------------------------------------------------------------------------------------
 
 int Http3ServerSession::on_read(const ngtcp2_pkt_info& pi, std::span<const uint8_t> data,
-                                const ngtcp2::Address& remote)
+                                const Address& remote)
 {
    ngtcp2_path path{
       {const_cast<sockaddr*>(&ep_.addr.su.sa), ep_.addr.len},
@@ -938,7 +940,7 @@ void Http3ServerImpl::erase_quic_session(Http3ServerSession* h)
 
 int Http3ServerImpl::udp_on_read(Endpoint& ep)
 {
-   ngtcp2::sockaddr_union su;
+   sockaddr_union su;
    std::array<uint8_t, 64_k> buf;
    ngtcp2_pkt_info pi{};
 
@@ -978,13 +980,13 @@ int Http3ServerImpl::udp_on_read(Endpoint& ep)
       if (nread < 22)
          continue;
 
-      auto local_addr = ngtcp2::msghdr_get_local_addr(&msg, su.storage.ss_family);
+      auto local_addr = msghdr_get_local_addr(&msg, su.storage.ss_family);
       if (!local_addr)
       {
          logw("could not obtain local address from cmsg");
          continue;
       }
-      ngtcp2::set_port(*local_addr, ep.addr);
+      set_port(*local_addr, ep.addr);
       ep.addr = *local_addr;
 
       // When UDP_GRO is enabled the kernel may coalesce several datagrams
@@ -1001,7 +1003,7 @@ int Http3ServerImpl::udp_on_read(Endpoint& ep)
          }
       }
 
-      auto remote = to_ngtcp2_address(su.storage, msg.msg_namelen);
+      auto remote = to_address(su.storage, msg.msg_namelen);
       if (!remote)
       {
          logw("unsupported remote address family");

@@ -22,11 +22,6 @@ target_sources(anyhttp PRIVATE ${anyhttp_sources})
 target_include_directories(anyhttp PUBLIC ../include)
 
 target_include_directories(anyhttp PRIVATE "/opt/nghttp3/build/include")
-#
-# Small helpers taken from the ngtcp2 examples (see ngtcp2/README.md).
-#
-target_sources(anyhttp PRIVATE ngtcp2/shared.cc ngtcp2/util.cc)
-
 target_link_libraries(anyhttp PRIVATE Threads::Threads)
 target_link_libraries(anyhttp PRIVATE OpenSSL::SSL)
 target_link_libraries(anyhttp PRIVATE Boost::thread Boost::atomic Boost::url Boost::filesystem)
