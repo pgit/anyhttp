@@ -20,7 +20,7 @@ jobs:
     steps:
     - &checkout
       name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       
     - name: Configure CMake
       run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -101,7 +101,7 @@ jobs:
           cp -r build/coverage_report/* pages/coverage/
 
       - name: Upload Coverage Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: build/coverage_report/
@@ -109,11 +109,11 @@ jobs:
 
       - name: Upload coverage to GitHub Pages
         if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: pages/
 
       - name: Deploy to GitHub Pages
         if: github.ref == 'refs/heads/master' && github.event_name == 'push'
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
