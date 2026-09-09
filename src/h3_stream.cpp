@@ -385,6 +385,7 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
    });
 }
 
+// https://nghttp2.org/nghttp3/types.html#c.nghttp3_read_data_callback
 nghttp3_ssize Http3Stream::data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t* pflags)
 {
    if (veccnt == 0)

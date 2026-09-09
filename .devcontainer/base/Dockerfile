@@ -120,13 +120,15 @@ RUN git clone --recursive --depth 1 --branch ${NGTCP2_VERSION} https://github.co
   
 # ==================================================================================================
 
-RUN git clone --depth 1 -b v1.6.3 https://github.com/libbpf/libbpf && \
+RUN git clone --depth 1 -b v1.7.0 https://github.com/libbpf/libbpf && \
     cd libbpf && \
     PREFIX=/usr/local LIBDIR=/usr/local/lib make -j$(nproc) -C src install && \
     cd .. && rm -rf libbpf
 
 #
 # nghttp2 with HTTP/3 support (based on OpenSSL)
+#
+# --enable-debug (very noisy)
 #
 ARG NGHTTP2_VERSION=v1.70.0
 RUN git clone --recursive --depth 1 --branch ${NGHTTP2_VERSION} https://github.com/nghttp2/nghttp2.git && \
@@ -150,7 +152,7 @@ RUN cd opt && \
     git clone --depth 1 https://github.com/curl/curl.git && \
     cd curl && autoreconf -fi && \
     ./configure --with-openssl --without-libpsl --with-nghttp2 \
-                --with-ngtcp2 --with-nghttp3 \
+                --with-ngtcp2 --with-nghttp3 --enable-ssls-export \
                 --prefix /usr/local && \
     make -j$(nproc) && make install && \
     cd .. && rm -rf curl

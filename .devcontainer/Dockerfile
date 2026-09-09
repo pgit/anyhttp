@@ -4,6 +4,8 @@
 #
 FROM docker.io/psedoc/anyhttp:0.28
 
+# ==================================================================================================
+
 #
 # install some more interactive utils in the devcontainer
 #
@@ -11,6 +13,8 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
     apt-get -y install iputils-ping tmux btop valgrind && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# ==================================================================================================
 
 #
 # TEST: claude code
@@ -23,6 +27,8 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
 
 # Install Claude Code
 # RUN npm install -g @anthropic-ai/claude-code
+
+# ==================================================================================================
 
 #
 # enable persistent bash history in container
