@@ -4,6 +4,7 @@
 #include "anyhttp/common.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/h1_backend.hpp"
+#include "anyhttp/h2_backend.hpp"
 #include "anyhttp/server.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
@@ -17,6 +18,7 @@
 #include <boost/asio/ip/tcp.hpp>
 
 #include <boost/beast/core.hpp>
+#include <boost/beast/core/detail/base64.hpp>
 #include <boost/beast/core/buffer_traits.hpp>
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/core/stream_traits.hpp>
@@ -37,6 +39,9 @@
 
 #include <boost/url/parse.hpp>
 
+#include <algorithm>
+#include <optional>
+#include <stdexcept>
 #include <string_view>
 
 using namespace std::chrono_literals;
@@ -319,7 +324,7 @@ public:
       message.body().data = buffer.size() ? const_cast<void*>(buffer.data()) : nullptr;
 #else
       message.body().data = const_cast<void*>(buffer.data());
-#endif      
+#endif
       message.body().size = buffer.size();
       message.body().more = !eof;
 
@@ -661,6 +666,106 @@ void BeastSession<Stream>::destroy() noexcept
    // });
 }
 
+template <typename Stream>
+void ServerSession<Stream>::destroy() noexcept
+{
+   if (m_upgraded)
+      m_upgraded->destroy(); // the stream has been moved there
+   else
+      super::destroy();
+}
+
+// =================================================================================================
+
+/**
+ * Returns what the HTTP/2 session needs to continue \p request as stream 1, if the request asks
+ * for an upgrade to h2c (RFC 7540, section 3.2) and it can be granted. Otherwise, the upgrade is
+ * ignored and the request is served as HTTP/1.1, which is always a valid response to it.
+ *
+ * Only requests that are complete after their header are upgraded: A request body would have to
+ * be read in HTTP/1.1 first, before switching protocols. Cleartext only, as h2 over TLS is
+ * negotiated by ALPN instead.
+ */
+static std::optional<nghttp2::Upgrade> h2c_upgrade(const http::request<http::buffer_body>& request,
+                                                   const boost::urls::url& url, bool complete)
+{
+   const auto has_token = [](std::string_view list, std::string_view token)
+   {
+      for (auto item : http::token_list(list))
+         if (beast::iequals(item, token))
+            return true;
+      return false;
+   };
+
+   if (!has_token(request[http::field::upgrade], "h2c") || url.scheme() != "http")
+      return std::nullopt;
+
+   if (!has_token(request[http::field::connection], "upgrade") ||
+       !has_token(request[http::field::connection], "http2-settings"))
+   {
+      logw("upgrade: ignoring h2c upgrade, 'Connection' misses 'Upgrade' or 'HTTP2-Settings'");
+      return std::nullopt;
+   }
+
+   // exactly one HTTP2-Settings header, containing base64url without padding
+   if (request.count("HTTP2-Settings") != 1)
+   {
+      logw("upgrade: ignoring h2c upgrade, need exactly one 'HTTP2-Settings' header");
+      return std::nullopt;
+   }
+
+   if (!complete)
+   {
+      logw("upgrade: ignoring h2c upgrade for request with body");
+      return std::nullopt;
+   }
+
+   std::string encoded(request["HTTP2-Settings"]);
+   std::ranges::replace(encoded, '-', '+');
+   std::ranges::replace(encoded, '_', '/');
+
+   nghttp2::Upgrade upgrade;
+   upgrade.settings.resize(beast::detail::base64::decoded_size(encoded.size()));
+   auto [written, read] =
+      beast::detail::base64::decode(upgrade.settings.data(), encoded.data(), encoded.size());
+   upgrade.settings.resize(written);
+
+   // a SETTINGS payload is a sequence of 6-byte entries
+   if (read != encoded.size() || upgrade.settings.size() % 6 != 0)
+   {
+      logw("upgrade: ignoring h2c upgrade, invalid 'HTTP2-Settings' header");
+      return std::nullopt;
+   }
+
+   upgrade.method = request.method_string();
+   upgrade.url = url;
+   return upgrade;
+}
+
+static std::shared_ptr<Session::Impl> make_h2c_session(server::Server::Impl& server,
+                                                       any_io_executor executor,
+                                                       tcp_stream& stream,
+                                                       nghttp2::Upgrade&& upgrade)
+{
+   return nghttp2::make_server_session(server, std::move(executor), stream.release_socket(),
+                                       std::move(upgrade));
+}
+
+static std::shared_ptr<Session::Impl> make_h2c_session(server::Server::Impl& server,
+                                                       any_io_executor executor,
+                                                       AnyAsyncStream& stream,
+                                                       nghttp2::Upgrade&& upgrade)
+{
+   return nghttp2::make_server_session(server, std::move(executor), std::move(stream),
+                                       std::move(upgrade));
+}
+
+static std::shared_ptr<Session::Impl> make_h2c_session(server::Server::Impl&, any_io_executor,
+                                                       ssl::stream<socket>&, nghttp2::Upgrade&&)
+{
+   throw std::logic_error("h2c upgrade over TLS"); // rejected by h2c_upgrade()
+}
+
 // =================================================================================================
 
 /**
@@ -748,6 +853,32 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       mlogd("{} {} (need_eof={})", request.method_string(), reader->m_url.buffer(), need_eof);
       for (auto& header : request)
          mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
+
+      //
+      // Upgrade to h2c, if requested: Answer with "101 Switching Protocols" and hand over the
+      // stream to an HTTP/2 session, which continues this request as stream 1. Anything that
+      // follows in the buffer (the client preface) is already HTTP/2.
+      //
+      if (auto upgrade = h2c_upgrade(request, reader->m_url, parser.is_done()))
+      {
+         http::response<http::empty_body> res{http::status::switching_protocols, request.version()};
+         res.set(http::field::connection, "Upgrade");
+         res.set(http::field::upgrade, "h2c");
+         reader.reset(); // owns the parser and thereby 'request'
+
+         if (auto [ec, n] = co_await http::async_write(m_stream, res, as_tuple); ec)
+         {
+            mlogw("upgrade: writing 101 response: {}", ec.message());
+            break;
+         }
+
+         mlogi("upgrading to h2c, {} bytes in buffer", m_buffer.size());
+         m_upgraded = make_h2c_session(server(), super::get_executor(), m_stream,
+                                       std::move(*upgrade));
+         co_await m_upgraded->do_session(std::move(m_buffer));
+         mlogi("h2c session done, served {} requests before upgrade", requestCounter - 1);
+         co_return;
+      }
 
       //
       // Prepare response.

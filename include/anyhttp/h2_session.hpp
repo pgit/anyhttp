@@ -2,6 +2,7 @@
 
 #include "anyhttp/common.hpp"
 #include "client_impl.hpp"
+#include "h2_backend.hpp"
 #include "h2_stream.hpp"
 #include "server_impl.hpp"
 #include "session_impl.hpp"
@@ -12,6 +13,7 @@
 #include <boost/beast/core/stream_traits.hpp>
 
 #include <map>
+#include <optional>
 
 #include "nghttp2/nghttp2.h"
 
@@ -181,6 +183,9 @@ public:
    ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
 
    awaitable<void> do_session(Buffer&& data) override;
+
+   /// Set if this session continues an HTTP/1.1 request that has been upgraded to h2c.
+   std::optional<Upgrade> m_upgrade;
 };
 
 // =================================================================================================

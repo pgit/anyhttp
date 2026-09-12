@@ -657,6 +657,27 @@ std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
                                                                  std::move(socket));
 }
 
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
+                                                   asio::any_io_executor executor,
+                                                   asio::ip::tcp::socket&& socket,
+                                                   Upgrade&& upgrade)
+{
+   auto session = std::make_shared<ServerSession<asio::ip::tcp::socket>>(
+      server, std::move(executor), std::move(socket));
+   session->m_upgrade = std::move(upgrade);
+   return session;
+}
+
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
+                                                   asio::any_io_executor executor,
+                                                   AnyAsyncStream&& stream, Upgrade&& upgrade)
+{
+   auto session = std::make_shared<ServerSession<AnyAsyncStream>>(server, std::move(executor),
+                                                                  std::move(stream));
+   session->m_upgrade = std::move(upgrade);
+   return session;
+}
+
 std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
                                                    asio::any_io_executor executor,
                                                    asio::ip::tcp::socket&& socket)
