@@ -8,6 +8,9 @@ add_executable(test_all ${SRC_FILES})
 target_link_libraries(test_all PRIVATE GTest::GTest GTest::gmock anyhttp)
 target_link_libraries(test_all PRIVATE spdlog::spdlog_header_only)
 
+# the h2c upgrade tests drive an HTTP/2 client session by hand
+target_link_libraries(test_all PRIVATE PkgConfig::NGHTTP2)
+
 # the tests connect over TLS and pass pki/out/root.pem to curl, so the PKI must exist first
 add_dependencies(test_all pki)
 
