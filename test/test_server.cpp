@@ -6,10 +6,11 @@
 #include <print>
 #include <thread>
 
+using namespace testing;
+
 // =================================================================================================
 
-INSTANTIATE_TEST_SUITE_P(Server, Server,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2),
+INSTANTIATE_TEST_SUITE_P(Server, Server, Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
@@ -39,7 +40,7 @@ TEST_P(Server, Stop)
 // Note that this is *not* what a client calling Session::reset() looks like: that one says
 // goodbye, and the server cleans up right away by way of the draining period.
 //
-class Http3IdleTimeout : public testing::Test
+class Http3IdleTimeout : public Test
 {
 protected:
    static constexpr auto IdleTimeout = 500ms;

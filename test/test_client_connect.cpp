@@ -1,8 +1,10 @@
 #include "test_fixtures.hpp"
 
+using namespace testing;
+
 // =================================================================================================
 
-class ClientConnect : public testing::Test
+class ClientConnect : public Test
 {
 public:
    void SetUp() override { setupLogging(); }

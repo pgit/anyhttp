@@ -9,11 +9,13 @@
 #include <ranges>
 #include <span>
 
+using namespace testing;
+
 // =================================================================================================
 
 INSTANTIATE_TEST_SUITE_P(ClientAsync, ClientAsync,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
-                                           anyhttp::Protocol::h3),
+                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                                anyhttp::Protocol::h3),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
@@ -761,8 +763,8 @@ TEST_P(ClientAsync, Dump)
       co_await send_eof(request);
       auto response = co_await request.async_get_response();
       auto dump = co_await read(response);
-      EXPECT_THAT(dump, testing::HasSubstr("path: /dump space"));
-      EXPECT_THAT(dump, testing::HasSubstr("  blah=white space"));
+      EXPECT_THAT(dump, HasSubstr("path: /dump space"));
+      EXPECT_THAT(dump, HasSubstr("  blah=white space"));
    };
 }
 
