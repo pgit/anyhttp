@@ -65,7 +65,7 @@
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
-#include <ngtcp2/ngtcp2_crypto_ossl.h>
+#include <ngtcp2/ngtcp2_crypto_boringssl.h>
 
 #include <openssl/err.h>
 #include <openssl/rand.h>
@@ -118,29 +118,25 @@ namespace
 {
 
 //
-// One-shot process-wide initialization of ngtcp2_crypto_ossl and the OpenSSL SSL_CTX
-// used for every QUIC connection.
+// The process-wide BoringSSL SSL_CTX used for every QUIC connection.
 //
 struct TlsServerContext
 {
    TlsServerContext()
    {
-      static const int init_once = []
-      {
-         if (ngtcp2_crypto_ossl_init() != 0)
-            throw std::runtime_error("ngtcp2_crypto_ossl_init");
-         return 0;
-      }();
-      (void)init_once;
-
       ctx = SSL_CTX_new(TLS_server_method());
       if (!ctx)
          throw std::runtime_error("SSL_CTX_new");
 
-      SSL_CTX_set_options(ctx, (SSL_OP_ALL & ~SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS) |
-                                  SSL_OP_SINGLE_ECDH_USE | SSL_OP_CIPHER_SERVER_PREFERENCE |
-                                  SSL_OP_NO_ANTI_REPLAY);
-      SSL_CTX_set_mode(ctx, SSL_MODE_RELEASE_BUFFERS);
+      if (ngtcp2_crypto_boringssl_configure_server_context(ctx) != 0)
+         throw std::runtime_error("ngtcp2_crypto_boringssl_configure_server_context");
+
+      //
+      // What OpenSSL needed SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS, SSL_OP_SINGLE_ECDH_USE and
+      // SSL_MODE_RELEASE_BUFFERS for is the default in BoringSSL. SSL_OP_NO_ANTI_REPLAY does not
+      // exist, but it would only matter for 0-RTT, which we don't enable.
+      //
+      SSL_CTX_set_options(ctx, SSL_OP_CIPHER_SERVER_PREFERENCE);
 
       SSL_CTX_set_alpn_select_cb(ctx, &TlsServerContext::alpn_select_cb, nullptr);
 
