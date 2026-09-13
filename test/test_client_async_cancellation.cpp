@@ -6,7 +6,21 @@
 
 // =================================================================================================
 
-TEST_P(ClientAsync, Backpressure)
+//
+// Backpressure, cancellation and connection loss, on top of the ClientAsync fixture.
+//
+class ClientAsyncCancellation : public ClientAsync
+{
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientAsyncCancellation, ClientAsyncCancellation,
+                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                                           anyhttp::Protocol::h3),
+                         NameGenerator);
+
+// -------------------------------------------------------------------------------------------------
+
+TEST_P(ClientAsyncCancellation, Backpressure)
 {
    test = [this](Session session) -> awaitable<void>
    {
@@ -48,7 +62,7 @@ TEST_P(ClientAsync, Backpressure)
 // FIXME: As of nghttp2 version 1.67, the partial message results in a GOAWAY, so that only one
 //        request can be made. The following request should throw an exception.
 //
-TEST_P(ClientAsync, CancellationContentLength)
+TEST_P(ClientAsyncCancellation, CancellationContentLength)
 {
    test = [this](Session session) -> awaitable<void>
    {
@@ -95,7 +109,7 @@ TEST_P(ClientAsync, CancellationContentLength)
 //         by closing the stream without sending an EOF. But that would also stop the receiving
 //         direction.
 //
-TEST_P(ClientAsync, Cancellation)
+TEST_P(ClientAsyncCancellation, Cancellation)
 {
    test = [this](Session session) -> awaitable<void>
    {
@@ -138,7 +152,7 @@ TEST_P(ClientAsync, Cancellation)
 //       requested to do terminal "cancellation". Cancellation types are backward compatible this
 //       way.
 //
-TEST_P(ClientAsync, CancellationRange)
+TEST_P(ClientAsyncCancellation, CancellationRange)
 {
    test = [this](Session session) -> awaitable<void>
    {
@@ -159,7 +173,7 @@ TEST_P(ClientAsync, CancellationRange)
    };
 }
 
-TEST_P(ClientAsync, PerOperationCancellation)
+TEST_P(ClientAsyncCancellation, PerOperationCancellation)
 {
    test = [this](Session session) -> awaitable<void>
    {
@@ -179,7 +193,7 @@ TEST_P(ClientAsync, PerOperationCancellation)
    };
 }
 
-TEST_P(ClientAsync, CancelAfter)
+TEST_P(ClientAsyncCancellation, CancelAfter)
 {
    test = [this](Session session) -> awaitable<void>
    {
@@ -200,7 +214,7 @@ TEST_P(ClientAsync, CancelAfter)
    };
 }
 
-TEST_P(ClientAsync, WHEN_send_more_than_content_length_THEN_connection_is_reset)
+TEST_P(ClientAsyncCancellation, WHEN_send_more_than_content_length_THEN_connection_is_reset)
 {
    test = [this](Session session) -> awaitable<void>
    {
@@ -226,7 +240,7 @@ TEST_P(ClientAsync, WHEN_send_more_than_content_length_THEN_connection_is_reset)
 
 // =================================================================================================
 
-TEST_P(ClientAsync, ClientDropRequest)
+TEST_P(ClientAsyncCancellation, ClientDropRequest)
 {
    test = [this](Session session) -> awaitable<void>
    {
@@ -237,7 +251,7 @@ TEST_P(ClientAsync, ClientDropRequest)
 
 // =================================================================================================
 
-TEST_P(ClientAsync, ResetServerDuringRequest)
+TEST_P(ClientAsyncCancellation, ResetServerDuringRequest)
 {
    test = [this](Session session) -> awaitable<void>
    {
@@ -277,7 +291,7 @@ TEST_P(ClientAsync, ResetServerDuringRequest)
    };
 }
 
-TEST_P(ClientAsync, DISABLED_SpawnAndForget)
+TEST_P(ClientAsyncCancellation, DISABLED_SpawnAndForget)
 {
    if (GetParam() == anyhttp::Protocol::http11)
       GTEST_SKIP(); // FIXME: ASAN errors
