@@ -4,6 +4,8 @@
 #include <print>
 #include <ranges>
 
+using namespace testing;
+
 // =================================================================================================
 
 //
@@ -14,8 +16,8 @@ class ClientAsyncCancellation : public ClientAsync
 };
 
 INSTANTIATE_TEST_SUITE_P(ClientAsyncCancellation, ClientAsyncCancellation,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
-                                           anyhttp::Protocol::h3),
+                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                                anyhttp::Protocol::h3),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
@@ -233,8 +235,8 @@ TEST_P(ClientAsyncCancellation, WHEN_send_more_than_content_length_THEN_connecti
       // ECONNRESET, any later one with EPIPE. Single-threaded we reliably hit the former, with
       // more than one thread the latter; both mean the same thing here.
       //
-      EXPECT_THAT(code(ep), testing::AnyOf(boost::system::errc::connection_reset,
-                                           boost::system::errc::broken_pipe));
+      EXPECT_THAT(code(ep),
+                  AnyOf(boost::system::errc::connection_reset, boost::system::errc::broken_pipe));
    };
 }
 

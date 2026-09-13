@@ -68,6 +68,9 @@ public:
    boost::url_view url() const;
    std::optional<size_t> content_length() const noexcept;
 
+   /// The request header fields, without HTTP/2 and HTTP/3 pseudo-headers.
+   const Fields& fields() const;
+
    /**
     * Looks up a query parameter and converts its value to \c T.
     *

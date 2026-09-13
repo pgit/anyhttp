@@ -622,15 +622,19 @@ void Http3Stream::on_header(std::string_view name, std::string_view value)
    try
    {
       if (name.starts_with(':'))
+      {
          on_pseudo_header(name, value);
-      else if (name == "content-length")
+         return;
+      }
+
+      if (name == "content-length")
       {
          size_t len = 0;
          if (std::from_chars(value.begin(), value.end(), len).ec == std::errc{})
             content_length = len;
       }
-      else
-         fields.set(name, value);
+
+      fields.insert(name, value); // insert, not set: repeated fields must all be kept
    }
    catch (const std::exception& ex)
    {

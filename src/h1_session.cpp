@@ -117,6 +117,7 @@ public:
          return parser.get().result_int();
    }
    boost::url_view url() const override { return m_url; }
+   const Fields& fields() const override { return parser.get(); }
    std::optional<size_t> content_length() const noexcept override
    {
       if (parser.content_length())
@@ -739,6 +740,26 @@ static std::optional<nghttp2::Upgrade> h2c_upgrade(const http::request<http::buf
 
    upgrade.method = request.method_string();
    upgrade.url = url;
+
+   //
+   // HTTP/2 has no connection-specific header fields (RFC 9113, section 8.2.2), and the upgrade
+   // ones are used up by now.
+   //
+   for (const auto& field : request)
+   {
+      switch (field.name())
+      {
+      case http::field::connection:
+      case http::field::proxy_connection:
+      case http::field::keep_alive:
+      case http::field::transfer_encoding:
+      case http::field::upgrade:
+      case http::field::http2_settings:
+         break;
+      default:
+         upgrade.fields.insert(field.name_string(), field.value());
+      }
+   }
    return upgrade;
 }
 

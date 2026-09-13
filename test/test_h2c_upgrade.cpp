@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+using namespace testing;
+
 // =================================================================================================
 
 //
@@ -54,7 +56,9 @@ protected:
    }
 
    /// Upgrades a GET for the first target and sends GETs for the others as HTTP/2 streams.
-   awaitable<Responses> upgrade(std::vector<std::string> targets)
+   /// \p fields go along with the upgrade request.
+   awaitable<Responses> upgrade(std::vector<std::string> targets,
+                                boost::beast::http::fields fields = {})
    {
       namespace http = boost::beast::http;
 
@@ -111,6 +115,8 @@ protected:
       EXPECT_GT(len, 0);
 
       http::request<http::empty_body> request{http::verb::get, targets.front(), 11};
+      for (const auto& field : fields)
+         request.insert(field.name_string(), field.value());
       request.set(http::field::host, authority);
       request.set(http::field::connection, "Upgrade, HTTP2-Settings");
       request.set(http::field::upgrade, "h2c");
@@ -246,8 +252,28 @@ TEST_F(H2CUpgrade, WHEN_upgrade_is_requested_THEN_request_continues_as_stream_1)
    ASSERT_TRUE(responses.contains(1));
    EXPECT_EQ(responses[1].status, 200);
    EXPECT_TRUE(responses[1].closed);
-   EXPECT_THAT(responses[1].body, testing::HasSubstr("path: /dump"));
-   EXPECT_THAT(responses[1].body, testing::HasSubstr("query: first"));
+   EXPECT_THAT(responses[1].body, HasSubstr("path: /dump"));
+   EXPECT_THAT(responses[1].body, HasSubstr("query: first"));
+}
+
+TEST_F(H2CUpgrade, WHEN_upgraded_THEN_request_headers_are_passed_on_to_stream_1)
+{
+   boost::beast::http::fields fields;
+   fields.set("x-custom", "value");
+   fields.set(boost::beast::http::field::keep_alive, "timeout=5");
+   auto responses = run(upgrade({"/dump?first"}, std::move(fields)));
+
+   ASSERT_TRUE(responses.contains(1));
+   EXPECT_EQ(responses[1].status, 200);
+   const auto& body = responses[1].body;
+   EXPECT_THAT(body, HasSubstr("\n  x-custom: value\n"));
+   EXPECT_THAT(body, HasSubstr("\n  Host: 127.0.0.2:"));
+
+   // connection-specific fields do not exist in HTTP/2 (RFC 9113, section 8.2.2)
+   EXPECT_THAT(body, Not(HasSubstr("Connection:")));
+   EXPECT_THAT(body, Not(HasSubstr("Upgrade:")));
+   EXPECT_THAT(body, Not(HasSubstr("HTTP2-Settings:")));
+   EXPECT_THAT(body, Not(HasSubstr("Keep-Alive:")));
 }
 
 TEST_F(H2CUpgrade, WHEN_upgraded_THEN_connection_takes_more_streams)
@@ -256,9 +282,9 @@ TEST_F(H2CUpgrade, WHEN_upgraded_THEN_connection_takes_more_streams)
 
    ASSERT_EQ(responses.size(), 3);
    EXPECT_EQ(responses[1].status, 200);
-   EXPECT_THAT(responses[1].body, testing::HasSubstr("query: first"));
+   EXPECT_THAT(responses[1].body, HasSubstr("query: first"));
    EXPECT_EQ(responses[3].status, 200);
-   EXPECT_THAT(responses[3].body, testing::HasSubstr("query: second"));
+   EXPECT_THAT(responses[3].body, HasSubstr("query: second"));
    EXPECT_EQ(responses[5].status, 404);
 }
 
@@ -279,7 +305,7 @@ TEST_F(H2CUpgrade, WHEN_http2_settings_are_missing_THEN_is_served_as_http11)
    auto response = run(http11(std::move(request)));
 
    EXPECT_EQ(response.result_int(), 200);
-   EXPECT_THAT(response.body(), testing::HasSubstr("query: no-settings"));
+   EXPECT_THAT(response.body(), HasSubstr("query: no-settings"));
 }
 
 TEST_F(H2CUpgrade, WHEN_http2_settings_are_invalid_THEN_is_served_as_http11)
@@ -289,7 +315,7 @@ TEST_F(H2CUpgrade, WHEN_http2_settings_are_invalid_THEN_is_served_as_http11)
    auto response = run(http11(std::move(request)));
 
    EXPECT_EQ(response.result_int(), 200);
-   EXPECT_THAT(response.body(), testing::HasSubstr("query: invalid"));
+   EXPECT_THAT(response.body(), HasSubstr("query: invalid"));
 }
 
 // =================================================================================================

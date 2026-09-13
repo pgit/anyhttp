@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <fstream>
 
+using namespace testing;
+
 // =================================================================================================
 
 //
@@ -86,8 +88,8 @@ protected:
 // -------------------------------------------------------------------------------------------------
 
 INSTANTIATE_TEST_SUITE_P(FileHandler, FileHandler,
-                         ::testing::Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
-                                           anyhttp::Protocol::h3),
+                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                                anyhttp::Protocol::h3),
                          NameGenerator);
 
 // =================================================================================================

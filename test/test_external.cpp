@@ -423,7 +423,7 @@ TEST_F(ExternalCustom, curl_h2c_upgrade)
    // clang-format off
    Args args = {"-sS", "-v", "--http2",
                 "-w", "%{http_code} HTTP/%{http_version}\n",
-                url + "?first", url + "?second"};
+                url + "?first", "-H", "x-custom:value", url + "?second"};
    // clang-format on
    auto future = spawn(CURL_PATH, std::move(args));
    run();
@@ -431,6 +431,14 @@ TEST_F(ExternalCustom, curl_h2c_upgrade)
    const std::string output = future.get();
    EXPECT_THAT(output, testing::HasSubstr("query: first"));
    EXPECT_THAT(output, testing::HasSubstr("query: second"));
+
+   // the header goes along with both requests, the upgraded one included
+   std::string_view headers = output;
+   size_t with_header = 0;
+   for (size_t pos; (pos = headers.find("\n  x-custom: value\n")) != std::string_view::npos;
+        ++with_header)
+      headers.remove_prefix(pos + 1);
+   EXPECT_EQ(with_header, 2) << output;
 
    std::string_view rest = output;
    size_t upgraded = 0;

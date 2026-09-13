@@ -43,6 +43,7 @@ public:
    
    unsigned int status_code() const noexcept override;
    boost::url_view url() const override;
+   const Fields& fields() const override;
 
    NGHttp2Stream* stream;
    asio::any_io_executor executor; // kept as a copy so a detached reader can still complete
@@ -179,6 +180,7 @@ public:
    std::vector<std::pair<std::string, std::string>> received_headers;
    std::optional<unsigned int> status_code;
    std::optional<size_t> content_length;
+   Fields fields; // all received headers except the pseudo-headers
 
    bool closed = false; // set to true after on_stream_close_callback
 

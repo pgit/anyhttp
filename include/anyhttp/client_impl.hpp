@@ -32,6 +32,7 @@ public:
 
    virtual unsigned int status_code() const noexcept = 0;
    virtual boost::url_view url() const = 0;
+   virtual const Fields& fields() const = 0;
 
    using ReaderOrWriter = impl::Reader;
 };

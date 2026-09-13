@@ -95,6 +95,13 @@ boost::url_view NGHttp2Reader<Base>::url() const
 }
 
 template <typename Base>
+const Fields& NGHttp2Reader<Base>::fields() const
+{
+   assert(stream);
+   return stream->fields;
+}
+
+template <typename Base>
 std::optional<size_t> NGHttp2Reader<Base>::content_length() const noexcept
 {
    if (!stream)

@@ -147,6 +147,9 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
          stream->content_length.emplace();
          std::from_chars(value.begin(), value.end(), *stream->content_length);
       }
+
+      if (!name.starts_with(':'))
+         stream->fields.insert(name, value);
    }
    catch (std::exception& ex)
    {
