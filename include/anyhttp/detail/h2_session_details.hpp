@@ -226,6 +226,34 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 #endif
 
    //
+   // Continue an HTTP/1.1 request upgraded to h2c as stream 1. It has been received completely,
+   // so nghttp2 opens it half-closed (remote). No HEADERS frame will arrive for it, so do what
+   // on_begin_headers_callback() and on_frame_recv_callback() would have done.
+   //
+   if (m_upgrade)
+   {
+      const auto& settings = m_upgrade->settings;
+      const bool head_request = m_upgrade->method == "HEAD";
+      if (auto rv = nghttp2_session_upgrade2(session,
+                                             reinterpret_cast<const uint8_t*>(settings.data()),
+                                             settings.size(), head_request, nullptr))
+      {
+         mloge("nghttp2_session_upgrade2: {}", nghttp2_strerror(rv));
+         nghttp2_session_terminate_session(session, NGHTTP2_PROTOCOL_ERROR);
+      }
+      else
+      {
+         auto stream = this->create_stream(1);
+         stream->method = std::move(m_upgrade->method);
+         stream->url = std::move(m_upgrade->url);
+         mlogd("upgraded from HTTP/1.1: {} {}", stream->method, stream->url.buffer());
+         stream->on_request();
+         stream->on_eof(session, 1);
+      }
+      m_upgrade.reset();
+   }
+
+   //
    // Let NGHTTP2 parse what we have received so far.
    // This must happen after submitting the server settings.
    //

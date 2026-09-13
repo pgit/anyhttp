@@ -1,4 +1,3 @@
-#include <gtest/gtest.h>
 #include <anyhttp/formatter.hpp>
 #include <anyhttp/h2_common.hpp> // the nghttp2_nv formatter lives with the rest of the h2 glue
 
@@ -10,6 +9,8 @@
 
 #include <format>
 #include <thread>
+
+#include <gtest/gtest.h>
 
 // =================================================================================================
 // Test thread_id formatter

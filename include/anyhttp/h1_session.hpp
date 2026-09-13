@@ -86,8 +86,13 @@ class ServerSession : public ServerSessionBase, public BeastSession<Stream>
 public:
    ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
 
+   void destroy() noexcept override;
    void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers) override;
    awaitable<void> do_session(Buffer&& data) override;
+
+private:
+   /// Takes over the stream after an upgrade to h2c, see do_session().
+   std::shared_ptr<Session::Impl> m_upgraded;
 };
 
 // -------------------------------------------------------------------------------------------------
