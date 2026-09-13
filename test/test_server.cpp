@@ -535,7 +535,7 @@ TEST_P(ExternalTLS, curl)
                 "--cacert", "pki/out/root.pem",
                 "--data-binary", std::format("@{}", testFile.string()),
                 url};
-   // clang-format off
+   // clang-format on
 
    auto future = spawn_curl(std::move(args));
    run();
@@ -556,7 +556,7 @@ TEST_P(ExternalTLS, curl_many)
                   "--cacert", "pki/out/root.pem",
                   "--data-binary", std::format("@{}", testFile.string()),
                   url};
-      // clang-format off
+      // clang-format on
 
       futures.emplace_back(spawn_curl(std::move(args)));
    }
@@ -575,7 +575,7 @@ TEST_P(ExternalTLS, curl_multiple)
                 "--cacert", "pki/out/root.pem",
                 "--data-binary", std::format("@{}", testFile.string()),
                 url, url, url, url};
-   // clang-format off
+   // clang-format on
 
    auto future = spawn_curl(std::move(args));
    run();
@@ -675,8 +675,11 @@ TEST_F(ExternalCustom, h2spec)
 TEST_F(ExternalCustom, curl_h2c_upgrade)
 {
    auto url = std::format("http://127.0.0.2:{}/dump", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "--http2", "-w", "%{http_code} HTTP/%{http_version}\n",
+   // clang-format off
+   Args args = {"-sS", "-v", "--http2",
+                "-w", "%{http_code} HTTP/%{http_version}\n",
                 url + "?first", url + "?second"};
+   // clang-format on
    auto future = spawn(CURL_PATH, std::move(args));
    run();
 
@@ -745,9 +748,9 @@ protected:
          nghttp2_session_callbacks* cbs;
          nghttp2_session_callbacks_new(&cbs);
          nghttp2_session_callbacks_set_on_header_callback(
-            cbs, [](nghttp2_session*, const nghttp2_frame* frame, const uint8_t* name,
-                    size_t namelen, const uint8_t* value, size_t valuelen, uint8_t,
-                    void* user_data) -> int
+            cbs,
+            [](nghttp2_session*, const nghttp2_frame* frame, const uint8_t* name, size_t namelen,
+               const uint8_t* value, size_t valuelen, uint8_t, void* user_data) -> int
          {
             auto& responses = *static_cast<Responses*>(user_data);
             if (std::string_view(reinterpret_cast<const char*>(name), namelen) == ":status")
@@ -756,8 +759,9 @@ protected:
             return 0;
          });
          nghttp2_session_callbacks_set_on_data_chunk_recv_callback(
-            cbs, [](nghttp2_session*, uint8_t, int32_t stream_id, const uint8_t* data, size_t len,
-                    void* user_data) -> int
+            cbs,
+            [](nghttp2_session*, uint8_t, int32_t stream_id, const uint8_t* data, size_t len,
+               void* user_data) -> int
          {
             auto& responses = *static_cast<Responses*>(user_data);
             responses[stream_id].body.append(reinterpret_cast<const char*>(data), len);
@@ -813,7 +817,8 @@ protected:
       {
          std::array nva{nv(":method", "GET"), nv(":scheme", "http"), nv(":authority", authority),
                         nv(":path", target)};
-         auto id = nghttp2_submit_request2(session, nullptr, nva.data(), nva.size(), nullptr, nullptr);
+         auto id =
+            nghttp2_submit_request2(session, nullptr, nva.data(), nva.size(), nullptr, nullptr);
          EXPECT_GT(id, 0) << nghttp2_strerror(id);
       }
 
