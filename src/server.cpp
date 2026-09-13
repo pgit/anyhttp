@@ -45,6 +45,12 @@ std::optional<size_t> Request::content_length() const noexcept
    return impl->content_length();
 }
 
+const Fields& Request::fields() const
+{
+   assert(impl);
+   return impl->fields();
+}
+
 void Request::async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler)
 {
    assert(impl);

@@ -54,7 +54,9 @@ protected:
    }
 
    /// Upgrades a GET for the first target and sends GETs for the others as HTTP/2 streams.
-   awaitable<Responses> upgrade(std::vector<std::string> targets)
+   /// \p fields go along with the upgrade request.
+   awaitable<Responses> upgrade(std::vector<std::string> targets,
+                                boost::beast::http::fields fields = {})
    {
       namespace http = boost::beast::http;
 
@@ -111,6 +113,8 @@ protected:
       EXPECT_GT(len, 0);
 
       http::request<http::empty_body> request{http::verb::get, targets.front(), 11};
+      for (const auto& field : fields)
+         request.insert(field.name_string(), field.value());
       request.set(http::field::host, authority);
       request.set(http::field::connection, "Upgrade, HTTP2-Settings");
       request.set(http::field::upgrade, "h2c");
@@ -248,6 +252,26 @@ TEST_F(H2CUpgrade, WHEN_upgrade_is_requested_THEN_request_continues_as_stream_1)
    EXPECT_TRUE(responses[1].closed);
    EXPECT_THAT(responses[1].body, testing::HasSubstr("path: /dump"));
    EXPECT_THAT(responses[1].body, testing::HasSubstr("query: first"));
+}
+
+TEST_F(H2CUpgrade, WHEN_upgraded_THEN_request_headers_are_passed_on_to_stream_1)
+{
+   boost::beast::http::fields fields;
+   fields.set("x-custom", "value");
+   fields.set(boost::beast::http::field::keep_alive, "timeout=5");
+   auto responses = run(upgrade({"/dump?first"}, std::move(fields)));
+
+   ASSERT_TRUE(responses.contains(1));
+   EXPECT_EQ(responses[1].status, 200);
+   const auto& body = responses[1].body;
+   EXPECT_THAT(body, testing::HasSubstr("\n  x-custom: value\n"));
+   EXPECT_THAT(body, testing::HasSubstr("\n  Host: 127.0.0.2:"));
+
+   // connection-specific fields do not exist in HTTP/2 (RFC 9113, section 8.2.2)
+   EXPECT_THAT(body, testing::Not(testing::HasSubstr("Connection:")));
+   EXPECT_THAT(body, testing::Not(testing::HasSubstr("Upgrade:")));
+   EXPECT_THAT(body, testing::Not(testing::HasSubstr("HTTP2-Settings:")));
+   EXPECT_THAT(body, testing::Not(testing::HasSubstr("Keep-Alive:")));
 }
 
 TEST_F(H2CUpgrade, WHEN_upgraded_THEN_connection_takes_more_streams)

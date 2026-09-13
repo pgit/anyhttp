@@ -263,6 +263,12 @@ public:
       return stream->url;
    }
 
+   const Fields& fields() const override
+   {
+      assert(stream);
+      return stream->fields;
+   }
+
    void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) override
    {
       //

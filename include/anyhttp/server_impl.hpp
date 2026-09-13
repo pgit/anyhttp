@@ -27,6 +27,7 @@ public:
    // FIXME: doesn't make sense to have a status_code() for a server request, but keeps beast happy
    virtual unsigned int status_code() const noexcept = 0;
    virtual boost::url_view url() const = 0;
+   virtual const Fields& fields() const = 0;
 
    using ReaderOrWriter = impl::Reader;
 };

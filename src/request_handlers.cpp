@@ -72,6 +72,10 @@ awaitable<void> dump(server::Request request, server::Response response)
       std::println(str, "  {}={} ({})", key, EscapedString(value), _);
    std::println(str, "fragment: {} ({})", url.fragment(), url.encoded_fragment());
 
+   std::println(str, "headers:");
+   for (const auto& field : request.fields())
+      std::println(str, "  {}: {}", field.name_string(), EscapedString(field.value()));
+
    auto body = str.str();
    co_await response.async_submit(
       200, fields({{"Content-Length", body.size()}, {"Content-Type", "text/plain"}}));

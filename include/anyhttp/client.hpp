@@ -45,6 +45,9 @@ public:
 public:
    int status_code() const noexcept;
 
+   /// The response header fields, without HTTP/2 and HTTP/3 pseudo-headers.
+   const Fields& fields() const;
+
 public:
    /**
     * Reads a part of the response body.

@@ -37,6 +37,7 @@ struct Upgrade
    std::string settings; ///< decoded payload of the HTTP2-Settings header
    std::string method;
    boost::urls::url url;
+   Fields fields; ///< request headers, without the connection-specific ones
 };
 
 std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,

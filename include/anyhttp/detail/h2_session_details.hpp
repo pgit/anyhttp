@@ -246,6 +246,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          auto stream = this->create_stream(1);
          stream->method = std::move(m_upgrade->method);
          stream->url = std::move(m_upgrade->url);
+         stream->fields = std::move(m_upgrade->fields);
          mlogd("upgraded from HTTP/1.1: {} {}", stream->method, stream->url.buffer());
          stream->on_request();
          stream->on_eof(session, 1);
