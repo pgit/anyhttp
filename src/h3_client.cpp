@@ -48,7 +48,7 @@
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
-#include <ngtcp2/ngtcp2_crypto_ossl.h>
+#include <ngtcp2/ngtcp2_crypto_boringssl.h>
 
 #include <openssl/err.h>
 #include <openssl/rand.h>
@@ -83,24 +83,18 @@ namespace
 {
 
 //
-// One-shot process-wide initialization of ngtcp2_crypto_ossl and the client-role OpenSSL SSL_CTX
-// used for every outgoing QUIC connection.
+// The process-wide client-role BoringSSL SSL_CTX used for every outgoing QUIC connection.
 //
 struct TlsClientContext
 {
    TlsClientContext()
    {
-      static const int init_once = []
-      {
-         if (ngtcp2_crypto_ossl_init() != 0)
-            throw std::runtime_error("ngtcp2_crypto_ossl_init");
-         return 0;
-      }();
-      (void)init_once;
-
       ctx = SSL_CTX_new(TLS_client_method());
       if (!ctx)
          throw std::runtime_error("SSL_CTX_new");
+
+      if (ngtcp2_crypto_boringssl_configure_client_context(ctx) != 0)
+         throw std::runtime_error("ngtcp2_crypto_boringssl_configure_client_context");
 
       static constexpr unsigned char alpn[] = "\x02h3";
       SSL_CTX_set_alpn_protos(ctx, alpn, sizeof(alpn) - 1);

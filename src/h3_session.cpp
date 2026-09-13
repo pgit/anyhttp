@@ -40,14 +40,10 @@ Http3Session::~Http3Session()
       nghttp3_conn_del(h3_);
    if (conn_)
       ngtcp2_conn_del(conn_);
-   if (ossl_ctx_)
+   if (ssl_)
    {
-      if (auto ssl = ngtcp2_crypto_ossl_ctx_get_ssl(ossl_ctx_))
-      {
-         SSL_set_app_data(ssl, nullptr);
-         SSL_free(ssl);
-      }
-      ngtcp2_crypto_ossl_ctx_del(ossl_ctx_);
+      SSL_set_app_data(ssl_, nullptr);
+      SSL_free(ssl_);
    }
 }
 
@@ -453,10 +449,14 @@ void Http3Session::fill_settings(ngtcp2_settings& settings, ngtcp2_transport_par
    params.max_idle_timeout = static_cast<uint64_t>(idle_timeout.count());
 }
 
+//
+// The QUIC specifics were configured on the SSL_CTX already (see the roles' TlsServerContext and
+// TlsClientContext), so with BoringSSL, the session is a plain SSL whose app data leads back to us.
+//
 int Http3Session::setup_tls(SSL_CTX* ssl_ctx, bool is_server)
 {
-   auto* ssl = SSL_new(ssl_ctx);
-   if (!ssl)
+   ssl_ = SSL_new(ssl_ctx);
+   if (!ssl_)
    {
       mloge("SSL_new failed");
       return -1;
@@ -464,30 +464,14 @@ int Http3Session::setup_tls(SSL_CTX* ssl_ctx, bool is_server)
 
    conn_ref_.get_conn = &Http3Session::get_conn;
    conn_ref_.user_data = this;
-   SSL_set_app_data(ssl, &conn_ref_);
+   SSL_set_app_data(ssl_, &conn_ref_);
 
    if (is_server)
-      SSL_set_accept_state(ssl);
+      SSL_set_accept_state(ssl_);
    else
-      SSL_set_connect_state(ssl);
+      SSL_set_connect_state(ssl_);
 
-   auto configure = is_server ? &ngtcp2_crypto_ossl_configure_server_session
-                              : &ngtcp2_crypto_ossl_configure_client_session;
-   if (configure(ssl) != 0)
-   {
-      mloge("ngtcp2_crypto_ossl_configure_{}_session failed", is_server ? "server" : "client");
-      SSL_free(ssl);
-      return -1;
-   }
-
-   if (ngtcp2_crypto_ossl_ctx_new(&ossl_ctx_, ssl) != 0)
-   {
-      mloge("ngtcp2_crypto_ossl_ctx_new failed");
-      SSL_free(ssl);
-      return -1;
-   }
-
-   ngtcp2_conn_set_tls_native_handle(conn_, ossl_ctx_);
+   ngtcp2_conn_set_tls_native_handle(conn_, ssl_);
    return 0;
 }
 
@@ -573,7 +557,7 @@ int Http3Session::cb_handshake_completed(ngtcp2_conn*, void* user)
 {
    auto self = static_cast<Http3Session*>(user);
    logi("[{}] TLS handshake completed: {}", self->log_prefix_,
-        tls_handshake_info(ngtcp2_crypto_ossl_ctx_get_ssl(self->ossl_ctx_)));
+        tls_handshake_info(self->ssl_));
    if (self->setup_http3() != 0)
       return NGTCP2_ERR_CALLBACK_FAILURE;
    return 0;

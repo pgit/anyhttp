@@ -8,7 +8,6 @@
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
-#include <ngtcp2/ngtcp2_crypto_ossl.h>
 
 #include <openssl/ssl.h>
 
@@ -112,7 +111,7 @@ public:
    int handle_expiry();
 
    //
-   // ngtcp2 <-> ngtcp2_crypto_ossl bridge.
+   // ngtcp2 <-> ngtcp2_crypto_boringssl bridge, reached through SSL_get_app_data().
    //
    static ngtcp2_conn* get_conn(ngtcp2_crypto_conn_ref* ref)
    {
@@ -219,7 +218,7 @@ protected:
    asio::any_io_executor executor_;
 
    ngtcp2_conn* conn_ = nullptr;
-   ngtcp2_crypto_ossl_ctx* ossl_ctx_ = nullptr;
+   SSL* ssl_ = nullptr; // also ngtcp2's TLS native handle
    ngtcp2_crypto_conn_ref conn_ref_{};
 
    nghttp3_conn* h3_ = nullptr;

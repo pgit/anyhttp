@@ -69,8 +69,20 @@ add_compile_options(-Wno-inconsistent-missing-override)
 # https://github.com/madmongo1/blog-december-2020/blob/master/CMakeLists.txt
 #
 find_package(Boost 1.88 COMPONENTS thread atomic url filesystem process program_options OPTIONAL_COMPONENTS system REQUIRED)
-find_package(OpenSSL)
 find_package(Threads)
+
+#
+# TLS: BoringSSL -- or rather AWS-LC, which is API compatible and what the devcontainer builds into
+# /opt/boringssl, deliberately away from the system OpenSSL. It only comes as static libraries.
+#
+# Everything in the process has to use the very same TLS library: Boost.Asio's SSL streams,
+# ngtcp2_crypto_boringssl and our own code. Linking the system OpenSSL on top would silently mix
+# up two libraries exporting the same symbols.
+#
+set(BORINGSSL_ROOT /opt/boringssl CACHE PATH "Installation prefix of BoringSSL / AWS-LC")
+list(PREPEND CMAKE_PREFIX_PATH ${BORINGSSL_ROOT}) # ssl-config.cmake finds 'crypto' through it
+find_package(ssl CONFIG REQUIRED)
+message(STATUS "Using TLS library: ${ssl_DIR}")
 
 #
 # nghttp2

@@ -1,7 +1,6 @@
 #include <anyhttp/tls.hpp>
 
 #include <openssl/evp.h>
-#include <openssl/objects.h>
 #include <openssl/ssl.h>
 
 #include <format>
@@ -16,17 +15,16 @@ namespace
 
 /**
  * Key exchange group of the handshake, like the "Server Temp Key" line of h2load, e.g.
- * "X25519 (253 bits)" or "prime256v1 (256 bits)".
+ * "X25519 (253 bits)" or "P-256 (256 bits)".
  */
 std::string key_exchange(SSL* ssl)
 {
    //
-   // The negotiated group is known even for groups OpenSSL has no EVP_PKEY name for, like the
-   // post-quantum hybrids ("X25519MLKEM768") that are the default in OpenSSL 3.5.
+   // The negotiated group is known even for groups that have no EVP_PKEY, like the post-quantum
+   // hybrids ("X25519MLKEM768").
    //
-   std::string name;
-   if (const char* group = SSL_get0_group_name(ssl))
-      name = group;
+   const char* group = SSL_get_group_name(SSL_get_group_id(ssl));
+   std::string name = group ? group : "unknown";
 
    //
    // On the client this is the server's key share, on the server the client's one. Either way,
@@ -34,21 +32,9 @@ std::string key_exchange(SSL* ssl)
    //
    EVP_PKEY* key = nullptr;
    if (SSL_get_peer_tmp_key(ssl, &key) != 1 || !key)
-      return name.empty() ? "unknown" : name;
+      return name;
 
-   if (name.empty())
-   {
-      char group[80];
-      size_t len = 0;
-      if (EVP_PKEY_get_group_name(key, group, sizeof(group), &len) == 1 && len)
-         name.assign(group, len);
-      else if (const char* sn = OBJ_nid2sn(EVP_PKEY_get_id(key)))
-         name = sn;
-      else
-         name = "unknown";
-   }
-
-   auto bits = EVP_PKEY_get_bits(key);
+   auto bits = EVP_PKEY_bits(key);
    EVP_PKEY_free(key);
 
    return std::format("{} ({} bits)", name, bits);
