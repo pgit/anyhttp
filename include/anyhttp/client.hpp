@@ -104,6 +104,16 @@ public:
    using GetResponse = void(boost::system::error_code, Response);
    using GetResponseHandler = asio::any_completion_handler<GetResponse>;
 
+   /**
+    * Waits for the response to this request, until its header has been received.
+    *
+    * With HTTP/1.1, responses arrive in the order the requests were sent, one after the other.
+    * Getting the response to a request whose predecessors' responses have not been read to their
+    * end does not wait for that to happen, but fails immediately with
+    * \c asio::error::would_block. After a response could not be read -- it was released before
+    * its end, or its request was released without asking for it -- getting any later response
+    * fails with \c asio::error::connection_aborted. See README.md, "Concurrent Requests".
+    */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken = DefaultCompletionToken>
    auto async_get_response(CompletionToken&& token = CompletionToken())
    {

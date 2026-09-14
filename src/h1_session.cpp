@@ -5,6 +5,7 @@
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/h1_backend.hpp"
 #include "anyhttp/h2_backend.hpp"
+#include "anyhttp/literals.hpp"
 #include "anyhttp/server.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
@@ -18,8 +19,8 @@
 #include <boost/asio/ip/tcp.hpp>
 
 #include <boost/beast/core.hpp>
-#include <boost/beast/core/detail/base64.hpp>
 #include <boost/beast/core/buffer_traits.hpp>
+#include <boost/beast/core/detail/base64.hpp>
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/core/stream_traits.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
@@ -40,6 +41,7 @@
 #include <boost/url/parse.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -76,6 +78,7 @@ public:
         m_executor(session_.get_executor()) // survives detach(), see get_executor()
    {
       parser.body_limit(std::numeric_limits<uint64_t>::max());
+      session_.attach(*this);
    }
 
    void destroy() noexcept override
@@ -95,13 +98,25 @@ public:
          if (ec)
             logw("destroy: shutdown: {}", what(ec));
       }
+      finish();
    }
 
    ~BeastReader() override
    {
       assert(!reading);
+      finish();
       if (session)
-         session->rx = nullptr;
+         session->release(*this);
+   }
+
+   /// Tells the session, once, that this reader is done with the stream, see reader_finished().
+   void finish()
+   {
+      if (session && !finished)
+      {
+         finished = true;
+         session->reader_finished(parser.is_done());
+      }
    }
    void detach() override
    {
@@ -128,10 +143,6 @@ public:
 
    void async_read_some(asio::mutable_buffer body_buffer, ReadSomeHandler&& handler) override
    {
-      buffer.reserve(64 * 1024);
-      mlogd("async_read_some: is_done={} size={} capacity={}", parser.is_done(), buffer.size(),
-            buffer.capacity());
-
       assert(!reading);
 
       //
@@ -155,6 +166,10 @@ public:
          return;
       }
 
+      buffer.reserve(64_k); // the buffer is the session's, so not before checking for it
+      mlogd("async_read_some: is_done={} size={} capacity={}", parser.is_done(), buffer.size(),
+            buffer.capacity());
+
       reading = true;
       parser.get().body().data = body_buffer.data();
       parser.get().body().size = body_buffer.size();
@@ -172,6 +187,9 @@ public:
                ec.message(), parser.is_done(), buffer.size(), buffer.capacity());
          if (ec == beast::http::error::need_buffer)
             ec = {}; // FIXME: maybe we should keep 'need_buffer' to avoid extra empty round trip
+
+         if (parser.is_done())
+            finish();
 
          //
          // Nothing of the body came out of this round -- either the parser is now done, in which
@@ -207,6 +225,7 @@ public:
    std::optional<unsigned int> m_status_code = 0;
    boost::url m_url;
    bool reading = false;
+   bool finished = false; // see finish()
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -254,13 +273,14 @@ public:
       : session(&session_), stream(stream_),
         m_executor(session_.get_executor()) // survives detach(), see get_executor()
    {
+      session_.attach(*this);
    }
 
    ~WriterBase() override
    {
       assert(!writing);
       if (session)
-         session->wx = nullptr;
+         session->release(*this);
    }
 
    inline auto logPrefix() const { return session ? session->logPrefix() : "DETACHED"; }
@@ -284,6 +304,7 @@ public:
       // prescribes: a zero-length non-EOF write is a free no-op wherever the body stands (it
       // would otherwise turn into an empty chunk); after the body has ended, data has no body
       // left to belong to -- through either entry point -- while a bare re-end is idempotent.
+      // Only then does it matter that the session, and with it the stream, may be gone.
       //
       if (empty && !eof)
       {
@@ -297,6 +318,14 @@ public:
             mloge("async_write: body has already been ended");
          complete_immediately(std::move(handler), get_executor(),
                               empty ? error_code{} : errc::make_error_code(errc::broken_pipe));
+         return;
+      }
+
+      if (!session)
+      {
+         mlogw("async_write: session already gone");
+         complete_immediately(std::move(handler), get_executor(),
+                              make_error_code(asio::error::connection_aborted));
          return;
       }
 
@@ -377,8 +406,11 @@ public:
             //
             mlogw("async_write: canceled after writing {} of {} bytes", n, expected);
             cancelled = true;
-            mlogw("async_write: canceled, closing stream");
-            get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send);
+            if (session) // otherwise, the stream is gone already
+            {
+               mlogw("async_write: canceled, closing stream");
+               get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send);
+            }
          }
          else if (ec)
          {
@@ -400,6 +432,16 @@ public:
          if (!ec && eof)
             eof_submitted = true;
 
+         if (session && eof_submitted)
+            body_ended();
+         else if (session && cancelled)
+            write_failed();
+
+         //
+         // The handler may resume the caller right here. If it releases the writer, that has to
+         // take effect immediately, not only when this callback is gone.
+         //
+         self.reset();
          std::move(handler)(ec);
       };
 
@@ -408,6 +450,12 @@ public:
          forwarding_handler<decltype(cb), decltype(ex), decltype(alloc), decltype(cs)>{
             std::move(cb), std::move(ex), std::move(alloc), std::move(cs)});
    }
+
+   /// Called when a write has ended the body, before its handler is invoked.
+   virtual void body_ended() {}
+
+   /// Called when a write has failed, leaving the stream unusable for this message.
+   virtual void write_failed() {}
 
    // ----------------------------------------------------------------------------------------------
 
@@ -454,6 +502,7 @@ public:
    using super::logPrefix;
    using super::message;
    using super::serializer;
+   using super::session;
    using super::stream;
    using super::submit_headers;
 
@@ -473,6 +522,14 @@ public:
    void async_submit(StatusHandler&& handler, unsigned int status_code,
                      const Fields& headers) override
    {
+      if (!session)
+      {
+         mlogw("async_submit: session already gone");
+         complete_immediately(std::move(handler), super::get_executor(),
+                              make_error_code(asio::error::connection_aborted));
+         return;
+      }
+
       message.result(status_code);
 
       if (message.find(http::field::date) == message.end())
@@ -509,6 +566,8 @@ class RequestWriter
       WriterBase<client::Request::Impl, Stream, http::request_serializer<http::buffer_body>>;
 
 public:
+   using super::cancelled;
+   using super::eof_submitted;
    using super::logPrefix;
    using super::message;
    using super::response_requested;
@@ -518,11 +577,61 @@ public:
    using super::submit_headers;
 
 public:
-   inline RequestWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_)
+   inline RequestWriter(ClientSession<Stream>& session_, Stream& stream_) : super(session_, stream_)
    {
    }
 
-   ~RequestWriter() = default;
+   ~RequestWriter() override
+   {
+      if (session)
+         client_session().request_released(*this);
+   }
+
+   ClientSession<Stream>& client_session()
+   {
+      assert(session);
+      return static_cast<ClientSession<Stream>&>(*session);
+   }
+
+   // ----------------------------------------------------------------------------------------------
+
+   /**
+    * Whether the request has a body, going by its framing (RFC 9112, section 6.3): a request
+    * without 'Transfer-Encoding' and without a 'Content-Length' other than zero has none. As
+    * ClientSession::async_submit() makes every request without 'Content-Length' chunked, that
+    * leaves "Content-Length: 0". The request method plays no part in this.
+    */
+   bool has_body() const
+   {
+      if (message.chunked())
+         return true;
+
+      auto value = message[http::field::content_length];
+      size_t length = 0;
+      auto [end, ec] = std::from_chars(value.data(), value.data() + value.size(), length);
+      return ec != std::errc{} || end != value.data() + value.size() || length != 0;
+   }
+
+   /// Called when writing the header is done. A request without a body is complete by then.
+   void header_written(error_code ec)
+   {
+      if (ec)
+      {
+         mlogw("async_submit: {}", what(ec));
+         cancelled = true;
+         if (session)
+            client_session().request_failed(*this);
+      }
+      else if (!has_body())
+      {
+         eof_submitted = true;
+         if (session)
+            client_session().request_complete(*this);
+      }
+   }
+
+   void body_ended() override { client_session().request_complete(*this); }
+   void write_failed() override { client_session().request_failed(*this); }
 
    void content_length(std::optional<size_t> content_length) override
    {
@@ -537,6 +646,14 @@ public:
    void async_submit(StatusHandler&& handler, unsigned int status_code,
                      const Fields& headers) override
    {
+      if (!session)
+      {
+         mlogw("async_submit: session already gone");
+         complete_immediately(std::move(handler), get_executor(),
+                              make_error_code(asio::error::connection_aborted));
+         return;
+      }
+
       submit_headers(headers);
       message.method(http::verb::post);
 
@@ -565,6 +682,34 @@ public:
          });
          return;
       }
+
+      if (!session)
+      {
+         mlogw("async_get_response: session already gone");
+         complete_immediately(std::move(handler), get_executor(),
+                              make_error_code(asio::error::connection_aborted),
+                              client::Response{nullptr});
+         return;
+      }
+
+      //
+      // Responses arrive in the order the requests were sent. Reading the response to this one
+      // has to wait until the responses to all earlier requests have been read. Instead of
+      // waiting, this is an error. See ClientSession for details.
+      //
+      auto& cs = client_session();
+      error_code ec;
+      if (cs.m_receive_failed)
+         ec = asio::error::connection_aborted;
+      else if (sequence != cs.m_responses_read)
+         ec = asio::error::would_block;
+      if (ec)
+      {
+         mlogw("async_get_response: {} (request #{}, {} responses read)", what(ec), sequence,
+               cs.m_responses_read);
+         complete_immediately(std::move(handler), get_executor(), ec, client::Response{nullptr});
+         return;
+      }
       response_requested = true;
 
       auto& buffer = session->m_buffer;
@@ -574,7 +719,6 @@ public:
          std::make_unique<BeastReader<client::Response::Impl, std::decay_t<decltype(stream)>,
                                       decltype(buffer), http::response_parser<http::buffer_body>>>(
             *session, stream, buffer);
-      session->rx = reader.get();
       http::response_parser<http::buffer_body>& parser = reader->parser;
 
       auto ex = get_associated_executor(handler, get_executor());
@@ -596,8 +740,17 @@ public:
          // If reading the headers was cancelled before receiving anything, we can allow another
          // attempt. TODO: If we move the parser into the session, we can even relax this further.
          //
+         // As this reader has not taken anything from the connection, it does not count as having
+         // failed to read the response, either.
+         //
          if (ec == errc::operation_canceled && !reader->parser.got_some())
+         {
             response_requested = false;
+            reader->finished = true;
+         }
+
+         if (!ec && reader->parser.is_done()) // a response without body is complete already
+            reader->finish();
 
          std::move(handler)(ec, client::Response(std::move(reader)));
       };
@@ -608,6 +761,9 @@ public:
    }
 
    client::Request::GetResponseHandler responseHandler;
+
+   /// Position of this request on the connection, which is also the position of its response.
+   size_t sequence = 0;
 };
 
 // =================================================================================================
@@ -624,16 +780,12 @@ template <typename Stream>
 BeastSession<Stream>::~BeastSession()
 {
    mlogd("session deleted");
-   if (wx)
-   {
-      mlogw("dtor: detaching writer");
-      wx->detach();
-   }
-   if (rx)
-   {
-      mlogw("dtor: detaching reader");
-      rx->detach();
-   }
+   if (!m_writers.empty())
+      mlogw("dtor: detaching {} writer(s)", m_writers.size());
+   detach_writers();
+   if (!m_readers.empty())
+      mlogw("dtor: detaching {} reader(s)", m_readers.size());
+   detach_readers();
 }
 
 template <typename Stream>
@@ -764,8 +916,7 @@ static std::optional<nghttp2::Upgrade> h2c_upgrade(const http::request<http::buf
 }
 
 static std::shared_ptr<Session::Impl> make_h2c_session(server::Server::Impl& server,
-                                                       any_io_executor executor,
-                                                       tcp_stream& stream,
+                                                       any_io_executor executor, tcp_stream& stream,
                                                        nghttp2::Upgrade&& upgrade)
 {
    return nghttp2::make_server_session(server, std::move(executor), stream.release_socket(),
@@ -820,13 +971,11 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    size_t requestCounter = 0;
    while (!m_closed)
    {
+      detach_readers(); // the previous request, if still around, is done with the stream
       auto reader =
          std::make_unique<BeastReader<server::Request::Impl, decltype(m_stream), decltype(m_buffer),
                                       http::request_parser<http::buffer_body>>>(*this, m_stream,
                                                                                 m_buffer);
-      if (rx)
-         rx->detach();
-      rx = reader.get();
 
       logd("");
       mlogd("waiting for request (size={} capacity={})", m_buffer.size(), m_buffer.capacity());
@@ -894,8 +1043,8 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          }
 
          mlogi("upgrading to h2c, {} bytes in buffer", m_buffer.size());
-         m_upgraded = make_h2c_session(server(), super::get_executor(), m_stream,
-                                       std::move(*upgrade));
+         m_upgraded =
+            make_h2c_session(server(), super::get_executor(), m_stream, std::move(*upgrade));
          co_await m_upgraded->do_session(std::move(m_buffer));
          mlogi("h2c session done, served {} requests before upgrade", requestCounter - 1);
          co_return;
@@ -904,10 +1053,8 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       //
       // Prepare response.
       //
+      detach_writers(); // likewise for the previous response
       auto writer = std::make_shared<ResponseWriter<Stream>>(*this, m_stream);
-      if (wx)
-         wx->detach();
-      wx = writer.get();
 
       http::response<http::buffer_body>& response = writer->message;
       http::response_serializer<http::buffer_body>& serializer = writer->serializer;
@@ -1035,8 +1182,25 @@ template <typename Stream>
 void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::url url,
                                          const Fields& headers)
 {
+   //
+   // Only one request can be incomplete at a time, see ClientSession. Instead of waiting for the
+   // previous one, which might never happen if the caller is the one to complete it, this is an
+   // error.
+   //
+   error_code ec;
+   if (m_send_failed)
+      ec = asio::error::connection_aborted;
+   else if (m_sending)
+      ec = asio::error::would_block;
+   if (ec)
+   {
+      mlogw("async_submit: {} ({})", what(ec),
+            m_sending ? "previous request not complete yet" : "an earlier request failed");
+      complete_immediately(std::move(handler), super::get_executor(), ec, client::Request{nullptr});
+      return;
+   }
+
    auto writer = std::make_unique<RequestWriter<Stream>>(*this, m_stream);
-   wx = writer.get();
    auto& request = writer->message;
 
    request.base().target(url.encoded_target());
@@ -1053,20 +1217,68 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
    for (const auto& header : request)
       mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
 
-   //
-   // TODO: make writer shared? put into queue
-   //
+   writer->sequence = m_requests_sent++;
+   m_sending = writer.get();
+
    auto& serializer = writer->serializer;
-   auto cs = get_associated_cancellation_slot(handler);
    auto ex = get_associated_executor(handler, super::get_executor());
-   auto alloc = get_associated_allocator(handler);
-   auto cb = [handler = std::move(handler), writer = std::move(writer), this](
-                         boost::system::error_code ec, size_t n) mutable { //
-                         std::move(handler)(std::move(ec),
-                                            client::Request(std::move(writer)));
-                      };
+   auto cb = [handler = std::move(handler), writer = std::move(writer)] //
+      (error_code ec, size_t) mutable
+   {
+      writer->header_written(ec);
+      std::move(handler)(ec, client::Request(std::move(writer)));
+   };
 
    async_write_header(m_stream, serializer, bind_executor(ex, std::move(cb)));
+}
+
+// -------------------------------------------------------------------------------------------------
+
+template <typename Stream>
+void ClientSession<Stream>::request_complete(RequestWriter<Stream>& request)
+{
+   assert(m_sending == &request);
+   mlogd("request #{} complete", request.sequence);
+   m_sending = nullptr;
+}
+
+template <typename Stream>
+void ClientSession<Stream>::request_failed(RequestWriter<Stream>& request)
+{
+   mlogw("request #{} failed, no more requests can be sent", request.sequence);
+   m_send_failed = true;
+   m_sending = nullptr;
+}
+
+template <typename Stream>
+void ClientSession<Stream>::request_released(RequestWriter<Stream>& request)
+{
+   //
+   // The connection is in the middle of this request, and nothing else can be sent any more.
+   //
+   if (m_sending == &request)
+      request_failed(request);
+
+   //
+   // Its response will be coming, but nobody is going to read it.
+   //
+   if (!request.response_requested)
+   {
+      mlogw("request #{} released without getting its response", request.sequence);
+      m_receive_failed = true;
+   }
+}
+
+template <typename Stream>
+void ClientSession<Stream>::reader_finished(bool complete)
+{
+   if (complete)
+      ++m_responses_read;
+   else
+   {
+      mlogw("response #{} not read completely", m_responses_read);
+      m_receive_failed = true;
+   }
 }
 
 // =================================================================================================
