@@ -7,6 +7,7 @@
 
 #include "anyhttp/any_async_stream.hpp"
 #include "anyhttp/h2_session.hpp"
+#include "anyhttp/literals.hpp"
 
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
@@ -158,7 +159,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
 template <typename Stream>
 awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
 {
-   m_buffer.reserve(64 * 1024);
+   m_buffer.reserve(64_k);
 
    unsigned int reason = NGHTTP2_NO_ERROR;
    while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
@@ -215,7 +216,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       throw std::runtime_error("nghttp2_session_server_new");
 
 #if 1
-   const uint32_t window_size = 1024 * 1024;
+   const uint32_t window_size = 1_m;
    std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
                                              {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
@@ -234,9 +235,9 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    {
       const auto& settings = m_upgrade->settings;
       const bool head_request = m_upgrade->method == "HEAD";
-      if (auto rv = nghttp2_session_upgrade2(session,
-                                             reinterpret_cast<const uint8_t*>(settings.data()),
-                                             settings.size(), head_request, nullptr))
+      if (auto rv =
+             nghttp2_session_upgrade2(session, reinterpret_cast<const uint8_t*>(settings.data()),
+                                      settings.size(), head_request, nullptr))
       {
          mloge("nghttp2_session_upgrade2: {}", nghttp2_strerror(rv));
          nghttp2_session_terminate_session(session, NGHTTP2_PROTOCOL_ERROR);
@@ -304,7 +305,7 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
       throw std::runtime_error("nghttp2_session_client_new");
 
 #if 1
-   const uint32_t window_size = 1024 * 1024;
+   const uint32_t window_size = 1_m;
    std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
                                              {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
