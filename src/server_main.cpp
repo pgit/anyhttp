@@ -142,6 +142,14 @@ int main(int argc, char* argv[])
          co_await serve_file(std::move(request), std::move(response), "test", "/test");
       else if (path == "/eat_request")
          co_await eat_request(std::move(request), std::move(response));
+      else if (path == "/upload")
+      {
+         // Unlike eat_request, respond only after the whole body is in: clients such as h2load
+         // stop uploading as soon as the response is complete.
+         co_await drain(request);
+         co_await response.async_submit(200, {});
+         co_await response.async_write_eof();
+      }
       else if (path == "/" || path == "/h2spec")
          co_await h2spec(std::move(request), std::move(response));
       else
