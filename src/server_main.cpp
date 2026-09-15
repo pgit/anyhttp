@@ -19,6 +19,9 @@
 #include <print>
 #include <ranges>
 
+#include <sys/ioctl.h>
+#include <unistd.h>
+
 namespace rv = std::ranges::views;
 
 using namespace std::chrono_literals;
@@ -37,8 +40,12 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
 {
    Config config;
 
-   // Define program options
-   po::options_description desc("Allowed options");
+   // Define program options, wrapping the help text at the terminal's width (it goes to stderr)
+   winsize ws{};
+   unsigned columns = ::ioctl(STDERR_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col >= 40
+                         ? ws.ws_col
+                         : po::options_description::m_default_line_length;
+   po::options_description desc("Allowed options", columns, columns / 2);
    auto opts = desc.add_options();
    opts("help,h", "produce help message");
    opts("verbose,v", po::value<std::vector<std::string>>()->zero_tokens()->composing(),
