@@ -50,6 +50,10 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
         "HTTP/3 testing: probability (0.0 .. 1.0) of dropping a received QUIC packet");
    opts("drop-tx", po::value(&config.server.drop_rate_tx)->default_value(0.0),
         "HTTP/3 testing: probability (0.0 .. 1.0) of dropping a QUIC packet before sending it");
+   opts("disable-gro", po::bool_switch(&config.server.disable_gro),
+        "HTTP/3 benchmarking: don't enable UDP_GRO (receive offload) on the UDP socket");
+   opts("disable-gso", po::bool_switch(&config.server.disable_gso),
+        "HTTP/3 benchmarking: don't use UDP_SEGMENT (send offload), one sendto() per packet");
 
    po::variables_map vm;
    try

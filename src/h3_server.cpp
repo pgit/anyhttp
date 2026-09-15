@@ -304,7 +304,7 @@ private:
 
    asio::steady_timer done_signal_; // used to wake do_session() on connection close
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
-   bool no_gso_ = false; // set once sendmsg() rejected UDP_SEGMENT, see send_datagrams()
+   bool no_gso_ = false; // Config::disable_gso, or sendmsg() rejected UDP_SEGMENT
 };
 
 //
@@ -483,7 +483,8 @@ Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Add
    : http3::Http3Session(server.config().use_strand
                             ? asio::any_io_executor{asio::make_strand(server.get_executor())}
                             : server.get_executor()),
-     server_(server), ep_(ep), remote_(remote), done_signal_(get_executor())
+     server_(server), ep_(ep), remote_(remote), done_signal_(get_executor()),
+     no_gso_(server.config().disable_gso)
 {
    log_prefix_ = std::format("h3:{}", straddr(&remote_.su.sa, remote_.len));
 
@@ -868,11 +869,13 @@ Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endp
       socket_->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
       socket_->set_option(socket_option::integer<IPPROTO_IP, IP_PKTINFO>(1));
    }
-   socket_->set_option(socket_option::integer<IPPROTO_UDP, UDP_GRO>(1));
+   if (!config().disable_gro)
+      socket_->set_option(socket_option::integer<IPPROTO_UDP, UDP_GRO>(1));
    socket_->non_blocking(true);
 
    socket_->bind(endpoint);
-   logi("Server: UDP listening on {}", endpoint);
+   logi("Server: UDP listening on {} (GRO {}, GSO {})", endpoint,
+        config().disable_gro ? "off" : "on", config().disable_gso ? "off" : "on");
 }
 
 // -------------------------------------------------------------------------------------------------

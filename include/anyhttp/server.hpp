@@ -46,6 +46,14 @@ struct Config
    //
    double drop_rate_rx = 0.0;
    double drop_rate_tx = 0.0;
+
+   //
+   // HTTP/3 only, for benchmarking: turn off the kernel's UDP offloads. Without GRO, every received
+   // datagram costs a recvmsg() of its own; without GSO, every QUIC packet costs a sendto() of its
+   // own instead of a whole same-sized run going out in one sendmsg().
+   //
+   bool disable_gro = false;
+   bool disable_gso = false;
 };
 
 // =================================================================================================
