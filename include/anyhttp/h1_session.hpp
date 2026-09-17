@@ -119,7 +119,8 @@ public:
    ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
 
    void destroy() noexcept override;
-   void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers) override;
+   void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
+                     const Fields& headers) override;
    awaitable<void> do_session(Buffer&& data) override;
 
 private:
@@ -194,7 +195,8 @@ class ClientSession : public ClientSessionBase, public BeastSession<Stream>
 public:
    ClientSession(client::Client::Impl& parent, any_io_executor executor, Stream&& stream);
 
-   void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers) override;
+   void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
+                     const Fields& headers) override;
    awaitable<void> do_session(Buffer&& data) override;
 
    // ----------------------------------------------------------------------------------------------

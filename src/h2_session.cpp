@@ -422,8 +422,8 @@ NGHttp2Session::~NGHttp2Session()
 
 // =================================================================================================
 
-void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
-                                  const Fields& headers)
+void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view method,
+                                  boost::urls::url url, const Fields& headers)
 {
    mlogi("submit: {}", url.buffer());
 
@@ -449,14 +449,14 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
    // TODO: CONNECT
    //       https://datatracker.ietf.org/doc/html/rfc7540#section-8.3
    //
-   std::string method("POST");
+   std::string method_str(method);
    std::string scheme(url.scheme());
    std::string target(url.encoded_target());
    std::string authority(url.host_address());
 
    auto nva = boost::container::small_vector<nghttp2_nv, 16>();
    nva.reserve(4 + std::distance(headers.begin(), headers.end()));
-   nva.push_back(make_nv_ls(":method", method));
+   nva.push_back(make_nv_ls(":method", method_str));
    nva.push_back(make_nv_ls(":scheme", scheme));
    nva.push_back(make_nv_ls(":path", target));
    nva.push_back(make_nv_ls(":authority", authority));
@@ -470,7 +470,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
       nva.push_back(make_nv_ls(item.name_string(), item.value()));
    }
 
-   logd("[{}] {} {}", stream->logPrefix, method, url.buffer());
+   logd("[{}] {} {}", stream->logPrefix, method_str, url.buffer());
    for (auto nv : nva)
       logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->logPrefix, truncated(name_of(nv)),
            truncated(value_of(nv)));

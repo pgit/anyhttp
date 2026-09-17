@@ -70,7 +70,8 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers) override;
+   void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
+                     const Fields& headers) override;
 
    // ----------------------------------------------------------------------------------------------
 

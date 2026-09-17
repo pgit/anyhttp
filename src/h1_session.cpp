@@ -1208,15 +1208,15 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-void ServerSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::url url,
-                                         const Fields& headers)
+void ServerSession<Stream>::async_submit(SubmitHandler&& handler, std::string_view method,
+                                         boost::urls::url url, const Fields& headers)
 {
    assert(false);
 }
 
 template <typename Stream>
-void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::url url,
-                                         const Fields& headers)
+void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_view method,
+                                         boost::urls::url url, const Fields& headers)
 {
    //
    // Only one request can be incomplete at a time, see ClientSession. Instead of waiting for the
@@ -1240,7 +1240,7 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
    auto& request = writer->message;
 
    request.base().target(url.encoded_target());
-   request.method(http::verb::post);
+   request.method_string(method);
    request.set(http::field::user_agent, "anyhttp");
    add_fields(request, headers);
    if (request.find(http::field::host) == request.end())
