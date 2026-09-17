@@ -263,7 +263,8 @@ public:
    // it, giving one QUIC connection the same single-threaded world a TCP connection gets from
    // the strand its socket lives on.
    //
-   void async_submit(SubmitHandler&& handler, boost::urls::url, const Fields&) override;
+   void async_submit(SubmitHandler&& handler, std::string_view, boost::urls::url,
+                     const Fields&) override;
    awaitable<void> do_session(Buffer&& data) override;
    void destroy() noexcept override;
 
@@ -527,7 +528,8 @@ Http3ServerSession::~Http3ServerSession()
 
 // -------------------------------------------------------------------------------------------------
 
-void Http3ServerSession::async_submit(SubmitHandler&& handler, boost::urls::url, const Fields&)
+void Http3ServerSession::async_submit(SubmitHandler&& handler, std::string_view, boost::urls::url,
+                                      const Fields&)
 {
    // A server does not initiate requests; see Http3ClientSession::async_submit().
    std::move(handler)(errc::make_error_code(errc::operation_not_supported),

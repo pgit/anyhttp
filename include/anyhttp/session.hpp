@@ -14,6 +14,9 @@ namespace anyhttp
 using Submit = void(boost::system::error_code, client::Request);
 using SubmitHandler = boost::asio::any_completion_handler<Submit>;
 
+using Get = void(boost::system::error_code, client::Message);
+using GetHandler = boost::asio::any_completion_handler<Get>;
+
 class Session
 {
 public:
@@ -69,10 +72,52 @@ public:
          token, std::move(url), headers);
    }
 
+   /**
+    * Performs a whole GET request in one operation, and hands back the whole response.
+    *
+    * This is the short way through what \ref async_submit() spreads over four steps: it submits
+    * the request, ends its (empty) body, waits for the response and reads all of it into a
+    * \c client::Message -- status, header fields and body as a \c std::string:
+    *
+    * \code
+    *    auto message = co_await session.async_get(url);
+    *    EXPECT_EQ(message.result_int(), 200);
+    *    EXPECT_EQ(message.body(), "Hello, World!");
+    * \endcode
+    *
+    * The convenience is paid for with memory: the body is buffered in full, however large it
+    * turns out to be, as there is no way to look at it before it is complete. Anything that needs
+    * the body while it arrives, a request body of its own, or a method other than GET still wants
+    * \ref async_submit().
+    *
+    * The request goes out with "Content-Length: 0" unless \p headers already frames a body, so
+    * that HTTP/1.1 does not have to make it chunked.
+    *
+    * Any error along the way completes this operation: the ones \ref async_submit() describes,
+    * \c http::error::header_limit for a response header section over
+    * \c client::Config::max_header_size, and \c http::error::partial_message for a body cut
+    * short. The message that comes with an error is empty, and says \c status::unknown rather
+    * than the 200 a default-constructed Beast response would claim. A response that says 404, on
+    * the other hand, is not an error -- it is a response, and arrives as one.
+    */
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Get) CompletionToken = DefaultCompletionToken>
+   auto async_get(boost::urls::url url, const Fields& headers = {},
+                  CompletionToken&& token = CompletionToken())
+   {
+      auto executor = asio::get_associated_executor(token, get_executor());
+      return asio::async_initiate<CompletionToken, Get>(
+         asio::bind_executor(executor,
+                             [this](auto&& handler, boost::urls::url url, const Fields& headers) {//
+            async_get_any(std::move(handler), std::move(url), headers);
+         }),
+         token, std::move(url), headers);
+   }
+
    boost::asio::any_io_executor get_executor() const noexcept;
 
 private:
    void async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers);
+   void async_get_any(GetHandler&& handler, boost::urls::url url, const Fields& headers);
    std::shared_ptr<Impl> impl;
 };
 
