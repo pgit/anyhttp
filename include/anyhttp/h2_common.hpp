@@ -32,6 +32,9 @@ inline nghttp2_nv make_nv_ls(std::string_view key, std::string_view value)
    return {(uint8_t*)key.data(), (uint8_t*)value.data(), key.size(), value.size(), 0};
 }
 
+inline std::string_view name_of(const nghttp2_nv& nv) { return {(const char*)nv.name, nv.namelen}; }
+inline std::string_view value_of(const nghttp2_nv& nv) { return {(const char*)nv.value, nv.valuelen}; }
+
 // =================================================================================================
 
 } // namespace anyhttp

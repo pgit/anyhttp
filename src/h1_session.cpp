@@ -90,6 +90,7 @@ public:
       : session(&session_), stream(stream_), buffer(buffer_),
         m_executor(session_.get_executor()) // survives detach(), see get_executor()
    {
+      // parser.header_limit(std::numeric_limits<uint32_t>::max());
       parser.body_limit(std::numeric_limits<uint64_t>::max());
       session_.attach(*this);
    }
@@ -554,7 +555,7 @@ public:
 
       mlogd("{} {}", message.result_int(), message.reason());
       for (const auto& header : message)
-         mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
+         mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()), truncated(header.value()));
 
       //
       // TODO: For bundling writing the header and body, we should just post the writing here,
@@ -743,7 +744,7 @@ public:
             http::response_parser<http::buffer_body>::value_type& msg = reader->parser.get();
             mlogd("{} {}", msg.result_int(), msg.reason());
             for (const auto& header : msg)
-               mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
+               mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()), truncated(header.value()));
          }
          else
             mlogw("async_read_header: {} len={}", ec.message(), len);
@@ -1034,7 +1035,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
       mlogd("{} {} (need_eof={})", request.method_string(), reader->m_url.buffer(), need_eof);
       for (auto& header : request)
-         mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
+         mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()), truncated(header.value()));
 
       //
       // Upgrade to h2c, if requested: Answer with "101 Switching Protocols" and hand over the
@@ -1226,7 +1227,7 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
 
    mlogd("{} {}", request.method_string(), url.buffer());
    for (const auto& header : request)
-      mlogd("  \x1b[1;34m{}\x1b[0m: {}", header.name_string(), header.value());
+      mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()), truncated(header.value()));
 
    writer->sequence = m_requests_sent++;
    m_sending = writer.get();

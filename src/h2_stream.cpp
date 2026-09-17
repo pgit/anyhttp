@@ -244,7 +244,8 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    }
 
    for (auto nv : nva)
-      logd("[{0}]   \x1b[1;34m{1:n}\x1b[0m: {1:v}", stream->logPrefix, nv);
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->logPrefix, truncated(name_of(nv)),
+           truncated(value_of(nv)));
 
    // TODO: If we already know that there is no body, don't set a producer.
    nghttp2_data_provider2 prd;
@@ -805,7 +806,7 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
 void NGHttp2Stream::log_received_headers()
 {
    for (const auto& [name, value] : received_headers)
-      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", logPrefix, name, value);
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", logPrefix, truncated(name), truncated(value));
    received_headers.clear();
 }
 
