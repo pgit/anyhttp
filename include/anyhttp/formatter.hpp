@@ -10,8 +10,10 @@
 #include <boost/url/authority_view.hpp>
 #include <boost/url/pct_string_view.hpp>
 
-#include <thread>
+#include <cstddef>
 #include <format>
+#include <string_view>
+#include <thread>
 
 // =================================================================================================
 
@@ -75,6 +77,48 @@ struct std::formatter<boost::beast::http::field>
    auto format(const boost::beast::http::field& field, FormatContext& ctx) const
    {
       return std::format_to(ctx.out(), "{}", to_string(field));
+   }
+};
+
+// =================================================================================================
+
+namespace anyhttp
+{
+
+/// A string to be logged, cut short if it is longer than \c max_size bytes. See truncated().
+struct Truncated
+{
+   std::string_view text;
+   size_t max_size;
+};
+
+/// Default for truncated(): long enough for any regular header, short enough to keep the log readable.
+inline constexpr size_t max_logged_size = 80;
+
+/**
+ * Wraps \p text for logging, so that only its first \p max_size bytes are printed, followed by the
+ * total size. Meant for header names and values, which may be of almost any size:
+ * \code
+ * logd("{}: {}", truncated(name), truncated(value)); // x-large: aaaa... (30000 bytes, truncated)
+ * \endcode
+ */
+inline Truncated truncated(std::string_view text, size_t max_size = max_logged_size)
+{
+   return {text, max_size};
+}
+
+} // namespace anyhttp
+
+template <>
+struct std::formatter<anyhttp::Truncated> : std::formatter<std::string_view>
+{
+   auto format(const anyhttp::Truncated& value, std::format_context& ctx) const
+   {
+      if (value.text.size() <= value.max_size)
+         return std::formatter<std::string_view>::format(value.text, ctx);
+
+      return std::format_to(ctx.out(), "{}... ({} bytes, truncated)",
+                            value.text.substr(0, value.max_size), value.text.size());
    }
 };
 

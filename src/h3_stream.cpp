@@ -616,6 +616,23 @@ void Http3Stream::finish_active_write()
 
 void Http3Stream::on_header(std::string_view name, std::string_view value)
 {
+   //
+   // Beyond the limit, fields are not stored any more. What happens to the stream is decided once
+   // the field section is complete, see on_headers_complete() of the server and client streams.
+   //
+   if (header_limit_exceeded)
+      return;
+
+   header_size += header_field_size(name, value);
+   if (header_size > session.max_header_size())
+   {
+      logw("[{}] header section exceeds {} bytes, ignoring the rest", log_prefix,
+           session.max_header_size());
+      header_limit_exceeded = true;
+      received_headers.clear();
+      return;
+   }
+
    if (spdlog::default_logger_raw()->should_log(spdlog::level::debug))
       received_headers.emplace_back(name, value);
 

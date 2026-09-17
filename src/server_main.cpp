@@ -19,6 +19,9 @@
 #include <print>
 #include <ranges>
 
+#include <sys/ioctl.h>
+#include <unistd.h>
+
 namespace rv = std::ranges::views;
 
 using namespace std::chrono_literals;
@@ -37,8 +40,12 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
 {
    Config config;
 
-   // Define program options
-   po::options_description desc("Allowed options");
+   // Define program options, wrapping the help text at the terminal's width (it goes to stderr)
+   winsize ws{};
+   unsigned columns = ::ioctl(STDERR_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col >= 40
+                         ? ws.ws_col
+                         : po::options_description::m_default_line_length;
+   po::options_description desc("Allowed options", columns, columns / 2);
    auto opts = desc.add_options();
    opts("help,h", "produce help message");
    opts("verbose,v", po::value<std::vector<std::string>>()->zero_tokens()->composing(),
@@ -50,6 +57,13 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
         "HTTP/3 testing: probability (0.0 .. 1.0) of dropping a received QUIC packet");
    opts("drop-tx", po::value(&config.server.drop_rate_tx)->default_value(0.0),
         "HTTP/3 testing: probability (0.0 .. 1.0) of dropping a QUIC packet before sending it");
+   opts("disable-gro", po::bool_switch(&config.server.disable_gro),
+        "HTTP/3 benchmarking: don't enable UDP_GRO (receive offload) on the UDP socket");
+   opts("disable-gso", po::bool_switch(&config.server.disable_gso),
+        "HTTP/3 benchmarking: don't use UDP_SEGMENT (send offload), one sendto() per packet");
+   opts("max-header-size",
+        po::value(&config.server.max_header_size)->default_value(config.server.max_header_size),
+        "largest request header section accepted, in bytes (answered with 431 if exceeded)");
 
    po::variables_map vm;
    try
@@ -138,6 +152,14 @@ int main(int argc, char* argv[])
          co_await serve_file(std::move(request), std::move(response), "test", "/test");
       else if (path == "/eat_request")
          co_await eat_request(std::move(request), std::move(response));
+      else if (path == "/upload")
+      {
+         // Unlike eat_request, respond only after the whole body is in: clients such as h2load
+         // stop uploading as soon as the response is complete.
+         co_await drain(request);
+         co_await response.async_submit(200, {});
+         co_await response.async_write_eof();
+      }
       else if (path == "/" || path == "/h2spec")
          co_await h2spec(std::move(request), std::move(response));
       else

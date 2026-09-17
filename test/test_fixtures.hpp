@@ -113,6 +113,7 @@ protected:
 
       auto config = server::Config{.listen_address = "127.0.0.2", .port = 0};
       config.use_strand = threads() > 1;
+      configure_server(config);
 
       //
       // The main server acceptor loop does not need to run on a strand. Instead, a per-connection
@@ -168,6 +169,9 @@ protected:
       context.run();
    }
 
+   /// Lets a derived fixture adjust the server configuration before the server is created.
+   virtual void configure_server(server::Config&) {}
+
 protected:
    boost::asio::io_context context;
    std::optional<server::Server> server;
@@ -184,12 +188,16 @@ protected:
       Server::SetUp();
       url.set_port_number(server->local_endpoint().port());
       client::Config config{.url = url, .protocol = GetParam()};
+      configure_client(config);
 #if defined(MULTITHREADED)
       client.emplace(make_strand(context.get_executor()), config);
 #else
       client.emplace(context.get_executor(), config);
 #endif
    }
+
+   /// Lets a derived fixture adjust the client configuration before the client is created.
+   virtual void configure_client(client::Config&) {}
 
 protected:
    boost::urls::url url{"http://127.0.0.2/custom"};

@@ -168,6 +168,9 @@ public:
    /// Set to true after responseHandler has been invoked, to make sure that this happens only once.
    bool response_delivered = false;
 
+   /// Set instead of has_response for a response that is not delivered, but fails.
+   boost::system::error_code response_error;
+
    std::string logPrefix;
    std::string method;
    boost::urls::url url;
@@ -181,6 +184,10 @@ public:
    std::optional<unsigned int> status_code;
    std::optional<size_t> content_length;
    Fields fields; // all received headers except the pseudo-headers
+
+   /// Size of the received header section so far, see Config::max_header_size.
+   size_t header_size = 0;
+   bool header_limit_exceeded = false;
 
    bool closed = false; // set to true after on_stream_close_callback
 

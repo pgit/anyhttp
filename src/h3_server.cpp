@@ -104,10 +104,6 @@ struct Endpoint
 {
    Address addr;
    int fd;
-
-   // Testing aid, see server::Config::drop_rate_rx/tx.
-   double drop_rate_rx = 0.0;
-   double drop_rate_tx = 0.0;
 };
 
 // =================================================================================================
@@ -216,90 +212,14 @@ bool drop_packet(double rate)
 
 // -------------------------------------------------------------------------------------------------
 
-int send_udp(const Endpoint& ep, const sockaddr* sa, socklen_t salen, std::span<const uint8_t> data)
+std::optional<Address> to_address(const sockaddr_storage& src, socklen_t len)
 {
-   if (drop_packet(ep.drop_rate_tx))
-   {
-      // logw("*** dropping outgoing packet ({} bytes) ***", data.size());
-      return 0; // pretend it went out; ngtcp2 will retransmit
-   }
-
-   for (;;)
-   {
-      auto n = ::sendto(ep.fd, data.data(), data.size(), 0, sa, salen);
-      if (n == -1)
-      {
-         if (errno == EINTR)
-            continue;
-         if (errno == EAGAIN || errno == EWOULDBLOCK)
-            return 0; // best-effort; ngtcp2 will retransmit
-         loge("sendto: {}", strerror(errno));
-         return -1;
-      }
-      return 0;
-   }
-}
-
-// -------------------------------------------------------------------------------------------------
-
-// Sends a run of same-sized packets (as produced by ngtcp2_conn_write_aggregate_pkt2(), all but
-// the last exactly `gso_size` bytes) with a single sendmsg() using UDP_SEGMENT (GSO), so N QUIC
-// packets cost one syscall instead of N. Falls back to one sendto() per segment -- and remembers
-// to do so from then on -- if the kernel/NIC doesn't support UDP_SEGMENT here.
-int send_udp_gso(const Endpoint& ep, const sockaddr* sa, socklen_t salen,
-                 std::span<const uint8_t> data, size_t gso_size, bool& no_gso)
-{
-   // With TX dropping enabled, go packet by packet so each one can be dropped individually.
-   if (no_gso || data.size() <= gso_size || ep.drop_rate_tx > 0.0)
-   {
-      for (; !data.empty();)
-      {
-         auto len = std::min(gso_size, data.size());
-         if (send_udp(ep, sa, salen, data.first(len)) != 0)
-            return -1;
-         data = data.subspan(len);
-      }
-      return 0;
-   }
-
-   iovec msg_iov{const_cast<uint8_t*>(data.data()), data.size()};
-   uint8_t msg_ctrl[CMSG_SPACE(sizeof(uint16_t))];
-   msghdr msg{};
-   msg.msg_name = const_cast<sockaddr*>(sa);
-   msg.msg_namelen = salen;
-   msg.msg_iov = &msg_iov;
-   msg.msg_iovlen = 1;
-   msg.msg_control = msg_ctrl;
-   msg.msg_controllen = sizeof(msg_ctrl);
-
-   auto* cm = CMSG_FIRSTHDR(&msg);
-   cm->cmsg_level = SOL_UDP;
-   cm->cmsg_type = UDP_SEGMENT;
-   cm->cmsg_len = CMSG_LEN(sizeof(uint16_t));
-   auto seg = static_cast<uint16_t>(gso_size);
-   memcpy(CMSG_DATA(cm), &seg, sizeof(seg));
-
-   for (;;)
-   {
-      auto n = ::sendmsg(ep.fd, &msg, 0);
-      if (n == -1)
-      {
-         if (errno == EINTR)
-            continue;
-         if (errno == EAGAIN || errno == EWOULDBLOCK)
-            return 0; // best-effort; ngtcp2 will retransmit
-         if (errno == EINVAL || errno == EOPNOTSUPP)
-         {
-            // GSO unsupported on this socket/NIC: fall back permanently and resend as
-            // individual datagrams.
-            no_gso = true;
-            return send_udp_gso(ep, sa, salen, data, gso_size, no_gso);
-         }
-         loge("sendmsg (GSO): {}", strerror(errno));
-         return -1;
-      }
-      return 0;
-   }
+   Address addr{};
+   if (len > sizeof(addr.su))
+      return std::nullopt;
+   std::memcpy(&addr.su, &src, len);
+   addr.len = len;
+   return addr;
 }
 
 } // namespace
@@ -370,6 +290,7 @@ protected:
    void on_remove_cid(const ngtcp2_cid& cid) override;
 
 private:
+   int send_udp(const ngtcp2_addr& remote, std::span<const uint8_t> packet);
    void signal_done();
    void schedule_close_timer();
    void do_destroy() noexcept; // the body of destroy(), always run on executor_
@@ -383,21 +304,8 @@ private:
 
    asio::steady_timer done_signal_; // used to wake do_session() on connection close
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
-   bool no_gso_ = false;
+   bool no_gso_ = false; // Config::disable_gso, or sendmsg() rejected UDP_SEGMENT
 };
-
-namespace
-{
-std::optional<Address> to_address(const sockaddr_storage& src, socklen_t len)
-{
-   Address addr{};
-   if (len > sizeof(addr.su))
-      return std::nullopt;
-   std::memcpy(&addr.su, &src, len);
-   addr.len = len;
-   return addr;
-}
-} // namespace
 
 //
 // What one pass of udp_on_read() hands a session: every datagram of the receive batch that was
@@ -520,7 +428,10 @@ void Http3ServerStream::on_headers_complete()
    server::Response response(std::make_unique<http3::Http3Writer<server::Response::Impl>>(*this));
 
    auto& sv = static_cast<Http3ServerSession&>(session).server();
-   if (auto& handler = sv.requestHandler())
+   if (header_limit_exceeded)
+      co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
+               detached);
+   else if (auto& handler = sv.requestHandler())
       co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
    else
    {
@@ -575,8 +486,10 @@ Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Add
    : http3::Http3Session(server.config().use_strand
                             ? asio::any_io_executor{asio::make_strand(server.get_executor())}
                             : server.get_executor()),
-     server_(server), ep_(ep), remote_(remote), done_signal_(get_executor())
+     server_(server), ep_(ep), remote_(remote), done_signal_(get_executor()),
+     no_gso_(server.config().disable_gso)
 {
+   max_header_size_ = server.config().max_header_size;
    log_prefix_ = std::format("h3:{}", straddr(&remote_.su.sa, remote_.len));
 
    //
@@ -674,7 +587,7 @@ void Http3ServerSession::do_destroy() noexcept
       std::array<uint8_t, NGTCP2_MAX_UDP_PAYLOAD_SIZE> closebuf;
       ngtcp2_path_storage ps;
       if (auto packet = write_connection_close(closebuf, ps); !packet.empty())
-         send_udp(ep_, ps.path.remote.addr, ps.path.remote.addrlen, packet);
+         send_udp(ps.path.remote, packet);
    }
 
    timer_.cancel();
@@ -701,10 +614,94 @@ void Http3ServerSession::on_new_cid(const ngtcp2_cid& cid)
 
 void Http3ServerSession::on_remove_cid(const ngtcp2_cid& cid) { server_.dissociate_quic_cid(cid); }
 
+//
+// Sends a run of same-sized packets (as produced by ngtcp2_conn_write_aggregate_pkt2(), all but
+// the last exactly `gso_size` bytes) with a single sendmsg() using UDP_SEGMENT (GSO), so N QUIC
+// packets cost one syscall instead of N. Falls back to one sendto() per segment -- and remembers
+// to do so from then on -- if the kernel/NIC doesn't support UDP_SEGMENT here.
+//
 int Http3ServerSession::send_datagrams(const ngtcp2_path& path, std::span<const uint8_t> data,
                                        size_t gso_size)
 {
-   return send_udp_gso(ep_, path.remote.addr, path.remote.addrlen, data, gso_size, no_gso_);
+   // With TX dropping enabled, go packet by packet so each one can be dropped individually.
+   if (no_gso_ || data.size() <= gso_size || server_.config().drop_rate_tx > 0.0)
+   {
+      for (; !data.empty();)
+      {
+         auto len = std::min(gso_size, data.size());
+         if (send_udp(path.remote, data.first(len)) != 0)
+            return -1;
+         data = data.subspan(len);
+      }
+      return 0;
+   }
+
+   iovec msg_iov{const_cast<uint8_t*>(data.data()), data.size()};
+   uint8_t msg_ctrl[CMSG_SPACE(sizeof(uint16_t))];
+   msghdr msg{};
+   msg.msg_name = path.remote.addr;
+   msg.msg_namelen = path.remote.addrlen;
+   msg.msg_iov = &msg_iov;
+   msg.msg_iovlen = 1;
+   msg.msg_control = msg_ctrl;
+   msg.msg_controllen = sizeof(msg_ctrl);
+
+   auto* cm = CMSG_FIRSTHDR(&msg);
+   cm->cmsg_level = SOL_UDP;
+   cm->cmsg_type = UDP_SEGMENT;
+   cm->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+   auto seg = static_cast<uint16_t>(gso_size);
+   memcpy(CMSG_DATA(cm), &seg, sizeof(seg));
+
+   for (;;)
+   {
+      auto n = ::sendmsg(ep_.fd, &msg, 0);
+      if (n == -1)
+      {
+         if (errno == EINTR)
+            continue;
+         if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return 0; // best-effort; ngtcp2 will retransmit
+         if (errno == EINVAL || errno == EOPNOTSUPP)
+         {
+            // GSO unsupported on this socket/NIC: fall back permanently and resend as
+            // individual datagrams.
+            no_gso_ = true;
+            return send_datagrams(path, data, gso_size);
+         }
+         loge("[{}] sendmsg (GSO): {}", log_prefix_, strerror(errno));
+         return -1;
+      }
+      return 0;
+   }
+}
+
+//
+// Sends a single QUIC packet. Also where the TX half of the packet-loss testing aid sits, see
+// server::Config::drop_rate_tx.
+//
+int Http3ServerSession::send_udp(const ngtcp2_addr& remote, std::span<const uint8_t> packet)
+{
+   if (drop_packet(server_.config().drop_rate_tx))
+   {
+      // logw("*** dropping outgoing packet ({} bytes) ***", packet.size());
+      return 0; // pretend it went out; ngtcp2 will retransmit
+   }
+
+   for (;;)
+   {
+      auto n = ::sendto(ep_.fd, packet.data(), packet.size(), 0, remote.addr, remote.addrlen);
+      if (n == -1)
+      {
+         if (errno == EINTR)
+            continue;
+         if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return 0; // best-effort; ngtcp2 will retransmit
+         loge("[{}] sendto: {}", log_prefix_, strerror(errno));
+         return -1;
+      }
+      return 0;
+   }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -803,7 +800,7 @@ int Http3ServerSession::handle_error(int /*rv*/)
       {
          conn_closebuf_.resize(packet.size());
          logi("[{}] sending CONNECTION_CLOSE", log_prefix_);
-         send_udp(ep_, ps.path.remote.addr, ps.path.remote.addrlen, conn_closebuf_);
+         send_udp(ps.path.remote, conn_closebuf_);
       }
       else
       {
@@ -845,7 +842,7 @@ void Http3ServerSession::resend_conn_close()
    if (!path)
       return;
    logd("[{}] resending CONNECTION_CLOSE", log_prefix_);
-   send_udp(ep_, path->remote.addr, path->remote.addrlen, conn_closebuf_);
+   send_udp(path->remote, conn_closebuf_);
 }
 
 // =================================================================================================
@@ -876,11 +873,13 @@ Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endp
       socket_->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
       socket_->set_option(socket_option::integer<IPPROTO_IP, IP_PKTINFO>(1));
    }
-   socket_->set_option(socket_option::integer<IPPROTO_UDP, UDP_GRO>(1));
+   if (!config().disable_gro)
+      socket_->set_option(socket_option::integer<IPPROTO_UDP, UDP_GRO>(1));
    socket_->non_blocking(true);
 
    socket_->bind(endpoint);
-   logi("Server: UDP listening on {}", endpoint);
+   logi("Server: UDP listening on {} (GRO {}, GSO {})", endpoint,
+        config().disable_gro ? "off" : "on", config().disable_gso ? "off" : "on");
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1017,7 +1016,7 @@ int Http3ServerImpl::udp_on_read(Endpoint& ep)
          auto data = all_data.subspan(0, std::min(seg_size, all_data.size()));
          all_data = all_data.subspan(data.size());
 
-         if (drop_packet(ep.drop_rate_rx))
+         if (drop_packet(config().drop_rate_rx))
          {
             // logw("*** dropping received packet ({} bytes) ***", data.size());
             continue;
@@ -1215,8 +1214,6 @@ awaitable<void> Http3ServerImpl::udp_receive_loop()
 
       Endpoint ep{};
       ep.fd = socket_->native_handle();
-      ep.drop_rate_rx = config().drop_rate_rx;
-      ep.drop_rate_tx = config().drop_rate_tx;
       auto local = socket_->local_endpoint();
       auto data = local.data();
       std::memcpy(&ep.addr.su, data, local.size());

@@ -123,6 +123,151 @@ TEST_P(ClientAsync, WHEN_get_response_is_detached_THEN_does_not_crash)
    };
 }
 
+// -------------------------------------------------------------------------------------------------
+
+//
+// Requests and responses may outlive the session they belong to. Once it is gone, there is no
+// connection left for them to use: whatever they are asked to do has to complete with an error,
+// without touching what used to be the session's stream.
+//
+// On the client side, only an HTTP/1.1 session is gone as soon as it is reset(). HTTP/2 and HTTP/3
+// sessions shut down asynchronously, so operations may still complete successfully for a little
+// while, with data that has already arrived.
+//
+static bool is_connection_error(const boost::system::error_code& ec)
+{
+   return ec == boost::system::errc::connection_aborted ||
+          ec == boost::system::errc::connection_reset;
+}
+
+TEST_P(ClientAsync, WHEN_session_is_gone_THEN_request_reports_error)
+{
+   if (GetParam() != anyhttp::Protocol::http11)
+      GTEST_SKIP();
+
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url.set_path("echo"), {});
+      session.reset();
+
+      auto [ec] = co_await request.async_write(asio::buffer("Hello"sv), as_tuple);
+      EXPECT_TRUE(is_connection_error(ec)) << what(ec);
+
+      std::tie(ec) = co_await request.async_write_eof(as_tuple);
+      EXPECT_TRUE(is_connection_error(ec)) << what(ec);
+
+      auto [ec2, response] = co_await request.async_get_response(as_tuple);
+      EXPECT_TRUE(is_connection_error(ec2)) << what(ec2);
+   };
+}
+
+TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
+{
+   auto responded = std::make_shared<bool>(false);
+   custom = [responded](server::Request request, server::Response response) -> awaitable<void>
+   {
+      //
+      // Keep the response around beyond the request handler, until the client has closed the
+      // connection and the server session has ended.
+      //
+      co_spawn(co_await this_coro::executor,
+               [responded, response = std::move(response)]() mutable -> awaitable<void>
+      {
+         co_await sleep(100ms);
+
+         auto [ec] = co_await response.async_submit(200, {}, as_tuple);
+         EXPECT_TRUE(is_connection_error(ec)) << what(ec);
+
+         std::tie(ec) = co_await response.async_write(asio::buffer("Hello"sv), as_tuple);
+         EXPECT_TRUE(is_connection_error(ec)) << what(ec);
+
+         *responded = true;
+      }, detached);
+      co_return;
+   };
+   test = [this, responded](Session session) -> awaitable<void>
+   {
+      auto request = co_await session.async_submit(url, {});
+      co_await request.async_write_eof();
+      request.reset();
+      session.reset();
+
+      for (int i = 0; i < 100 && !*responded; ++i)
+         co_await sleep(10ms);
+      EXPECT_TRUE(*responded);
+   };
+}
+
+//
+// With HTTP/1.1 pipelining, a session has more than one request at a time. Releasing the earlier
+// one must not make the session forget about the later one, which has to learn about the session
+// going away all the same.
+//
+TEST_P(ClientAsync, WHEN_earlier_request_is_released_THEN_later_request_still_learns_session_is_gone)
+{
+   if (GetParam() != anyhttp::Protocol::http11)
+      GTEST_SKIP();
+
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
+      co_await request1.async_write_eof(asio::buffer("Hello, Server #1!"sv));
+      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
+
+      request1.reset();
+      session.reset();
+
+      auto [ec] = co_await request2.async_write(asio::buffer("Hello"sv), as_tuple);
+      EXPECT_TRUE(is_connection_error(ec)) << what(ec);
+   };
+}
+
+TEST_P(ClientAsync, WHEN_session_is_gone_THEN_earlier_request_reports_error)
+{
+   if (GetParam() != anyhttp::Protocol::http11)
+      GTEST_SKIP();
+
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
+      co_await request1.async_write_eof(asio::buffer("Hello, Server #1!"sv));
+      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
+
+      session.reset();
+
+      auto [ec, response] = co_await request1.async_get_response(as_tuple);
+      EXPECT_TRUE(is_connection_error(ec)) << what(ec);
+   };
+}
+
+TEST_P(ClientAsync, WHEN_earlier_response_is_released_THEN_later_response_still_learns_session_is_gone)
+{
+   if (GetParam() != anyhttp::Protocol::http11)
+      GTEST_SKIP();
+
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
+      co_await request1.async_write_eof(asio::buffer("Hello, Server #1!"sv));
+      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
+      co_await request2.async_write(asio::buffer("Hello, Server #2!"sv));
+
+      auto response1 = co_await request1.async_get_response();
+      EXPECT_EQ(co_await drain(response1), 17);
+      auto response2 = co_await request2.async_get_response();
+
+      response1.reset();
+      session.reset();
+
+      //
+      // The body of the second response is still open, as its request has not been ended.
+      //
+      std::array<char, 64> buffer;
+      auto [ec, n] = co_await response2.async_read_some(asio::buffer(buffer), as_tuple);
+      EXPECT_EQ(ec, boost::beast::http::error::partial_message) << what(ec);
+   };
+}
+
 TEST_P(ClientAsync, WHEN_server_discards_request_while_writing_THEN_connection_is_reset)
 {
    custom = [this](server::Request request, server::Response response) -> awaitable<void>
@@ -714,11 +859,10 @@ TEST_P(ClientAsync, WHEN_request_is_sent_THEN_response_is_received_before_body_i
 // -------------------------------------------------------------------------------------------------
 
 //
-// HTTP/1.1 supports pipelining in the sense that multiple, full requests can be made before
-// the responses are received.
-//
-// TODO: Any kind of interleaving is not supported. An attempt to issue another request while the
-//       previous request is still active should result in an error, immediately.
+// HTTP/1.1 supports pipelining: multiple requests can be made before the responses are received.
+// On the wire, requests and responses can not be interleaved, though, so the HTTP/1.1 client puts
+// them in order. See ClientSession in h1_session.hpp for the rules; HTTP/2 and HTTP/3 multiplex
+// requests and don't need any of them.
 //
 TEST_P(ClientAsync, WHEN_multiple_request_are_made_THEN_responses_are_received_in_order)
 {
@@ -735,6 +879,192 @@ TEST_P(ClientAsync, WHEN_multiple_request_are_made_THEN_responses_are_received_i
 
       auto response2 = co_await request2.async_get_response();
       EXPECT_EQ(co_await drain(response2), 21);
+   };
+}
+
+static constexpr auto body1 = "Hello, Server #1!"sv;
+static constexpr auto body2 = "Hello, Server #2! XYZ"sv;
+
+//
+// HTTP/1.1 behaves like a protocol with "max concurrent streams = 1": submitting has to wait for
+// the previous request to be complete. Instead of waiting, which would deadlock here, it reports
+// an error, so that it can be retried later.
+//
+// TODO: HTTP/2 and HTTP/3 should behave the same way when the peer limits concurrent streams.
+//
+TEST_P(ClientAsync, WHEN_request_is_submitted_before_previous_is_complete_THEN_reports_would_block)
+{
+   test = [this](Session session) -> awaitable<void>
+   {
+      const bool limited = GetParam() == anyhttp::Protocol::http11;
+
+      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
+      auto [ec, request2] = co_await session.async_submit(url.set_path("echo"), {}, as_tuple);
+      if (limited)
+      {
+         EXPECT_EQ(ec, asio::error::would_block);
+         EXPECT_FALSE(request2);
+      }
+      else
+         EXPECT_FALSE(ec) << what(ec);
+
+      co_await request1.async_write_eof(asio::buffer(body1));
+      if (limited)
+         request2 = co_await session.async_submit(url.set_path("echo"), {});
+      co_await request2.async_write_eof(asio::buffer(body2));
+
+      auto response1 = co_await request1.async_get_response();
+      EXPECT_EQ(co_await read(response1), body1);
+      auto response2 = co_await request2.async_get_response();
+      EXPECT_EQ(co_await read(response2), body2);
+   };
+}
+
+TEST_P(ClientAsync, WHEN_many_requests_are_made_THEN_all_are_answered_in_order)
+{
+   test = [this](Session session) -> awaitable<void>
+   {
+      std::vector<client::Request> requests;
+      for (size_t i = 0; i < 10; ++i)
+      {
+         requests.push_back(co_await session.async_submit(url.set_path("echo"), {}));
+         co_await requests.back().async_write_eof(asio::buffer(std::format("request #{}", i)));
+      }
+
+      for (size_t i = 0; i < requests.size(); ++i)
+      {
+         auto response = co_await requests[i].async_get_response();
+         EXPECT_EQ(co_await read(response), std::format("request #{}", i));
+      }
+   };
+}
+
+//
+// Likewise, getting a response has to wait until the responses to all earlier requests have been
+// read -- otherwise, it would read one of those.
+//
+TEST_P(ClientAsync, WHEN_getting_response_before_previous_is_read_THEN_reports_would_block)
+{
+   if (GetParam() != anyhttp::Protocol::http11)
+      GTEST_SKIP(); // requests are multiplexed, nothing to wait for
+
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
+      co_await request1.async_write_eof(asio::buffer(body1));
+      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
+      co_await request2.async_write_eof(asio::buffer(body2));
+
+      auto [ec, response2] = co_await request2.async_get_response(as_tuple);
+      EXPECT_EQ(ec, asio::error::would_block) << "response #1 not requested yet";
+
+      auto response1 = co_await request1.async_get_response();
+      std::tie(ec, response2) = co_await request2.async_get_response(as_tuple);
+      EXPECT_EQ(ec, asio::error::would_block) << "response #1 not read yet";
+
+      EXPECT_EQ(co_await read(response1), body1);
+      response2 = co_await request2.async_get_response();
+      EXPECT_EQ(co_await read(response2), body2);
+   };
+}
+
+//
+// A request without a body -- "Content-Length: 0" -- is complete as soon as it has been submitted,
+// so the next one can follow right away. Its body has been ended implicitly: ending it again is a
+// no-op, and data has nowhere to go.
+//
+TEST_P(ClientAsync, WHEN_request_has_no_body_THEN_it_is_complete_after_submit)
+{
+   if (GetParam() != anyhttp::Protocol::http11)
+      GTEST_SKIP(); // requests are multiplexed, nothing to wait for
+
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request1 =
+         co_await session.async_submit(url.set_path("echo"), fields({{"Content-Length", 0}}));
+      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
+      co_await request2.async_write_eof(asio::buffer(body2));
+
+      auto [ec] = co_await request1.async_write_eof(as_tuple);
+      EXPECT_FALSE(ec) << what(ec);
+      std::tie(ec) = co_await request1.async_write(asio::buffer(body1), as_tuple);
+      EXPECT_EQ(ec, boost::system::errc::broken_pipe) << what(ec);
+
+      auto response1 = co_await request1.async_get_response();
+      EXPECT_EQ(co_await read(response1), "");
+      auto response2 = co_await request2.async_get_response();
+      EXPECT_EQ(co_await read(response2), body2);
+   };
+}
+
+//
+// A request with a body is complete only once async_write_eof() has succeeded, even if all of its
+// 'Content-Length' has been written already.
+//
+TEST_P(ClientAsync, WHEN_content_length_is_written_without_eof_THEN_request_is_not_complete)
+{
+   if (GetParam() != anyhttp::Protocol::http11)
+      GTEST_SKIP(); // requests are multiplexed, nothing to wait for
+
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request1 = co_await session.async_submit(url.set_path("echo"),
+                                                    fields({{"Content-Length", body1.size()}}));
+      co_await request1.async_write(asio::buffer(body1));
+
+      auto [ec, request2] = co_await session.async_submit(url.set_path("echo"), {}, as_tuple);
+      EXPECT_EQ(ec, asio::error::would_block);
+
+      co_await request1.async_write_eof();
+      request2 = co_await session.async_submit(url.set_path("echo"), {});
+      co_await request2.async_write_eof(asio::buffer(body2));
+
+      auto response1 = co_await request1.async_get_response();
+      EXPECT_EQ(co_await read(response1), body1);
+      auto response2 = co_await request2.async_get_response();
+      EXPECT_EQ(co_await read(response2), body2);
+   };
+}
+
+//
+// A request that goes away before it is complete leaves the connection in the middle of a message:
+// nothing can be sent after it any more.
+//
+TEST_P(ClientAsync, WHEN_incomplete_request_is_released_THEN_later_requests_report_error)
+{
+   if (GetParam() != anyhttp::Protocol::http11)
+      GTEST_SKIP(); // requests are multiplexed, and independent of each other
+
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
+      co_await request1.async_write(asio::buffer(body1));
+      request1.reset();
+
+      auto [ec, request2] = co_await session.async_submit(url.set_path("echo"), {}, as_tuple);
+      EXPECT_EQ(ec, asio::error::connection_aborted);
+   };
+}
+
+//
+// A request that has been sent, but goes away without asking for its response, leaves that
+// response unread on the connection -- and with it, all responses after it.
+//
+TEST_P(ClientAsync, WHEN_request_is_released_without_getting_response_THEN_later_responses_report_error)
+{
+   if (GetParam() != anyhttp::Protocol::http11)
+      GTEST_SKIP(); // requests are multiplexed, and independent of each other
+
+   test = [this](Session session) -> awaitable<void>
+   {
+      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
+      co_await request1.async_write_eof(asio::buffer(body1));
+      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
+      co_await request2.async_write_eof(asio::buffer(body2));
+      request1.reset();
+
+      auto [ec, response] = co_await request2.async_get_response(as_tuple);
+      EXPECT_EQ(ec, asio::error::connection_aborted);
    };
 }
 

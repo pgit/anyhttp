@@ -6,7 +6,9 @@
 //
 
 #include "anyhttp/any_async_stream.hpp"
+#include "anyhttp/h2_common.hpp"
 #include "anyhttp/h2_session.hpp"
+#include "anyhttp/literals.hpp"
 
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
@@ -158,7 +160,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
 template <typename Stream>
 awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
 {
-   m_buffer.reserve(64 * 1024);
+   m_buffer.reserve(64_k);
 
    unsigned int reason = NGHTTP2_NO_ERROR;
    while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
@@ -190,6 +192,7 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_execut
                                      Stream&& stream)
    : ServerReference(parent), super("\x1b[1;31mserver\x1b[0m", executor, std::move(stream))
 {
+   m_max_header_size = parent.config().max_header_size;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -210,12 +213,19 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    auto options = nghttp2_option_new();
    nghttp2_option_set_no_http_messaging(options.get(), 0); // h2spec: fails ~16 tests if 1
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
+   nghttp2_option_set_max_send_header_block_length(options.get(), 1_m);
+   nghttp2_option_set_max_continuations(options.get(), max_continuations(m_max_header_size));
 
    if (auto rv = nghttp2_session_server_new2(&session, callbacks.get(), this, options.get()))
       throw std::runtime_error("nghttp2_session_server_new");
 
 #if 1
-   const uint32_t window_size = 1024 * 1024;
+   const uint32_t window_size = 1_m;
+   //
+   // No SETTINGS_MAX_HEADER_LIST_SIZE: it defaults to unlimited and is advisory anyway, as nghttp2
+   // enforces it in neither direction. Header sections beyond max_header_size are rejected where
+   // they arrive, see on_header_callback().
+   //
    std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
                                              {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
@@ -234,9 +244,9 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    {
       const auto& settings = m_upgrade->settings;
       const bool head_request = m_upgrade->method == "HEAD";
-      if (auto rv = nghttp2_session_upgrade2(session,
-                                             reinterpret_cast<const uint8_t*>(settings.data()),
-                                             settings.size(), head_request, nullptr))
+      if (auto rv =
+             nghttp2_session_upgrade2(session, reinterpret_cast<const uint8_t*>(settings.data()),
+                                      settings.size(), head_request, nullptr))
       {
          mloge("nghttp2_session_upgrade2: {}", nghttp2_strerror(rv));
          nghttp2_session_terminate_session(session, NGHTTP2_PROTOCOL_ERROR);
@@ -279,6 +289,7 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_execut
                                      Stream&& stream)
    : ClientReference(parent), super("\x1b[1;32mclient\x1b[0m", executor, std::move(stream))
 {
+   m_max_header_size = parent.config().max_header_size;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -299,12 +310,19 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    auto options = nghttp2_option_new();
    nghttp2_option_set_no_http_messaging(options.get(), 1);
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
+   nghttp2_option_set_max_send_header_block_length(options.get(), 1_m);
+   nghttp2_option_set_max_continuations(options.get(), max_continuations(m_max_header_size));
 
    if (auto rv = nghttp2_session_client_new2(&session, callbacks.get(), this, options.get()))
       throw std::runtime_error("nghttp2_session_client_new");
 
 #if 1
-   const uint32_t window_size = 1024 * 1024;
+   const uint32_t window_size = 1_m;
+   //
+   // No SETTINGS_MAX_HEADER_LIST_SIZE: it defaults to unlimited and is advisory anyway, as nghttp2
+   // enforces it in neither direction. Header sections beyond max_header_size are rejected where
+   // they arrive, see on_header_callback().
+   //
    std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
                                              {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());

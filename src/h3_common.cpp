@@ -3,6 +3,7 @@
 //
 #include "anyhttp/h3_common.hpp"
 #include "anyhttp/common.hpp" // IWYU pragma: keep
+#include "anyhttp/formatter.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -36,15 +37,15 @@ void log_headers(std::string_view log_prefix, std::span<const nghttp3_nv> nva)
 {
    for (const auto& nv : nva)
       logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", log_prefix,
-           std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen),
-           std::string_view(reinterpret_cast<const char*>(nv.value), nv.valuelen));
+           truncated(std::string_view(reinterpret_cast<const char*>(nv.name), nv.namelen)),
+           truncated(std::string_view(reinterpret_cast<const char*>(nv.value), nv.valuelen)));
 }
 
 void log_headers(std::string_view log_prefix,
                  const std::vector<std::pair<std::string, std::string>>& headers)
 {
    for (const auto& [name, value] : headers)
-      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", log_prefix, name, value);
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", log_prefix, truncated(name), truncated(value));
 }
 
 void ngtcp2_log_printf(void* /*user*/, const char* fmt, ...) noexcept

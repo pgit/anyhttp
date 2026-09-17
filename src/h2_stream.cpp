@@ -244,7 +244,8 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    }
 
    for (auto nv : nva)
-      logd("[{0}]   \x1b[1;34m{1:n}\x1b[0m: {1:v}", stream->logPrefix, nv);
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->logPrefix, truncated(name_of(nv)),
+           truncated(value_of(nv)));
 
    // TODO: If we already know that there is no body, don't set a producer.
    nghttp2_data_provider2 prd;
@@ -805,25 +806,46 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
 void NGHttp2Stream::log_received_headers()
 {
    for (const auto& [name, value] : received_headers)
-      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", logPrefix, name, value);
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", logPrefix, truncated(name), truncated(value));
    received_headers.clear();
 }
 
 void NGHttp2Stream::on_response()
 {
-   has_response = true;
+   //
+   // A response with too large a header section is of no use: fail it, and stop the server from
+   // sending its body. The stream is kept until the failure has been delivered, see close_stream().
+   //
+   if (header_limit_exceeded)
+   {
+      response_error = boost::beast::http::error::header_limit;
+      nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_CANCEL);
+   }
+   else
+      has_response = true;
+
    deliver_response();
 }
 
 void NGHttp2Stream::deliver_response()
 {
-   if (!has_response)
+   if (!has_response && !response_error)
    {
       logd("[{}] deliver_response: no response, yet", logPrefix);
    }
    else if (!response_handler)
    {
       logw("[{}] deliver_response: not waiting for a response, yet", logPrefix);
+   }
+   else if (response_error)
+   {
+      logw("[{}] deliver_response: {}", logPrefix, what(response_error));
+      response_delivered = true;
+      swap_and_invoke(response_handler, response_error, client::Response{nullptr});
+
+      // the stream may have been kept around just for this, see close_stream()
+      if (closed)
+         parent.close_stream(id);
    }
    else
    {
@@ -850,7 +872,10 @@ void NGHttp2Stream::on_request()
    server::Response response(std::make_unique<NGHttp2Writer<server::Response::Impl>>(*this));
 
    auto& server = dynamic_cast<ServerReference&>(parent).server();
-   if (auto& handler = server.requestHandler())
+   if (header_limit_exceeded)
+      co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
+               detached);
+   else if (auto& handler = server.requestHandler())
       co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
    else
    {

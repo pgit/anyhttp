@@ -107,6 +107,24 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
    assert(stream);
 
    //
+   // Beyond the limit, fields are not stored any more, but nghttp2 still has to decode them: HPACK
+   // state is shared by the whole connection. What happens to the stream is decided once the
+   // header block is complete, see NGHttp2Stream::on_request() and on_response().
+   //
+   if (stream->header_limit_exceeded)
+      return 0;
+
+   stream->header_size += header_field_size(name, value);
+   if (stream->header_size > handler->m_max_header_size)
+   {
+      logw("[{}] header section exceeds {} bytes, ignoring the rest", handler->logPrefix(frame),
+           handler->m_max_header_size);
+      stream->header_limit_exceeded = true;
+      stream->received_headers.clear();
+      return 0;
+   }
+
+   //
    // Headers are logged as a block, after the request or status line, see on_frame_recv_callback().
    //
    if (spdlog::default_logger_raw()->should_log(spdlog::level::debug))
@@ -165,6 +183,15 @@ int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* fr
    const auto handler = static_cast<NGHttp2Session*>(user_data);
    logw("[{}] on_frame_not_send_callback: {} {}", handler->logPrefix(frame),
         frameType(frame->hd.type), nghttp2_strerror(lib_error_code));
+
+   //
+   // nghttp2 closes the stream of a request HEADERS frame that could not be sent, but leaves the
+   // stream of a response open -- with neither side ever learning that there will be no response.
+   // Resetting it tells the peer and closes the stream here, too.
+   //
+   if (frame->hd.type == NGHTTP2_HEADERS && frame->headers.cat != NGHTTP2_HCAT_REQUEST)
+      nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
+                                NGHTTP2_INTERNAL_ERROR);
 
    return 0;
 }
@@ -445,7 +472,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, boost::urls::url url,
 
    logd("[{}] {} {}", stream->logPrefix, method, url.buffer());
    for (auto nv : nva)
-      logd("[{0}]   \x1b[1;34m{1:n}\x1b[0m: {1:v}", stream->logPrefix, nv);
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->logPrefix, truncated(name_of(nv)),
+           truncated(value_of(nv)));
 
    //
    // https://nghttp2.org/documentation/types.html#c.nghttp2_data_source_read_callback
@@ -565,7 +593,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
       // data. This may also happen during normal operation, if the server delivers a response
       // before the client calls async_get_response().
       //
-      if (stream->has_response)
+      if (stream->has_response || stream->response_error)
       {
          logd("[{}] close_stream: response not delivered yet", logPrefix(stream_id));
          it->second->call_read_handler(); // FIXME: this seems to be not needed

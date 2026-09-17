@@ -38,6 +38,15 @@ public:
     *
     * Use \ref Request::async_get_response() on the request to wait for the response.
     *
+    * A session may limit the number of requests in progress. When that limit is reached, this
+    * does not wait for a request to finish -- the caller might be the one who has to finish it --
+    * but fails immediately with \c asio::error::would_block. HTTP/1.1 is such a protocol, with a
+    * limit of one: a request is in progress until it is \e complete, that is, until all of it,
+    * header and body, has been written. See README.md, "Concurrent Requests".
+    *
+    * After a request could not be completed, an HTTP/1.1 session can't send any more requests,
+    * and this fails with \c asio::error::connection_aborted.
+    *
     * TODO: There is only a single Session interface for both server and client. This even might
     *       make sense for HTTP/2, where the server can also (sort of) submit a push promise to the
     *       client. But in general, it may be better to separate them.

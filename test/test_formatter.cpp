@@ -239,3 +239,25 @@ TEST(FormatterTest, NgHttp2NvEmptyValue)
    auto formatted = std::format("{}", nv);
    EXPECT_EQ(formatted, "some-header=");
 }
+
+// =================================================================================================
+// Test anyhttp::truncated()
+// =================================================================================================
+
+TEST(FormatterTest, TruncatedShortStringIsUnchanged)
+{
+   EXPECT_EQ(std::format("{}", anyhttp::truncated("content-type")), "content-type");
+   EXPECT_EQ(std::format("{}", anyhttp::truncated("")), "");
+}
+
+TEST(FormatterTest, TruncatedAtLimitIsUnchanged)
+{
+   std::string value(anyhttp::max_logged_size, 'x');
+   EXPECT_EQ(std::format("{}", anyhttp::truncated(value)), value);
+}
+
+TEST(FormatterTest, TruncatedLongStringIsCutShort)
+{
+   std::string value(30000, 'x');
+   EXPECT_EQ(std::format("{}", anyhttp::truncated(value, 4)), "xxxx... (30000 bytes, truncated)");
+}

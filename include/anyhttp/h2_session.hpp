@@ -26,6 +26,7 @@ namespace anyhttp::nghttp2
 
 // =================================================================================================
 
+/// RAII wrapper for NGHTTP2 objects, wrapping them in a std::unique_ptr with a custom deleter.
 template <class T>
 using nghttp2_unique_ptr = std::unique_ptr<T, void (*)(T*)>;
 
@@ -123,6 +124,9 @@ public:
    int32_t m_last_id = 0;
    size_t m_requestCounter = 0;
 
+   /// The largest header section accepted from the peer, see Config::max_header_size.
+   size_t m_max_header_size = default_max_header_size;
+
    Buffer m_buffer;
 };
 
@@ -176,6 +180,7 @@ class ServerSession : public ServerReference, public NGHttp2SessionImpl<Stream>
    using super::send_loop;
 
    using super::m_buffer;
+   using super::m_max_header_size;
    using super::m_stream;
    using super::session;
 
@@ -218,6 +223,7 @@ class ClientSession : public ClientReference, public NGHttp2SessionImpl<Stream>
    using super::send_loop;
 
    using super::m_buffer;
+   using super::m_max_header_size;
    using super::m_stream;
    using super::session;
 
