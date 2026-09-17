@@ -26,6 +26,7 @@ namespace anyhttp::nghttp2
 
 // =================================================================================================
 
+/// RAII wrapper for NGHTTP2 objects, wrapping them in a std::unique_ptr with a custom deleter.
 template <class T>
 using nghttp2_unique_ptr = std::unique_ptr<T, void (*)(T*)>;
 

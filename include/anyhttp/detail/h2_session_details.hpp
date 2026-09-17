@@ -221,10 +221,13 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
 #if 1
    const uint32_t window_size = 1_m;
-   std::array<nghttp2_settings_entry, 3> iv{
-      {{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-       {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size},
-       {NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE, settings_value(m_max_header_size)}}};
+   //
+   // No SETTINGS_MAX_HEADER_LIST_SIZE: it defaults to unlimited and is advisory anyway, as nghttp2
+   // enforces it in neither direction. Header sections beyond max_header_size are rejected where
+   // they arrive, see on_header_callback().
+   //
+   std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
+                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
 #else
@@ -315,10 +318,13 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 
 #if 1
    const uint32_t window_size = 1_m;
-   std::array<nghttp2_settings_entry, 3> iv{
-      {{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-       {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size},
-       {NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE, settings_value(m_max_header_size)}}};
+   //
+   // No SETTINGS_MAX_HEADER_LIST_SIZE: it defaults to unlimited and is advisory anyway, as nghttp2
+   // enforces it in neither direction. Header sections beyond max_header_size are rejected where
+   // they arrive, see on_header_callback().
+   //
+   std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
+                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
 #else

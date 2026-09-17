@@ -500,7 +500,10 @@ int Http3Session::setup_http3()
    settings.qpack_blocked_streams = 100;
 
    //
-   // Only announced to the peer: nghttp3 does not enforce it, see Http3Stream::on_header().
+   // Only announced to the peer: nghttp3 does not enforce it, see Http3Stream::on_header(). The
+   // setting goes out either way, as nghttp3 always writes it into its SETTINGS frame. Leaving it
+   // at the default would announce an unlimited header section, and take four more bytes to do so.
+   // * https://datatracker.ietf.org/doc/html/rfc9114#section-4.2.2
    //
    settings.max_field_section_size = max_header_size_;
 

@@ -42,12 +42,6 @@ inline size_t max_continuations(size_t max_header_size)
    return std::max<size_t>(8, max_header_size / 16384 + 1);
 }
 
-/// Clamps a size to what fits into a SETTINGS value.
-inline uint32_t settings_value(size_t value)
-{
-   return static_cast<uint32_t>(std::min<size_t>(value, std::numeric_limits<uint32_t>::max()));
-}
-
 inline std::string_view name_of(const nghttp2_nv& nv) { return {(const char*)nv.name, nv.namelen}; }
 inline std::string_view value_of(const nghttp2_nv& nv) { return {(const char*)nv.value, nv.valuelen}; }
 
