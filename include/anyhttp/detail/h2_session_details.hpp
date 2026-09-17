@@ -211,6 +211,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    auto options = nghttp2_option_new();
    nghttp2_option_set_no_http_messaging(options.get(), 0); // h2spec: fails ~16 tests if 1
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
+   nghttp2_option_set_max_send_header_block_length(options.get(), 1_m);
 
    if (auto rv = nghttp2_session_server_new2(&session, callbacks.get(), this, options.get()))
       throw std::runtime_error("nghttp2_session_server_new");
@@ -300,6 +301,7 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    auto options = nghttp2_option_new();
    nghttp2_option_set_no_http_messaging(options.get(), 1);
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
+   nghttp2_option_set_max_send_header_block_length(options.get(), 1_m);
 
    if (auto rv = nghttp2_session_client_new2(&session, callbacks.get(), this, options.get()))
       throw std::runtime_error("nghttp2_session_client_new");

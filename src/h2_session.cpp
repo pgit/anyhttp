@@ -166,6 +166,15 @@ int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* fr
    logw("[{}] on_frame_not_send_callback: {} {}", handler->logPrefix(frame),
         frameType(frame->hd.type), nghttp2_strerror(lib_error_code));
 
+   //
+   // nghttp2 closes the stream of a request HEADERS frame that could not be sent, but leaves the
+   // stream of a response open -- with neither side ever learning that there will be no response.
+   // Resetting it tells the peer and closes the stream here, too.
+   //
+   if (frame->hd.type == NGHTTP2_HEADERS && frame->headers.cat != NGHTTP2_HCAT_REQUEST)
+      nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
+                                NGHTTP2_INTERNAL_ERROR);
+
    return 0;
 }
 

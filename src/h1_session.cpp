@@ -67,6 +67,19 @@ inline auto& get_socket(tcp_stream& stream) { return stream.socket(); }
 inline auto& get_socket(ssl::stream<socket>& stream) { return stream.lowest_layer(); }
 inline auto& get_socket(AnyAsyncStream& stream) { return stream.get_socket(); }
 
+/**
+ * Adds the user's header fields to an outgoing message. A field replaces whatever the message
+ * already has under that name, like a default set before, but repeated fields are all kept.
+ */
+template <bool isRequest, typename Body>
+void add_fields(http::message<isRequest, Body>& message, const Fields& headers)
+{
+   for (auto&& header : headers)
+      message.erase(header.name_string());
+   for (auto&& header : headers)
+      message.insert(header.name_string(), header.value());
+}
+
 // =================================================================================================
 
 template <typename Interface, typename Stream, typename Buffer, typename Parser>
@@ -466,8 +479,7 @@ public:
    {
       message.body().data = nullptr;
 
-      for (auto&& header : headers)
-         message.set(header.name_string(), header.value());
+      add_fields(message, headers);
 
       if (!message.has_content_length())
          message.chunked(true);
@@ -1206,8 +1218,7 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, boost::urls::u
    request.base().target(url.encoded_target());
    request.method(http::verb::post);
    request.set(http::field::user_agent, "anyhttp");
-   for (auto&& header : headers)
-      request.set(header.name_string(), header.value());
+   add_fields(request, headers);
    if (request.find(http::field::host) == request.end())
       request.set(http::field::host, url.encoded_authority());
    if (!request.has_content_length())
