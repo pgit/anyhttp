@@ -48,12 +48,22 @@ static std::vector<std::string_view> values_of(const Fields& fields, std::string
           std::ranges::to<std::vector>();
 }
 
+/// All fields as (name, value) pairs, in the order they appear in.
+static std::vector<std::pair<std::string_view, std::string_view>> pairs_of(const Fields& fields)
+{
+   return fields | rv::transform([](auto& field) {
+             return std::pair(std::string_view(field.name_string()),
+                              std::string_view(field.value()));
+          }) |
+          std::ranges::to<std::vector>();
+}
+
 /// Expects every field of \p expected to be found in \p actual.
 static void expect_contains(const Fields& actual, const Fields& expected)
 {
+   auto fields = pairs_of(actual);
    for (auto&& field : expected)
-      EXPECT_THAT(values_of(actual, field.name_string()), Contains(field.value()))
-         << field.name_string();
+      EXPECT_THAT(fields, Contains(Pair(StrCaseEq(field.name_string()), field.value())));
 }
 
 /// Number of bytes the fields take up on an HTTP/1.1 wire, roughly.
