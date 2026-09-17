@@ -65,6 +65,9 @@ awaitable<void> sleep(T duration)
 awaitable<void> yield(size_t count = 1);
 awaitable<void> not_found(server::Response response);
 awaitable<void> not_found(server::Request request, server::Response response);
+
+/// Responds with 431 (Request Header Fields Too Large), see server::Config::max_header_size.
+awaitable<void> header_fields_too_large(server::Request request, server::Response response);
 awaitable<void> dump(server::Request request, server::Response response);
 awaitable<void> echo(server::Request request, server::Response response);
 awaitable<void> eat_request(server::Request request, server::Response response);

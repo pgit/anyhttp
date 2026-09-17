@@ -6,6 +6,7 @@
 //
 
 #include "anyhttp/any_async_stream.hpp"
+#include "anyhttp/h2_common.hpp"
 #include "anyhttp/h2_session.hpp"
 #include "anyhttp/literals.hpp"
 
@@ -191,6 +192,7 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_execut
                                      Stream&& stream)
    : ServerReference(parent), super("\x1b[1;31mserver\x1b[0m", executor, std::move(stream))
 {
+   m_max_header_size = parent.config().max_header_size;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -212,14 +214,17 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    nghttp2_option_set_no_http_messaging(options.get(), 0); // h2spec: fails ~16 tests if 1
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
    nghttp2_option_set_max_send_header_block_length(options.get(), 1_m);
+   nghttp2_option_set_max_continuations(options.get(), max_continuations(m_max_header_size));
 
    if (auto rv = nghttp2_session_server_new2(&session, callbacks.get(), this, options.get()))
       throw std::runtime_error("nghttp2_session_server_new");
 
 #if 1
    const uint32_t window_size = 1_m;
-   std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
+   std::array<nghttp2_settings_entry, 3> iv{
+      {{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
+       {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size},
+       {NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE, settings_value(m_max_header_size)}}};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
 #else
@@ -281,6 +286,7 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_execut
                                      Stream&& stream)
    : ClientReference(parent), super("\x1b[1;32mclient\x1b[0m", executor, std::move(stream))
 {
+   m_max_header_size = parent.config().max_header_size;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -302,14 +308,17 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    nghttp2_option_set_no_http_messaging(options.get(), 1);
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
    nghttp2_option_set_max_send_header_block_length(options.get(), 1_m);
+   nghttp2_option_set_max_continuations(options.get(), max_continuations(m_max_header_size));
 
    if (auto rv = nghttp2_session_client_new2(&session, callbacks.get(), this, options.get()))
       throw std::runtime_error("nghttp2_session_client_new");
 
 #if 1
    const uint32_t window_size = 1_m;
-   std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
+   std::array<nghttp2_settings_entry, 3> iv{
+      {{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
+       {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size},
+       {NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE, settings_value(m_max_header_size)}}};
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
 #else

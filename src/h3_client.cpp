@@ -196,7 +196,7 @@ public:
 class Http3ClientSession : public http3::Http3Session
 {
 public:
-   explicit Http3ClientSession(asio::any_io_executor executor);
+   Http3ClientSession(asio::any_io_executor executor, const Config& config);
    ~Http3ClientSession() override;
 
    //
@@ -270,6 +270,19 @@ void Http3ClientStream::on_pseudo_header(std::string_view name, std::string_view
 
 void Http3ClientStream::on_headers_complete()
 {
+   //
+   // A response with too large a header section is of no use: fail it, and stop the server from
+   // sending its body.
+   //
+   if (header_limit_exceeded)
+   {
+      headers_received = false; // there is no response to deliver, see deliver_failure()
+      failure_ec = boost::beast::http::error::header_limit;
+      session.reset_stream(id, NGHTTP3_H3_REQUEST_CANCELLED);
+      deliver_failure();
+      return;
+   }
+
    using namespace boost::beast::http;
    logd("[{}] {} {}", log_prefix, status_code, obsolete_reason(int_to_status(status_code)));
    log_headers(log_prefix, std::exchange(received_headers, {}));
@@ -282,7 +295,8 @@ void Http3ClientStream::on_failed(boost::system::error_code ec)
    // A stream closing gracefully (ec success, e.g. NGHTTP3_H3_NO_ERROR) still means no response
    // ever arrived if headers were never received -- never report success with a null Response.
    //
-   failure_ec = ec ? ec : boost::beast::http::error::end_of_stream;
+   if (!failure_ec) // the first reason is the one to report, see on_headers_complete()
+      failure_ec = ec ? ec : boost::beast::http::error::end_of_stream;
    deliver_failure();
 }
 
@@ -391,9 +405,10 @@ void Http3ClientStream::deliver_response()
 // Http3ClientSession implementation
 // =================================================================================================
 
-Http3ClientSession::Http3ClientSession(asio::any_io_executor executor)
+Http3ClientSession::Http3ClientSession(asio::any_io_executor executor, const Config& config)
    : http3::Http3Session(executor), socket_(get_executor()), ready_signal_(get_executor())
 {
+   max_header_size_ = config.max_header_size;
    // Sentinel timers: expires_at(max) means "not yet"; a wait completes once moved to "min".
    ready_signal_.expires_at(asio::steady_timer::time_point::max());
    logi("Http3ClientSession: ctor");
@@ -674,13 +689,14 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, boost::urls::url 
 // =================================================================================================
 
 awaitable<std::shared_ptr<Session::Impl>> async_connect_http3(asio::any_io_executor executor,
-                                                              std::string host, std::string port)
+                                                              std::string host, std::string port,
+                                                              const Config& config)
 {
    boost::asio::ip::udp::resolver resolver(executor);
    auto flags = boost::asio::ip::udp::resolver::numeric_service;
    auto results = co_await resolver.async_resolve(host, port, flags); // may throw
 
-   auto session = std::make_shared<Http3ClientSession>(executor);
+   auto session = std::make_shared<Http3ClientSession>(executor, config);
    if (session->init(results.begin()->endpoint()) != 0)
       throw boost::system::system_error(errc::make_error_code(errc::connection_refused));
 

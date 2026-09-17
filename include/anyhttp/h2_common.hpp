@@ -32,6 +32,22 @@ inline nghttp2_nv make_nv_ls(std::string_view key, std::string_view value)
    return {(uint8_t*)key.data(), (uint8_t*)value.data(), key.size(), value.size(), 0};
 }
 
+/**
+ * The number of CONTINUATION frames to accept after a HEADERS frame, for a header section of up to
+ * \p max_header_size bytes in frames of the default size. A peer sending more is flooding us and
+ * loses the connection. nghttp2 accepts 8 by default, which is kept as the minimum.
+ */
+inline size_t max_continuations(size_t max_header_size)
+{
+   return std::max<size_t>(8, max_header_size / 16384 + 1);
+}
+
+/// Clamps a size to what fits into a SETTINGS value.
+inline uint32_t settings_value(size_t value)
+{
+   return static_cast<uint32_t>(std::min<size_t>(value, std::numeric_limits<uint32_t>::max()));
+}
+
 inline std::string_view name_of(const nghttp2_nv& nv) { return {(const char*)nv.name, nv.namelen}; }
 inline std::string_view value_of(const nghttp2_nv& nv) { return {(const char*)nv.value, nv.valuelen}; }
 

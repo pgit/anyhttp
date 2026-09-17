@@ -53,6 +53,9 @@ public:
    bool closed() const noexcept { return closed_; }
    const std::string& logPrefix() const noexcept { return log_prefix_; }
 
+   /// The largest header section accepted from the peer, see Config::max_header_size.
+   size_t max_header_size() const noexcept { return max_header_size_; }
+
    //
    // Returns a shared_ptr, not a raw pointer: callers routinely invoke user handlers on the
    // stream they looked up, and those can drop the last reference to it (the coroutine they
@@ -222,6 +225,7 @@ protected:
    ngtcp2_crypto_conn_ref conn_ref_{};
 
    nghttp3_conn* h3_ = nullptr;
+   size_t max_header_size_ = default_max_header_size; // set by the derived session's constructor
 
    asio::steady_timer timer_; // ngtcp2 expiry (handshake / idle / PTO)
    ngtcp2_ccerr last_error_{};

@@ -98,7 +98,7 @@ awaitable<Session> Client::Impl::async_connect()
    // handshake, ...) than the TCP-based http11/h2 paths below.
    //
    if (config().protocol == Protocol::h3)
-      co_return Session{co_await async_connect_http3(m_executor, host, port)};
+      co_return Session{co_await async_connect_http3(m_executor, host, port, config())};
 
    std::vector<ip::tcp::endpoint> endpoints;
    logd("Client: resolving {}:{} ...", host, port);

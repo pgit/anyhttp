@@ -61,6 +61,9 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
         "HTTP/3 benchmarking: don't enable UDP_GRO (receive offload) on the UDP socket");
    opts("disable-gso", po::bool_switch(&config.server.disable_gso),
         "HTTP/3 benchmarking: don't use UDP_SEGMENT (send offload), one sendto() per packet");
+   opts("max-header-size",
+        po::value(&config.server.max_header_size)->default_value(config.server.max_header_size),
+        "largest request header section accepted, in bytes (answered with 431 if exceeded)");
 
    po::variables_map vm;
    try

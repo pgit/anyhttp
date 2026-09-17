@@ -92,6 +92,10 @@ public:
    std::vector<std::pair<std::string, std::string>> received_headers;
    bool headers_received = false;
 
+   /// Size of the received header section so far, see Config::max_header_size.
+   size_t header_size = 0;
+   bool header_limit_exceeded = false;
+
    //
    // Outgoing message: the response on the server (set by the user through Http3Writer), the
    // request on the client (set once by async_submit(), before this stream even exists as far as

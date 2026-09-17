@@ -52,6 +52,19 @@ std::ostream& operator<<(std::ostream& str, Protocol protocol);
 using Fields = boost::beast::http::fields;
 static_assert(boost::beast::http::is_fields<Fields>::value);
 
+/// Default for \c server::Config::max_header_size and \c client::Config::max_header_size.
+inline constexpr size_t default_max_header_size = 64 * 1024;
+
+/**
+ * What a received header field counts against the limit on the size of a header section: its name
+ * and value plus 32 bytes of overhead, as for SETTINGS_MAX_HEADER_LIST_SIZE in HTTP/2 (RFC 9113,
+ * section 6.5.2) and SETTINGS_MAX_FIELD_SECTION_SIZE in HTTP/3 (RFC 9114, section 4.2.2).
+ */
+constexpr size_t header_field_size(std::string_view name, std::string_view value) noexcept
+{
+   return name.size() + value.size() + 32;
+}
+
 //
 // A header value as passed to fields() below: either something string-like, or anything
 // std::format can turn into a string, so sizes and counts need no conversion at the call site.

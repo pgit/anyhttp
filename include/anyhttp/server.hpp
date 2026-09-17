@@ -30,6 +30,20 @@ struct Config
    bool use_strand = false;
 
    //
+   // The largest header section of a request the server accepts, in bytes. A request with more is
+   // answered with 431 (Request Header Fields Too Large) and never reaches the request handler.
+   // HTTP/1.1 counts the request line and header lines as received, and closes the connection
+   // after the 431 response. HTTP/2 and HTTP/3 count each field as its name and value plus 32
+   // bytes (pseudo-headers included) and announce the limit to the client in their SETTINGS.
+   //
+   // Fields beyond the limit are not stored, so this bounds the memory a request can take up with
+   // its headers. A single field is also limited by the protocol libraries: 64 KiB for HTTP/2 and
+   // HTTP/3, where a larger one fails the whole connection. So does an HTTP/2 header block that
+   // takes up more CONTINUATION frames than a header section of this size needs (but at least 8).
+   //
+   size_t max_header_size = default_max_header_size;
+
+   //
    // HTTP/3 only: how long a QUIC connection may go without a packet from its peer before it is
    // dropped. This is the only way a peer that vanished without a CONNECTION_CLOSE -- a killed
    // client, a machine that went to sleep -- is ever noticed, so it also bounds how long its

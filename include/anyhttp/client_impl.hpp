@@ -48,9 +48,9 @@ public:
    boost::asio::any_io_executor get_executor() const noexcept { return m_executor; }
 
    void async_connect(ConnectHandler handler);
+   const Config& config() const { return m_config; }
 
 private:
-   const Config& config() const { return m_config; }
    awaitable<Session> async_connect();
 
 private:

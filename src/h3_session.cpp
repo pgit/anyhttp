@@ -499,6 +499,11 @@ int Http3Session::setup_http3()
    settings.qpack_max_dtable_capacity = 4096;
    settings.qpack_blocked_streams = 100;
 
+   //
+   // Only announced to the peer: nghttp3 does not enforce it, see Http3Stream::on_header().
+   //
+   settings.max_field_section_size = max_header_size_;
+
    if (is_server)
    {
       if (auto rv = nghttp3_conn_server_new(&h3_, &h3cb, &settings, nullptr, this); rv != 0)

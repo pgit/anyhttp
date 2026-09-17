@@ -58,7 +58,8 @@ namespace anyhttp::client
 
 /// Connects to `host`:`port` over QUIC and returns the HTTP/3 session running on it.
 boost::asio::awaitable<std::shared_ptr<Session::Impl>>
-async_connect_http3(boost::asio::any_io_executor executor, std::string host, std::string port);
+async_connect_http3(boost::asio::any_io_executor executor, std::string host, std::string port,
+                    const Config& config);
 
 // =================================================================================================
 

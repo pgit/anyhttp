@@ -80,6 +80,13 @@ void add_fields(http::message<isRequest, Body>& message, const Fields& headers)
       message.insert(header.name_string(), header.value());
 }
 
+/// Converts Config::max_header_size into what a Beast parser takes as its header limit.
+inline std::uint32_t header_limit(size_t max_header_size)
+{
+   return static_cast<std::uint32_t>(
+      std::min<size_t>(max_header_size, std::numeric_limits<std::uint32_t>::max()));
+}
+
 // =================================================================================================
 
 template <typename Interface, typename Stream, typename Buffer, typename Parser>
@@ -733,6 +740,7 @@ public:
                                       decltype(buffer), http::response_parser<http::buffer_body>>>(
             *session, stream, buffer);
       http::response_parser<http::buffer_body>& parser = reader->parser;
+      parser.header_limit(header_limit(cs.client().config().max_header_size));
 
       auto ex = get_associated_executor(handler, get_executor());
       auto slot = get_associated_cancellation_slot(handler);
@@ -993,6 +1001,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       logd("");
       mlogd("waiting for request (size={} capacity={})", m_buffer.size(), m_buffer.capacity());
       auto& parser = reader->parser;
+      parser.header_limit(header_limit(server().config().max_header_size));
       auto [ec, len] = co_await async_read_header(m_stream, m_buffer, parser, as_tuple);
       if (!ec)
          mlogd("async_read_header: len={} size={} capacity={} ec={}", len, m_buffer.size(),
@@ -1002,6 +1011,20 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       else
          mlogw("async_read_header: len={} size={} capacity={} ec=\x1b[1;31m{}\x1b[0m", len,
                m_buffer.size(), m_buffer.capacity(), ec.message());
+
+      //
+      // The rest of the request can not be told apart from whatever follows it on the connection,
+      // so there is nothing left to do after telling the client why.
+      //
+      if (ec == http::error::header_limit)
+      {
+         http::response<http::empty_body> res{http::status::request_header_fields_too_large, 11};
+         res.set(http::field::server, "anyhttp");
+         res.set(http::field::connection, "close");
+         res.content_length(0);
+         if (auto [ec, n] = co_await http::async_write(m_stream, res, as_tuple); ec)
+            mlogw("writing 431 response: {}", ec.message());
+      }
       if (ec)
          break;
       requestCounter++;

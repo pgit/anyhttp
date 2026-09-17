@@ -116,6 +116,12 @@ awaitable<void> not_found(server::Request, server::Response response)
    co_await response.async_write_eof();
 }
 
+awaitable<void> header_fields_too_large(server::Request, server::Response response)
+{
+   co_await response.async_submit(431, {});
+   co_await response.async_write_eof();
+}
+
 awaitable<void> eat_request(server::Request request, server::Response response)
 {
    logd("eat_request: going to eat {} bytes", request.content_length().value_or(-1));

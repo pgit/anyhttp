@@ -22,6 +22,14 @@ struct Config
    // FIXME: the client does not connect to an URL, it connects to a host:port or endpoint
    boost::urls::url url{"localhost:8080"};
    Protocol protocol{Protocol::h2};
+
+   //
+   // The largest header section of a response the client accepts, in bytes, counted as for
+   // server::Config::max_header_size. For a response with more, async_get_response() fails with
+   // boost::beast::http::error::header_limit and the stream is reset -- with HTTP/1.1, which has no
+   // streams, the connection can not be used any more.
+   //
+   size_t max_header_size = default_max_header_size;
 };
 
 // =================================================================================================

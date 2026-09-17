@@ -428,7 +428,10 @@ void Http3ServerStream::on_headers_complete()
    server::Response response(std::make_unique<http3::Http3Writer<server::Response::Impl>>(*this));
 
    auto& sv = static_cast<Http3ServerSession&>(session).server();
-   if (auto& handler = sv.requestHandler())
+   if (header_limit_exceeded)
+      co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
+               detached);
+   else if (auto& handler = sv.requestHandler())
       co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
    else
    {
@@ -486,6 +489,7 @@ Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Add
      server_(server), ep_(ep), remote_(remote), done_signal_(get_executor()),
      no_gso_(server.config().disable_gso)
 {
+   max_header_size_ = server.config().max_header_size;
    log_prefix_ = std::format("h3:{}", straddr(&remote_.su.sa, remote_.len));
 
    //
