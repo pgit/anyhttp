@@ -106,7 +106,7 @@ public:
    buffer_array(BS const& bs) noexcept : dummy_(0)
    {
       auto it = buffer_sequence_begin(bs);
-      auto const last = buffer_sequence_begin(bs);
+      auto const last = buffer_sequence_end(bs);
       while (it != last && n_ < N)
       {
          value_type b(*it);

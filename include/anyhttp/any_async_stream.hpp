@@ -108,10 +108,8 @@ public:
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
          [this](ReadWriteHandler handler, const ConstBufferSequence& buffers)
-      {
-         impl->async_write_some(std::move(handler),
-                                ConstBufferVector{asio::buffer_sequence_begin(buffers),
-                                                  asio::buffer_sequence_end(buffers)});
+      {  //
+         impl->async_write_some(std::move(handler), ConstBufferVector{buffers});
       }, token, buffers);
    }
 
@@ -127,10 +125,8 @@ public:
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
          [this](ReadWriteHandler handler, const MutableBufferSequence& buffers)
-      {
-         impl->async_read_some(std::move(handler),
-                               MutableBufferVector{asio::buffer_sequence_begin(buffers),
-                                                   asio::buffer_sequence_end(buffers)});
+      {  //
+         impl->async_read_some(std::move(handler), MutableBufferVector{buffers});
       }, token, buffers);
    }
 };
