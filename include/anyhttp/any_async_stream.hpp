@@ -21,6 +21,7 @@ namespace ip = asio::ip;
 
 namespace anyhttp
 {
+
 // =================================================================================================
 
 using ReadWrite = void(boost::system::error_code, std::size_t);
@@ -37,12 +38,12 @@ using ShutdownHandler = asio::any_completion_handler<Shutdown>;
 /**
  * Attempt to create a type-erased async stream.
  *
- * The difficult part here is to type-erase the buffer sequences. For starters, the buffers are
- * copied into a small vector that can hold up to 4 buffers without allocation. This seems to work
- * reasonably well.
+ * The difficult part here is to type-erase the buffer sequences. The buffers are copied into a
+ * buffer_array, a fixed-capacity, non-allocating array of buffer descriptors that is itself a
+ * buffer sequence. This seems to work reasonably well.
  *
  * There is also asio::buffer_sequence_adapter and linearise(), which seems to be used in ASIO's
- * SSL code was well. It merges a set of buffers into a new, contiguous buffer. But that is slow.
+ * SSL code as well. It merges a set of buffers into a new, contiguous buffer. But that is slow.
  */
 class AnyAsyncStream
 {
@@ -52,21 +53,19 @@ public:
    class Impl
    {
    public:
-      using executor_type = boost::asio::any_io_executor;
       virtual ~Impl() = default;
+      
+      using executor_type = boost::asio::any_io_executor;
       virtual executor_type get_executor() noexcept = 0;
       virtual ip::tcp::socket& get_socket() = 0;
 
-      using ConstBuffers = ConstBufferVector;
-      using MutableBuffers = MutableBufferVector;
       virtual void async_write_some(ReadWriteHandler handler, ConstBufferVector buffer) = 0;
       virtual void async_read_some(ReadWriteHandler handler, MutableBufferVector buffer) = 0;
-
       virtual void async_shutdown_impl(ShutdownHandler handler)
       {
          auto ex = boost::asio::get_associated_immediate_executor(handler, get_executor());
          ex.execute([handler = std::move(handler)]() mutable { //
-            handler(boost::system::error_code());
+            std::move(handler)(boost::system::error_code());
          });
       }
    };
@@ -84,20 +83,22 @@ public:
    // async_write_some
    //
    // The async operations of ASIO are designed to work with sequences of buffers. Those cannot
-   // easily be type-erased, aside transforming them to a vector.
+   // easily be type-erased, so we copy the buffer descriptors into a fixed-capacity array.
    //
    // The requirements for ConstBufferSequence are defined here:
    // https://live.boost.org/doc/libs/1_88_0/doc/html/boost_asio/reference/ConstBufferSequence.html
    //
    // The iterators returned by asio::buffer_sequence_{begin,end} must be 'bidirectional', but are
-   // not required to be 'contiguous'. So those iterators cannot be simply convereted to a span.
+   // not required to be 'contiguous'. So those iterators cannot be simply converted to a span.
    //
    // * https://en.cppreference.com/w/cpp/iterator/bidirectional_iterator
    // * https://en.cppreference.com/w/cpp/iterator/contiguous_iterator.html
    //
-   // In the end, we just re-use ASIOs "buffer sequence adapter" that yields a single buffer.
-   // When writing, it merges small buffers and when reading, it uses the first non-empty buffer.
-   // This is simple, but effective -- and also what an SSL stream does, internally.
+   // Instead, we copy them into a buffer_array, which is itself a (contiguous) buffer sequence and
+   // can be passed on to the underlying stream unchanged. Nothing is merged or linearized, so
+   // scatter/gather I/O is preserved. Empty buffers are dropped while copying, and sequences longer
+   // than the array's capacity are truncated -- which is harmless for a "some" operation, as it
+   // just results in a shorter transfer.
    //
    template <typename ConstBufferSequence,
              BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite)
