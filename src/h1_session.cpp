@@ -1147,9 +1147,16 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
    mlogi("closing stream, served {} requests", requestCounter);
 
-   // FIXME: close() before shutdown()?!
-   get_socket(m_stream).close();
+   //
+   // Send a FIN first, and let go of the socket only after that: closing one that still has
+   // unread data in its receive queue answers the peer with an RST instead, and an RST discards
+   // whatever has not been delivered yet -- which can be the very response that said the
+   // connection was ending.
+   //
    get_socket(m_stream).shutdown(asio::ip::tcp::socket::shutdown_send, ec);
+   if (ec && ec != asio::error::not_connected) // the peer may be gone already
+      mlogw("shutdown: {}", ec.message());
+   get_socket(m_stream).close(ec);
 
    mlogd("session done");
 }

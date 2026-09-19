@@ -147,3 +147,57 @@ TEST_F(ConnectionClose, WHEN_request_is_http_1_0_THEN_stream_ends_after_the_resp
 }
 
 // =================================================================================================
+
+//
+// A request whose header section is too large is answered with 431 and ends the connection, with
+// the rest of the request still on its way. That is the one case here where the connection is
+// closed while data is still coming in, and closing a socket with unread data in its receive
+// queue is what makes the kernel send an RST instead of a FIN.
+//
+class RejectedRequest : public ConnectionClose
+{
+protected:
+   static constexpr size_t limit = 4_k;
+
+   void configure_server(server::Config& config) override { config.max_header_size = limit; }
+};
+
+TEST_F(RejectedRequest, WHEN_request_is_rejected_THEN_the_response_arrives_anyway)
+{
+   run([&]() -> awaitable<void>
+   {
+      auto socket = co_await connect();
+
+      //
+      // Far more than the server is willing to read: it stops at the limit, answers, and hangs
+      // up, leaving the rest of this unread on the connection.
+      //
+      std::string request = std::format("GET /dump HTTP/1.1\r\nHost: 127.0.0.2:{}\r\n", port());
+      for (size_t i = 0; request.size() < 4_m; ++i)
+         request += std::format("x-header-{}: {}\r\n", i, std::string(1_k, 'a'));
+      request += "\r\n";
+
+      //
+      // Sending and receiving have to overlap: the server stops reading long before the request
+      // is out, so a write of all of it only completes once the connection is gone.
+      //
+      Response response;
+      auto send = [&]() -> awaitable<error_code>
+      {
+         auto [ec, n] = co_await asio::async_write(socket, asio::buffer(request), as_tuple);
+         co_return ec;
+      };
+      auto receive = [&]() -> awaitable<error_code>
+      {
+         auto [ec, n] = co_await http::async_read(socket, m_buffer, response, as_tuple);
+         co_return ec;
+      };
+
+      auto [send_ec, receive_ec] = co_await (send() && receive());
+      EXPECT_FALSE(receive_ec) << "the 431 was lost: " << receive_ec.message();
+      EXPECT_EQ(response.result_int(), 431);
+      EXPECT_FALSE(response.keep_alive());
+   }());
+}
+
+// =================================================================================================

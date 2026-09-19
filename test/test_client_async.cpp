@@ -280,7 +280,15 @@ TEST_P(ClientAsync, WHEN_server_discards_request_while_writing_THEN_connection_i
       auto request = co_await session.async_submit(url);
       auto executor = co_await this_coro::executor;
       auto [ec] = co_await co_spawn(executor, send(request, rv::iota(uint8_t(0))), as_tuple);
-      EXPECT_EQ(code(ec), boost::system::errc::connection_reset);
+
+      //
+      // Which of the two it is depends on where the teardown catches the write: the RST that
+      // follows the server's FIN fails the write in progress with ECONNRESET, and every one
+      // after it with EPIPE.
+      //
+      EXPECT_THAT(code(ec), AnyOf(boost::system::errc::connection_reset, //
+                                  boost::system::errc::broken_pipe))
+         << what(ec);
    };
 }
 
