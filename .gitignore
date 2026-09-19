@@ -16,3 +16,5 @@ _codeql_detected_source_root
 cmake_test_discovery_*.json
 googletest_discovery_*.json
 keylog.log
+alt-svc.log
+
