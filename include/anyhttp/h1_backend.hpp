@@ -22,10 +22,6 @@ namespace anyhttp::beast_impl
 
 // =================================================================================================
 
-using SslStream = boost::asio::ssl::stream<boost::asio::ip::tcp::socket>;
-
-// -------------------------------------------------------------------------------------------------
-
 //
 // The stream is moved into the session, which runs on the stream's own executor -- hence the
 // rvalue reference, which also keeps the SocketStream constraint from matching an lvalue.
@@ -46,7 +42,7 @@ make_server_session<boost::asio::ip::tcp::socket>(server::Server::Impl&,
 extern template std::shared_ptr<Session::Impl>
 make_server_session<SslStream>(server::Server::Impl&, SslStream&&);
 extern template std::shared_ptr<Session::Impl>
-make_server_session<AnyAsyncStream>(server::Server::Impl&, AnyAsyncStream&&);
+make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&);
 
 extern template std::shared_ptr<Session::Impl>
 make_client_session<boost::asio::ip::tcp::socket>(client::Client::Impl&,

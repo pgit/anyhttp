@@ -1,11 +1,11 @@
 #include "anyhttp/server_impl.hpp"
 
-#include "anyhttp/any_async_stream.hpp"
-#include "anyhttp/detect_ssl.hpp"
+#include "anyhttp/detail/any_async_stream.hpp"
+#include "anyhttp/detail/detect_h2.hpp"
+#include "anyhttp/detail/detect_ssl.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/h1_backend.hpp"
 #include "anyhttp/h2_backend.hpp"
-#include "anyhttp/h2_detect.hpp"
 #include "anyhttp/h3_backend.hpp"
 #include "anyhttp/tls.hpp"
 
@@ -243,29 +243,6 @@ static asio::ssl::context make_tls_server_context()
 
 // -------------------------------------------------------------------------------------------------
 
-class TestStream : public AnyAsyncStream::Impl
-{
-public:
-   TestStream(ip::tcp::socket socket) : socket_(std::move(socket)) {}
-   executor_type get_executor() noexcept override { return socket_.get_executor(); }
-
-   ip::tcp::socket& get_socket() final { return socket_; }
-   void async_write_some(ReadWriteHandler handler, ConstBufferVector buffers) final
-   {
-      socket_.async_write_some(buffers, std::move(handler));
-   }
-
-   void async_read_some(ReadWriteHandler handler, MutableBufferVector buffers) final
-   {
-      socket_.async_read_some(buffers, std::move(handler));
-   }
-
-private:
-   ip::tcp::socket socket_; // the underlying socket, for cancellation
-};
-
-// -------------------------------------------------------------------------------------------------
-
 awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
 {
    const auto prefix = normalize(socket.remote_endpoint());
@@ -331,8 +308,7 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
 #if 1
-      AnyAsyncStream stream(std::make_unique<TestStream>(std::move(socket)));
-      session = nghttp2::make_server_session(*this, std::move(stream));
+      session = nghttp2::make_server_session(*this, make_any_async_stream(std::move(socket)));
 #else
       session = nghttp2::make_server_session(*this, std::move(socket));
 #endif
@@ -345,8 +321,7 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    {
       logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", prefix);
 #if 1
-      AnyAsyncStream stream(std::make_unique<TestStream>(std::move(socket)));
-      session = beast_impl::make_server_session(*this, std::move(stream));
+      session = beast_impl::make_server_session(*this, make_any_async_stream(std::move(socket)));
 #else
       session = beast_impl::make_server_session(*this, std::move(socket));
 #endif

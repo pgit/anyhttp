@@ -2,14 +2,14 @@
 
 //
 // The sessions are templates over the stream they run on, and there are four of those: a plain
-// TCP socket, a TLS stream on top of one, beast's tcp_stream and the type-erased AnyAsyncStream.
+// TCP socket, a TLS stream on top of one, beast's tcp_stream and the type-erased any_async_stream.
 // Beyond the async read and write operations, which all of them have in common already, a session
 // needs two more things from its stream: the underlying socket, to shut it down or close it, and
 // an executor to run its loops on. Neither is spelled the same way by all four, so they are
 // reached through this trait instead.
 //
 
-#include "anyhttp/any_async_stream.hpp"
+#include "anyhttp/detail/any_async_stream.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -62,9 +62,9 @@ struct stream_traits<boost::beast::basic_stream<Protocol, Executor, RatePolicy>>
 
 /// The type-erased stream already offers both, its implementation has to provide them.
 template <>
-struct stream_traits<AnyAsyncStream>
+struct stream_traits<any_async_stream>
 {
-   using stream_type = AnyAsyncStream;
+   using stream_type = any_async_stream;
 
    static auto& get_socket(stream_type& stream) noexcept { return stream.get_socket(); }
    static auto get_executor(stream_type& stream) noexcept { return stream.get_executor(); }
@@ -72,12 +72,10 @@ struct stream_traits<AnyAsyncStream>
 
 // -------------------------------------------------------------------------------------------------
 
-/**
- * What the four get_socket() above have in common: a TLS stream hands out its \c lowest_layer(),
- * which is this rather than the full ip::tcp::socket. It is enough for shutdown() and close(),
- * which is all a session does with it.
- */
-using TcpSocketBase = boost::asio::basic_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>;
+//
+// What the four get_socket() above have in common is TcpSocketBase, declared next to the
+// type-erased stream, which returns it directly.
+//
 
 /**
  * An async stream that is backed by a TCP socket and knows the executor it runs on -- in other
@@ -108,7 +106,7 @@ decltype(auto) get_socket(Stream& stream) noexcept
 static_assert(SocketStream<boost::asio::ip::tcp::socket>);
 static_assert(SocketStream<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>);
 static_assert(SocketStream<boost::beast::tcp_stream>);
-static_assert(SocketStream<AnyAsyncStream>);
+static_assert(SocketStream<any_async_stream>);
 static_assert(!SocketStream<boost::asio::ip::tcp::socket&>); // rvalues only, see above
 
 // =================================================================================================

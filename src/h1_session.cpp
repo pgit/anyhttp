@@ -1,7 +1,7 @@
 #include "anyhttp/h1_session.hpp"
 
-#include "anyhttp/any_async_stream.hpp"
 #include "anyhttp/common.hpp"
+#include "anyhttp/detail/any_async_stream.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/h1_backend.hpp"
 #include "anyhttp/h2_backend.hpp"
@@ -1290,7 +1290,7 @@ void ClientSession<Stream>::reader_finished(bool complete)
 
 template class ServerSession<asio::ip::tcp::socket>;
 template class ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>;
-template class ServerSession<AnyAsyncStream>;
+template class ServerSession<any_async_stream>;
 
 // =================================================================================================
 // Factories, see anyhttp/h1_backend.hpp. Instantiating the session templates is kept to this
@@ -1316,7 +1316,7 @@ template std::shared_ptr<Session::Impl> make_server_session<socket>(server::Serv
 template std::shared_ptr<Session::Impl> make_server_session<SslStream>(server::Server::Impl&,
                                                                        SslStream&&);
 template std::shared_ptr<Session::Impl>
-make_server_session<AnyAsyncStream>(server::Server::Impl&, AnyAsyncStream&&);
+make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&);
 
 template std::shared_ptr<Session::Impl> make_client_session<socket>(client::Client::Impl&,
                                                                     socket&&);

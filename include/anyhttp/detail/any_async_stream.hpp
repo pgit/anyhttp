@@ -1,20 +1,25 @@
 #pragma once
 
+//
+// The type-erased async stream as its users see it. The implementation behind it is only forward
+// declared here: it lives in anyhttp/detail/any_async_stream_impl.hpp, which src/
+// any_async_stream_impl.cpp is the only place to include -- and to instantiate.
+//
+
 #include <anyhttp/buffer_array.hpp>
 
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/associated_executor.hpp>
-#include <boost/asio/associated_immediate_executor.hpp>
+#include <boost/asio/async_result.hpp>
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
-#include <boost/asio/immediate.hpp>
 #include <boost/asio/ip/tcp.hpp>
-
-#include <boost/container/small_vector.hpp>
+#include <boost/asio/ssl/stream.hpp>
 
 #include <boost/beast/core/buffer_traits.hpp>
 #include <boost/beast/core/stream_traits.hpp>
+
+#include <memory>
+#include <type_traits>
 
 namespace asio = boost::asio;
 namespace ip = asio::ip;
@@ -34,6 +39,16 @@ using Shutdown = void(boost::system::error_code);
 using ShutdownHandler = asio::any_completion_handler<Shutdown>;
 
 /**
+ * The socket underneath a stream, as far as the sessions care about it: enough for shutdown() and
+ * close(), which is all they do with it. A TLS stream hands out its \c lowest_layer(), which is
+ * this rather than the full ip::tcp::socket, so this is what the type-erased stream offers, too.
+ */
+using TcpSocketBase = asio::basic_socket<ip::tcp, asio::any_io_executor>;
+
+/// The TLS stream the server and client run on, spelled out often enough to deserve a name.
+using SslStream = asio::ssl::stream<ip::tcp::socket>;
+
+/**
  * Attempt to create a type-erased async stream with ASIO.
  *
  * The difficult part here is to type-erase the buffer sequences. The buffers are copied into a
@@ -43,39 +58,21 @@ using ShutdownHandler = asio::any_completion_handler<Shutdown>;
  * There is also \c asio::buffer_sequence_adapter and \c linearise(), which seem to be used in ASIO
  * SSL code as well. It merges a set of buffers into a new, contiguous buffer. But that is slow.
  */
-class AnyAsyncStream
+class any_async_stream
 {
 public:
    using executor_type = boost::asio::any_io_executor;
 
-   class Impl
-   {
-   public:
-      virtual ~Impl() = default;
+   /// The type-erased stream itself, defined in anyhttp/detail/any_async_stream_impl.hpp.
+   class Impl;
 
-      using executor_type = boost::asio::any_io_executor;
-      virtual executor_type get_executor() noexcept = 0;
-      virtual ip::tcp::socket& get_socket() = 0;
+   explicit any_async_stream(std::unique_ptr<Impl> impl);
+   any_async_stream(any_async_stream&&) noexcept;
+   any_async_stream& operator=(any_async_stream&&) noexcept;
+   ~any_async_stream();
 
-      virtual void async_write_some(ReadWriteHandler handler, ConstBufferVector buffer) = 0;
-      virtual void async_read_some(ReadWriteHandler handler, MutableBufferVector buffer) = 0;
-      virtual void async_shutdown_impl(ShutdownHandler handler)
-      {
-         auto ex = boost::asio::get_associated_immediate_executor(handler, get_executor());
-         ex.execute([handler = std::move(handler)]() mutable { //
-            std::move(handler)(boost::system::error_code());
-         });
-      }
-   };
-
-protected:
-   std::unique_ptr<Impl> impl;
-
-public:
-   AnyAsyncStream(std::unique_ptr<Impl> impl_) : impl(std::move(impl_)) {}
-
-   executor_type get_executor() noexcept { return impl->get_executor(); }
-   ip::tcp::socket& get_socket() { return impl->get_socket(); }
+   executor_type get_executor() noexcept;
+   TcpSocketBase& get_socket();
 
    //
    // async_write_some
@@ -106,10 +103,10 @@ public:
                          CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
-         [this](ReadWriteHandler handler, const ConstBufferSequence& buffers)
+         [this](ReadWriteHandler handler, ConstBufferVector buffers)
       {  //
-         impl->async_write_some(std::move(handler), ConstBufferVector{buffers});
-      }, token, buffers);
+         write_some(std::move(handler), std::move(buffers));
+      }, token, ConstBufferVector{buffers});
    }
 
    //
@@ -123,14 +120,42 @@ public:
                         CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
-         [this](ReadWriteHandler handler, const MutableBufferSequence& buffers)
+         [this](ReadWriteHandler handler, MutableBufferVector buffers)
       {  //
-         impl->async_read_some(std::move(handler), MutableBufferVector{buffers});
-      }, token, buffers);
+         read_some(std::move(handler), std::move(buffers));
+      }, token, MutableBufferVector{buffers});
    }
+
+private:
+   //
+   // The initiations, with the buffer sequence already type-erased. Out of line, because this is
+   // where the implementation is dereferenced -- it is incomplete here.
+   //
+   void write_some(ReadWriteHandler handler, ConstBufferVector buffers);
+   void read_some(ReadWriteHandler handler, MutableBufferVector buffers);
+
+   std::unique_ptr<Impl> impl;
 };
 
-static_assert(boost::beast::is_async_stream<AnyAsyncStream>::value);
+static_assert(boost::beast::is_async_stream<any_async_stream>::value);
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// The stream is moved into the type-erasing wrapper -- hence the rvalue reference, which the
+// constraint keeps from matching an lvalue, just like the session factories do it.
+//
+// This is defined in anyhttp/detail/any_async_stream_impl.hpp and explicitly instantiated in
+// src/any_async_stream_impl.cpp for each of the stream types below, so that the implementation
+// is instantiated in that one place only.
+//
+
+template <typename Stream>
+   requires(!std::is_reference_v<Stream>)
+any_async_stream make_any_async_stream(Stream&& stream);
+
+extern template any_async_stream make_any_async_stream<ip::tcp::socket>(ip::tcp::socket&&);
+extern template any_async_stream make_any_async_stream<SslStream>(SslStream&&);
 
 // =================================================================================================
 

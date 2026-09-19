@@ -686,7 +686,7 @@ make_server_session<socket>(server::Server::Impl&, socket&&, std::optional<Upgra
 template std::shared_ptr<Session::Impl>
 make_server_session<SslStream>(server::Server::Impl&, SslStream&&, std::optional<Upgrade>);
 template std::shared_ptr<Session::Impl>
-make_server_session<AnyAsyncStream>(server::Server::Impl&, AnyAsyncStream&&,
+make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&,
                                     std::optional<Upgrade>);
 
 template std::shared_ptr<Session::Impl> make_client_session<socket>(client::Client::Impl&,

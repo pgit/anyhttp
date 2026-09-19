@@ -25,8 +25,6 @@ namespace anyhttp::nghttp2
 
 // =================================================================================================
 
-using SslStream = boost::asio::ssl::stream<boost::asio::ip::tcp::socket>;
-
 /**
  * A request received as HTTP/1.1 with "Upgrade: h2c" (RFC 7540, section 3.2) that has been answered
  * with "101 Switching Protocols". The HTTP/2 session continues it as stream 1. Only requests without
@@ -62,7 +60,7 @@ make_server_session<boost::asio::ip::tcp::socket>(server::Server::Impl&,
 extern template std::shared_ptr<Session::Impl>
 make_server_session<SslStream>(server::Server::Impl&, SslStream&&, std::optional<Upgrade>);
 extern template std::shared_ptr<Session::Impl>
-make_server_session<AnyAsyncStream>(server::Server::Impl&, AnyAsyncStream&&,
+make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&,
                                     std::optional<Upgrade>);
 
 extern template std::shared_ptr<Session::Impl>
