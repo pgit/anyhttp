@@ -1082,6 +1082,15 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          response.set(http::field::alt_svc, alt_svc);
 
       //
+      // A client that asked for the connection to end -- or one speaking HTTP/1.0, which has no
+      // persistent connections unless it asks for one -- gets one last response, and that response
+      // has to say that it is the last one (RFC 9112, section 9.6): without it, the client can not
+      // tell the end of the connection from one that was lost mid-message.
+      //
+      if (need_eof)
+         response.keep_alive(false);
+
+      //
       // Call user-provided request handler.
       //
       // Unlike HTTP2, the request handler is not co_spawn()ed as a separate thread of execution,
