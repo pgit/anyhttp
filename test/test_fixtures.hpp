@@ -172,6 +172,9 @@ protected:
    /// Lets a derived fixture adjust the server configuration before the server is created.
    virtual void configure_server(server::Config&) {}
 
+   /// Returns listening port of the server.
+   auto port() const noexcept { return server->local_endpoint().port(); }
+
 protected:
    boost::asio::io_context context;
    std::optional<server::Server> server;

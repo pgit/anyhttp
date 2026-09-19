@@ -187,6 +187,7 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_execut
    : ServerReference(parent), super("\x1b[1;31mserver\x1b[0m", executor, std::move(stream))
 {
    m_max_header_size = parent.config().max_header_size;
+   m_alt_svc = parent.alt_svc();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -304,6 +305,13 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
    nghttp2_option_set_max_send_header_block_length(options.get(), 1_m);
    nghttp2_option_set_max_continuations(options.get(), max_continuations(m_max_header_size));
+
+   //
+   // ALTSVC (RFC 7838, section 4) is an extension frame: without this, nghttp2 drops it before
+   // on_frame_recv_callback() ever sees it. It is how a server may advertise its HTTP/3 endpoint
+   // without waiting for a request, see Config::follow_alt_svc.
+   //
+   nghttp2_option_set_builtin_recv_extension_type(options.get(), NGHTTP2_ALTSVC);
 
    if (auto rv = nghttp2_session_client_new2(&session, callbacks.get(), this, options.get()))
       throw std::runtime_error("nghttp2_session_client_new");

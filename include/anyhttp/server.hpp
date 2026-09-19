@@ -44,6 +44,19 @@ struct Config
    size_t max_header_size = default_max_header_size;
 
    //
+   // How long a client may remember the HTTP/3 endpoint this server advertises in every response
+   // it sends over HTTP/1.1 and HTTP/2, as "Alt-Svc: h3=\":<port>\"; ma=<seconds>" (RFC 7838).
+   // A client that takes it up makes its *next* connection over QUIC -- there is no in-band
+   // upgrade to HTTP/3, so this is the whole of it. HTTP/3 shares the endpoint the TCP acceptor
+   // is listening on, so what is advertised is the port and nothing else: the same host, over
+   // QUIC. Zero sends no "Alt-Svc" at all.
+   //
+   // Advertising over cleartext HTTP is of no use to browsers and curl, which honour "Alt-Svc"
+   // for https:// origins only -- the alternative has to be at least as secure as the origin.
+   //
+   std::chrono::seconds alt_svc_max_age = 24h;
+
+   //
    // HTTP/3 only: how long a QUIC connection may go without a packet from its peer before it is
    // dropped. This is the only way a peer that vanished without a CONNECTION_CLOSE -- a killed
    // client, a machine that went to sleep -- is ever noticed, so it also bounds how long its

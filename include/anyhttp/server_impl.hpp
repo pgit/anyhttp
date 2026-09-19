@@ -74,6 +74,13 @@ public:
    //
    boost::asio::ssl::context& tls_context() noexcept { return m_tlsContext; }
 
+   //
+   // The "Alt-Svc" field value pointing at this server's HTTP/3 endpoint, put into every response
+   // sent over HTTP/1.1 and HTTP/2, see Config::alt_svc_max_age. Empty when there is nothing to
+   // advertise, which is also what HTTP/3 sessions see -- they are already there.
+   //
+   const std::string& alt_svc() const noexcept { return m_altSvc; }
+
    asio::awaitable<void> tcp_accept_loop();
    asio::awaitable<void> handle_connection(asio::ip::tcp::socket socket);
 
@@ -101,6 +108,7 @@ private:
    boost::asio::any_io_executor m_executor;
    boost::asio::ssl::context m_tlsContext;
    std::optional<asio::ip::tcp::acceptor> m_acceptor;
+   std::string m_altSvc;
 
    std::mutex m_sessionMutex;
    std::set<std::shared_ptr<Session::Impl>> m_sessions;

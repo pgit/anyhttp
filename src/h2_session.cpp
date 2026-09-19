@@ -239,6 +239,24 @@ int on_invalid_frame_recv_callback(nghttp2_session* session, const nghttp2_frame
 int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
 {
    const auto handler = static_cast<NGHttp2Session*>(user_data);
+
+   //
+   // ALTSVC is an extension frame, and only ever received when it has been enabled for the
+   // session -- which the client does and the server doesn't, see ClientSession::do_session(). It
+   // may arrive on stream 0, carrying the origin it is about, or on a request stream, where the
+   // origin is that of the request. Either way it is handled before the stream is looked up: an
+   // ALTSVC for a stream that is already gone is to be ignored (RFC 7838, section 4), not
+   // answered with the RST_STREAM below.
+   //
+   if (frame->hd.type == NGHTTP2_ALTSVC)
+   {
+      const auto* altsvc = static_cast<const nghttp2_ext_altsvc*>(frame->ext.payload);
+      const auto value = make_string_view(altsvc->field_value, altsvc->field_value_len);
+      logd("[{}] on_frame_recv_callback: ALTSVC: {}", handler->logPrefix(frame), value);
+      handler->on_alt_svc(value);
+      return 0;
+   }
+
    const auto stream = handler->find_stream(frame->hd.stream_id);
 
    if (!stream && frame->hd.stream_id > 0)
@@ -278,7 +296,16 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
       if (frame->headers.cat == NGHTTP2_HCAT_REQUEST)
          stream->on_request();
       else if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE)
+      {
+         //
+         // A response may carry an alternative service as a header field instead of, or as well
+         // as, in an ALTSVC frame -- the two say the same thing in the same syntax.
+         //
+         if (auto alt_svc = stream->fields["alt-svc"]; !alt_svc.empty())
+            handler->on_alt_svc(std::string_view(alt_svc));
+
          stream->on_response();
+      }
 
       // end of of stream already? --> no body
       if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)

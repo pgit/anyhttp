@@ -750,6 +750,13 @@ public:
             for (const auto& header : msg)
                mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
                      truncated(header.value()));
+
+            //
+            // An "Alt-Svc" on any response may point at an HTTP/3 endpoint to use for the next
+            // connection (RFC 7838), see Client::Impl::on_alt_svc().
+            //
+            if (auto alt_svc = msg[http::field::alt_svc]; session && !alt_svc.empty())
+               client_session().client().on_alt_svc(std::string_view(alt_svc));
          }
          else
             mlogw("async_read_header: {} len={}", ec.message(), len);
@@ -1065,6 +1072,14 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       http::response<http::buffer_body>& response = writer->message;
       http::response_serializer<http::buffer_body>& serializer = writer->serializer;
       response.set(http::field::server, "anyhttp");
+
+      //
+      // Point the client at our HTTP/3 endpoint, see server::Config::alt_svc_max_age. Set before
+      // the handler runs, so one that wants to say something else about alternative services can
+      // simply pass its own field: submitting a response replaces the fields it names.
+      //
+      if (const auto& alt_svc = server().alt_svc(); !alt_svc.empty())
+         response.set(http::field::alt_svc, alt_svc);
 
       //
       // Call user-provided request handler.

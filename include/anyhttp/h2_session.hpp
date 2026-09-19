@@ -111,6 +111,13 @@ public:
 
    nghttp2_unique_ptr<nghttp2_session_callbacks> setup_callbacks();
 
+   /**
+    * Called with the value of an "Alt-Svc" received from the peer, either as a response header
+    * field or as an ALTSVC frame (RFC 7838). A server has nothing to do with one, so this does
+    * nothing unless the session is a client's, see ClientSession.
+    */
+   virtual void on_alt_svc(std::string_view field_value) {}
+
    NGHttp2Stream* create_stream(int32_t stream_id);
    NGHttp2Stream* find_stream(int32_t stream_id);
    void close_stream(int32_t stream_id);
@@ -127,6 +134,12 @@ public:
 
    /// The largest header section accepted from the peer, see Config::max_header_size.
    size_t m_max_header_size = default_max_header_size;
+
+   //
+   // What to advertise as this origin's HTTP/3 endpoint in every response, see
+   // server::Config::alt_svc_max_age. Only a server session ever has one.
+   //
+   std::string m_alt_svc;
 
    Buffer m_buffer;
 };
@@ -180,6 +193,7 @@ class ServerSession : public ServerReference, public NGHttp2SessionImpl<Stream>
    using super::recv_loop;
    using super::send_loop;
 
+   using super::m_alt_svc;
    using super::m_buffer;
    using super::m_max_header_size;
    using super::m_stream;
@@ -232,6 +246,8 @@ public:
    ClientSession(client::Client::Impl& parent, any_io_executor executor, Stream&& stream);
 
    awaitable<void> do_session(Buffer&& data) override;
+
+   void on_alt_svc(std::string_view field_value) override { client().on_alt_svc(field_value); }
 };
 
 // =================================================================================================

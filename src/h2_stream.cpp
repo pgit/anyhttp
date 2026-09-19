@@ -224,9 +224,18 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    const std::string date = format_http_date(std::chrono::system_clock::now());
 
    auto nva = boost::container::small_vector<nghttp2_nv, 16>();
-   nva.reserve(3 + std::distance(headers.begin(), headers.end()));
+   nva.reserve(4 + std::distance(headers.begin(), headers.end()));
    nva.push_back(make_nv_ls(":status", status_code_str));
    nva.push_back(make_nv_ls("date", date));
+
+   //
+   // Point the client at our HTTP/3 endpoint, see server::Config::alt_svc_max_age. Only a server
+   // session has one of these, and a handler that names the field itself gets its way: HTTP/2
+   // would happily carry both, which is not what "Alt-Svc" means.
+   //
+   if (const auto& alt_svc = stream->parent.m_alt_svc;
+       !alt_svc.empty() && !headers.count("alt-svc"))
+      nva.push_back(make_nv_ls("alt-svc", alt_svc));
 
    for (auto&& item : headers)
    {

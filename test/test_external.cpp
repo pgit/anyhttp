@@ -447,4 +447,29 @@ TEST_F(ExternalCustom, curl_h2c_upgrade)
    EXPECT_EQ(upgraded, 2) << output;
 }
 
+//
+// The server advertises its HTTP/3 endpoint as "Alt-Svc" in every response it sends over HTTP/1.1
+// and HTTP/2, see server::Config::alt_svc_max_age. curl only remembers that with a cache file
+// given as --alt-svc, and only for https:// origins -- and it needs ALPN, which is what "h3" is
+// negotiated as, so --no-alpn would rule out the alternative as much as it rules out HTTP/2.
+//
+// The alternative moves the *next* connection, never the one that learns about it, so this takes
+// one curl invocation per request: the first is answered over TCP, the ones after it over QUIC.
+//
+TEST_F(ExternalCustom, curl_alt_svc)
+{
+   auto url = boost::url("https://127.0.0.2/dump").set_port_number(port());
+   auto cmd = std::format("cache=$(mktemp) && trap 'rm -f $cache' EXIT && "
+                          "for i in 1 2 3; do "
+                          "timeout 5 {} -sS -v --cacert pki/out/root.pem --alt-svc $cache "
+                          "-o /dev/null -w 'HTTP/%{{http_version}}\\n' {}; "
+                          "done",
+                          CURL_PATH, url.buffer());
+
+   auto future = spawn("/usr/bin/bash", {"-c", cmd});
+   run();
+
+   EXPECT_EQ(future.get(), "HTTP/2\nHTTP/3\nHTTP/3\n");
+}
+
 // =================================================================================================

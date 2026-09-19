@@ -73,6 +73,17 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    //
    auto tcp_ep = m_acceptor->local_endpoint();
    m_http3 = make_http3_server(*this, ip::udp::endpoint{tcp_ep.address(), tcp_ep.port()});
+
+   //
+   // Advertise that endpoint to HTTP/1.1 and HTTP/2 clients, see Config::alt_svc_max_age. The
+   // alt-authority carries the port alone: an empty host in one means the host of the origin
+   // itself, which is exactly where HTTP/3 is, one transport over.
+   //
+   if (m_http3 && m_config.alt_svc_max_age > 0s)
+   {
+      m_altSvc = std::format("h3=\":{}\"; ma={}", tcp_ep.port(), m_config.alt_svc_max_age.count());
+      logi("Server: advertising '{}'", m_altSvc);
+   }
 }
 
 // -------------------------------------------------------------------------------------------------
