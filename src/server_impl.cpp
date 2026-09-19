@@ -288,7 +288,6 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    // socket.set_option(sb::send_buffer_size(8192));
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 
-   auto executor = co_await boost::asio::this_coro::executor;
    auto buffer = boost::beast::flat_buffer();
 
    //
@@ -320,9 +319,9 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
            tls_handshake_info(ssl_stream->native_handle()));
 
       if (alpn == "h2")
-         session = nghttp2::make_server_session(*this, executor, std::move(*ssl_stream));
+         session = nghttp2::make_server_session(*this, std::move(*ssl_stream));
       else if (alpn == "http/1.1")
-         session = beast_impl::make_server_session(*this, executor, std::move(*ssl_stream));
+         session = beast_impl::make_server_session(*this, std::move(*ssl_stream));
    }
 
    //
@@ -333,9 +332,9 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
 #if 1
       AnyAsyncStream stream(std::make_unique<TestStream>(std::move(socket)));
-      session = nghttp2::make_server_session(*this, executor, std::move(stream));
+      session = nghttp2::make_server_session(*this, std::move(stream));
 #else
-      session = nghttp2::make_server_session(*this, executor, std::move(socket));
+      session = nghttp2::make_server_session(*this, std::move(socket));
 #endif
    }
 
@@ -347,9 +346,9 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
       logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", prefix);
 #if 1
       AnyAsyncStream stream(std::make_unique<TestStream>(std::move(socket)));
-      session = beast_impl::make_server_session(*this, executor, std::move(stream));
+      session = beast_impl::make_server_session(*this, std::move(stream));
 #else
-      session = beast_impl::make_server_session(*this, executor, std::move(socket));
+      session = beast_impl::make_server_session(*this, std::move(socket));
 #endif
    }
 
@@ -399,7 +398,16 @@ awaitable<void> Server::Impl::tcp_accept_loop()
    size_t sessionCounter = 0;
    for (;;)
    {
-      auto [ec, socket] = co_await acceptor.async_accept(as_tuple(deferred));
+      //
+      // Put each connection on a strand if needed. The socket is accepted onto that executor,
+      // so that everything layered on top of it stays there, too: the session takes its executor
+      // from the stream it is given, see the make_*_session() factories.
+      //
+      // NOTE: This is slow. Consider multiple IO contexts instead,
+      //       or explicit thread pools where really needed.
+      //
+      ip::tcp::socket socket(config().use_strand ? boost::asio::make_strand(executor) : executor);
+      auto [ec] = co_await acceptor.async_accept(socket, as_tuple);
       if (ec)
       {
          if (ec == boost::system::errc::operation_canceled)
@@ -421,14 +429,9 @@ awaitable<void> Server::Impl::tcp_accept_loop()
          ++sessionCounter;
       }
 
-      //
-      // Put each connection on a strand if needed.
-      //
-      // NOTE: This is slow. Consider multiple IO contexts instead,
-      //       or explicit thread pools where really needed.
-      //
-      co_spawn(config().use_strand ? boost::asio::make_strand(executor) : executor,
-               handle_connection(std::move(socket)), [&, ep](const std::exception_ptr& ex) mutable
+      auto connection_executor = socket.get_executor();
+      co_spawn(connection_executor, handle_connection(std::move(socket)),
+               [&, ep](const std::exception_ptr& ex) mutable
       {
          auto lock = std::lock_guard(m_sessionMutex);
          --sessionCounter;

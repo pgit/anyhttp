@@ -16,7 +16,6 @@
 #include <boost/asio/ssl/stream.hpp>
 
 #include <boost/beast/core/static_buffer.hpp>
-#include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/http/error.hpp>
 #include <boost/beast/http/impl/error.hpp>
 #include <boost/beast/http/status.hpp>
@@ -664,58 +663,34 @@ void NGHttp2Session::start_write()
 // translation unit, so that the generic server and client never see an nghttp2 type.
 // =================================================================================================
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   asio::any_io_executor executor,
-                                                   SslStream&& stream)
+template <SocketStream Stream>
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Stream&& stream,
+                                                   std::optional<Upgrade> upgrade)
 {
-   return std::make_shared<ServerSession<SslStream>>(server, std::move(executor),
-                                                     std::move(stream));
-}
-
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   asio::any_io_executor executor,
-                                                   AnyAsyncStream&& stream)
-{
-   return std::make_shared<ServerSession<AnyAsyncStream>>(server, std::move(executor),
-                                                          std::move(stream));
-}
-
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   asio::any_io_executor executor,
-                                                   asio::ip::tcp::socket&& socket)
-{
-   return std::make_shared<ServerSession<asio::ip::tcp::socket>>(server, std::move(executor),
-                                                                 std::move(socket));
-}
-
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   asio::any_io_executor executor,
-                                                   asio::ip::tcp::socket&& socket,
-                                                   Upgrade&& upgrade)
-{
-   auto session = std::make_shared<ServerSession<asio::ip::tcp::socket>>(
-      server, std::move(executor), std::move(socket));
+   auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
+   auto session =
+      std::make_shared<ServerSession<Stream>>(server, std::move(executor), std::move(stream));
    session->m_upgrade = std::move(upgrade);
    return session;
 }
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   asio::any_io_executor executor,
-                                                   AnyAsyncStream&& stream, Upgrade&& upgrade)
+template <SocketStream Stream>
+std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Stream&& stream)
 {
-   auto session = std::make_shared<ServerSession<AnyAsyncStream>>(server, std::move(executor),
-                                                                  std::move(stream));
-   session->m_upgrade = std::move(upgrade);
-   return session;
+   auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
+   return std::make_shared<ClientSession<Stream>>(client, std::move(executor), std::move(stream));
 }
 
-std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
-                                                   asio::any_io_executor executor,
-                                                   asio::ip::tcp::socket&& socket)
-{
-   return std::make_shared<ClientSession<asio::ip::tcp::socket>>(client, std::move(executor),
-                                                                 std::move(socket));
-}
+template std::shared_ptr<Session::Impl>
+make_server_session<socket>(server::Server::Impl&, socket&&, std::optional<Upgrade>);
+template std::shared_ptr<Session::Impl>
+make_server_session<SslStream>(server::Server::Impl&, SslStream&&, std::optional<Upgrade>);
+template std::shared_ptr<Session::Impl>
+make_server_session<AnyAsyncStream>(server::Server::Impl&, AnyAsyncStream&&,
+                                    std::optional<Upgrade>);
+
+template std::shared_ptr<Session::Impl> make_client_session<socket>(client::Client::Impl&,
+                                                                    socket&&);
 
 // =================================================================================================
 

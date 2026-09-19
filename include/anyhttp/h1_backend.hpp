@@ -7,12 +7,11 @@
 // and h1_session.cpp, which are the only places instantiating them.
 //
 
-#include "anyhttp/any_async_stream.hpp"
 #include "anyhttp/client_impl.hpp"
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
+#include "anyhttp/stream_traits.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/stream.hpp>
 
@@ -25,21 +24,33 @@ namespace anyhttp::beast_impl
 
 using SslStream = boost::asio::ssl::stream<boost::asio::ip::tcp::socket>;
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   boost::asio::any_io_executor executor,
-                                                   SslStream&& stream);
+// -------------------------------------------------------------------------------------------------
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   boost::asio::any_io_executor executor,
-                                                   AnyAsyncStream&& stream);
+//
+// The stream is moved into the session, which runs on the stream's own executor -- hence the
+// rvalue reference, which also keeps the SocketStream constraint from matching an lvalue.
+//
+// These are defined in src/h1_session.cpp and explicitly instantiated there for each of the
+// stream types below, so that beast's HTTP machinery is instantiated in that one place only.
+//
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   boost::asio::any_io_executor executor,
-                                                   boost::asio::ip::tcp::socket&& socket);
+template <SocketStream Stream>
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Stream&& stream);
 
-std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
-                                                   boost::asio::any_io_executor executor,
-                                                   boost::asio::ip::tcp::socket&& socket);
+template <SocketStream Stream>
+std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Stream&& stream);
+
+extern template std::shared_ptr<Session::Impl>
+make_server_session<boost::asio::ip::tcp::socket>(server::Server::Impl&,
+                                                  boost::asio::ip::tcp::socket&&);
+extern template std::shared_ptr<Session::Impl>
+make_server_session<SslStream>(server::Server::Impl&, SslStream&&);
+extern template std::shared_ptr<Session::Impl>
+make_server_session<AnyAsyncStream>(server::Server::Impl&, AnyAsyncStream&&);
+
+extern template std::shared_ptr<Session::Impl>
+make_client_session<boost::asio::ip::tcp::socket>(client::Client::Impl&,
+                                                  boost::asio::ip::tcp::socket&&);
 
 // =================================================================================================
 

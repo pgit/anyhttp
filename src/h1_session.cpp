@@ -7,6 +7,7 @@
 #include "anyhttp/h2_backend.hpp"
 #include "anyhttp/literals.hpp"
 #include "anyhttp/server.hpp"
+#include "anyhttp/stream_traits.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/associated_allocator.hpp>
@@ -23,7 +24,6 @@
 #include <boost/beast/core/detail/base64.hpp>
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/core/stream_traits.hpp>
-#include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/http/basic_parser.hpp>
 #include <boost/beast/http/dynamic_body.hpp>
@@ -61,11 +61,6 @@ namespace anyhttp::beast_impl
 using namespace asio;
 using namespace boost::beast;
 using socket = asio::ip::tcp::socket;
-
-inline auto& get_socket(socket& socket) { return socket; }
-inline auto& get_socket(tcp_stream& stream) { return stream.socket(); }
-inline auto& get_socket(ssl::stream<socket>& stream) { return stream.lowest_layer(); }
-inline auto& get_socket(AnyAsyncStream& stream) { return stream.get_socket(); }
 
 /**
  * Adds the user's header fields to an outgoing message. A field replaces whatever the message
@@ -562,7 +557,8 @@ public:
 
       mlogd("{} {}", message.result_int(), message.reason());
       for (const auto& header : message)
-         mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()), truncated(header.value()));
+         mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
+               truncated(header.value()));
 
       //
       // TODO: For bundling writing the header and body, we should just post the writing here,
@@ -752,7 +748,8 @@ public:
             http::response_parser<http::buffer_body>::value_type& msg = reader->parser.get();
             mlogd("{} {}", msg.result_int(), msg.reason());
             for (const auto& header : msg)
-               mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()), truncated(header.value()));
+               mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
+                     truncated(header.value()));
          }
          else
             mlogw("async_read_header: {} len={}", ec.message(), len);
@@ -936,31 +933,6 @@ static std::optional<nghttp2::Upgrade> h2c_upgrade(const http::request<http::buf
    return upgrade;
 }
 
-static std::shared_ptr<Session::Impl> make_h2c_session(server::Server::Impl& server,
-                                                       any_io_executor executor, tcp_stream& stream,
-                                                       nghttp2::Upgrade&& upgrade)
-{
-   return nghttp2::make_server_session(server, std::move(executor), stream.release_socket(),
-                                       std::move(upgrade));
-}
-
-static std::shared_ptr<Session::Impl> make_h2c_session(server::Server::Impl& server,
-                                                       any_io_executor executor,
-                                                       AnyAsyncStream& stream,
-                                                       nghttp2::Upgrade&& upgrade)
-{
-   return nghttp2::make_server_session(server, std::move(executor), std::move(stream),
-                                       std::move(upgrade));
-}
-
-static std::shared_ptr<Session::Impl> make_h2c_session(server::Server::Impl&, any_io_executor,
-                                                       ssl::stream<socket>&, nghttp2::Upgrade&&)
-{
-   throw std::logic_error("h2c upgrade over TLS"); // rejected by h2c_upgrade()
-}
-
-// =================================================================================================
-
 /**
  * This function waits for headers of an incoming, new request and passes control to a registered
  * handler. After the request has been completed, and if the connection can be kept open, it starts
@@ -980,11 +952,6 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    m_buffer = std::move(buffer);
 
    mlogd("do_server_session, {} bytes in buffer", m_buffer.size());
-   // get_socket(m_stream).set_option(asio::ip::tcp::no_delay(true));
-
-   // Set the timeout. TODO: don't rely on beast timeouts
-   // m_stream.expires_after(std::chrono::seconds(5));
-   // m_stream.expires_never();
 
    bool close = false;
    beast::error_code ec;
@@ -1058,7 +1025,8 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
       mlogd("{} {} (need_eof={})", request.method_string(), reader->m_url.buffer(), need_eof);
       for (auto& header : request)
-         mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()), truncated(header.value()));
+         mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
+               truncated(header.value()));
 
       //
       // Upgrade to h2c, if requested: Answer with "101 Switching Protocols" and hand over the
@@ -1079,8 +1047,10 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          }
 
          mlogi("upgrading to h2c, {} bytes in buffer", m_buffer.size());
-         m_upgraded =
-            make_h2c_session(server(), super::get_executor(), m_stream, std::move(*upgrade));
+         // Stream is whatever this session runs on, but never a TLS one: h2c_upgrade() takes
+         // cleartext requests only, as h2 over TLS is negotiated by ALPN instead.
+         m_upgraded = nghttp2::make_server_session(server(), std::move(m_stream),
+                                                   std::move(*upgrade));
          co_await m_upgraded->do_session(std::move(m_buffer));
          mlogi("h2c session done, served {} requests before upgrade", requestCounter - 1);
          co_return;
@@ -1168,10 +1138,9 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    m_buffer = std::move(buffer);
 
    mlogd("do_client_session, {} bytes in buffer", m_buffer.size());
-   // get_socket(m_stream).set_option(asio::ip::tcp::no_delay(true));
 
    // Set the low-level TCP stream timeout. This is relevant for some testcases...
-   m_stream.expires_after(5s);
+   // m_stream.expires_after(5s);
 
    //
    // Even in HTTP/1.1, where the current request and the current response's serializers take
@@ -1201,7 +1170,7 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    timer.expires_after(2s);
    co_await timer.async_wait(deferred);
 
-   // auto [ec, len] = co_await async_read_header(m_stream, buffer, parser, as_tuple(deferred));
+   // auto [ec, len] = co_await async_read_header(m_stream, buffer, parser, as_tuple);
    co_return;
 }
 
@@ -1250,7 +1219,8 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
 
    mlogd("{} {}", request.method_string(), url.buffer());
    for (const auto& header : request)
-      mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()), truncated(header.value()));
+      mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
+            truncated(header.value()));
 
    writer->sequence = m_requests_sent++;
    m_sending = writer.get();
@@ -1318,8 +1288,7 @@ void ClientSession<Stream>::reader_finished(bool complete)
 
 // =================================================================================================
 
-template class ClientSession<boost::beast::tcp_stream>;
-template class ServerSession<boost::beast::tcp_stream>;
+template class ServerSession<asio::ip::tcp::socket>;
 template class ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>;
 template class ServerSession<AnyAsyncStream>;
 
@@ -1328,37 +1297,29 @@ template class ServerSession<AnyAsyncStream>;
 // translation unit, so that the generic server and client stay free of beast's HTTP machinery.
 // =================================================================================================
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   asio::any_io_executor executor,
-                                                   SslStream&& stream)
+template <SocketStream Stream>
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Stream&& stream)
 {
-   return std::make_shared<ServerSession<SslStream>>(server, std::move(executor),
-                                                     std::move(stream));
+   auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
+   return std::make_shared<ServerSession<Stream>>(server, std::move(executor), std::move(stream));
 }
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   asio::any_io_executor executor,
-                                                   AnyAsyncStream&& stream)
+template <SocketStream Stream>
+std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Stream&& stream)
 {
-   return std::make_shared<ServerSession<AnyAsyncStream>>(server, std::move(executor),
-                                                          std::move(stream));
+   auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
+   return std::make_shared<ClientSession<Stream>>(client, std::move(executor), std::move(stream));
 }
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   asio::any_io_executor executor,
-                                                   asio::ip::tcp::socket&& socket)
-{
-   return std::make_shared<ServerSession<boost::beast::tcp_stream>>(
-      server, std::move(executor), boost::beast::tcp_stream(std::move(socket)));
-}
+template std::shared_ptr<Session::Impl> make_server_session<socket>(server::Server::Impl&,
+                                                                    socket&&);
+template std::shared_ptr<Session::Impl> make_server_session<SslStream>(server::Server::Impl&,
+                                                                       SslStream&&);
+template std::shared_ptr<Session::Impl>
+make_server_session<AnyAsyncStream>(server::Server::Impl&, AnyAsyncStream&&);
 
-std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
-                                                   asio::any_io_executor executor,
-                                                   asio::ip::tcp::socket&& socket)
-{
-   return std::make_shared<ClientSession<boost::beast::tcp_stream>>(
-      client, std::move(executor), boost::beast::tcp_stream(std::move(socket)));
-}
+template std::shared_ptr<Session::Impl> make_client_session<socket>(client::Client::Impl&,
+                                                                    socket&&);
 
 // =================================================================================================
 

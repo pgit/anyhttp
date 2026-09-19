@@ -5,10 +5,10 @@
 // factories in anyhttp/h2_backend.hpp are what the generic server and client use instead.
 //
 
-#include "anyhttp/any_async_stream.hpp"
 #include "anyhttp/h2_common.hpp"
 #include "anyhttp/h2_session.hpp"
 #include "anyhttp/literals.hpp"
+#include "anyhttp/stream_traits.hpp"
 
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
@@ -16,7 +16,6 @@
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/beast/core/static_buffer.hpp>
-#include <boost/beast/core/tcp_stream.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
 #include <boost/url/format.hpp>
@@ -33,11 +32,6 @@ namespace anyhttp::nghttp2
 using namespace boost::asio;
 using namespace boost::beast;
 using socket = asio::ip::tcp::socket;
-
-inline auto& get_socket(socket& socket) { return socket; }
-inline auto& get_socket(tcp_stream& stream) { return stream.socket(); }
-inline auto& get_socket(ssl::stream<socket>& stream) { return stream.lowest_layer(); }
-inline auto& get_socket(AnyAsyncStream& stream) { return stream.get_socket(); }
 
 // =================================================================================================
 
@@ -113,7 +107,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
       {
          const std::array<asio::const_buffer, 2> seq{buffer.data(), asio::buffer(data, nread)};
          mylogd("send loop: writing {} bytes...", bytes_to_write);
-         auto [ec, written] = co_await asio::async_write(m_stream, seq, as_tuple(deferred));
+         auto [ec, written] = co_await asio::async_write(m_stream, seq, as_tuple);
          if (ec)
          {
             mloge("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
@@ -166,7 +160,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
    while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
    {
       auto free = m_buffer.capacity() - m_buffer.size();
-      auto [ec, n] = co_await m_stream.async_read_some(m_buffer.prepare(free), as_tuple(deferred));
+      auto [ec, n] = co_await m_stream.async_read_some(m_buffer.prepare(free), as_tuple);
       if (ec)
       {
          mylogd("read: {}, terminating session", ec.message());
@@ -201,7 +195,6 @@ template <typename Stream>
 awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
-   // get_socket(m_stream).set_option(ip::tcp::no_delay(true));
    auto callbacks = super::setup_callbacks();
 
    //
@@ -298,7 +291,6 @@ template <typename Stream>
 awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
    m_buffer = std::move(buffer);
-   // get_socket(m_stream).set_option(ip::tcp::no_delay(true));
    auto callbacks = super::setup_callbacks();
 
    //
