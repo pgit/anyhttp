@@ -295,9 +295,14 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
       logi("[{}] TLS handshake completed: {}", prefix,
            tls_handshake_info(ssl_stream->native_handle()));
 
+      //
+      // Everything that is not "h2" is served as HTTP/1.1, including the empty ALPN of a client
+      // that offered none at all (curl --no-alpn) and one nobody agreed on. Refusing those would
+      // buy nothing: HTTP/1.1 is what a connection without a negotiated protocol speaks anyway.
+      //
       if (alpn == "h2")
          session = nghttp2::make_server_session(*this, std::move(*ssl_stream));
-      else if (alpn == "http/1.1")
+      else
          session = beast_impl::make_server_session(*this, std::move(*ssl_stream));
    }
 
