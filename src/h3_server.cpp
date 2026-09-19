@@ -114,7 +114,8 @@ namespace
 {
 
 //
-// The process-wide BoringSSL SSL_CTX used for every QUIC connection.
+// The BoringSSL SSL_CTX every QUIC connection of one server is served from. Owned by
+// Http3ServerImpl, so it is built with the server and not on the first connection.
 //
 struct TlsServerContext
 {
@@ -174,14 +175,6 @@ struct TlsServerContext
 
    SSL_CTX* ctx = nullptr;
 };
-
-TlsServerContext& tls_context()
-{
-   static TlsServerContext instance;
-   return instance;
-}
-
-// -------------------------------------------------------------------------------------------------
 
 std::string cid_key(const ngtcp2_cid& cid)
 {
@@ -357,6 +350,13 @@ public:
    asio::any_io_executor get_executor() const noexcept { return parent_.get_executor(); }
 
    //
+   // The TLS context every QUIC connection is served from, created with this server rather than
+   // lazily on the first connection, so that a certificate rotated afterwards is never picked up
+   // by one protocol only. See make_tls_server_context() on the TCP side.
+   //
+   SSL_CTX* tls_context() noexcept { return tls_.ctx; }
+
+   //
    // QUIC connection-ID demux table. Populated as new source CIDs are minted, consulted by
    // udp_on_read() to route packets to the right connection. Guarded by mutex_: the receive loop
    // reads it while sessions mutate it from their own strands (get_new_connection_id /
@@ -376,6 +376,8 @@ private:
 
 private:
    Server::Impl& parent_;
+
+   TlsServerContext tls_;
 
    //
    // The socket gets its own strand: udp_receive_loop() runs on it, and destroy() dispatches the
@@ -742,7 +744,7 @@ int Http3ServerSession::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uin
       return -1;
    }
 
-   if (setup_tls(tls_context().ctx, true /* server */) != 0)
+   if (setup_tls(server_.tls_context(), true /* server */) != 0)
       return -1;
 
    logi("[{}] new connection, scid={} version=0x{:x}", log_prefix_,

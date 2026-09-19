@@ -4,6 +4,7 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_completion_handler.hpp>
+#include <boost/asio/ssl/context.hpp>
 
 #include <memory>
 #include <set>
@@ -68,6 +69,11 @@ public:
    const Config& config() const { return m_config; }
    boost::asio::any_io_executor get_executor() const noexcept { return m_executor; }
 
+   //
+   // The TLS context used for every TCP connection, see make_tls_server_context().
+   //
+   boost::asio::ssl::context& tls_context() noexcept { return m_tlsContext; }
+
    asio::awaitable<void> tcp_accept_loop();
    asio::awaitable<void> handle_connection(asio::ip::tcp::socket socket);
 
@@ -93,6 +99,7 @@ private:
    Config m_config;
 
    boost::asio::any_io_executor m_executor;
+   boost::asio::ssl::context m_tlsContext;
    std::optional<asio::ip::tcp::acceptor> m_acceptor;
 
    std::mutex m_sessionMutex;

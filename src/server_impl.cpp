@@ -55,8 +55,14 @@ Response::Impl::~Impl() = default;
 
 // =================================================================================================
 
+//
+// Defined further down, together with the ALPN callbacks it installs.
+//
+static asio::ssl::context make_tls_server_context();
+
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
-   : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
+   : m_config(std::move(config)), m_executor(std::move(executor)),
+     m_tlsContext(make_tls_server_context()), m_acceptor(m_executor)
 {
    logi("Server: ctor");
    listen_tcp();
@@ -212,6 +218,29 @@ static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned ch
    return SSL_TLSEXT_ERR_NOACK;
 }
 
+//
+// The TLS context every TCP connection is served from. It is created once, when the server is
+// constructed, and not per connection: building it reads the PEM files from disk, and a context
+// built per connection would also pick up a certificate that was rotated underneath a running
+// server -- unlike HTTP/3, which holds its context for the lifetime of the server. That
+// difference made a regenerated test PKI fail over HTTP/3 while HTTP/2 silently kept working.
+//
+static asio::ssl::context make_tls_server_context()
+{
+   asio::ssl::context ctx{asio::ssl::context::tlsv13};
+   SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, NULL);
+   SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, NULL);
+
+   //
+   // This is a testing key only. It is not in the repository, but generated at build time
+   // by the 'pki' target (see cmake/pki.cmake).
+   //
+   ctx.use_certificate_chain_file("pki/out/server-chain.pem");
+   ctx.use_private_key_file("pki/out/server-key.pem", asio::ssl::context::pem);
+
+   return ctx;
+}
+
 // -------------------------------------------------------------------------------------------------
 
 class TestStream : public AnyAsyncStream::Impl
@@ -271,18 +300,7 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    {
       logi("[{}] detected TLS client hello, {} bytes in buffer", prefix, buffer.size());
 
-      asio::ssl::context ctx{asio::ssl::context::tlsv13};
-      SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, NULL);
-      SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, NULL);
-
-      //
-      // This is a testing key only. It is not in the repository, but generated at build time
-      // by the 'pki' target (see cmake/pki.cmake).
-      //
-      ctx.use_certificate_chain_file("pki/out/server-chain.pem");
-      ctx.use_private_key_file("pki/out/server-key.pem", asio::ssl::context::pem);
-
-      ssl_stream.emplace(std::move(socket), ctx);
+      ssl_stream.emplace(std::move(socket), m_tlsContext);
       auto n = co_await ssl_stream->async_handshake(asio::ssl::stream_base::server, buffer.data());
       buffer.consume(n);
 
