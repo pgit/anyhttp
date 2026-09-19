@@ -27,8 +27,6 @@ namespace anyhttp
 using ReadWrite = void(boost::system::error_code, std::size_t);
 using ReadWriteHandler = asio::any_completion_handler<ReadWrite>;
 
-// using ConstBufferVector = boost::container::small_vector<asio::const_buffer, 4>;
-// using MutableBufferVector = boost::container::small_vector<asio::mutable_buffer, 4>;
 using ConstBufferVector = const_buffer_array<16>;
 using MutableBufferVector = mutable_buffer_array<16>;
 
@@ -36,13 +34,13 @@ using Shutdown = void(boost::system::error_code);
 using ShutdownHandler = asio::any_completion_handler<Shutdown>;
 
 /**
- * Attempt to create a type-erased async stream.
+ * Attempt to create a type-erased async stream with ASIO.
  *
  * The difficult part here is to type-erase the buffer sequences. The buffers are copied into a
  * buffer_array, a fixed-capacity, non-allocating array of buffer descriptors that is itself a
  * buffer sequence. This seems to work reasonably well.
  *
- * There is also asio::buffer_sequence_adapter and linearise(), which seems to be used in ASIO's
+ * There is also \c asio::buffer_sequence_adapter and \c linearise(), which seem to be used in ASIO
  * SSL code as well. It merges a set of buffers into a new, contiguous buffer. But that is slow.
  */
 class AnyAsyncStream
@@ -54,7 +52,7 @@ public:
    {
    public:
       virtual ~Impl() = default;
-      
+
       using executor_type = boost::asio::any_io_executor;
       virtual executor_type get_executor() noexcept = 0;
       virtual ip::tcp::socket& get_socket() = 0;
@@ -76,8 +74,8 @@ protected:
 public:
    AnyAsyncStream(std::unique_ptr<Impl> impl_) : impl(std::move(impl_)) {}
 
-   inline executor_type get_executor() noexcept { return impl->get_executor(); }
-   inline ip::tcp::socket& get_socket() { return impl->get_socket(); }
+   executor_type get_executor() noexcept { return impl->get_executor(); }
+   ip::tcp::socket& get_socket() { return impl->get_socket(); }
 
    //
    // async_write_some
