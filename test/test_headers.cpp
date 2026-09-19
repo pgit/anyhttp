@@ -93,12 +93,10 @@ void Headers::round_trip(Fields sent)
    };
    test = [this, sent](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url, sent);
-      co_await request.async_write_eof();
-      auto response = co_await request.async_get_response();
-      EXPECT_EQ(response.status_code(), 200);
-      expect_contains(response.fields(), sent);
-      EXPECT_EQ(co_await drain(response), 0);
+      auto message = co_await session.async_get(url, sent);
+      EXPECT_EQ(message.result_int(), 200);
+      expect_contains(message, sent);
+      EXPECT_THAT(message.body(), IsEmpty());
    };
 }
 
@@ -130,11 +128,8 @@ TEST_P(Headers, WHEN_header_name_repeats_THEN_all_values_arrive_in_order)
    };
    test = [this, sent, values](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url, sent);
-      co_await request.async_write_eof();
-      auto response = co_await request.async_get_response();
-      EXPECT_THAT(values_of(response.fields(), "x-repeated"), ElementsAreArray(values));
-      co_await drain(response);
+      auto message = co_await session.async_get(url, sent);
+      EXPECT_THAT(values_of(message, "x-repeated"), ElementsAreArray(values));
    };
 }
 
@@ -167,10 +162,8 @@ TEST_P(Headers, WHEN_request_headers_exceed_default_limit_THEN_server_responds_4
    };
    test = [this, sent](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url, sent);
-      co_await request.async_write_eof();
-      auto response = co_await request.async_get_response();
-      EXPECT_EQ(response.status_code(), 431);
+      auto message = co_await session.async_get(url, sent);
+      EXPECT_EQ(message.result_int(), 431);
    };
 }
 
@@ -217,17 +210,10 @@ protected:
       if (response_size)
          target.params().set("response_size", std::to_string(response_size));
 
-      auto [ec, request] = co_await session.async_submit(target, sent, as_tuple);
-      if (!ec)
-         std::tie(ec) = co_await request.async_write_eof(as_tuple);
+      auto [ec, message] = co_await session.async_get(target, sent, as_tuple);
       if (ec)
          co_return std::unexpected(ec);
-
-      auto [ec2, response] = co_await request.async_get_response(as_tuple);
-      if (ec2)
-         co_return std::unexpected(ec2);
-      co_await drain(response);
-      co_return response.status_code();
+      co_return message.result_int();
    }
 
    size_t handled = 0;

@@ -49,6 +49,7 @@
         "respawn",
         "RESPAWNED",
         "respawning",
+        "rvalues",
         "scid",
         "SCIDLEN",
         "scids",

@@ -54,20 +54,13 @@ public:
       std::ofstream(path, std::ios::binary).write(content.data(), content.size());
    }
 
-   //
-   // Requests \p target and returns status code and body. The request is finished right away --
-   // serve_file() ignores the request body, but still has to consume it.
-   //
-   awaitable<std::tuple<int, std::string>> get(Session& session, boost::urls::url target)
+   /// Requests \p target and returns the whole response, body and all.
+   awaitable<client::Message> get(Session& session, boost::urls::url target)
    {
-      auto request = co_await session.async_submit(target, {});
-      co_await request.async_write_eof();
-      auto response = co_await request.async_get_response();
-      auto body = co_await read(response);
-      co_return std::make_tuple(response.status_code(), std::move(body));
+      co_return co_await session.async_get(std::move(target));
    }
 
-   awaitable<std::tuple<int, std::string>> get(Session& session, std::string_view path)
+   awaitable<client::Message> get(Session& session, std::string_view path)
    {
       co_return co_await get(session, boost::urls::url(url).set_path(path));
    }
@@ -98,9 +91,9 @@ TEST_P(FileHandler, WHEN_file_exists_THEN_serves_content)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      auto [status, body] = co_await get(session, "/custom/hello.txt");
-      EXPECT_EQ(status, 200);
-      EXPECT_EQ(body, "Hello, File!");
+      auto message = co_await get(session, "/custom/hello.txt");
+      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.body(), "Hello, File!");
    };
 }
 
@@ -108,9 +101,9 @@ TEST_P(FileHandler, WHEN_file_is_in_subdirectory_THEN_serves_content)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      auto [status, body] = co_await get(session, "/custom/sub/nested.txt");
-      EXPECT_EQ(status, 200);
-      EXPECT_EQ(body, "Nested!");
+      auto message = co_await get(session, "/custom/sub/nested.txt");
+      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.body(), "Nested!");
    };
 }
 
@@ -122,9 +115,9 @@ TEST_P(FileHandler, WHEN_file_is_empty_THEN_serves_empty_body)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      auto [status, body] = co_await get(session, "/custom/empty.txt");
-      EXPECT_EQ(status, 200);
-      EXPECT_EQ(body, "");
+      auto message = co_await get(session, "/custom/empty.txt");
+      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_THAT(message.body(), IsEmpty());
    };
 }
 
@@ -136,9 +129,9 @@ TEST_P(FileHandler, WHEN_file_is_large_THEN_serves_all_of_it)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      auto [status, body] = co_await get(session, "/custom/large.bin");
-      EXPECT_EQ(status, 200);
-      EXPECT_EQ(body, std::string(256_k, 'x'));
+      auto message = co_await get(session, "/custom/large.bin");
+      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.body(), std::string(256_k, 'x'));
    };
 }
 
@@ -146,9 +139,9 @@ TEST_P(FileHandler, WHEN_file_does_not_exist_THEN_error_404)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      auto [status, body] = co_await get(session, "/custom/missing.txt");
-      EXPECT_EQ(status, 404);
-      EXPECT_EQ(body, "");
+      auto message = co_await get(session, "/custom/missing.txt");
+      EXPECT_EQ(message.result_int(), 404);
+      EXPECT_THAT(message.body(), IsEmpty());
    };
 }
 
@@ -159,8 +152,8 @@ TEST_P(FileHandler, WHEN_path_is_a_directory_THEN_error_404)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      EXPECT_EQ(std::get<0>(co_await get(session, "/custom/sub")), 404);
-      EXPECT_EQ(std::get<0>(co_await get(session, "/custom/")), 404);
+      EXPECT_EQ((co_await get(session, "/custom/sub")).result_int(), 404);
+      EXPECT_EQ((co_await get(session, "/custom/")).result_int(), 404);
    };
 }
 
@@ -168,9 +161,9 @@ TEST_P(FileHandler, WHEN_path_escapes_the_root_THEN_error_404)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      EXPECT_EQ(std::get<0>(co_await get(session, "/custom/../outside.txt")), 404);
-      EXPECT_EQ(std::get<0>(co_await get(session, "/custom/sub/../../outside.txt")), 404);
-      EXPECT_EQ(std::get<0>(co_await get(session, encoded("/custom/%2e%2e/outside.txt"))), 404);
+      EXPECT_EQ((co_await get(session, "/custom/../outside.txt")).result_int(), 404);
+      EXPECT_EQ((co_await get(session, "/custom/sub/../../outside.txt")).result_int(), 404);
+      EXPECT_EQ((co_await get(session, encoded("/custom/%2e%2e/outside.txt"))).result_int(), 404);
    };
 }
 
@@ -181,7 +174,7 @@ TEST_P(FileHandler, WHEN_symlink_points_outside_the_root_THEN_error_404)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      EXPECT_EQ(std::get<0>(co_await get(session, "/custom/escape.txt")), 404);
+      EXPECT_EQ((co_await get(session, "/custom/escape.txt")).result_int(), 404);
    };
 }
 
@@ -193,10 +186,10 @@ TEST_P(FileHandler, WHEN_prefix_matches_mid_segment_THEN_error_404)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      auto [status, body] = co_await get(session, "/customer.txt");
-      EXPECT_EQ(status, 404);
-      EXPECT_EQ(body, "");
-      EXPECT_EQ(std::get<0>(co_await get(session, "/customer/hello.txt")), 404);
+      auto message = co_await get(session, "/customer.txt");
+      EXPECT_EQ(message.result_int(), 404);
+      EXPECT_THAT(message.body(), IsEmpty());
+      EXPECT_EQ((co_await get(session, "/customer/hello.txt")).result_int(), 404);
    };
 }
 
@@ -207,9 +200,9 @@ TEST_P(FileHandler, WHEN_file_is_not_readable_THEN_error_403)
 
    test = [this](Session session) -> awaitable<void>
    {
-      auto [status, body] = co_await get(session, "/custom/secret.txt");
-      EXPECT_EQ(status, 403);
-      EXPECT_EQ(body, "");
+      auto message = co_await get(session, "/custom/secret.txt");
+      EXPECT_EQ(message.result_int(), 403);
+      EXPECT_THAT(message.body(), IsEmpty());
    };
 }
 
@@ -217,8 +210,8 @@ TEST_P(FileHandler, WHEN_same_file_is_requested_twice_THEN_serves_it_twice)
 {
    test = [this](Session session) -> awaitable<void>
    {
-      EXPECT_EQ(std::get<1>(co_await get(session, "/custom/hello.txt")), "Hello, File!");
-      EXPECT_EQ(std::get<1>(co_await get(session, "/custom/hello.txt")), "Hello, File!");
+      EXPECT_EQ((co_await get(session, "/custom/hello.txt")).body(), "Hello, File!");
+      EXPECT_EQ((co_await get(session, "/custom/hello.txt")).body(), "Hello, File!");
    };
 }
 

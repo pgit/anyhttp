@@ -1,11 +1,11 @@
 #include "anyhttp/server_impl.hpp"
 
-#include "anyhttp/any_async_stream.hpp"
-#include "anyhttp/detect_ssl.hpp"
+#include "anyhttp/detail/any_async_stream.hpp"
+#include "anyhttp/detail/detect_h2.hpp"
+#include "anyhttp/detail/detect_ssl.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/h1_backend.hpp"
 #include "anyhttp/h2_backend.hpp"
-#include "anyhttp/h2_detect.hpp"
 #include "anyhttp/h3_backend.hpp"
 #include "anyhttp/tls.hpp"
 
@@ -55,8 +55,14 @@ Response::Impl::~Impl() = default;
 
 // =================================================================================================
 
+//
+// Defined further down, together with the ALPN callbacks it installs.
+//
+static asio::ssl::context make_tls_server_context();
+
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
-   : m_config(std::move(config)), m_executor(std::move(executor)), m_acceptor(m_executor)
+   : m_config(std::move(config)), m_executor(std::move(executor)),
+     m_tlsContext(make_tls_server_context()), m_acceptor(m_executor)
 {
    logi("Server: ctor");
    listen_tcp();
@@ -212,28 +218,28 @@ static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned ch
    return SSL_TLSEXT_ERR_NOACK;
 }
 
-// -------------------------------------------------------------------------------------------------
-
-class TestStream : public AnyAsyncStream::Impl
+//
+// The TLS context every TCP connection is served from. It is created once, when the server is
+// constructed, and not per connection: building it reads the PEM files from disk, and a context
+// built per connection would also pick up a certificate that was rotated underneath a running
+// server -- unlike HTTP/3, which holds its context for the lifetime of the server. That
+// difference made a regenerated test PKI fail over HTTP/3 while HTTP/2 silently kept working.
+//
+static asio::ssl::context make_tls_server_context()
 {
-public:
-   TestStream(ip::tcp::socket socket) : socket_(std::move(socket)) {}
-   executor_type get_executor() noexcept override { return socket_.get_executor(); }
+   asio::ssl::context ctx{asio::ssl::context::tlsv13};
+   SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, NULL);
+   SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, NULL);
 
-   ip::tcp::socket& get_socket() final { return socket_; }
-   void async_write_some(ReadWriteHandler handler, ConstBuffers buffers) final
-   {
-      socket_.async_write_some(buffers, std::move(handler));
-   }
+   //
+   // This is a testing key only. It is not in the repository, but generated at build time
+   // by the 'pki' target (see cmake/pki.cmake).
+   //
+   ctx.use_certificate_chain_file("pki/out/server-chain.pem");
+   ctx.use_private_key_file("pki/out/server-key.pem", asio::ssl::context::pem);
 
-   void async_read_some(ReadWriteHandler handler, MutableBuffers buffers) final
-   {
-      socket_.async_read_some(buffers, std::move(handler));
-   }
-
-private:
-   ip::tcp::socket socket_; // the underlying socket, for cancellation
-};
+   return ctx;
+}
 
 // -------------------------------------------------------------------------------------------------
 
@@ -259,7 +265,6 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    // socket.set_option(sb::send_buffer_size(8192));
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 
-   auto executor = co_await boost::asio::this_coro::executor;
    auto buffer = boost::beast::flat_buffer();
 
    //
@@ -271,18 +276,7 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    {
       logi("[{}] detected TLS client hello, {} bytes in buffer", prefix, buffer.size());
 
-      asio::ssl::context ctx{asio::ssl::context::tlsv13};
-      SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, NULL);
-      SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, NULL);
-
-      //
-      // This is a testing key only. It is not in the repository, but generated at build time
-      // by the 'pki' target (see cmake/pki.cmake).
-      //
-      ctx.use_certificate_chain_file("pki/out/server-chain.pem");
-      ctx.use_private_key_file("pki/out/server-key.pem", asio::ssl::context::pem);
-
-      ssl_stream.emplace(std::move(socket), ctx);
+      ssl_stream.emplace(std::move(socket), m_tlsContext);
       auto n = co_await ssl_stream->async_handshake(asio::ssl::stream_base::server, buffer.data());
       buffer.consume(n);
 
@@ -302,9 +296,9 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
            tls_handshake_info(ssl_stream->native_handle()));
 
       if (alpn == "h2")
-         session = nghttp2::make_server_session(*this, executor, std::move(*ssl_stream));
+         session = nghttp2::make_server_session(*this, std::move(*ssl_stream));
       else if (alpn == "http/1.1")
-         session = beast_impl::make_server_session(*this, executor, std::move(*ssl_stream));
+         session = beast_impl::make_server_session(*this, std::move(*ssl_stream));
    }
 
    //
@@ -314,10 +308,9 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
 #if 1
-      AnyAsyncStream stream(std::make_unique<TestStream>(std::move(socket)));
-      session = nghttp2::make_server_session(*this, executor, std::move(stream));
+      session = nghttp2::make_server_session(*this, make_any_async_stream(std::move(socket)));
 #else
-      session = nghttp2::make_server_session(*this, executor, std::move(socket));
+      session = nghttp2::make_server_session(*this, std::move(socket));
 #endif
    }
 
@@ -328,10 +321,9 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    {
       logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", prefix);
 #if 1
-      AnyAsyncStream stream(std::make_unique<TestStream>(std::move(socket)));
-      session = beast_impl::make_server_session(*this, executor, std::move(stream));
+      session = beast_impl::make_server_session(*this, make_any_async_stream(std::move(socket)));
 #else
-      session = beast_impl::make_server_session(*this, executor, std::move(socket));
+      session = beast_impl::make_server_session(*this, std::move(socket));
 #endif
    }
 
@@ -381,7 +373,16 @@ awaitable<void> Server::Impl::tcp_accept_loop()
    size_t sessionCounter = 0;
    for (;;)
    {
-      auto [ec, socket] = co_await acceptor.async_accept(as_tuple(deferred));
+      //
+      // Put each connection on a strand if needed. The socket is accepted onto that executor,
+      // so that everything layered on top of it stays there, too: the session takes its executor
+      // from the stream it is given, see the make_*_session() factories.
+      //
+      // NOTE: This is slow. Consider multiple IO contexts instead,
+      //       or explicit thread pools where really needed.
+      //
+      ip::tcp::socket socket(config().use_strand ? boost::asio::make_strand(executor) : executor);
+      auto [ec] = co_await acceptor.async_accept(socket, as_tuple);
       if (ec)
       {
          if (ec == boost::system::errc::operation_canceled)
@@ -403,14 +404,9 @@ awaitable<void> Server::Impl::tcp_accept_loop()
          ++sessionCounter;
       }
 
-      //
-      // Put each connection on a strand if needed.
-      //
-      // NOTE: This is slow. Consider multiple IO contexts instead,
-      //       or explicit thread pools where really needed.
-      //
-      co_spawn(config().use_strand ? boost::asio::make_strand(executor) : executor,
-               handle_connection(std::move(socket)), [&, ep](const std::exception_ptr& ex) mutable
+      auto connection_executor = socket.get_executor();
+      co_spawn(connection_executor, handle_connection(std::move(socket)),
+               [&, ep](const std::exception_ptr& ex) mutable
       {
          auto lock = std::lock_guard(m_sessionMutex);
          --sessionCounter;

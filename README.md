@@ -63,6 +63,21 @@ awaitable<void> do_session(Client& client, boost::urls::url url)
    auto response = co_await request.async_get_response();   
 }
 ```
+
+A plain GET needs none of those four steps spelled out. `async_get()` does the whole request as one
+operation and hands back the response as a plain Beast message -- status, fields and the body as a
+`std::string`:
+
+```c++
+   auto session = co_await client.async_connect();
+   auto message = co_await session.async_get(url);
+   std::println("{}: {} bytes", message.result_int(), message.body().size());
+```
+
+The convenience is paid for with memory, as the body is buffered in full: anything that wants to
+look at the body while it arrives, or to send a body of its own, still goes through
+`async_submit()`.
+
 # Implementation
 
 The asynchronous operations exposed by server and client are [ASIO asynchronous operations](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/asynchronous_operations.html). As such, they support a range of [completion tokens](https://think-async.com/Asio/asio-1.30.2/doc/asio/overview/model/completion_tokens.html) like [use_awaitable](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/use_awaitable.html) or plain callbacks.

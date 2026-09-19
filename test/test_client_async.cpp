@@ -496,10 +496,7 @@ TEST_P(ClientAsync, WHEN_written_after_eof_THEN_reports_broken_pipe)
    };
    test = [this](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url);
-      co_await request.async_write_eof();
-      auto response = co_await request.async_get_response();
-      EXPECT_EQ(co_await read(response), hello);
+      EXPECT_EQ((co_await session.async_get(url)).body(), hello);
    };
 }
 
@@ -513,11 +510,9 @@ TEST_P(ClientAsync, HelloWorld)
    };
    test = [this](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url);
-      co_await request.async_write_eof();
-      auto response = co_await request.async_get_response();
-      auto body = co_await read(response);
-      EXPECT_EQ(body, hello);
+      auto message = co_await session.async_get(url);
+      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.body(), hello);
    };
 }
 
@@ -548,9 +543,7 @@ TEST_P(ClientAsync, WHEN_server_writes_large_buffer_at_once_THEN_receives_all)
    };
    test = [this](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url);
-      co_await request.async_write_eof();
-      EXPECT_EQ(co_await count_response(request), body.size());
+      EXPECT_EQ((co_await session.async_get(url)).body().size(), body.size());
    };
 }
 
@@ -686,9 +679,7 @@ TEST_P(ClientAsync, ServerYieldFirst)
    };
    test = [this](Session session) -> awaitable<void>
    {
-      auto request = co_await session.async_submit(url);
-      co_await request.async_write_eof();
-      co_await count_response(request);
+      EXPECT_EQ((co_await session.async_get(url)).result_int(), 200);
    };
 }
 

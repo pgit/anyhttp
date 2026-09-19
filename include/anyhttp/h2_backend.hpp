@@ -7,25 +7,23 @@
 // and h2_session.cpp, so that dispatching to HTTP/2 needs no nghttp2 type here.
 //
 
-#include "anyhttp/any_async_stream.hpp"
 #include "anyhttp/client_impl.hpp"
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
+#include "anyhttp/stream_traits.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/url/url.hpp>
 
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace anyhttp::nghttp2
 {
 
 // =================================================================================================
-
-using SslStream = boost::asio::ssl::stream<boost::asio::ip::tcp::socket>;
 
 /**
  * A request received as HTTP/1.1 with "Upgrade: h2c" (RFC 7540, section 3.2) that has been answered
@@ -40,34 +38,34 @@ struct Upgrade
    Fields fields; ///< request headers, without the connection-specific ones
 };
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   boost::asio::any_io_executor executor,
-                                                   boost::asio::ip::tcp::socket&& socket);
+//
+// The stream is moved into the session, which runs on the stream's own executor -- hence the
+// rvalue reference, which also keeps the SocketStream constraint from matching an lvalue.
+//
+// These are defined in src/h2_session.cpp and explicitly instantiated there for each of the
+// stream types below, so that nghttp2 is instantiated in that one place only.
+//
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   boost::asio::any_io_executor executor,
-                                                   SslStream&& stream);
+template <SocketStream Stream>
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Stream&& stream,
+                                                   std::optional<Upgrade> upgrade = {});
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   boost::asio::any_io_executor executor,
-                                                   AnyAsyncStream&& stream);
+template <SocketStream Stream>
+std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Stream&& stream);
 
-// Cleartext only: there is no upgrade to HTTP/2 over TLS, that is what ALPN is for.
+extern template std::shared_ptr<Session::Impl>
+make_server_session<boost::asio::ip::tcp::socket>(server::Server::Impl&,
+                                                  boost::asio::ip::tcp::socket&&,
+                                                  std::optional<Upgrade>);
+extern template std::shared_ptr<Session::Impl>
+make_server_session<SslStream>(server::Server::Impl&, SslStream&&, std::optional<Upgrade>);
+extern template std::shared_ptr<Session::Impl>
+make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&,
+                                    std::optional<Upgrade>);
 
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   boost::asio::any_io_executor executor,
-                                                   boost::asio::ip::tcp::socket&& socket,
-                                                   Upgrade&& upgrade);
-
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
-                                                   boost::asio::any_io_executor executor,
-                                                   AnyAsyncStream&& stream, Upgrade&& upgrade);
-
-// -------------------------------------------------------------------------------------------------
-
-std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
-                                                   boost::asio::any_io_executor executor,
-                                                   boost::asio::ip::tcp::socket&& socket);
+extern template std::shared_ptr<Session::Impl>
+make_client_session<boost::asio::ip::tcp::socket>(client::Client::Impl&,
+                                                  boost::asio::ip::tcp::socket&&);
 
 // =================================================================================================
 

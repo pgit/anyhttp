@@ -16,8 +16,8 @@ concept MutableBufferSequence = boost::asio::is_mutable_buffer_sequence<T>::valu
 
 
 //
-// https://think-async.com/Asio/asio-1.11.0/doc/asio/reference/AsyncReadStream.html
-// https://think-async.com/Asio/asio-1.11.0/doc/asio/reference/AsyncWriteStream.html
+// https://think-async.com/Asio/asio-1.38.2/doc/asio/reference/AsyncReadStream.html
+// https://think-async.com/Asio/asio-1.38.2/doc/asio/reference/AsyncWriteStream.html
 //
 
 template <typename T>

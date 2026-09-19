@@ -152,7 +152,8 @@ public:
    void submit_response(unsigned int, const Fields&) override {}
 
    /// Assembles and submits the request headers. Called once, right after the stream is created.
-   bool submit_request(const boost::urls::url& url, const Fields& headers);
+   bool submit_request(std::string_view method, const boost::urls::url& url,
+                       const Fields& headers);
 
    void async_get_response(client::Request::GetResponseHandler&& handler);
    void deliver_response();
@@ -202,7 +203,8 @@ public:
    //
    // Session::Impl
    //
-   void async_submit(SubmitHandler&& handler, boost::urls::url url, const Fields& headers) override;
+   void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
+                     const Fields& headers) override;
    awaitable<void> do_session(Buffer&& data) override;
    void destroy() noexcept override;
 
@@ -309,15 +311,15 @@ void Http3ClientStream::deliver_failure()
    swap_and_invoke(response_handler, failure_ec, client::Response{nullptr});
 }
 
-bool Http3ClientStream::submit_request(const boost::urls::url& request_url, const Fields& headers)
+bool Http3ClientStream::submit_request(std::string_view method,
+                                       const boost::urls::url& request_url, const Fields& headers)
 {
    url = request_url;
 
    //
-   // TODO: CONNECT / other methods -- mirrors the h2 client's NGHttp2Session::async_submit(),
-   // which is likewise hard-coded to POST.
+   // TODO: CONNECT
    //
-   std::string method_str("POST");
+   std::string method_str(method);
    std::string scheme(request_url.scheme());
    std::string target(request_url.encoded_target());
    std::string authority(request_url.host_address());
@@ -649,8 +651,8 @@ int Http3ClientSession::on_read(std::span<const uint8_t> data)
 
 // -------------------------------------------------------------------------------------------------
 
-void Http3ClientSession::async_submit(SubmitHandler&& handler, boost::urls::url url,
-                                      const Fields& headers)
+void Http3ClientSession::async_submit(SubmitHandler&& handler, std::string_view method,
+                                      boost::urls::url url, const Fields& headers)
 {
    if (closed() || !h3())
    {
@@ -668,7 +670,7 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, boost::urls::url 
    }
 
    auto* stream = static_cast<Http3ClientStream*>(create_stream(stream_id));
-   if (!stream->submit_request(url, headers))
+   if (!stream->submit_request(method, url, headers))
    {
       erase_stream(stream_id);
       std::move(handler)(errc::make_error_code(errc::invalid_argument), client::Request{nullptr});

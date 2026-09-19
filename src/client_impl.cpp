@@ -16,7 +16,6 @@
 
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
-#include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/http/message.hpp>
 #include <boost/scope/scope_exit.hpp>
 
@@ -155,11 +154,11 @@ awaitable<Session> Client::Impl::async_connect()
    switch (config().protocol)
    {
    case Protocol::http11:
-      impl = beast_impl::make_client_session(*this, m_executor, std::move(socket));
+      impl = beast_impl::make_client_session(*this, std::move(socket));
       break;
 
    case Protocol::h2:
-      impl = nghttp2::make_client_session(*this, m_executor, std::move(socket));
+      impl = nghttp2::make_client_session(*this, std::move(socket));
       break;
 
    case anyhttp::Protocol::h3:

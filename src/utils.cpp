@@ -23,7 +23,7 @@ size_t run(boost::asio::io_context& context)
          std::println("--- {} ------------------------------------------------------------------------", i);
       else
          std::println("\x1b[1;31m--- {} ({}) ----------------------------------------------------------------\x1b[0m", i, dt);
-      // clang-format off
+      // clang-format on
    }
    return i;
 }
@@ -33,16 +33,17 @@ size_t run(boost::asio::io_context& context)
 
 unsigned short get_unused_port(boost::asio::io_context& io)
 {
-    boost::asio::ip::tcp::acceptor acc(io);
+   using namespace boost::asio::ip;
 
-    acc.open(boost::asio::ip::tcp::v4());
-    acc.bind({boost::asio::ip::address_v4::loopback(), 0});
+   tcp::acceptor acc(io);
+   acc.open(tcp::v6());
+   acc.bind({address_v6::loopback(), 0});
 
-    unsigned short port = acc.local_endpoint().port();
+   auto port = acc.local_endpoint().port();
 
-    acc.close(); // release immediately
+   acc.close(); // release immediately
 
-    return port;
+   return port;
 }
 
 // =================================================================================================

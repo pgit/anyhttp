@@ -6,6 +6,8 @@
 #include <boost/asio/buffer.hpp>
 
 #include <boost/beast/core/stream_traits.hpp>
+#include <boost/beast/http/message.hpp>
+#include <boost/beast/http/string_body.hpp>
 
 #include <boost/url.hpp>
 
@@ -33,6 +35,17 @@ struct Config
 };
 
 // =================================================================================================
+
+//
+// A response received in one piece: status, header fields and the whole body as a string.
+//
+// This is a plain Beast message, with nothing of anyhttp left in it -- what \c Session::async_get()
+// hands back. Its version is 11 whatever the protocol was: HTTP/2 and HTTP/3 have no version on
+// the wire, and a Beast message has nowhere else to put one.
+//
+using Message = boost::beast::http::response<boost::beast::http::string_body>;
+
+// -------------------------------------------------------------------------------------------------
 
 class Response
 {
