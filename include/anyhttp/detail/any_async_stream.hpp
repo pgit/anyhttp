@@ -95,12 +95,10 @@ public:
    // than the array's capacity are truncated -- which is harmless for a "some" operation, as it
    // just results in a shorter transfer.
    //
-   template <typename ConstBufferSequence,
+   template <ConstBufferSequence Buffers,
              BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite)
                 CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
-      requires boost::beast::is_const_buffer_sequence<ConstBufferSequence>::value
-   auto async_write_some(const ConstBufferSequence& buffers,
-                         CompletionToken&& token = CompletionToken())
+   auto async_write_some(const Buffers& buffers, CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
          [this](ReadWriteHandler handler, ConstBufferVector buffers) { //
@@ -112,12 +110,10 @@ public:
    //
    // async_read_some
    //
-   template <typename MutableBufferSequence,
+   template <MutableBufferSequence Buffers,
              BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite)
                 CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
-      requires boost::beast::is_mutable_buffer_sequence<MutableBufferSequence>::value
-   auto async_read_some(const MutableBufferSequence& buffers,
-                        CompletionToken&& token = CompletionToken())
+   auto async_read_some(const Buffers& buffers, CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
          [this](ReadWriteHandler handler, MutableBufferVector buffers) { //
