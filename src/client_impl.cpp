@@ -125,9 +125,8 @@ void Client::Impl::async_connect(ConnectHandler handler)
       std::move(handler)(code(ep), std::move(session));
    };
 
-   co_spawn(get_executor(), [this] mutable -> awaitable<Session> {
-      co_return co_await async_connect();
-   }, bind_executor(executor, bind_cancellation_slot(slot, std::move(completion))));
+   co_spawn(get_executor(), async_connect(),
+            bind_executor(executor, bind_cancellation_slot(slot, std::move(completion))));
 }
 
 awaitable<Session> Client::Impl::async_connect()
