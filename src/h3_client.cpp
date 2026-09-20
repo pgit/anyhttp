@@ -152,8 +152,7 @@ public:
    void submit_response(unsigned int, const Fields&) override {}
 
    /// Assembles and submits the request headers. Called once, right after the stream is created.
-   bool submit_request(std::string_view method, const boost::urls::url& url,
-                       const Fields& headers);
+   bool submit_request(std::string_view method, const boost::urls::url& url, const Fields& headers);
 
    void async_get_response(client::Request::GetResponseHandler&& handler);
    void deliver_response();
@@ -311,8 +310,8 @@ void Http3ClientStream::deliver_failure()
    swap_and_invoke(response_handler, failure_ec, client::Response{nullptr});
 }
 
-bool Http3ClientStream::submit_request(std::string_view method,
-                                       const boost::urls::url& request_url, const Fields& headers)
+bool Http3ClientStream::submit_request(std::string_view method, const boost::urls::url& request_url,
+                                       const Fields& headers)
 {
    url = request_url;
 
@@ -359,13 +358,11 @@ void Http3ClientStream::async_get_response(client::Request::GetResponseHandler&&
    auto cs = handler.get_cancellation_slot();
    if (cs.is_connected())
    {
-      cs.assign([this](asio::cancellation_type_t ct)
-      {
+      cs.assign([this](asio::cancellation_type_t ct) {
          logd("[{}] async_get_response: cancelled ({})", log_prefix, ct);
          if (response_handler)
          {
-            asio::post(get_executor(), [handler = std::move(response_handler)]() mutable
-            {
+            asio::post(get_executor(), [handler = std::move(response_handler)]() mutable {
                std::move(handler)(errc::make_error_code(errc::operation_canceled),
                                   client::Response{nullptr});
             });
@@ -704,8 +701,7 @@ awaitable<std::shared_ptr<Session::Impl>> async_connect_http3(asio::any_io_execu
 
    std::shared_ptr<Session::Impl> impl = session;
 
-   co_spawn(executor, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable
-   {
+   co_spawn(executor, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable {
       if (ex)
          logw("client run: {}", what(ex));
       else

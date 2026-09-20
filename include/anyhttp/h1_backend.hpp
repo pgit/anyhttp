@@ -39,8 +39,8 @@ std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
 extern template std::shared_ptr<Session::Impl>
 make_server_session<boost::asio::ip::tcp::socket>(server::Server::Impl&,
                                                   boost::asio::ip::tcp::socket&&);
-extern template std::shared_ptr<Session::Impl>
-make_server_session<SslStream>(server::Server::Impl&, SslStream&&);
+extern template std::shared_ptr<Session::Impl> make_server_session<SslStream>(server::Server::Impl&,
+                                                                              SslStream&&);
 extern template std::shared_ptr<Session::Impl>
 make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&);
 

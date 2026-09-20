@@ -121,32 +121,31 @@ protected:
       //
       server.emplace(context.get_executor(), config);
       server->setRequestHandler(
-         [this](server::Request request, server::Response response) -> awaitable<void>
-      {
-         logd("{} ({})", request.url().path(), request.url().buffer());
+         [this](server::Request request, server::Response response) -> awaitable<void> {
+            logd("{} ({})", request.url().path(), request.url().buffer());
 
-         if (auto delay = request.get_param_as<std::chrono::milliseconds::rep>("delay"))
-            co_await sleep(std::chrono::milliseconds{*delay});
+            if (auto delay = request.get_param_as<std::chrono::milliseconds::rep>("delay"))
+               co_await sleep(std::chrono::milliseconds{*delay});
 
-         if (request.url().path() == "/echo")
-            co_await echo(std::move(request), std::move(response));
-         else if (request.url().path() == "/eat_request")
-            co_await eat_request(std::move(request), std::move(response));
-         else if (request.url().path() == "/discard")
-            co_return;
-         else if (request.url().path() == "/h2spec")
-            co_await h2spec(std::move(request), std::move(response));
-         else if (request.url().path() == "/dump")
-            co_await dump(std::move(request), std::move(response));
-         else if (request.url().path() == "/dump space")
-            co_await dump(std::move(request), std::move(response));
-         else if (request.url().path() == "/detach")
-            co_await detach(std::move(request), std::move(response));
-         else if (request.url().path().starts_with("/custom"))
-            co_await requestHandler(std::move(request), std::move(response));
-         else
-            co_await not_found(std::move(request), std::move(response));
-      });
+            if (request.url().path() == "/echo")
+               co_await echo(std::move(request), std::move(response));
+            else if (request.url().path() == "/eat_request")
+               co_await eat_request(std::move(request), std::move(response));
+            else if (request.url().path() == "/discard")
+               co_return;
+            else if (request.url().path() == "/h2spec")
+               co_await h2spec(std::move(request), std::move(response));
+            else if (request.url().path() == "/dump")
+               co_await dump(std::move(request), std::move(response));
+            else if (request.url().path() == "/dump space")
+               co_await dump(std::move(request), std::move(response));
+            else if (request.url().path() == "/detach")
+               co_await detach(std::move(request), std::move(response));
+            else if (request.url().path().starts_with("/custom"))
+               co_await requestHandler(std::move(request), std::move(response));
+            else
+               co_await not_found(std::move(request), std::move(response));
+         });
    }
 
    void run()
@@ -162,9 +161,10 @@ protected:
       // The extra threads use context.run() directly: the per-operation logging of ::run() is
       // meant for single-threaded debugging and would just interleave into noise here.
       //
-      auto pool = rv::iota(size_t{1}, n) | rv::transform([this](size_t) {
-         return std::jthread([this] { context.run(); });
-      }) | std::ranges::to<std::vector>();
+      auto pool =
+         rv::iota(size_t{1}, n) |
+         rv::transform([this](size_t) { return std::jthread([this] { context.run(); }); }) |
+         std::ranges::to<std::vector>();
 
       context.run();
    }
@@ -215,8 +215,7 @@ class ClientAsync : public Client
 public:
    auto token()
    {
-      return [this](const std::exception_ptr& ep)
-      {
+      return [this](const std::exception_ptr& ep) {
          auto ec = code(ep);
          if (ec)
             logw("client completed with \x1b[1;31m{}\x1b[0m", what(ec));
@@ -241,14 +240,16 @@ public:
       //
       // Spawn the testcase coroutine on the client's executor so that access to it is serialized.
       //
-      co_spawn(client->get_executor(), [this]() -> awaitable<void>
-      {
-         if (clientSession)
-         {
-            auto session = co_await client->async_connect();
-            co_await clientSession(std::move(session));
-         }
-      }, token());
+      co_spawn(
+         client->get_executor(),
+         [this]() -> awaitable<void> {
+            if (clientSession)
+            {
+               auto session = co_await client->async_connect();
+               co_await clientSession(std::move(session));
+            }
+         },
+         token());
    }
 
    void TearDown() override

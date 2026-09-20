@@ -300,17 +300,15 @@ public:
       auto cs = asio::get_associated_cancellation_slot(handler);
       if (cs.is_connected() && !cs.has_handler())
       {
-         cs.assign([this](asio::cancellation_type_t)
-         {
+         cs.assign([this](asio::cancellation_type_t) {
             if (stream && stream->read_handler)
             {
                asio::post(stream->get_executor(),
-                          [handler = std::move(stream->read_handler)]() mutable
-               {
-                  std::move(handler)(
-                     boost::system::errc::make_error_code(boost::system::errc::operation_canceled),
-                     0);
-               });
+                          [handler = std::move(stream->read_handler)]() mutable {
+                             std::move(handler)(boost::system::errc::make_error_code(
+                                                   boost::system::errc::operation_canceled),
+                                                0);
+                          });
             }
          });
       }

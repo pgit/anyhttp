@@ -153,9 +153,10 @@ public:
    {
       auto executor = asio::get_associated_executor(token, get_executor());
       return asio::async_initiate<CompletionToken, GetResponse>(
-         asio::bind_executor(executor, [this](auto&& handler) { //
-            async_get_response_any(std::move(handler));
-         }),
+         asio::bind_executor(executor,
+                             [this](auto&& handler) { //
+                                async_get_response_any(std::move(handler));
+                             }),
          token);
    }
 
@@ -172,9 +173,10 @@ public:
       // FIXME: get_executor() breaks testcase SpawnAndForget because the impl is already gone there
       auto executor = asio::get_associated_executor(token); // , get_executor());
       return asio::async_initiate<CompletionToken, Write>(
-         asio::bind_executor(executor, [this](auto&& handler, asio::const_buffer buffer) { //
-            async_write_any(std::move(handler), buffer, false);
-         }),
+         asio::bind_executor(executor,
+                             [this](auto&& handler, asio::const_buffer buffer) { //
+                                async_write_any(std::move(handler), buffer, false);
+                             }),
          token, buffer);
    }
 
@@ -193,9 +195,10 @@ public:
       // see async_write() above for why the executor is not defaulted to get_executor()
       auto executor = asio::get_associated_executor(token);
       return asio::async_initiate<CompletionToken, Write>(
-         asio::bind_executor(executor, [this](auto&& handler, asio::const_buffer buffer) { //
-            async_write_any(std::move(handler), buffer, true);
-         }),
+         asio::bind_executor(executor,
+                             [this](auto&& handler, asio::const_buffer buffer) { //
+                                async_write_any(std::move(handler), buffer, true);
+                             }),
          token, buffer);
    }
 
@@ -244,10 +247,8 @@ public:
    auto async_connect(CompletionToken&& token = CompletionToken())
    {
       auto executor = asio::get_associated_executor(token, get_executor());
-      return asio::async_initiate<CompletionToken, Connect>(
-         bind_executor(executor, [&](auto&& handler) { //
-            async_connect_any(std::move(handler));
-         }),
+      return asio::async_initiate<CompletionToken, Connect>( //
+         bind_executor(executor, [&](auto&& handler) { async_connect_any(std::move(handler)); }),
          token);
    }
 

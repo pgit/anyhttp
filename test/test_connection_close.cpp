@@ -65,8 +65,7 @@ protected:
    /// Runs \p task to completion, then stops the server.
    void run(awaitable<void> task)
    {
-      co_spawn(context, std::move(task), [this](const std::exception_ptr& ep)
-      {
+      co_spawn(context, std::move(task), [this](const std::exception_ptr& ep) {
          if (ep)
             ADD_FAILURE() << what(ep);
          server.reset();
@@ -81,8 +80,7 @@ protected:
 
 TEST_F(ConnectionClose, WHEN_request_asks_to_close_THEN_response_says_so_and_stream_ends)
 {
-   run([&]() -> awaitable<void>
-   {
+   run([&]() -> awaitable<void> {
       auto socket = co_await connect();
 
       Request request{http::verb::get, "/dump", 11};
@@ -97,8 +95,7 @@ TEST_F(ConnectionClose, WHEN_request_asks_to_close_THEN_response_says_so_and_str
 
 TEST_F(ConnectionClose, WHEN_request_with_body_asks_to_close_THEN_body_is_served_first)
 {
-   run([&]() -> awaitable<void>
-   {
+   run([&]() -> awaitable<void> {
       auto socket = co_await connect();
 
       Request request{http::verb::post, "/echo", 11};
@@ -115,8 +112,7 @@ TEST_F(ConnectionClose, WHEN_request_with_body_asks_to_close_THEN_body_is_served
 
 TEST_F(ConnectionClose, WHEN_request_does_not_ask_to_close_THEN_connection_takes_the_next_request)
 {
-   run([&]() -> awaitable<void>
-   {
+   run([&]() -> awaitable<void> {
       auto socket = co_await connect();
 
       auto first = co_await exchange(socket, Request{http::verb::get, "/dump?first", 11});
@@ -133,8 +129,7 @@ TEST_F(ConnectionClose, WHEN_request_does_not_ask_to_close_THEN_connection_takes
 
 TEST_F(ConnectionClose, WHEN_request_is_http_1_0_THEN_stream_ends_after_the_response)
 {
-   run([&]() -> awaitable<void>
-   {
+   run([&]() -> awaitable<void> {
       auto socket = co_await connect();
 
       //
@@ -167,8 +162,7 @@ protected:
 
 TEST_F(RejectedRequest, WHEN_request_is_rejected_THEN_the_response_arrives_anyway)
 {
-   run([&]() -> awaitable<void>
-   {
+   run([&]() -> awaitable<void> {
       auto socket = co_await connect();
 
       //
@@ -185,13 +179,11 @@ TEST_F(RejectedRequest, WHEN_request_is_rejected_THEN_the_response_arrives_anywa
       // is out, so a write of all of it only completes once the connection is gone.
       //
       Response response;
-      auto send = [&]() -> awaitable<error_code>
-      {
+      auto send = [&]() -> awaitable<error_code> {
          auto [ec, n] = co_await asio::async_write(socket, asio::buffer(request), as_tuple);
          co_return ec;
       };
-      auto receive = [&]() -> awaitable<error_code>
-      {
+      auto receive = [&]() -> awaitable<error_code> {
          auto [ec, n] = co_await http::async_read(socket, m_buffer, response, as_tuple);
          co_return ec;
       };
@@ -224,8 +216,7 @@ protected:
       co_return stream;
    }
 
-   asio::ssl::context m_context = std::invoke([]
-   {
+   asio::ssl::context m_context = std::invoke([] {
       asio::ssl::context context{asio::ssl::context::tlsv13};
       context.load_verify_file("pki/out/root.pem");
       context.set_verify_mode(asio::ssl::verify_peer);
@@ -238,8 +229,7 @@ protected:
 
 TEST_F(TlsConnectionClose, WHEN_request_asks_to_close_THEN_close_notify_comes_before_the_end)
 {
-   run([&]() -> awaitable<void>
-   {
+   run([&]() -> awaitable<void> {
       auto stream = co_await connect_tls();
 
       Request request{http::verb::get, "/dump", 11};

@@ -509,8 +509,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    nghttp2_data_provider2 prd;
    prd.source.ptr = stream.get();
    prd.read_callback = [](nghttp2_session* session, int32_t stream_id, uint8_t* buf, size_t length,
-                          uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t
-   {
+                          uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t {
       auto stream = static_cast<NGHttp2Stream*>(source->ptr);
       assert(stream);
       assert(stream->id == stream_id);
@@ -536,10 +535,9 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    m_streams.emplace(id, stream);
    post(get_executor(),
         [handler = std::move(handler),
-         writer = std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)]() mutable
-   {
-      std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)}); //
-   });
+         writer = std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)]() mutable {
+           std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)}); //
+        });
    start_write();
 }
 
@@ -708,13 +706,13 @@ std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
    return std::make_shared<ClientSession<Stream>>(client, std::move(executor), std::move(stream));
 }
 
-template std::shared_ptr<Session::Impl>
-make_server_session<socket>(server::Server::Impl&, socket&&, std::optional<Upgrade>);
+template std::shared_ptr<Session::Impl> make_server_session<socket>(server::Server::Impl&, socket&&,
+                                                                    std::optional<Upgrade>);
 template std::shared_ptr<Session::Impl>
 make_server_session<SslStream>(server::Server::Impl&, SslStream&&, std::optional<Upgrade>);
 template std::shared_ptr<Session::Impl>
 make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&,
-                                    std::optional<Upgrade>);
+                                      std::optional<Upgrade>);
 
 template std::shared_ptr<Session::Impl> make_client_session<socket>(client::Client::Impl&,
                                                                     socket&&);

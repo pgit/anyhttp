@@ -117,9 +117,8 @@ void Client::Impl::async_connect(ConnectHandler handler)
    //
    auto slot = get_associated_cancellation_slot(handler);
    auto executor = get_associated_executor(handler);
-   auto completion =
-      [this, handler = std::move(handler)](std::exception_ptr ep, Session session) mutable
-   {
+   auto completion = [this, handler = std::move(handler)](std::exception_ptr ep,
+                                                          Session session) mutable {
       if (ep)
          loge("Client: async_connect: {}", what(ep));
       std::move(handler)(code(ep), std::move(session));
@@ -236,8 +235,7 @@ awaitable<Session> Client::Impl::async_connect()
    //        of the user-facing "Session" object. So we should use only the "impl" internally.
    //
 #if 1
-   co_spawn(m_executor, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable
-   {
+   co_spawn(m_executor, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable {
       if (ex)
          logw("client run: {}", what(ex));
       else

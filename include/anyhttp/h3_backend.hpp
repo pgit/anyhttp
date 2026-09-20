@@ -26,7 +26,7 @@ namespace anyhttp::server
 //
 // The server's HTTP/3 half: one UDP socket shared by all QUIC connections, the receive loop
 // de-multiplexing datagrams onto them by connection ID, and the connections themselves.
-// 
+//
 // Sessions register with the owning Server::Impl just like the TCP-based ones, so they
 // take part in server-wide shutdown.
 //

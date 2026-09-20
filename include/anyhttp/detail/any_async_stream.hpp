@@ -103,10 +103,10 @@ public:
                          CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
-         [this](ReadWriteHandler handler, ConstBufferVector buffers)
-      {  //
-         write_some(std::move(handler), std::move(buffers));
-      }, token, ConstBufferVector{buffers});
+         [this](ReadWriteHandler handler, ConstBufferVector buffers) { //
+            write_some(std::move(handler), std::move(buffers));
+         },
+         token, ConstBufferVector{buffers});
    }
 
    //
@@ -120,10 +120,10 @@ public:
                         CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
-         [this](ReadWriteHandler handler, MutableBufferVector buffers)
-      {  //
-         read_some(std::move(handler), std::move(buffers));
-      }, token, MutableBufferVector{buffers});
+         [this](ReadWriteHandler handler, MutableBufferVector buffers) { //
+            read_some(std::move(handler), std::move(buffers));
+         },
+         token, MutableBufferVector{buffers});
    }
 
    //

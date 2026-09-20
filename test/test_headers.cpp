@@ -52,8 +52,10 @@ static std::vector<std::string_view> values_of(const Fields& fields, std::string
 static std::vector<std::pair<std::string_view, std::string_view>> pairs_of(const Fields& fields)
 {
    return fields | rv::transform([](auto& field) {
-      return std::pair(std::string_view(field.name_string()), std::string_view(field.value()));
-   }) | std::ranges::to<std::vector>();
+             return std::pair(std::string_view(field.name_string()),
+                              std::string_view(field.value()));
+          }) |
+          std::ranges::to<std::vector>();
 }
 
 /// Expects every field of \p expected to be found in \p actual.
@@ -80,8 +82,7 @@ static size_t wire_size(const Fields& fields)
 //
 void Headers::round_trip(Fields sent)
 {
-   requestHandler = [sent](server::Request request, server::Response response) -> awaitable<void>
-   {
+   requestHandler = [sent](server::Request request, server::Response response) -> awaitable<void> {
       expect_contains(request.fields(), sent);
       co_await drain(request);
       auto fields = sent;
@@ -89,8 +90,7 @@ void Headers::round_trip(Fields sent)
       co_await response.async_submit(200, fields);
       co_await response.async_write_eof();
    };
-   clientSession = [this, sent](Session session) -> awaitable<void>
-   {
+   clientSession = [this, sent](Session session) -> awaitable<void> {
       auto message = co_await session.async_get(url, sent);
       EXPECT_EQ(message.result_int(), 200);
       expect_contains(message, sent);
@@ -116,8 +116,7 @@ TEST_P(Headers, WHEN_header_name_repeats_THEN_all_values_arrive_in_order)
       sent.insert("x-repeated", values.emplace_back(std::format("value-{}", i)));
 
    requestHandler = [sent, values](server::Request request,
-                                   server::Response response) -> awaitable<void>
-   {
+                                   server::Response response) -> awaitable<void> {
       EXPECT_THAT(values_of(request.fields(), "x-repeated"), ElementsAreArray(values));
       co_await drain(request);
       auto fields = sent;
@@ -125,8 +124,7 @@ TEST_P(Headers, WHEN_header_name_repeats_THEN_all_values_arrive_in_order)
       co_await response.async_submit(200, fields);
       co_await response.async_write_eof();
    };
-   clientSession = [this, sent, values](Session session) -> awaitable<void>
-   {
+   clientSession = [this, sent, values](Session session) -> awaitable<void> {
       auto message = co_await session.async_get(url, sent);
       EXPECT_THAT(values_of(message, "x-repeated"), ElementsAreArray(values));
    };
@@ -153,14 +151,12 @@ TEST_P(Headers, WHEN_request_headers_exceed_default_limit_THEN_server_responds_4
    auto sent = make_fields(3, 30_k);
    ASSERT_GT(wire_size(sent), default_max_header_size);
 
-   requestHandler = [](server::Request request, server::Response response) -> awaitable<void>
-   {
+   requestHandler = [](server::Request request, server::Response response) -> awaitable<void> {
       ADD_FAILURE() << "request handler called for oversized request headers";
       co_await response.async_submit(200, {});
       co_await response.async_write_eof();
    };
-   clientSession = [this, sent](Session session) -> awaitable<void>
-   {
+   clientSession = [this, sent](Session session) -> awaitable<void> {
       auto message = co_await session.async_get(url, sent);
       EXPECT_EQ(message.result_int(), 431);
    };
@@ -187,8 +183,8 @@ protected:
    /// Request handler: responds with the headers of size \p response_size given as query parameter.
    void respond_with_headers()
    {
-      requestHandler = [this](server::Request request, server::Response response) -> awaitable<void>
-      {
+      requestHandler = [this](server::Request request,
+                              server::Response response) -> awaitable<void> {
          ++handled;
          auto size = request.get_param_as<size_t>("response_size").value_or(0);
          co_await drain(request);
@@ -228,8 +224,7 @@ INSTANTIATE_TEST_SUITE_P(HeaderLimits, HeaderLimits,
 TEST_P(HeaderLimits, WHEN_request_headers_are_within_limit_THEN_request_is_handled)
 {
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       EXPECT_EQ(co_await request(session, make_fields(1, limit / 2), limit / 2), 200);
       EXPECT_EQ(handled, 1);
    };
@@ -238,8 +233,7 @@ TEST_P(HeaderLimits, WHEN_request_headers_are_within_limit_THEN_request_is_handl
 TEST_P(HeaderLimits, WHEN_request_headers_exceed_limit_THEN_server_responds_431)
 {
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       EXPECT_EQ(co_await request(session, make_fields(1, limit)), 431);
       EXPECT_EQ(handled, 0);
    };
@@ -252,8 +246,7 @@ TEST_P(HeaderLimits, WHEN_request_headers_exceed_limit_THEN_server_responds_431)
 TEST_P(HeaderLimits, WHEN_many_small_fields_exceed_limit_THEN_server_responds_431)
 {
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto sent = make_fields(200, 1);
       EXPECT_EQ(co_await request(session, sent), 431);
       EXPECT_EQ(handled, 0);
@@ -272,8 +265,7 @@ TEST_P(HeaderLimits, WHEN_request_headers_far_exceed_limit_THEN_request_is_rejec
    ASSERT_GT(wire_size(sent), limit * 200);
 
    respond_with_headers();
-   clientSession = [this, sent](Session session) -> awaitable<void>
-   {
+   clientSession = [this, sent](Session session) -> awaitable<void> {
       auto result = co_await request(session, sent);
       if (GetParam() == anyhttp::Protocol::h2)
          EXPECT_FALSE(result.has_value()) << "status " << result.value_or(0);
@@ -289,8 +281,7 @@ TEST_P(HeaderLimits, WHEN_request_is_rejected_THEN_session_serves_next_request)
       GTEST_SKIP() << "HTTP/1.1 closes the connection after 431";
 
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       EXPECT_EQ(co_await request(session, make_fields(1, limit)), 431);
       EXPECT_EQ(co_await request(session, make_fields(1, 100)), 200);
       EXPECT_EQ(handled, 1);
@@ -302,8 +293,7 @@ TEST_P(HeaderLimits, WHEN_request_is_rejected_THEN_session_serves_next_request)
 TEST_P(HeaderLimits, WHEN_response_headers_exceed_limit_THEN_get_response_fails)
 {
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto result = co_await request(session, {}, limit);
       EXPECT_EQ(result, std::unexpected(error_code(boost::beast::http::error::header_limit)));
    };
@@ -315,8 +305,7 @@ TEST_P(HeaderLimits, WHEN_response_headers_exceed_limit_THEN_get_response_fails)
 TEST_P(HeaderLimits, WHEN_response_headers_exceed_limit_before_get_response_THEN_it_fails)
 {
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto target = url;
       target.params().set("response_size", std::to_string(limit));
       auto request = co_await session.async_submit(target, {});
@@ -333,8 +322,7 @@ TEST_P(HeaderLimits, WHEN_response_is_rejected_THEN_session_serves_next_request)
       GTEST_SKIP() << "HTTP/1.1 can not skip the rest of a response";
 
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto result = co_await request(session, {}, limit);
       EXPECT_EQ(result, std::unexpected(error_code(boost::beast::http::error::header_limit)));
       EXPECT_EQ(co_await request(session, {}, 100), 200);

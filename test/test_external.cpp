@@ -38,8 +38,7 @@ protected:
    awaitable<void> log(std::string prefix, readable_pipe& pipe)
    {
       std::string buffer;
-      auto print = [&](std::string_view line)
-      {
+      auto print = [&](std::string_view line) {
          if (line.ends_with('\r'))
             line.remove_suffix(1);
 
@@ -135,15 +134,14 @@ protected:
       auto future = promise.get_future();
       co_spawn(strand, spawn_process(std::move(path), std::move(args)),
                bind_executor(strand, [this, promise = std::move(promise)](
-                                        const std::exception_ptr& ex, std::string str) mutable
-      {
-         if (ex)
-         {
-            loge("{}", what(ex));
-            server.reset();
-         }
-         promise.set_value(std::move(str));
-      }));
+                                        const std::exception_ptr& ex, std::string str) mutable {
+                  if (ex)
+                  {
+                     loge("{}", what(ex));
+                     server.reset();
+                  }
+                  promise.set_value(std::move(str));
+               }));
       return std::move(future);
    }
 
@@ -401,8 +399,7 @@ TEST_F(ExternalCustom, h2spec)
 
    // https://github.com/nghttp2/nghttp2/issues/2278
    // https://github.com/nghttp2/nghttp2/issues/2365
-   const int expected_ok = std::invoke([]
-   {
+   const int expected_ok = std::invoke([] {
       if (NGHTTP2_VERSION_NUM >= 0x004200) // 1.66
          return 138; // 6.9.1
       else if (NGHTTP2_VERSION_NUM == 0x004100) // 1.65

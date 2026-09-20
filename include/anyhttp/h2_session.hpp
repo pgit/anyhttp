@@ -86,8 +86,7 @@ public:
    auto async_wait_send(CompletionToken&& token = CompletionToken())
    {
       return asio::async_initiate<CompletionToken, Resume>(
-         [&](ResumeHandler handler)
-         {
+         [&](ResumeHandler handler) {
             assert(!m_send_handler);
             m_send_handler = std::move(handler);
          },

@@ -151,8 +151,7 @@ INSTANTIATE_TEST_SUITE_P(AltSvcUpgrade, AltSvcUpgrade,
 
 TEST_P(AltSvcUpgrade, WHEN_the_server_advertises_h3_THEN_the_next_connection_uses_it)
 {
-   clientSession = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto first = co_await session.async_get(echo());
       EXPECT_EQ(first.result_int(), 200);
       EXPECT_FALSE(served_over_http3(first));
@@ -172,8 +171,7 @@ TEST_P(AltSvcUpgrade, WHEN_the_server_advertises_h3_THEN_the_next_connection_use
 //
 TEST_P(AltSvcUpgrade, WHEN_the_alternative_is_learned_THEN_the_session_that_learned_it_stays)
 {
-   clientSession = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       EXPECT_FALSE(served_over_http3(co_await session.async_get(echo())));
       EXPECT_FALSE(served_over_http3(co_await session.async_get(echo())));
    };
@@ -181,15 +179,13 @@ TEST_P(AltSvcUpgrade, WHEN_the_alternative_is_learned_THEN_the_session_that_lear
 
 TEST_P(AltSvcUpgrade, WHEN_the_server_clears_the_alternative_THEN_it_is_not_used)
 {
-   requestHandler = [](server::Request request, server::Response response) -> awaitable<void>
-   {
+   requestHandler = [](server::Request request, server::Response response) -> awaitable<void> {
       co_await drain(request);
       co_await response.async_submit(200, fields({{"Alt-Svc", "clear"}, {"Content-Length", 0}}));
       co_await response.async_write_eof();
    };
 
-   clientSession = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       EXPECT_THAT(std::string((co_await session.async_get(echo()))[http::field::alt_svc]),
                   HasSubstr("h3="));
 
@@ -216,8 +212,7 @@ INSTANTIATE_TEST_SUITE_P(AltSvcIgnored, AltSvcIgnored,
 
 TEST_P(AltSvcIgnored, WHEN_the_client_does_not_follow_alt_svc_THEN_it_keeps_its_protocol)
 {
-   clientSession = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto target = url;
       target.set_path("/echo");
 
@@ -246,8 +241,7 @@ INSTANTIATE_TEST_SUITE_P(AltSvcDisabled, AltSvcDisabled,
 
 TEST_P(AltSvcDisabled, WHEN_the_server_advertises_nothing_THEN_the_client_stays_where_it_is)
 {
-   clientSession = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto target = url;
       target.set_path("/echo");
 
@@ -282,20 +276,19 @@ nghttp2_nv nv(std::string_view name, std::string_view value)
  */
 awaitable<void> serve_h2_with_altsvc(tcp::socket socket, std::string origin, std::string value)
 {
-   auto callbacks = std::invoke([]
-   {
+   auto callbacks = std::invoke([] {
       nghttp2_session_callbacks* cbs;
       nghttp2_session_callbacks_new(&cbs);
       nghttp2_session_callbacks_set_on_frame_recv_callback(
-         cbs, [](nghttp2_session* session, const nghttp2_frame* frame, void*) -> int
-      {
-         if (frame->hd.type == NGHTTP2_HEADERS && frame->headers.cat == NGHTTP2_HCAT_REQUEST)
-         {
-            std::array nva{nv(":status", "200"), nv("content-length", "0")};
-            nghttp2_submit_response2(session, frame->hd.stream_id, nva.data(), nva.size(), nullptr);
-         }
-         return 0;
-      });
+         cbs, [](nghttp2_session* session, const nghttp2_frame* frame, void*) -> int {
+            if (frame->hd.type == NGHTTP2_HEADERS && frame->headers.cat == NGHTTP2_HCAT_REQUEST)
+            {
+               std::array nva{nv(":status", "200"), nv("content-length", "0")};
+               nghttp2_submit_response2(session, frame->hd.stream_id, nva.data(), nva.size(),
+                                        nullptr);
+            }
+            return 0;
+         });
       return std::unique_ptr<nghttp2_session_callbacks, decltype(&nghttp2_session_callbacks_del)>{
          cbs, nghttp2_session_callbacks_del};
    });
@@ -353,37 +346,39 @@ TEST_P(AltSvcFrame, WHEN_an_altsvc_frame_arrives_THEN_the_next_connection_uses_i
    auto origin = std::format("http://127.0.0.2:{}", acceptor.local_endpoint().port());
    auto value = std::format("h3=\":{}\"", server->local_endpoint().port());
 
-   co_spawn(context, [&]() -> awaitable<void>
-   {
-      auto socket = co_await acceptor.async_accept();
-      co_await serve_h2_with_altsvc(std::move(socket), origin, value);
-   }, [](const std::exception_ptr& ex) { logi("bare HTTP/2 server: {}", what(ex)); });
+   co_spawn(
+      context,
+      [&]() -> awaitable<void> {
+         auto socket = co_await acceptor.async_accept();
+         co_await serve_h2_with_altsvc(std::move(socket), origin, value);
+      },
+      [](const std::exception_ptr& ex) { logi("bare HTTP/2 server: {}", what(ex)); });
 
    boost::urls::url target{"http://127.0.0.2/echo"};
    target.set_port_number(acceptor.local_endpoint().port());
    client::Client client(context.get_executor(),
                          {.url = target, .protocol = Protocol::h2, .follow_alt_svc = true});
 
-   co_spawn(context,
-            [&]() -> awaitable<void>
-   {
-      //
-      // The response itself carries no "Alt-Svc" -- everything the client learns here, it learns
-      // from the frame that arrived before the request was even sent.
-      //
-      auto first = co_await (co_await client.async_connect()).async_get(target);
-      EXPECT_EQ(first.result_int(), 200);
-      EXPECT_EQ(first[http::field::alt_svc], "");
+   co_spawn(
+      context,
+      [&]() -> awaitable<void> {
+         //
+         // The response itself carries no "Alt-Svc" -- everything the client learns here, it learns
+         // from the frame that arrived before the request was even sent.
+         //
+         auto first = co_await (co_await client.async_connect()).async_get(target);
+         EXPECT_EQ(first.result_int(), 200);
+         EXPECT_EQ(first[http::field::alt_svc], "");
 
-      auto second = co_await (co_await client.async_connect()).async_get(target);
-      EXPECT_EQ(second.result_int(), 200);
-      EXPECT_TRUE(served_over_http3(second)) << "the second connection is not HTTP/3";
-   }, [&](const std::exception_ptr& ex)
-   {
-      EXPECT_FALSE(ex) << what(ex);
-      acceptor.close();
-      server.reset();
-   });
+         auto second = co_await (co_await client.async_connect()).async_get(target);
+         EXPECT_EQ(second.result_int(), 200);
+         EXPECT_TRUE(served_over_http3(second)) << "the second connection is not HTTP/3";
+      },
+      [&](const std::exception_ptr& ex) {
+         EXPECT_FALSE(ex) << what(ex);
+         acceptor.close();
+         server.reset();
+      });
 
    run();
 }

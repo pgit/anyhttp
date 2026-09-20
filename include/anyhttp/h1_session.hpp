@@ -34,11 +34,11 @@ public:
    ~BeastSession() override;
 
    std::string_view logPrefix() const { return m_logPrefix; }
-   
+
    // ----------------------------------------------------------------------------------------------
-   
+
    void destroy() noexcept override;
-   
+
    boost::asio::any_io_executor get_executor() const noexcept override { return m_executor; }
 
    // ----------------------------------------------------------------------------------------------
@@ -108,12 +108,12 @@ class ServerSession : public ServerSessionBase, public BeastSession<Stream>
    using super = BeastSession<Stream>;
 
    // FIXME: maybe use CRTP or something similar to avoid this?
-   using super::logPrefix;
-   using super::m_buffer;
-   using super::m_stream;
-   using super::m_closed;
    using super::detach_readers;
    using super::detach_writers;
+   using super::logPrefix;
+   using super::m_buffer;
+   using super::m_closed;
+   using super::m_stream;
 
 public:
    ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);

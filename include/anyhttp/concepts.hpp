@@ -14,7 +14,6 @@ concept ConstBufferSequence = boost::asio::is_const_buffer_sequence<T>::value;
 template <typename T>
 concept MutableBufferSequence = boost::asio::is_mutable_buffer_sequence<T>::value;
 
-
 //
 // https://think-async.com/Asio/asio-1.38.2/doc/asio/reference/AsyncReadStream.html
 // https://think-async.com/Asio/asio-1.38.2/doc/asio/reference/AsyncWriteStream.html

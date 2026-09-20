@@ -1,8 +1,8 @@
 #pragma once
 
 #include "anyhttp/client.hpp"
-#include "anyhttp/server.hpp"
 #include "anyhttp/literals.hpp"
+#include "anyhttp/server.hpp"
 
 #include <array>
 #include <exception>

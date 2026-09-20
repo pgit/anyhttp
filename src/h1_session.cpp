@@ -193,8 +193,7 @@ public:
       auto ex = get_associated_executor(handler, get_executor());
       auto cs = get_associated_cancellation_slot(handler);
       auto cb = [this, self = Interface::shared_from_this(), body_buffer = std::move(body_buffer),
-                 handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable
-      {
+                 handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable {
          reading = false;
 
          auto& body = parser.get().body();
@@ -389,77 +388,76 @@ public:
 
       auto cb = [this, self = Parent::shared_from_this(), expected = buffer.size(), eof,
                  handler = std::move(handler)] //
-         (boost::system::error_code ec, size_t n) mutable
-      {
-         // async op result 'n' is the number of bytes written to the stream,
-         // not the number of bytes read from the buffer
-         mlogd("async_write: n={} (\x1b[1;{}m{}\x1b[0m) done={} (body {})", n,
-               ec == beast::http::error::need_buffer ? 33 : 31, // need_buffer in yellow only
-               ec.message(), serializer.is_done(), serializer.get().body().size);
+         (boost::system::error_code ec, size_t n) mutable {
+            // async op result 'n' is the number of bytes written to the stream,
+            // not the number of bytes read from the buffer
+            mlogd("async_write: n={} (\x1b[1;{}m{}\x1b[0m) done={} (body {})", n,
+                  ec == beast::http::error::need_buffer ? 33 : 31, // need_buffer in yellow only
+                  ec.message(), serializer.is_done(), serializer.get().body().size);
 
-         writing = false;
+            writing = false;
 
-         //
-         // 'need_buffer' means that the serializer is done consuming all of the given buffer
-         // and is ready to accept a new one.
-         //
-         if (ec == beast::http::error::need_buffer)
-            ec = {};
-         else if (ec == errc::operation_canceled)
-         {
             //
-            // Cancellation is tricky, see e.g.: https://github.com/boostorg/beast/issues/2325.
+            // 'need_buffer' means that the serializer is done consuming all of the given buffer
+            // and is ready to accept a new one.
             //
-            // Main reason is that, depending on when the cancellation actually takes place,
-            // the stream is in an undefined state. For example, when writing a large chunk is
-            // interrupted, there is no meaningful way to recover: The length of the chunk has
-            // been written, but only part of the data.
-            //
-            // So the only sensible thing to do here is to close the socket.
-            //
-            // TODO: We could try to support partial cancellation, but that would only work
-            //       at chunk boundaries.
-            //
-            mlogw("async_write: canceled after writing {} of {} bytes", n, expected);
-            cancelled = true;
-            if (session) // otherwise, the stream is gone already
+            if (ec == beast::http::error::need_buffer)
+               ec = {};
+            else if (ec == errc::operation_canceled)
             {
-               mlogw("async_write: canceled, closing stream");
-               get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send);
+               //
+               // Cancellation is tricky, see e.g.: https://github.com/boostorg/beast/issues/2325.
+               //
+               // Main reason is that, depending on when the cancellation actually takes place,
+               // the stream is in an undefined state. For example, when writing a large chunk is
+               // interrupted, there is no meaningful way to recover: The length of the chunk has
+               // been written, but only part of the data.
+               //
+               // So the only sensible thing to do here is to close the socket.
+               //
+               // TODO: We could try to support partial cancellation, but that would only work
+               //       at chunk boundaries.
+               //
+               mlogw("async_write: canceled after writing {} of {} bytes", n, expected);
+               cancelled = true;
+               if (session) // otherwise, the stream is gone already
+               {
+                  mlogw("async_write: canceled, closing stream");
+                  get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send);
+               }
             }
-         }
-         else if (ec)
-         {
-            cancelled = true;
-         }
-         /*
-         else if (!ec && n < expected)
-         {
-            mlogw("async_write: wrote {} bytes which is less than expected ({})", n, expected);
-            ec = errc::make_error_code(errc::message_size);
-         }
-         */
+            else if (ec)
+            {
+               cancelled = true;
+            }
+            /*
+            else if (!ec && n < expected)
+            {
+               mlogw("async_write: wrote {} bytes which is less than expected ({})", n, expected);
+               ec = errc::make_error_code(errc::message_size);
+            }
+            */
 
-         //
-         // Only now is the body really ended: a cancelled or failed EOF write never got its
-         // terminating bytes onto the wire, and latching the flag at accept time would let a
-         // retried async_write_eof() report success for a body the peer sees as truncated.
-         //
-         if (!ec && eof)
-            eof_submitted = true;
+            //
+            // Only now is the body really ended: a cancelled or failed EOF write never got its
+            // terminating bytes onto the wire, and latching the flag at accept time would let a
+            // retried async_write_eof() report success for a body the peer sees as truncated.
+            //
+            if (!ec && eof)
+               eof_submitted = true;
 
-         if (session && eof_submitted)
-            body_ended();
-         else if (session && cancelled)
-            write_failed();
+            if (session && eof_submitted)
+               body_ended();
+            else if (session && cancelled)
+               write_failed();
 
-         //
-         // The handler may resume the caller right here. If it releases the writer, that has to
-         // take effect immediately, not only when this callback is gone.
-         //
-         self.reset();
-         std::move(handler)(ec);
-      };
+            //
+            // The handler may resume the caller right here. If it releases the writer, that has to
+            // take effect immediately, not only when this callback is gone.
+            //
+            self.reset();
+            std::move(handler)(ec);
+         };
 
       http::async_write(
          stream, serializer,
@@ -741,8 +739,7 @@ public:
       auto ex = get_associated_executor(handler, get_executor());
       auto slot = get_associated_cancellation_slot(handler);
       auto intermediate = [reader = std::move(reader), handler = std::move(handler),
-                           this](boost::system::error_code ec, size_t len) mutable
-      {
+                           this](boost::system::error_code ec, size_t len) mutable {
          if (!ec)
          {
             http::response_parser<http::buffer_body>::value_type& msg = reader->parser.get();
@@ -867,8 +864,7 @@ void ServerSession<Stream>::destroy() noexcept
 static std::optional<nghttp2::Upgrade> h2c_upgrade(const http::request<http::buffer_body>& request,
                                                    const boost::urls::url& url, bool complete)
 {
-   const auto has_token = [](std::string_view list, std::string_view token)
-   {
+   const auto has_token = [](std::string_view list, std::string_view token) {
       for (auto item : http::token_list(list))
          if (beast::iequals(item, token))
             return true;
@@ -1056,8 +1052,8 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          mlogi("upgrading to h2c, {} bytes in buffer", m_buffer.size());
          // Stream is whatever this session runs on, but never a TLS one: h2c_upgrade() takes
          // cleartext requests only, as h2 over TLS is negotiated by ALPN instead.
-         m_upgraded = nghttp2::make_server_session(server(), std::move(m_stream),
-                                                   std::move(*upgrade));
+         m_upgraded =
+            nghttp2::make_server_session(server(), std::move(m_stream), std::move(*upgrade));
          co_await m_upgraded->do_session(std::move(m_buffer));
          mlogi("h2c session done, served {} requests before upgrade", requestCounter - 1);
          co_return;
@@ -1266,11 +1262,10 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
    auto& serializer = writer->serializer;
    auto ex = get_associated_executor(handler, super::get_executor());
    auto cb = [handler = std::move(handler), writer = std::move(writer)] //
-      (error_code ec, size_t) mutable
-   {
-      writer->header_written(ec);
-      std::move(handler)(ec, client::Request(std::move(writer)));
-   };
+      (error_code ec, size_t) mutable {
+         writer->header_written(ec);
+         std::move(handler)(ec, client::Request(std::move(writer)));
+      };
 
    async_write_header(m_stream, serializer, bind_executor(ex, std::move(cb)));
 }
@@ -1353,8 +1348,8 @@ template std::shared_ptr<Session::Impl> make_server_session<socket>(server::Serv
                                                                     socket&&);
 template std::shared_ptr<Session::Impl> make_server_session<SslStream>(server::Server::Impl&,
                                                                        SslStream&&);
-template std::shared_ptr<Session::Impl>
-make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&);
+template std::shared_ptr<Session::Impl> make_server_session<any_async_stream>(server::Server::Impl&,
+                                                                              any_async_stream&&);
 
 template std::shared_ptr<Session::Impl> make_client_session<socket>(client::Client::Impl&,
                                                                     socket&&);

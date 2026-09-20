@@ -141,8 +141,7 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    auto cs = asio::get_associated_cancellation_slot(handler);
    if (cs.is_connected() && !cs.has_handler())
    {
-      cs.assign([this](asio::cancellation_type_t ct)
-      {
+      cs.assign([this](asio::cancellation_type_t ct) {
          logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m ({})", //
               stream->logPrefix, "cancelled", int(ct));
 
@@ -260,8 +259,7 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    nghttp2_data_provider2 prd;
    prd.source.ptr = stream;
    prd.read_callback = [](nghttp2_session*, int32_t stream_id, uint8_t* buf, size_t length,
-                          uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t
-   {
+                          uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t {
       auto stream = static_cast<NGHttp2Stream*>(source->ptr);
       assert(stream);
       assert(stream->id == stream_id);
@@ -660,8 +658,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
    auto slot = asio::get_associated_cancellation_slot(write_handler);
    if (slot.is_connected() && !slot.has_handler())
    {
-      slot.assign([this](asio::cancellation_type_t ct)
-      {
+      slot.assign([this](asio::cancellation_type_t ct) {
          logd("[{}] async_write: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", ct);
          // delete_writer();
 
@@ -717,15 +714,13 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
    auto cs = handler.get_cancellation_slot();
    if (cs.is_connected())
    {
-      cs.assign([this](asio::cancellation_type_t ct)
-      {
+      cs.assign([this](asio::cancellation_type_t ct) {
          logd("[{}] async_get_response: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", ct);
 
          if (response_handler)
          {
             // auto executor = get_associated_executor(response_handler, get_executor());
-            post(get_executor(), [handler = std::move(response_handler)]() mutable
-            {
+            post(get_executor(), [handler = std::move(response_handler)]() mutable {
                std::move(handler)(errc::make_error_code(errc::operation_canceled),
                                   client::Response{nullptr});
             });

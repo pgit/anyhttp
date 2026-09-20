@@ -51,10 +51,7 @@ Session::~Session() { reset(); }
 
 // -------------------------------------------------------------------------------------------------
 
-boost::asio::any_io_executor Session::get_executor() const noexcept
-{
-   return impl->get_executor();
-}
+boost::asio::any_io_executor Session::get_executor() const noexcept { return impl->get_executor(); }
 
 void Session::async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
 {
@@ -90,8 +87,8 @@ auto async_submit(Session::Impl& impl, std::string_view method, boost::urls::url
 // The implementation is held by shared_ptr: a Session released while the GET is still in flight
 // must not pull the ground out from under the operations still running on it.
 //
-awaitable<client::Message> get_message(std::shared_ptr<Session::Impl> session,
-                                       boost::urls::url url, Fields headers)
+awaitable<client::Message> get_message(std::shared_ptr<Session::Impl> session, boost::urls::url url,
+                                       Fields headers)
 {
    //
    // A GET has no body, and saying so with a "Content-Length: 0" keeps HTTP/1.1 from framing one
@@ -143,8 +140,7 @@ void Session::async_get_any(GetHandler&& handler, boost::urls::url url, const Fi
             bind_cancellation_slot(
                slot, bind_executor(executor, [handler = std::move(handler)](
                                                 const std::exception_ptr& ep,
-                                                client::Message message) mutable
-               {
+                                                client::Message message) mutable {
                   auto ec = code(ep);
                   if (ec)
                      message.result(boost::beast::http::status::unknown); // not the Beast default

@@ -43,7 +43,10 @@ inline size_t max_continuations(size_t max_header_size)
 }
 
 inline std::string_view name_of(const nghttp2_nv& nv) { return {(const char*)nv.name, nv.namelen}; }
-inline std::string_view value_of(const nghttp2_nv& nv) { return {(const char*)nv.value, nv.valuelen}; }
+inline std::string_view value_of(const nghttp2_nv& nv)
+{
+   return {(const char*)nv.value, nv.valuelen};
+}
 
 // =================================================================================================
 

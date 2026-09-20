@@ -74,8 +74,7 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
    using namespace boost::asio;
    return async_initiate<CompletionToken, void(boost::system::error_code, size_t)>(
       co_composed<void(boost::system::error_code, bool)>(
-         [](auto state, DynamicBuffer& buffer, AsyncReadStream& stream) -> void
-         {
+         [](auto state, DynamicBuffer& buffer, AsyncReadStream& stream) -> void {
             //
             // https://think-async.com/Asio/asio-1.26.0/doc/asio/reference/experimental__co_composed.html
             //
