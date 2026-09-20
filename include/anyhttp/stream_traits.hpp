@@ -6,16 +6,21 @@
 // Beyond the async read and write operations, which all of them have in common already, a session
 // needs two more things from its stream: the underlying socket, to shut it down or close it, and
 // an executor to run its loops on. Neither is spelled the same way by all four, so they are
-// reached through this trait instead.
+// reached through this trait instead. Ending the stream itself, which only TLS has to do, is
+// async and comes as a free function below.
 //
 
 #include "anyhttp/detail/any_async_stream.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/as_tuple.hpp>
+#include <boost/asio/awaitable.hpp>
+#include <boost/asio/cancel_after.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
 
+#include <chrono>
 #include <concepts>
 
 namespace anyhttp
@@ -99,6 +104,31 @@ template <SocketStream Stream>
 decltype(auto) get_socket(Stream& stream) noexcept
 {
    return stream_traits<Stream>::get_socket(stream);
+}
+
+/**
+ * Ends \p stream as far as the stream itself is concerned, which is something only TLS has: a
+ * "close_notify", which tells the peer that the end of the data is the end of the data and not a
+ * connection that was cut. Without it, everything the peer reads after the last response fails as
+ * a truncated stream instead of ending cleanly. Streams that have nothing of their own to end
+ * complete right away, and the FIN that the caller sends afterwards is the whole of it.
+ *
+ * The peer answers a "close_notify" with one of its own, and one that never does must not keep the
+ * session around for good, so the wait for it is bounded: the connection is going away either way.
+ */
+template <SocketStream Stream>
+boost::asio::awaitable<boost::system::error_code> async_teardown(Stream& stream)
+{
+   constexpr auto timeout = std::chrono::seconds(2);
+
+   if constexpr (requires { stream.async_shutdown(boost::asio::as_tuple); })
+   {
+      auto [ec] = co_await stream.async_shutdown( //
+         boost::asio::cancel_after(timeout, boost::asio::as_tuple));
+      co_return ec;
+   }
+   else
+      co_return boost::system::error_code{};
 }
 
 // -------------------------------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 #include "test_fixtures.hpp"
 
+#include <boost/asio/ssl.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/http.hpp>
 
@@ -35,7 +36,8 @@ protected:
    }
 
    /// Writes \p request, with the Host field filled in, and reads the response that follows.
-   awaitable<Response> exchange(tcp::socket& socket, Request request)
+   template <typename Stream>
+   awaitable<Response> exchange(Stream& socket, Request request)
    {
       request.set(http::field::host, std::format("127.0.0.2:{}", port()));
       request.prepare_payload();
@@ -47,7 +49,8 @@ protected:
    }
 
    /// Reads what follows the last response, which must be the end of the stream and nothing else.
-   awaitable<error_code> read_eof(tcp::socket& socket)
+   template <typename Stream>
+   awaitable<error_code> read_eof(Stream& socket)
    {
       EXPECT_EQ(m_buffer.size(), 0) << "unread data left over from the response";
 
@@ -197,6 +200,57 @@ TEST_F(RejectedRequest, WHEN_request_is_rejected_THEN_the_response_arrives_anywa
       EXPECT_FALSE(receive_ec) << "the 431 was lost: " << receive_ec.message();
       EXPECT_EQ(response.result_int(), 431);
       EXPECT_FALSE(response.keep_alive());
+   }());
+}
+
+// =================================================================================================
+
+//
+// The same over TLS, where ending the connection takes one more step: a "close_notify" that tells
+// the peer that the end of the data is the end of the data, and not a connection that was cut.
+// Without it, everything the peer reads afterwards fails with ssl::error::stream_truncated
+// instead of a clean end of stream -- which is a truncation attack as far as TLS is concerned.
+//
+class TlsConnectionClose : public ConnectionClose
+{
+protected:
+   using SslStream = asio::ssl::stream<tcp::socket>;
+
+   awaitable<SslStream> connect_tls()
+   {
+      SslStream stream(co_await this_coro::executor, m_context);
+      co_await stream.next_layer().async_connect(server->local_endpoint());
+      co_await stream.async_handshake(asio::ssl::stream_base::client);
+      co_return stream;
+   }
+
+   asio::ssl::context m_context = std::invoke([]
+   {
+      asio::ssl::context context{asio::ssl::context::tlsv13};
+      context.load_verify_file("pki/out/root.pem");
+      context.set_verify_mode(asio::ssl::verify_peer);
+      context.set_verify_callback(asio::ssl::host_name_verification("127.0.0.2"));
+      return context;
+   });
+};
+
+// -------------------------------------------------------------------------------------------------
+
+TEST_F(TlsConnectionClose, WHEN_request_asks_to_close_THEN_close_notify_comes_before_the_end)
+{
+   run([&]() -> awaitable<void>
+   {
+      auto stream = co_await connect_tls();
+
+      Request request{http::verb::get, "/dump", 11};
+      request.set(http::field::connection, "close");
+      auto response = co_await exchange(stream, std::move(request));
+
+      EXPECT_EQ(response.result_int(), 200);
+      EXPECT_FALSE(response.keep_alive());
+
+      // a clean end of stream, not ssl::error::stream_truncated
+      EXPECT_EQ(co_await read_eof(stream), asio::error::eof);
    }());
 }
 

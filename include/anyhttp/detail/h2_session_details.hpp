@@ -271,6 +271,13 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
    mlogd("server session done");
 
+   //
+   // End the stream itself: over TLS, that is the "close_notify" the peer needs to tell the end
+   // of the data from a connection that was cut, see async_teardown().
+   //
+   if (auto ec = co_await async_teardown(m_stream); ec)
+      mlogd("teardown: {}", ec.message());
+
    nghttp2_session_del(session);
    session = nullptr;
    mlogd("server session deleted");

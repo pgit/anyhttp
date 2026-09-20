@@ -1148,7 +1148,14 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    mlogi("closing stream, served {} requests", requestCounter);
 
    //
-   // Send a FIN first, and let go of the socket only after that: closing one that still has
+   // End the stream itself first: over TLS, that is the "close_notify" the peer needs to tell the
+   // end of the data from a connection that was cut. Everything else has nothing to send here.
+   //
+   if (auto teardown_ec = co_await async_teardown(m_stream); teardown_ec)
+      mlogw("teardown: {}", teardown_ec.message());
+
+   //
+   // Send a FIN next, and let go of the socket only after that: closing one that still has
    // unread data in its receive queue answers the peer with an RST instead, and an RST discards
    // whatever has not been delivered yet -- which can be the very response that said the
    // connection was ending.
