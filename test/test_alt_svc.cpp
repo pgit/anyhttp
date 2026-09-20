@@ -151,7 +151,7 @@ INSTANTIATE_TEST_SUITE_P(AltSvcUpgrade, AltSvcUpgrade,
 
 TEST_P(AltSvcUpgrade, WHEN_the_server_advertises_h3_THEN_the_next_connection_uses_it)
 {
-   test = [this](Session session) -> awaitable<void>
+   clientSession = [this](Session session) -> awaitable<void>
    {
       auto first = co_await session.async_get(echo());
       EXPECT_EQ(first.result_int(), 200);
@@ -172,7 +172,7 @@ TEST_P(AltSvcUpgrade, WHEN_the_server_advertises_h3_THEN_the_next_connection_use
 //
 TEST_P(AltSvcUpgrade, WHEN_the_alternative_is_learned_THEN_the_session_that_learned_it_stays)
 {
-   test = [this](Session session) -> awaitable<void>
+   clientSession = [this](Session session) -> awaitable<void>
    {
       EXPECT_FALSE(served_over_http3(co_await session.async_get(echo())));
       EXPECT_FALSE(served_over_http3(co_await session.async_get(echo())));
@@ -181,14 +181,14 @@ TEST_P(AltSvcUpgrade, WHEN_the_alternative_is_learned_THEN_the_session_that_lear
 
 TEST_P(AltSvcUpgrade, WHEN_the_server_clears_the_alternative_THEN_it_is_not_used)
 {
-   custom = [](server::Request request, server::Response response) -> awaitable<void>
+   requestHandler = [](server::Request request, server::Response response) -> awaitable<void>
    {
       co_await drain(request);
       co_await response.async_submit(200, fields({{"Alt-Svc", "clear"}, {"Content-Length", 0}}));
       co_await response.async_write_eof();
    };
 
-   test = [this](Session session) -> awaitable<void>
+   clientSession = [this](Session session) -> awaitable<void>
    {
       EXPECT_THAT(std::string((co_await session.async_get(echo()))[http::field::alt_svc]),
                   HasSubstr("h3="));
@@ -216,7 +216,7 @@ INSTANTIATE_TEST_SUITE_P(AltSvcIgnored, AltSvcIgnored,
 
 TEST_P(AltSvcIgnored, WHEN_the_client_does_not_follow_alt_svc_THEN_it_keeps_its_protocol)
 {
-   test = [this](Session session) -> awaitable<void>
+   clientSession = [this](Session session) -> awaitable<void>
    {
       auto target = url;
       target.set_path("/echo");
@@ -246,7 +246,7 @@ INSTANTIATE_TEST_SUITE_P(AltSvcDisabled, AltSvcDisabled,
 
 TEST_P(AltSvcDisabled, WHEN_the_server_advertises_nothing_THEN_the_client_stays_where_it_is)
 {
-   test = [this](Session session) -> awaitable<void>
+   clientSession = [this](Session session) -> awaitable<void>
    {
       auto target = url;
       target.set_path("/echo");

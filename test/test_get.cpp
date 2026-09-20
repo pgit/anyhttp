@@ -18,8 +18,8 @@ protected:
    /// Installs a request handler that drains the request and responds 200 with \p body.
    void respond_with(std::string body)
    {
-      custom = [body = std::move(body)](server::Request request,
-                                        server::Response response) -> awaitable<void>
+      requestHandler = [body = std::move(body)](server::Request request,
+                                                server::Response response) -> awaitable<void>
       {
          EXPECT_EQ(co_await drain(request), 0); // a GET has no body
          co_await response.async_submit(
@@ -39,7 +39,7 @@ INSTANTIATE_TEST_SUITE_P(AsyncGet, AsyncGet,
 TEST_P(AsyncGet, WHEN_get_THEN_message_has_status_fields_and_body)
 {
    respond_with("Hello, World!");
-   test = [this](Session session) -> awaitable<void>
+   clientSession = [this](Session session) -> awaitable<void>
    {
       auto message = co_await session.async_get(url);
       EXPECT_EQ(message.result(), http::status::ok);
@@ -52,7 +52,7 @@ TEST_P(AsyncGet, WHEN_get_THEN_message_has_status_fields_and_body)
 TEST_P(AsyncGet, WHEN_response_has_no_body_THEN_body_is_empty)
 {
    respond_with("");
-   test = [this](Session session) -> awaitable<void>
+   clientSession = [this](Session session) -> awaitable<void>
    {
       auto message = co_await session.async_get(url);
       EXPECT_EQ(message.result_int(), 200);
@@ -66,7 +66,7 @@ TEST_P(AsyncGet, WHEN_response_has_no_body_THEN_body_is_empty)
 //
 TEST_P(AsyncGet, WHEN_path_is_unknown_THEN_message_says_404)
 {
-   test = [this](Session session) -> awaitable<void>
+   clientSession = [this](Session session) -> awaitable<void>
    {
       auto message = co_await session.async_get(url.set_path("unknown"));
       EXPECT_EQ(message.result(), http::status::not_found);
@@ -77,7 +77,7 @@ TEST_P(AsyncGet, WHEN_body_is_large_THEN_all_of_it_arrives)
 {
    auto body = std::string(1_m, 'x');
    respond_with(body);
-   test = [this, body](Session session) -> awaitable<void>
+   clientSession = [this, body](Session session) -> awaitable<void>
    {
       auto message = co_await session.async_get(url);
       EXPECT_EQ(message.result_int(), 200);
@@ -88,7 +88,7 @@ TEST_P(AsyncGet, WHEN_body_is_large_THEN_all_of_it_arrives)
 
 TEST_P(AsyncGet, WHEN_headers_are_given_THEN_they_arrive_with_the_request)
 {
-   custom = [](server::Request request, server::Response response) -> awaitable<void>
+   requestHandler = [](server::Request request, server::Response response) -> awaitable<void>
    {
       EXPECT_EQ(request.fields()["x-question"], "what?");
       EXPECT_EQ(request.fields()["content-length"], "0");
@@ -96,7 +96,7 @@ TEST_P(AsyncGet, WHEN_headers_are_given_THEN_they_arrive_with_the_request)
       co_await response.async_submit(200, fields({{"Content-Length", 0}}));
       co_await response.async_write_eof();
    };
-   test = [this](Session session) -> awaitable<void>
+   clientSession = [this](Session session) -> awaitable<void>
    {
       auto message = co_await session.async_get(url, fields({{"X-Question", "what?"}}));
       EXPECT_EQ(message.result_int(), 200);
@@ -110,7 +110,7 @@ TEST_P(AsyncGet, WHEN_headers_are_given_THEN_they_arrive_with_the_request)
 TEST_P(AsyncGet, WHEN_two_requests_in_a_row_THEN_both_are_answered)
 {
    respond_with("Hello, World!");
-   test = [this](Session session) -> awaitable<void>
+   clientSession = [this](Session session) -> awaitable<void>
    {
       for (size_t i = 0; i < 2; ++i)
       {
@@ -131,13 +131,13 @@ TEST_P(AsyncGet, WHEN_cancelled_THEN_completes_with_operation_canceled_and_empty
    // Responds late, and to nobody in particular: by then the client has given up, so writing to
    // the stream is expected to fail.
    //
-   custom = [](server::Request request, server::Response response) -> awaitable<void>
+   requestHandler = [](server::Request request, server::Response response) -> awaitable<void>
    {
       co_await sleep(1s);
       std::ignore = co_await response.async_submit(200, {}, as_tuple);
       std::ignore = co_await response.async_write_eof(as_tuple);
    };
-   test = [this](Session session) -> awaitable<void>
+   clientSession = [this](Session session) -> awaitable<void>
    {
       auto [ec, message] = co_await session.async_get(url, {}, cancel_after(100ms, as_tuple));
       EXPECT_EQ(ec, boost::system::errc::operation_canceled);

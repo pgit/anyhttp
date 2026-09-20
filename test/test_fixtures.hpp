@@ -143,7 +143,7 @@ protected:
          else if (request.url().path() == "/detach")
             co_await detach(std::move(request), std::move(response));
          else if (request.url().path().starts_with("/custom"))
-            co_await custom(std::move(request), std::move(response));
+            co_await requestHandler(std::move(request), std::move(response));
          else
             co_await not_found(std::move(request), std::move(response));
       });
@@ -178,7 +178,8 @@ protected:
 protected:
    boost::asio::io_context context;
    std::optional<server::Server> server;
-   std::function<awaitable<void>(server::Request request, server::Response response)> custom;
+   std::function<awaitable<void>(server::Request request, server::Response response)>
+      requestHandler;
 };
 
 // =================================================================================================
@@ -242,10 +243,10 @@ public:
       //
       co_spawn(client->get_executor(), [this]() -> awaitable<void>
       {
-         if (test)
+         if (clientSession)
          {
             auto session = co_await client->async_connect();
-            co_await test(std::move(session));
+            co_await clientSession(std::move(session));
          }
       }, token());
    }
@@ -258,7 +259,7 @@ public:
 
 public:
    decltype(boost::asio::make_work_guard(context)) work = boost::asio::make_work_guard(context);
-   std::function<awaitable<void>(Session session)> test;
+   std::function<awaitable<void>(Session session)> clientSession;
 };
 
 // =================================================================================================
