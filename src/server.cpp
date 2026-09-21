@@ -32,6 +32,7 @@ Request::~Request() { reset(); }
 
 Request::Impl& Request::pimpl() const noexcept { return static_cast<Impl&>(Reader::pimpl()); }
 
+std::string_view Request::method() const noexcept { return pimpl().method(); }
 boost::url_view Request::url() const { return pimpl().url(); }
 const Fields& Request::fields() const { return pimpl().fields(); }
 

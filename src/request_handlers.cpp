@@ -60,6 +60,7 @@ awaitable<void> dump(server::Request request, server::Response response)
    auto url = request.url();
 
    std::stringstream str;
+   std::println(str, "method: {}", request.method());
    std::println(str, "RAW URL: {}", url.buffer());
    std::println(str, "authority: {} ({})", url.authority(), url.encoded_authority());
    std::println(str, "path: {} ({})", url.path(), url.encoded_path());

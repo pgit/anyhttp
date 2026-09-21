@@ -81,20 +81,6 @@ asio::any_io_executor NGHttp2Reader<Base>::get_executor() const noexcept
 }
 
 template <typename Base>
-unsigned int NGHttp2Reader<Base>::status_code() const noexcept
-{
-   assert(stream);
-   return stream->status_code.value_or(0);
-}
-
-template <typename Base>
-boost::url_view NGHttp2Reader<Base>::url() const
-{
-   assert(stream);
-   return {stream->url};
-}
-
-template <typename Base>
 const Fields& NGHttp2Reader<Base>::fields() const
 {
    assert(stream);
@@ -161,6 +147,43 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    stream->m_read_handler = std::move(handler);
    stream->call_read_handler();
 }
+
+// =================================================================================================
+
+//
+// The two roles a reader can be in. Everything above is the same for both; what they add is the
+// half of the incoming message that only their role has -- a request line, or a status code.
+//
+
+class NGHttp2RequestReader final : public NGHttp2Reader<server::Request::Impl>
+{
+public:
+   using NGHttp2Reader<server::Request::Impl>::NGHttp2Reader;
+
+   std::string_view method() const noexcept override
+   {
+      assert(stream);
+      return stream->method;
+   }
+
+   boost::url_view url() const override
+   {
+      assert(stream);
+      return {stream->url};
+   }
+};
+
+class NGHttp2ResponseReader final : public NGHttp2Reader<client::Response::Impl>
+{
+public:
+   using NGHttp2Reader<client::Response::Impl>::NGHttp2Reader;
+
+   unsigned int status_code() const noexcept override
+   {
+      assert(stream);
+      return stream->status_code.value_or(0);
+   }
+};
 
 // =================================================================================================
 
@@ -854,7 +877,7 @@ void NGHttp2Stream::deliver_response()
    else
    {
       response_delivered = true;
-      auto impl = client::Response{std::make_unique<NGHttp2Reader<client::Response::Impl>>(*this)};
+      auto impl = client::Response{std::make_unique<NGHttp2ResponseReader>(*this)};
       swap_and_invoke(response_handler, boost::system::error_code{}, std::move(impl));
    }
 }
@@ -872,7 +895,7 @@ void NGHttp2Stream::on_request()
    // TODO: Implement request queue. Until then, separate preparation of request/response from
    //       the actual handling.
    //
-   server::Request request(std::make_unique<NGHttp2Reader<server::Request::Impl>>(*this));
+   server::Request request(std::make_unique<NGHttp2RequestReader>(*this));
    server::Response response(std::make_unique<NGHttp2Writer<server::Response::Impl>>(*this));
 
    auto& server = dynamic_cast<ServerReference&>(parent).server();

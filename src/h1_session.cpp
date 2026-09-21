@@ -140,14 +140,6 @@ public:
       session = nullptr;
    }
 
-   unsigned int status_code() const noexcept override
-   {
-      if constexpr (typename Parser::is_request())
-         return 0;
-      else
-         return parser.get().result_int();
-   }
-   boost::url_view url() const override { return m_url; }
    const Fields& fields() const override { return parser.get(); }
    std::optional<size_t> content_length() const noexcept override
    {
@@ -237,10 +229,49 @@ public:
    Buffer& buffer;
    Parser parser;
    asio::any_io_executor m_executor; // kept as a copy so a detached reader can still complete
-   std::optional<unsigned int> m_status_code = 0;
-   boost::url m_url;
    bool reading = false;
    bool finished = false; // see finish()
+};
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// The two roles a reader can be in. Everything above is the same for both; what they add is the
+// half of the incoming message that only their role has -- a request line, or a status code.
+// Which of the two Beast parsers a role reads with follows from the role itself.
+//
+
+template <typename Stream, typename Buffer>
+class BeastRequestReader final
+   : public BeastReader<server::Request::Impl, Stream, Buffer,
+                        beast::http::request_parser<beast::http::buffer_body>>
+{
+   using Base = BeastReader<server::Request::Impl, Stream, Buffer,
+                            beast::http::request_parser<beast::http::buffer_body>>;
+
+public:
+   using Base::Base;
+
+   std::string_view method() const noexcept override { return this->parser.get().method_string(); }
+   boost::url_view url() const override { return m_url; }
+
+   /// Assembled from the request target, the host header and the kind of socket this arrived on,
+   /// by the session, right after the header was parsed.
+   boost::url m_url;
+};
+
+template <typename Stream, typename Buffer>
+class BeastResponseReader final
+   : public BeastReader<client::Response::Impl, Stream, Buffer,
+                        beast::http::response_parser<beast::http::buffer_body>>
+{
+   using Base = BeastReader<client::Response::Impl, Stream, Buffer,
+                            beast::http::response_parser<beast::http::buffer_body>>;
+
+public:
+   using Base::Base;
+
+   unsigned int status_code() const noexcept override { return this->parser.get().result_int(); }
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -730,8 +761,7 @@ public:
       // auto& stream = session->m_stream;
 
       auto reader =
-         std::make_unique<BeastReader<client::Response::Impl, std::decay_t<decltype(stream)>,
-                                      decltype(buffer), http::response_parser<http::buffer_body>>>(
+         std::make_unique<BeastResponseReader<std::decay_t<decltype(stream)>, decltype(buffer)>>(
             *session, stream, buffer);
       http::response_parser<http::buffer_body>& parser = reader->parser;
       parser.header_limit(header_limit(cs.client().config().max_header_size));
@@ -963,10 +993,8 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    while (!m_closed)
    {
       detach_readers(); // the previous request, if still around, is done with the stream
-      auto reader =
-         std::make_unique<BeastReader<server::Request::Impl, decltype(m_stream), decltype(m_buffer),
-                                      http::request_parser<http::buffer_body>>>(*this, m_stream,
-                                                                                m_buffer);
+      auto reader = std::make_unique<BeastRequestReader<decltype(m_stream), decltype(m_buffer)>>(
+         *this, m_stream, m_buffer);
 
       logd("");
       mlogd("waiting for request (size={} capacity={})", m_buffer.size(), m_buffer.capacity());

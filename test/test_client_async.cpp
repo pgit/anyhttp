@@ -1038,6 +1038,7 @@ TEST_P(ClientAsync, Dump)
       co_await send_eof(request);
       auto response = co_await request.async_get_response();
       auto dump = co_await read(response);
+      EXPECT_THAT(dump, HasSubstr("method: POST"));
       EXPECT_THAT(dump, HasSubstr("path: /dump space"));
       EXPECT_THAT(dump, HasSubstr("  blah=white space"));
    };

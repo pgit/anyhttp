@@ -98,6 +98,9 @@ public:
    ~Request();
 
 public:
+   /// The request method, as it arrived: "GET", "POST", ...
+   std::string_view method() const noexcept;
+
    boost::url_view url() const;
 
    /// The request header fields, without HTTP/2 and HTTP/3 pseudo-headers.

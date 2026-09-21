@@ -260,15 +260,6 @@ public:
       return stream ? stream->content_length : std::nullopt;
    }
 
-   /// Only meaningful for a client::Response; a server::Request has no status, and reports 0.
-   unsigned int status_code() const noexcept override { return stream ? stream->status_code : 0; }
-
-   boost::url_view url() const override
-   {
-      assert(stream);
-      return stream->url;
-   }
-
    const Fields& fields() const override
    {
       assert(stream);

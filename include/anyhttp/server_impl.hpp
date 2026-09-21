@@ -27,8 +27,11 @@ public:
    Impl() noexcept;
    virtual ~Impl();
 
-   // FIXME: doesn't make sense to have a status_code() for a server request, but keeps beast happy
-   virtual unsigned int status_code() const noexcept = 0;
+   //
+   // The request line, as it arrived. A request has no status code -- that is the other half of
+   // the exchange, on client::Response::Impl.
+   //
+   virtual std::string_view method() const noexcept = 0;
    virtual boost::url_view url() const = 0;
    virtual const Fields& fields() const = 0;
 };

@@ -393,6 +393,30 @@ private:
 // Http3ServerStream implementation
 // =================================================================================================
 
+//
+// The reading half of a server request: what http3::Http3Reader has for both roles, plus the
+// request line, which only this role has. Its counterpart on the client is Http3ResponseReader.
+//
+class Http3RequestReader final : public http3::Http3Reader<server::Request::Impl>
+{
+public:
+   using Http3Reader<server::Request::Impl>::Http3Reader;
+
+   std::string_view method() const noexcept override
+   {
+      assert(stream);
+      return stream->method;
+   }
+
+   boost::url_view url() const override
+   {
+      assert(stream);
+      return stream->url;
+   }
+};
+
+// -------------------------------------------------------------------------------------------------
+
 Http3ServerStream::Http3ServerStream(Http3ServerSession& s, int64_t stream_id)
    : http3::Http3Stream(s, stream_id, http3::WriteMode::ZeroCopy)
 {
@@ -427,7 +451,7 @@ void Http3ServerStream::on_headers_complete()
    //
    // Build the user-facing Request/Response and dispatch through the shared handler.
    //
-   server::Request request(std::make_unique<http3::Http3Reader<server::Request::Impl>>(*this));
+   server::Request request(std::make_unique<Http3RequestReader>(*this));
    server::Response response(std::make_unique<http3::Http3Writer<server::Response::Impl>>(*this));
 
    auto& sv = static_cast<Http3ServerSession&>(session).server();

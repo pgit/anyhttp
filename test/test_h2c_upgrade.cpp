@@ -244,6 +244,7 @@ TEST_F(H2CUpgrade, WHEN_upgrade_is_requested_THEN_request_continues_as_stream_1)
    ASSERT_TRUE(responses.contains(1));
    EXPECT_EQ(responses[1].status, 200);
    EXPECT_TRUE(responses[1].closed);
+   EXPECT_THAT(responses[1].body, HasSubstr("method: GET")); // carried over by the upgrade
    EXPECT_THAT(responses[1].body, HasSubstr("path: /dump"));
    EXPECT_THAT(responses[1].body, HasSubstr("query: first"));
 }

@@ -247,6 +247,20 @@ private:
 // Http3ClientStream implementation
 // =================================================================================================
 
+//
+// The reading half of a client response: what http3::Http3Reader has for both roles, plus the
+// status code, which only this role has. Its counterpart on the server is Http3RequestReader.
+//
+class Http3ResponseReader final : public http3::Http3Reader<client::Response::Impl>
+{
+public:
+   using Http3Reader<client::Response::Impl>::Http3Reader;
+
+   unsigned int status_code() const noexcept override { return stream ? stream->status_code : 0; }
+};
+
+// -------------------------------------------------------------------------------------------------
+
 Http3ClientStream::Http3ClientStream(Http3ClientSession& s, int64_t stream_id)
    : http3::Http3Stream(s, stream_id, http3::WriteMode::Staged)
 {
@@ -395,8 +409,7 @@ void Http3ClientStream::deliver_response()
       return;
 
    response_delivered = true;
-   auto response =
-      client::Response{std::make_unique<http3::Http3Reader<client::Response::Impl>>(*this)};
+   auto response = client::Response{std::make_unique<Http3ResponseReader>(*this)};
    swap_and_invoke(response_handler, boost::system::error_code{}, std::move(response));
 }
 

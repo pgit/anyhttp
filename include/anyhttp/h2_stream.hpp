@@ -43,8 +43,6 @@ public:
    void async_read_some(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler) override;
    void detach() override;
 
-   unsigned int status_code() const noexcept override;
-   boost::url_view url() const override;
    const Fields& fields() const override;
 
    NGHttp2Stream* stream;

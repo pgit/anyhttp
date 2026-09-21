@@ -36,8 +36,11 @@ public:
    Impl() noexcept;
    virtual ~Impl();
 
+   //
+   // The status line, as it arrived. A response has no method or URL -- those are the other half
+   // of the exchange, on server::Request::Impl.
+   //
    virtual unsigned int status_code() const noexcept = 0;
-   virtual boost::url_view url() const = 0;
    virtual const Fields& fields() const = 0;
 };
 
