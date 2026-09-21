@@ -13,6 +13,7 @@
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/as_single.hpp>
+#include <boost/asio/experimental/concurrent_channel.hpp>
 #include <boost/asio/immediate.hpp>
 #include <boost/asio/ip/address_v6.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -387,6 +388,17 @@ awaitable<void> Server::Impl::tcp_accept_loop()
    // Maybe the simplest solution is to put a mutex around it...
    //
    size_t sessionCounter = 0;
+
+   //
+   // Sessions run on their own executors and finish on whatever thread happens to be running
+   // them, so the "one more is gone" signal has to cross threads: concurrent_channel is the
+   // thread-safe flavour. It is only a nudge -- sessionCounter, read under the mutex, is the
+   // actual condition -- so a try_send() that finds the buffer full may be dropped: whenever
+   // the waiter is about to block, the buffer is empty and every session still counted has its
+   // own send() ahead of it.
+   //
+   experimental::concurrent_channel<void(boost::system::error_code)> sessionDone{executor, 1};
+
    for (;;)
    {
       //
@@ -425,6 +437,7 @@ awaitable<void> Server::Impl::tcp_accept_loop()
                [&, ep](const std::exception_ptr& ex) mutable {
                   auto lock = std::lock_guard(m_sessionMutex);
                   --sessionCounter;
+                  std::ignore = sessionDone.try_send(boost::system::error_code{});
                   if (ex)
                      logw("[{}] {}", ep, what(ex));
                   else
@@ -433,7 +446,9 @@ awaitable<void> Server::Impl::tcp_accept_loop()
    }
 
    //
-   // FIXME: implement a better waiting mechanism using async promises or just a condition variable.
+   // Wait for the sessions spawned above, sweeping the registry on every wake-up: a connection
+   // that was already in flight when the acceptor closed may still register itself after the
+   // first sweep, and destroying it is what makes it finish.
    //
    auto lock = std::unique_lock(m_sessionMutex);
    const auto waitingFor = sessionCounter;
@@ -447,7 +462,7 @@ awaitable<void> Server::Impl::tcp_accept_loop()
       m_sessions.clear();
 
       lock.unlock();
-      co_await post(executor);
+      std::ignore = co_await sessionDone.async_receive(as_tuple);
       lock.lock();
    }
 

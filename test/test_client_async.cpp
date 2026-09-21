@@ -2,6 +2,8 @@
 
 #include <pthread.h>
 
+#include <boost/asio/experimental/concurrent_channel.hpp>
+
 #include <array>
 #include <optional>
 #include <print>
@@ -151,19 +153,34 @@ TEST_P(ClientAsync, WHEN_session_is_gone_THEN_request_reports_error)
    };
 }
 
+//
+// The two sides hand over explicitly instead of polling: the client says when it is gone, and
+// the responder says when it is done. The latter is not just tidiness -- the client coroutine
+// returning is what tears the server down, so it must not return early.
+//
+// One wait resists that treatment. What the responder is really waiting for is its own session
+// to be gone, and for HTTP/2 and HTTP/3 that only happens once the server has noticed the closed
+// connection -- a network event, which nothing in this process can be woken by. So the sleep
+// stays, but it now covers only that, with the client's own teardown fenced off ahead of it.
+//
+using Signal = asio::experimental::concurrent_channel<void(boost::system::error_code)>;
+
 TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
 {
-   auto responded = std::make_shared<bool>(false);
-   requestHandler = [responded](server::Request request,
-                                server::Response response) -> awaitable<void> {
+   auto clientGone = std::make_shared<Signal>(context.get_executor(), 1);
+   auto responded = std::make_shared<Signal>(context.get_executor(), 1);
+
+   requestHandler = [clientGone, responded](server::Request request,
+                                            server::Response response) -> awaitable<void> {
       //
       // Keep the response around beyond the request handler, until the client has closed the
       // connection and the server session has ended.
       //
       co_spawn(
          co_await this_coro::executor,
-         [responded, response = std::move(response)]() mutable -> awaitable<void> {
-            co_await sleep(100ms);
+         [clientGone, responded, response = std::move(response)]() mutable -> awaitable<void> {
+            co_await clientGone->async_receive();
+            co_await sleep(100ms); // no channel can stand in for this, see above
 
             auto [ec] = co_await response.async_submit(200, {}, as_tuple);
             EXPECT_TRUE(is_connection_error(ec)) << what(ec);
@@ -171,20 +188,19 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
             std::tie(ec) = co_await response.async_write(asio::buffer("Hello"sv), as_tuple);
             EXPECT_TRUE(is_connection_error(ec)) << what(ec);
 
-            *responded = true;
+            co_await responded->async_send(boost::system::error_code{});
          },
          detached);
       co_return;
    };
-   clientSession = [this, responded](Session session) -> awaitable<void> {
+   clientSession = [this, clientGone, responded](Session session) -> awaitable<void> {
       auto request = co_await session.async_submit(url, {});
       co_await request.async_write_eof();
       request.reset();
       session.reset();
 
-      for (int i = 0; i < 100 && !*responded; ++i)
-         co_await sleep(10ms);
-      EXPECT_TRUE(*responded);
+      co_await clientGone->async_send(boost::system::error_code{});
+      co_await responded->async_receive();
    };
 }
 
