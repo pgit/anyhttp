@@ -78,59 +78,17 @@ The convenience is paid for with memory, as the body is buffered in full: anythi
 look at the body while it arrives, or to send a body of its own, still goes through
 `async_submit()`.
 
+# Class Hierarchy
+
+![Class hierarchy](docs/overview.drawio.svg)
+
 # Implementation
 
 The asynchronous operations exposed by server and client are [ASIO asynchronous operations](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/asynchronous_operations.html). As such, they support a range of [completion tokens](https://think-async.com/Asio/asio-1.30.2/doc/asio/overview/model/completion_tokens.html) like [use_awaitable](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/use_awaitable.html) or plain callbacks.
 
 The implementation is hidden behind [any_completion_handler](https://www.boost.org/doc/libs/1_86_0/doc/html/boost_asio/reference/any_completion_handler.html) so that it can be compiled separately.
 
-
 This work is partly inspired by [asio-grpc](https://github.com/Tradias/asio-grpc), which takes the idea even one step further and also supports the upcoming sender/receiver model of execution.
-
-```mermaid
-classDiagram
-
-Response --|> Reader
-Request_Impl --|> Writer
-
-namespace client {
-   class Response {
-      async_read_some(buffer)
-   }
-   class Request {
-      async_get_response()
-      async_write(buffer)
-      async_write_eof(buffer)
-   }
-   class Client {
-      async_connect()
-   }
-
-   class Request_Impl {
-
-   }
-}
-
-namespace impl {
-   class Reader {
-      get_executor()
-      content_length()
-      async_read_some(buffer)
-      detach()
-      destroy()
-   }
-   class Writer {
-      get_executor()
-      content_length(optional<size_t>)
-      async_write(buffer, eof)
-      detach()
-      destroy()
-   }
-   class Client {
-      get_executor()
-   }
-}
-```
 
 
 ## Concurrent Requests
