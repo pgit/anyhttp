@@ -9,7 +9,6 @@
 #include "anyhttp/h3_backend.hpp"
 #include "anyhttp/tls.hpp"
 
-#include <boost/asio.hpp>
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/as_single.hpp>
@@ -17,6 +16,8 @@
 #include <boost/asio/immediate.hpp>
 #include <boost/asio/ip/address_v6.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ip/v6_only.hpp>
+#include <boost/asio/strand.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/stream.hpp>
 

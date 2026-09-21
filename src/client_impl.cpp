@@ -6,7 +6,7 @@
 #include "anyhttp/h2_backend.hpp"
 #include "anyhttp/h3_backend.hpp"
 
-#include <boost/asio.hpp>
+#include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>

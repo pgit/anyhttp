@@ -24,7 +24,6 @@
 #include "anyhttp/literals.hpp"
 #include "anyhttp/session_impl.hpp"
 
-#include <boost/asio.hpp>
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/ip/udp.hpp>

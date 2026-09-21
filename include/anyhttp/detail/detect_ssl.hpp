@@ -1,5 +1,10 @@
 #pragma once
-#include <boost/asio.hpp>
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/as_tuple.hpp>
+#include <boost/asio/async_result.hpp>
+#include <boost/asio/buffer.hpp>
+#include <boost/asio/cancellation_type.hpp>
+#include <boost/asio/default_completion_token.hpp>
 #include <boost/asio/experimental/co_composed.hpp>
 
 #include <boost/beast/core/detect_ssl.hpp>

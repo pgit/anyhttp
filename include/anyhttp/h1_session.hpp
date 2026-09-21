@@ -6,7 +6,7 @@
 #include "server_impl.hpp"
 #include "session_impl.hpp"
 
-#include <boost/asio.hpp>
+#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/buffer.hpp>
 
 #include <boost/beast/core.hpp>
