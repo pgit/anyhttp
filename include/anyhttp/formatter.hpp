@@ -92,7 +92,8 @@ struct Truncated
    size_t max_size;
 };
 
-/// Default for truncated(): long enough for any regular header, short enough to keep the log readable.
+/// Default for truncated(): long enough for any regular header, short enough to keep the log
+/// readable.
 inline constexpr size_t max_logged_size = 80;
 
 /**
@@ -138,8 +139,7 @@ struct std::formatter<boost::asio::cancellation_type> : std::formatter<std::stri
          return std::formatter<std::string_view>::format("all", ctx);
 
       bool first = true;
-      auto append = [&](boost::asio::cancellation_type flag, std::string_view name)
-      {
+      auto append = [&](boost::asio::cancellation_type flag, std::string_view name) {
          if ((type & flag) == flag)
          {
             std::format_to(ctx.out(), "{}{}", first ? "" : "|", name);

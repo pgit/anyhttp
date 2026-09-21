@@ -38,11 +38,14 @@
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
 
-#include <boost/asio.hpp>
 #include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
 #include <boost/asio/error.hpp>
+#include <boost/asio/ip/v6_only.hpp>
 #include <boost/asio/redirect_error.hpp>
 #include <boost/asio/steady_timer.hpp>
+#include <boost/asio/strand.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
 #include <boost/container/container_fwd.hpp>
@@ -393,6 +396,30 @@ private:
 // Http3ServerStream implementation
 // =================================================================================================
 
+//
+// The reading half of a server request: what http3::Http3Reader has for both roles, plus the
+// request line, which only this role has. Its counterpart on the client is Http3ResponseReader.
+//
+class Http3RequestReader final : public http3::Http3Reader<server::Request::Impl>
+{
+public:
+   using Http3Reader<server::Request::Impl>::Http3Reader;
+
+   std::string_view method() const noexcept override
+   {
+      assert(stream);
+      return stream->method;
+   }
+
+   boost::url_view url() const override
+   {
+      assert(stream);
+      return stream->url;
+   }
+};
+
+// -------------------------------------------------------------------------------------------------
+
 Http3ServerStream::Http3ServerStream(Http3ServerSession& s, int64_t stream_id)
    : http3::Http3Stream(s, stream_id, http3::WriteMode::ZeroCopy)
 {
@@ -427,7 +454,7 @@ void Http3ServerStream::on_headers_complete()
    //
    // Build the user-facing Request/Response and dispatch through the shared handler.
    //
-   server::Request request(std::make_unique<http3::Http3Reader<server::Request::Impl>>(*this));
+   server::Request request(std::make_unique<Http3RequestReader>(*this));
    server::Response response(std::make_unique<http3::Http3Writer<server::Response::Impl>>(*this));
 
    auto& sv = static_cast<Http3ServerSession&>(session).server();
@@ -556,8 +583,9 @@ void Http3ServerSession::destroy() noexcept
    // this session's executor first; with use_strand off and the caller already inside the
    // io_context, dispatch() degenerates to an inline call.
    //
-   asio::dispatch(get_executor(), [self = shared_from_this()]
-   { static_cast<Http3ServerSession&>(*self).do_destroy(); });
+   asio::dispatch(get_executor(), [self = shared_from_this()] {
+      static_cast<Http3ServerSession&>(*self).do_destroy();
+   });
 }
 
 void Http3ServerSession::do_destroy() noexcept
@@ -825,8 +853,7 @@ void Http3ServerSession::schedule_close_timer()
    auto delay = conn_ ? std::chrono::nanoseconds{ngtcp2_conn_get_pto(conn_) * 3}
                       : std::chrono::nanoseconds{std::chrono::milliseconds{100}};
    timer_.expires_after(delay);
-   timer_.async_wait([self = weak_from_this()](const boost::system::error_code& ec)
-   {
+   timer_.async_wait([self = weak_from_this()](const boost::system::error_code& ec) {
       if (ec)
          return;
       auto session = std::static_pointer_cast<Http3ServerSession>(self.lock());
@@ -892,13 +919,12 @@ void Http3ServerImpl::start()
 {
    // On the socket's strand, so that the loop and destroy()'s close() never race on the socket.
    co_spawn(socket_->get_executor(), udp_receive_loop(),
-            [self = shared_from_this(), owner = owner()](const std::exception_ptr& ex)
-   {
-      if (ex)
-         logw("UDP receive loop: {}", what(ex));
-      else
-         logi("UDP receive loop: done");
-   });
+            [self = shared_from_this(), owner = owner()](const std::exception_ptr& ex) {
+               if (ex)
+                  logw("UDP receive loop: {}", what(ex));
+               else
+                  logi("UDP receive loop: done");
+            });
 }
 
 void Http3ServerImpl::destroy()
@@ -910,8 +936,9 @@ void Http3ServerImpl::destroy()
    // Server::Impl at this point, each sending its final CONNECTION_CLOSE through its own
    // dup()ed fd, so closing this socket doesn't race that.
    //
-   asio::dispatch(socket_->get_executor(), [self = shared_from_this(), owner = owner()]
-   { self->socket_->close(); }); // breaks udp_receive_loop()
+   asio::dispatch(socket_->get_executor(), [self = shared_from_this(), owner = owner()] {
+      self->socket_->close();
+   }); // breaks udp_receive_loop()
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1075,10 +1102,9 @@ int Http3ServerImpl::udp_on_read(Endpoint& ep)
    //
    for (auto& [session, batch] : batches)
    {
-      asio::post(session->get_executor(),
-                 [self = shared_from_this(), owner = owner(), session,
-                  batch = std::move(batch)]() mutable { // 
-          self->process_quic_batch(session, std::move(batch));
+      asio::post(session->get_executor(), [self = shared_from_this(), owner = owner(), session,
+                                           batch = std::move(batch)]() mutable { //
+         self->process_quic_batch(session, std::move(batch));
       });
    }
 
@@ -1133,12 +1159,11 @@ void Http3ServerImpl::process_quic_batch(const std::shared_ptr<Http3ServerSessio
       }
 
       co_spawn(session->get_executor(), session->do_session({}),
-               [self = shared_from_this(), owner = owner(), session](const std::exception_ptr& ex)
-      {
-         if (ex)
-            logw("[{}] {}", session->logPrefix(), what(ex));
-         self->parent_.remove_session(session);
-      });
+               [self = shared_from_this(), owner = owner(), session](const std::exception_ptr& ex) {
+                  if (ex)
+                     logw("[{}] {}", session->logPrefix(), what(ex));
+                  self->parent_.remove_session(session);
+               });
    }
 
    for (; next < batch.datagrams.size(); ++next)

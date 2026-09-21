@@ -1,6 +1,8 @@
 #pragma once
 
 #include "anyhttp/common.hpp"
+#include "anyhttp/reader_impl.hpp"
+#include "anyhttp/writer_impl.hpp"
 
 #include <boost/asio/any_completion_executor.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
@@ -161,8 +163,8 @@ public:
    //
    // Lifecycle.
    //
-   impl::Reader* reader = nullptr; // the Http3Reader, while attached
-   impl::Writer* writer = nullptr; // the Http3Writer, while attached
+   Reader::Impl* reader = nullptr; // the Http3Reader, while attached
+   Writer::Impl* writer = nullptr; // the Http3Writer, while attached
    bool closed = false;
 
    asio::any_io_executor get_executor() const noexcept;
@@ -258,15 +260,6 @@ public:
       return stream ? stream->content_length : std::nullopt;
    }
 
-   /// Only meaningful for a client::Response; a server::Request has no status, and reports 0.
-   unsigned int status_code() const noexcept override { return stream ? stream->status_code : 0; }
-
-   boost::url_view url() const override
-   {
-      assert(stream);
-      return stream->url;
-   }
-
    const Fields& fields() const override
    {
       assert(stream);
@@ -300,17 +293,15 @@ public:
       auto cs = asio::get_associated_cancellation_slot(handler);
       if (cs.is_connected() && !cs.has_handler())
       {
-         cs.assign([this](asio::cancellation_type_t)
-         {
+         cs.assign([this](asio::cancellation_type_t) {
             if (stream && stream->read_handler)
             {
                asio::post(stream->get_executor(),
-                          [handler = std::move(stream->read_handler)]() mutable
-               {
-                  std::move(handler)(
-                     boost::system::errc::make_error_code(boost::system::errc::operation_canceled),
-                     0);
-               });
+                          [handler = std::move(stream->read_handler)]() mutable {
+                             std::move(handler)(boost::system::errc::make_error_code(
+                                                   boost::system::errc::operation_canceled),
+                                                0);
+                          });
             }
          });
       }

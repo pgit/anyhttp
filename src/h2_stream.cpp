@@ -13,6 +13,8 @@
 #include <boost/asio/associated_executor.hpp>
 #include <boost/asio/associated_immediate_executor.hpp>
 #include <boost/asio/buffer.hpp>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/this_coro.hpp>
@@ -81,20 +83,6 @@ asio::any_io_executor NGHttp2Reader<Base>::get_executor() const noexcept
 }
 
 template <typename Base>
-unsigned int NGHttp2Reader<Base>::status_code() const noexcept
-{
-   assert(stream);
-   return stream->status_code.value_or(0);
-}
-
-template <typename Base>
-boost::url_view NGHttp2Reader<Base>::url() const
-{
-   assert(stream);
-   return {stream->url};
-}
-
-template <typename Base>
 const Fields& NGHttp2Reader<Base>::fields() const
 {
    assert(stream);
@@ -141,8 +129,7 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    auto cs = asio::get_associated_cancellation_slot(handler);
    if (cs.is_connected() && !cs.has_handler())
    {
-      cs.assign([this](asio::cancellation_type_t ct)
-      {
+      cs.assign([this](asio::cancellation_type_t ct) {
          logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m ({})", //
               stream->logPrefix, "cancelled", int(ct));
 
@@ -162,6 +149,43 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    stream->m_read_handler = std::move(handler);
    stream->call_read_handler();
 }
+
+// =================================================================================================
+
+//
+// The two roles a reader can be in. Everything above is the same for both; what they add is the
+// half of the incoming message that only their role has -- a request line, or a status code.
+//
+
+class NGHttp2RequestReader final : public NGHttp2Reader<server::Request::Impl>
+{
+public:
+   using NGHttp2Reader<server::Request::Impl>::NGHttp2Reader;
+
+   std::string_view method() const noexcept override
+   {
+      assert(stream);
+      return stream->method;
+   }
+
+   boost::url_view url() const override
+   {
+      assert(stream);
+      return {stream->url};
+   }
+};
+
+class NGHttp2ResponseReader final : public NGHttp2Reader<client::Response::Impl>
+{
+public:
+   using NGHttp2Reader<client::Response::Impl>::NGHttp2Reader;
+
+   unsigned int status_code() const noexcept override
+   {
+      assert(stream);
+      return stream->status_code.value_or(0);
+   }
+};
 
 // =================================================================================================
 
@@ -224,9 +248,18 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    const std::string date = format_http_date(std::chrono::system_clock::now());
 
    auto nva = boost::container::small_vector<nghttp2_nv, 16>();
-   nva.reserve(3 + std::distance(headers.begin(), headers.end()));
+   nva.reserve(4 + std::distance(headers.begin(), headers.end()));
    nva.push_back(make_nv_ls(":status", status_code_str));
    nva.push_back(make_nv_ls("date", date));
+
+   //
+   // Point the client at our HTTP/3 endpoint, see server::Config::alt_svc_max_age. Only a server
+   // session has one of these, and a handler that names the field itself gets its way: HTTP/2
+   // would happily carry both, which is not what "Alt-Svc" means.
+   //
+   if (const auto& alt_svc = stream->parent.m_alt_svc;
+       !alt_svc.empty() && !headers.count("alt-svc"))
+      nva.push_back(make_nv_ls("alt-svc", alt_svc));
 
    for (auto&& item : headers)
    {
@@ -251,8 +284,7 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    nghttp2_data_provider2 prd;
    prd.source.ptr = stream;
    prd.read_callback = [](nghttp2_session*, int32_t stream_id, uint8_t* buf, size_t length,
-                          uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t
-   {
+                          uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t {
       auto stream = static_cast<NGHttp2Stream*>(source->ptr);
       assert(stream);
       assert(stream->id == stream_id);
@@ -651,8 +683,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
    auto slot = asio::get_associated_cancellation_slot(write_handler);
    if (slot.is_connected() && !slot.has_handler())
    {
-      slot.assign([this](asio::cancellation_type_t ct)
-      {
+      slot.assign([this](asio::cancellation_type_t ct) {
          logd("[{}] async_write: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", ct);
          // delete_writer();
 
@@ -698,7 +729,7 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
    {
       auto ec = asio::error::basic_errors::already_started;
       logw("[{}] async_get_response: \x1b[1;31m{}\x1b[0m", logPrefix, what(ec));
-      any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
+      asio::any_completion_executor ex = asio::get_associated_immediate_executor(handler, get_executor());
       ex.execute([handler = std::move(handler), ec = std::move(ec)]() mutable { //
          std::move(handler)(ec, client::Response{nullptr});
       });
@@ -708,15 +739,13 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
    auto cs = handler.get_cancellation_slot();
    if (cs.is_connected())
    {
-      cs.assign([this](asio::cancellation_type_t ct)
-      {
+      cs.assign([this](asio::cancellation_type_t ct) {
          logd("[{}] async_get_response: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", ct);
 
          if (response_handler)
          {
             // auto executor = get_associated_executor(response_handler, get_executor());
-            post(get_executor(), [handler = std::move(response_handler)]() mutable
-            {
+            post(get_executor(), [handler = std::move(response_handler)]() mutable {
                std::move(handler)(errc::make_error_code(errc::operation_canceled),
                                   client::Response{nullptr});
             });
@@ -850,7 +879,7 @@ void NGHttp2Stream::deliver_response()
    else
    {
       response_delivered = true;
-      auto impl = client::Response{std::make_unique<NGHttp2Reader<client::Response::Impl>>(*this)};
+      auto impl = client::Response{std::make_unique<NGHttp2ResponseReader>(*this)};
       swap_and_invoke(response_handler, boost::system::error_code{}, std::move(impl));
    }
 }
@@ -868,19 +897,19 @@ void NGHttp2Stream::on_request()
    // TODO: Implement request queue. Until then, separate preparation of request/response from
    //       the actual handling.
    //
-   server::Request request(std::make_unique<NGHttp2Reader<server::Request::Impl>>(*this));
+   server::Request request(std::make_unique<NGHttp2RequestReader>(*this));
    server::Response response(std::make_unique<NGHttp2Writer<server::Response::Impl>>(*this));
 
    auto& server = dynamic_cast<ServerReference&>(parent).server();
    if (header_limit_exceeded)
-      co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
-               detached);
+      asio::co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
+               asio::detached);
    else if (auto& handler = server.requestHandler())
-      co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
+      asio::co_spawn(get_executor(), handler(std::move(request), std::move(response)), asio::detached);
    else
    {
       loge("[{}] on_request: no request handler!", logPrefix);
-      co_spawn(get_executor(), not_found(std::move(response)), detached);
+      asio::co_spawn(get_executor(), not_found(std::move(response)), asio::detached);
    }
 }
 

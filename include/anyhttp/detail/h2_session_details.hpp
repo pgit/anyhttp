@@ -22,15 +22,11 @@
 
 #include <nghttp2/nghttp2.h>
 
-using namespace boost::asio::experimental::awaitable_operators;
-
 namespace anyhttp::nghttp2
 {
 
 // =================================================================================================
 
-using namespace boost::asio;
-using namespace boost::beast;
 using socket = asio::ip::tcp::socket;
 
 // =================================================================================================
@@ -40,7 +36,7 @@ void NGHttp2SessionImpl<Stream>::destroy() noexcept
 {
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
-   get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
+   get_socket(m_stream).shutdown(asio::socket_base::shutdown_both, ec);
    logwi(ec, "[{}] destroy: socket shutdown: {}", m_logPrefix, ec.message());
    // });
 }
@@ -107,7 +103,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
       {
          const std::array<asio::const_buffer, 2> seq{buffer.data(), asio::buffer(data, nread)};
          mylogd("send loop: writing {} bytes...", bytes_to_write);
-         auto [ec, written] = co_await asio::async_write(m_stream, seq, as_tuple);
+         auto [ec, written] = co_await asio::async_write(m_stream, seq, asio::as_tuple);
          if (ec)
          {
             mloge("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
@@ -133,7 +129,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
             break; // nghttp2 doesn't want to send or receive any more, so we are done
 
          mylogd("send loop: waiting...");
-         co_await async_wait_send(deferred);
+         co_await async_wait_send(asio::deferred);
          mylogd("send loop: waiting... done");
       }
    }
@@ -160,7 +156,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
    while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
    {
       auto free = m_buffer.capacity() - m_buffer.size();
-      auto [ec, n] = co_await m_stream.async_read_some(m_buffer.prepare(free), as_tuple);
+      auto [ec, n] = co_await m_stream.async_read_some(m_buffer.prepare(free), asio::as_tuple);
       if (ec)
       {
          mylogd("read: {}, terminating session", ec.message());
@@ -182,11 +178,12 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
 // =================================================================================================
 
 template <typename Stream>
-ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_executor executor,
+ServerSession<Stream>::ServerSession(server::Server::Impl& parent, asio::any_io_executor executor,
                                      Stream&& stream)
    : ServerReference(parent), super("\x1b[1;31mserver\x1b[0m", executor, std::move(stream))
 {
    m_max_header_size = parent.config().max_header_size;
+   m_alt_svc = parent.alt_svc();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -266,9 +263,17 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    //
    // send/receive loop
    //
+   using namespace asio::experimental::awaitable_operators;
    co_await (send_loop() && recv_loop());
 
    mlogd("server session done");
+
+   //
+   // End the stream itself: over TLS, that is the "close_notify" the peer needs to tell the end
+   // of the data from a connection that was cut, see async_teardown().
+   //
+   if (auto ec = co_await async_teardown(m_stream); ec)
+      mlogd("teardown: {}", ec.message());
 
    nghttp2_session_del(session);
    session = nullptr;
@@ -278,7 +283,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 // =================================================================================================
 
 template <typename Stream>
-ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_executor executor,
+ClientSession<Stream>::ClientSession(client::Client::Impl& parent, asio::any_io_executor executor,
                                      Stream&& stream)
    : ClientReference(parent), super("\x1b[1;32mclient\x1b[0m", executor, std::move(stream))
 {
@@ -304,6 +309,13 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
    nghttp2_option_set_max_send_header_block_length(options.get(), 1_m);
    nghttp2_option_set_max_continuations(options.get(), max_continuations(m_max_header_size));
+
+   //
+   // ALTSVC (RFC 7838, section 4) is an extension frame: without this, nghttp2 drops it before
+   // on_frame_recv_callback() ever sees it. It is how a server may advertise its HTTP/3 endpoint
+   // without waiting for a request, see Config::follow_alt_svc.
+   //
+   nghttp2_option_set_builtin_recv_extension_type(options.get(), NGHTTP2_ALTSVC);
 
    if (auto rv = nghttp2_session_client_new2(&session, callbacks.get(), this, options.get()))
       throw std::runtime_error("nghttp2_session_client_new");
@@ -332,6 +344,7 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    //
    // send/receive loop
    //
+   using namespace asio::experimental::awaitable_operators;
    co_await (send_loop() && recv_loop());
 
    mlogd("client session done");

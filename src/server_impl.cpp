@@ -9,13 +9,15 @@
 #include "anyhttp/h3_backend.hpp"
 #include "anyhttp/tls.hpp"
 
-#include <boost/asio.hpp>
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/as_single.hpp>
+#include <boost/asio/experimental/concurrent_channel.hpp>
 #include <boost/asio/immediate.hpp>
 #include <boost/asio/ip/address_v6.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ip/v6_only.hpp>
+#include <boost/asio/strand.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/stream.hpp>
 
@@ -73,6 +75,17 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    //
    auto tcp_ep = m_acceptor->local_endpoint();
    m_http3 = make_http3_server(*this, ip::udp::endpoint{tcp_ep.address(), tcp_ep.port()});
+
+   //
+   // Advertise that endpoint to HTTP/1.1 and HTTP/2 clients, see Config::alt_svc_max_age. The
+   // alt-authority carries the port alone: an empty host in one means the host of the origin
+   // itself, which is exactly where HTTP/3 is, one transport over.
+   //
+   if (m_http3 && m_config.alt_svc_max_age > 0s)
+   {
+      m_altSvc = std::format("h3=\":{}\"; ma={}", tcp_ep.port(), m_config.alt_svc_max_age.count());
+      logi("Server: advertising '{}'", m_altSvc);
+   }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -85,13 +98,13 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
  */
 void Server::Impl::start()
 {
-   co_spawn(m_executor, tcp_accept_loop(), [self = shared_from_this()](const std::exception_ptr& ex)
-   {
-      if (ex)
-         logw("TCP accept loop: {}", what(ex));
-      else
-         logi("TCP accept loop: done");
-   });
+   co_spawn(m_executor, tcp_accept_loop(),
+            [self = shared_from_this()](const std::exception_ptr& ex) {
+               if (ex)
+                  logw("TCP accept loop: {}", what(ex));
+               else
+                  logi("TCP accept loop: done");
+            });
 
    if (m_http3)
       m_http3->start();
@@ -295,9 +308,14 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
       logi("[{}] TLS handshake completed: {}", prefix,
            tls_handshake_info(ssl_stream->native_handle()));
 
+      //
+      // Everything that is not "h2" is served as HTTP/1.1, including the empty ALPN of a client
+      // that offered none at all (curl --no-alpn) and one nobody agreed on. Refusing those would
+      // buy nothing: HTTP/1.1 is what a connection without a negotiated protocol speaks anyway.
+      //
       if (alpn == "h2")
          session = nghttp2::make_server_session(*this, std::move(*ssl_stream));
-      else if (alpn == "http/1.1")
+      else
          session = beast_impl::make_server_session(*this, std::move(*ssl_stream));
    }
 
@@ -371,6 +389,17 @@ awaitable<void> Server::Impl::tcp_accept_loop()
    // Maybe the simplest solution is to put a mutex around it...
    //
    size_t sessionCounter = 0;
+
+   //
+   // Sessions run on their own executors and finish on whatever thread happens to be running
+   // them, so the "one more is gone" signal has to cross threads: concurrent_channel is the
+   // thread-safe flavour. It is only a nudge -- sessionCounter, read under the mutex, is the
+   // actual condition -- so a try_send() that finds the buffer full may be dropped: whenever
+   // the waiter is about to block, the buffer is empty and every session still counted has its
+   // own send() ahead of it.
+   //
+   experimental::concurrent_channel<void(boost::system::error_code)> sessionDone{executor, 1};
+
    for (;;)
    {
       //
@@ -406,19 +435,21 @@ awaitable<void> Server::Impl::tcp_accept_loop()
 
       auto connection_executor = socket.get_executor();
       co_spawn(connection_executor, handle_connection(std::move(socket)),
-               [&, ep](const std::exception_ptr& ex) mutable
-      {
-         auto lock = std::lock_guard(m_sessionMutex);
-         --sessionCounter;
-         if (ex)
-            logw("[{}] {}", ep, what(ex));
-         else
-            logi("[{}] session finished, {} sessions left", ep, sessionCounter);
-      });
+               [&, ep](const std::exception_ptr& ex) mutable {
+                  auto lock = std::lock_guard(m_sessionMutex);
+                  --sessionCounter;
+                  std::ignore = sessionDone.try_send(boost::system::error_code{});
+                  if (ex)
+                     logw("[{}] {}", ep, what(ex));
+                  else
+                     logi("[{}] session finished, {} sessions left", ep, sessionCounter);
+               });
    }
 
    //
-   // FIXME: implement a better waiting mechanism using async promises or just a condition variable.
+   // Wait for the sessions spawned above, sweeping the registry on every wake-up: a connection
+   // that was already in flight when the acceptor closed may still register itself after the
+   // first sweep, and destroying it is what makes it finish.
    //
    auto lock = std::unique_lock(m_sessionMutex);
    const auto waitingFor = sessionCounter;
@@ -432,7 +463,7 @@ awaitable<void> Server::Impl::tcp_accept_loop()
       m_sessions.clear();
 
       lock.unlock();
-      co_await post(executor);
+      std::ignore = co_await sessionDone.async_receive(as_tuple);
       lock.lock();
    }
 

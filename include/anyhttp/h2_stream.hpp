@@ -2,15 +2,17 @@
 
 #include "client.hpp"
 #include "common.hpp"
+#include "reader_impl.hpp"
+#include "writer_impl.hpp"
 
 #include "nghttp2/nghttp2.h"
 
-#include <boost/asio.hpp>
+#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/buffer.hpp>
-#include <boost/beast/http/error.hpp>
 #include <boost/asio/cancellation_signal.hpp>
 #include <boost/asio/cancellation_type.hpp>
 #include <boost/asio/error.hpp>
+#include <boost/beast/http/error.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <boost/system/detail/system_category.hpp>
@@ -40,9 +42,7 @@ public:
    std::optional<size_t> content_length() const noexcept override;
    void async_read_some(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler) override;
    void detach() override;
-   
-   unsigned int status_code() const noexcept override;
-   boost::url_view url() const override;
+
    const Fields& fields() const override;
 
    NGHttp2Stream* stream;
@@ -117,16 +117,16 @@ public:
                     static_cast<const uint8_t*>(buffer.data()) + asio::buffer_size(buffer));
    }
 
-   static inline bool is_empty(asio::const_buffer buffer)
-   {
-      return asio::buffer_size(buffer) == 0;
-   }
+   static inline bool is_empty(asio::const_buffer buffer) { return asio::buffer_size(buffer) == 0; }
 
    /**
     * Returns true if all data has been read by the user.
     * This is true if there was an EOF flag and all buffers have been consumed.
     */
-   inline bool reading_finished() const { return !reader || eof_received && is_empty(m_read_buffer); }
+   inline bool reading_finished() const
+   {
+      return !reader || eof_received && is_empty(m_read_buffer);
+   }
 
    /// Returns true if the user has submitted EOF and this has been delivered to nghttp2.
    inline bool writing_finished() const { return !writer || eof_submitted; };
@@ -142,7 +142,7 @@ public:
    //
    // async_write()
    //
-   asio::const_buffer write_buffer;  // undefined unless write_handler is set
+   asio::const_buffer write_buffer; // undefined unless write_handler is set
    WriteHandler write_handler;
    bool is_deferred = false;
 
@@ -297,8 +297,8 @@ public:
    /// Log and discard the headers collected by on_header_callback().
    void log_received_headers();
 
-   impl::Reader* reader = nullptr;
-   impl::Writer* writer = nullptr;
+   Reader::Impl* reader = nullptr;
+   Writer::Impl* writer = nullptr;
 
    void delete_reader();
    void delete_writer();

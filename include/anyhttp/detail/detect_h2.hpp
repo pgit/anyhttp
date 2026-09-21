@@ -1,10 +1,19 @@
 #pragma once
-#include <boost/asio.hpp>
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/as_tuple.hpp>
+#include <boost/asio/async_result.hpp>
+#include <boost/asio/buffer.hpp>
+#include <boost/asio/cancellation_type.hpp>
+#include <boost/asio/default_completion_token.hpp>
 #include <boost/asio/experimental/co_composed.hpp>
 
 #include <boost/beast/core/stream_traits.hpp>
 
 #include <boost/logic/tribool.hpp>
+
+#include <algorithm>
+#include <cstring>
+#include <string_view>
 
 namespace anyhttp::server
 {
@@ -74,8 +83,7 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
    using namespace boost::asio;
    return async_initiate<CompletionToken, void(boost::system::error_code, size_t)>(
       co_composed<void(boost::system::error_code, bool)>(
-         [](auto state, DynamicBuffer& buffer, AsyncReadStream& stream) -> void
-         {
+         [](auto state, DynamicBuffer& buffer, AsyncReadStream& stream) -> void {
             //
             // https://think-async.com/Asio/asio-1.26.0/doc/asio/reference/experimental__co_composed.html
             //

@@ -72,6 +72,18 @@ public:
       m_stream.async_read_some(buffers, std::move(handler));
    }
 
+   //
+   // Only a TLS stream has something to end, everything else keeps the base class' immediate
+   // completion.
+   //
+   void async_shutdown_impl(ShutdownHandler handler) override
+   {
+      if constexpr (requires { m_stream.async_shutdown(std::move(handler)); })
+         m_stream.async_shutdown(std::move(handler));
+      else
+         Impl::async_shutdown_impl(std::move(handler));
+   }
+
 private:
    Stream m_stream;
 };

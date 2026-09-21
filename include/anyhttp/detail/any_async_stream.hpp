@@ -95,44 +95,69 @@ public:
    // than the array's capacity are truncated -- which is harmless for a "some" operation, as it
    // just results in a shorter transfer.
    //
-   template <typename ConstBufferSequence,
+   template <ConstBufferSequence Buffers,
              BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite)
                 CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
-      requires boost::beast::is_const_buffer_sequence<ConstBufferSequence>::value
-   auto async_write_some(const ConstBufferSequence& buffers,
-                         CompletionToken&& token = CompletionToken())
+   auto async_write_some(const Buffers& buffers, CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
-         [this](ReadWriteHandler handler, ConstBufferVector buffers)
-      {  //
-         write_some(std::move(handler), std::move(buffers));
-      }, token, ConstBufferVector{buffers});
+         [this](ReadWriteHandler handler, ConstBufferVector buffers) { //
+            write_some(std::move(handler), std::move(buffers));
+         },
+         token, ConstBufferVector{buffers});
    }
 
    //
    // async_read_some
    //
-   template <typename MutableBufferSequence,
+   template <MutableBufferSequence Buffers,
              BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite)
                 CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
-      requires boost::beast::is_mutable_buffer_sequence<MutableBufferSequence>::value
-   auto async_read_some(const MutableBufferSequence& buffers,
-                        CompletionToken&& token = CompletionToken())
+   auto async_read_some(const Buffers& buffers, CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
-         [this](ReadWriteHandler handler, MutableBufferVector buffers)
-      {  //
-         read_some(std::move(handler), std::move(buffers));
-      }, token, MutableBufferVector{buffers});
+         [this](ReadWriteHandler handler, MutableBufferVector buffers) { //
+            read_some(std::move(handler), std::move(buffers));
+         },
+         token, MutableBufferVector{buffers});
+   }
+
+   //
+   // async_shutdown
+   //
+   // Ends the stream itself, which is something only a TLS stream has to do: see async_teardown()
+   // in anyhttp/stream_traits.hpp, which is how the sessions reach this. For a stream that has
+   // nothing to end, this completes immediately and successfully.
+   //
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Shutdown)
+                CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
+   auto async_shutdown(CompletionToken&& token = CompletionToken())
+   {
+      return boost::asio::async_initiate<CompletionToken, Shutdown>(initiate_shutdown{this}, token);
    }
 
 private:
+   //
+   // A named initiation rather than a lambda, because it has to offer the executor the operation
+   // runs on: tokens with a timer of their own -- cancel_after, which is how the sessions bound
+   // the wait for the peer's "close_notify" -- look for it here.
+   //
+   struct initiate_shutdown
+   {
+      using executor_type = boost::asio::any_io_executor;
+      executor_type get_executor() const noexcept { return self->get_executor(); }
+      void operator()(ShutdownHandler handler) const { self->shutdown(std::move(handler)); }
+
+      any_async_stream* self;
+   };
+
    //
    // The initiations, with the buffer sequence already type-erased. Out of line, because this is
    // where the implementation is dereferenced -- it is incomplete here.
    //
    void write_some(ReadWriteHandler handler, ConstBufferVector buffers);
    void read_some(ReadWriteHandler handler, MutableBufferVector buffers);
+   void shutdown(ShutdownHandler handler);
 
    std::unique_ptr<Impl> impl;
 };

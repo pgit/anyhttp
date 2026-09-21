@@ -49,23 +49,22 @@ protected:
    {
       setupLogging();
 
-      server.emplace(context.get_executor(), server::Config{.listen_address = "127.0.0.2",
-                                                            .port = 0,
-                                                            .idle_timeout = IdleTimeout});
+      server.emplace(
+         context.get_executor(),
+         server::Config{.listen_address = "127.0.0.2", .port = 0, .idle_timeout = IdleTimeout});
       server->setRequestHandler(
-         [this](server::Request request, server::Response response) -> awaitable<void>
-      {
-         co_await response.async_submit(200, {});
+         [this](server::Request request, server::Response response) -> awaitable<void> {
+            co_await response.async_submit(200, {});
 
-         //
-         // Wait for a request body that never comes: this first read is where the handler is
-         // suspended when the client freezes, and it must be resumed -- with an error -- once
-         // the server gives up on the connection.
-         //
-         std::array<uint8_t, 1024> buffer;
-         auto [ec, n] = co_await request.async_read_some(asio::buffer(buffer), as_tuple);
-         handler_result.set_value(ec);
-      });
+            //
+            // Wait for a request body that never comes: this first read is where the handler is
+            // suspended when the client freezes, and it must be resumed -- with an error -- once
+            // the server gives up on the connection.
+            //
+            std::array<uint8_t, 1024> buffer;
+            auto [ec, n] = co_await request.async_read_some(asio::buffer(buffer), as_tuple);
+            handler_result.set_value(ec);
+         });
 
       url.set_port_number(server->local_endpoint().port());
    }
@@ -108,19 +107,22 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
    std::optional<client::Response> response;
 
    bool responded = false;
-   co_spawn(client_context, [&]() -> awaitable<void>
-   {
-      session = co_await client.async_connect();
-      request = co_await session->async_submit(url, {});
-      response = co_await request->async_get_response();
-      responded = true;
-   }, detached);
+   co_spawn(
+      client_context,
+      [&]() -> awaitable<void> {
+         session = co_await client.async_connect();
+         request = co_await session->async_submit(url, {});
+         response = co_await request->async_get_response();
+         responded = true;
+      },
+      detached);
 
    //
    // Run the client just far enough to have the request open and answered, then stop running it:
    // from here on it never touches its socket again.
    //
-   while (client_context.run_one() && !responded);
+   while (client_context.run_one() && !responded)
+      ;
    ASSERT_TRUE(responded) << "client never received a response";
    std::println("=== freezing the client, request still in flight ===");
 

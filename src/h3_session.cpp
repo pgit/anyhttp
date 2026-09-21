@@ -114,8 +114,7 @@ void Http3Session::wake_write()
       return;
    write_posted_ = true;
 
-   asio::post(get_executor(), [self = weak_from_this()]
-   {
+   asio::post(get_executor(), [self = weak_from_this()] {
       auto session = std::static_pointer_cast<Http3Session>(self.lock());
       if (!session)
          return;
@@ -324,8 +323,7 @@ void Http3Session::arm_timer_from_ngtcp2()
       expiry <= now ? std::chrono::nanoseconds{1} : std::chrono::nanoseconds{expiry - now};
 
    timer_.expires_after(delay);
-   timer_.async_wait([self = weak_from_this()](const boost::system::error_code& ec)
-   {
+   timer_.async_wait([self = weak_from_this()](const boost::system::error_code& ec) {
       if (ec)
          return;
       if (auto session = std::static_pointer_cast<Http3Session>(self.lock()))
@@ -564,8 +562,7 @@ int Http3Session::setup_http3()
 int Http3Session::cb_handshake_completed(ngtcp2_conn*, void* user)
 {
    auto self = static_cast<Http3Session*>(user);
-   logi("[{}] TLS handshake completed: {}", self->log_prefix_,
-        tls_handshake_info(self->ssl_));
+   logi("[{}] TLS handshake completed: {}", self->log_prefix_, tls_handshake_info(self->ssl_));
    if (self->setup_http3() != 0)
       return NGTCP2_ERR_CALLBACK_FAILURE;
    return 0;

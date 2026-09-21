@@ -32,6 +32,11 @@ void any_async_stream::read_some(ReadWriteHandler handler, MutableBufferVector b
    impl->async_read_some(std::move(handler), std::move(buffers));
 }
 
+void any_async_stream::shutdown(ShutdownHandler handler)
+{
+   impl->async_shutdown_impl(std::move(handler));
+}
+
 // =================================================================================================
 // The implementations, see anyhttp/detail/any_async_stream_impl.hpp. Instantiating them is kept to
 // this translation unit, so that including the type-erased stream stays cheap.

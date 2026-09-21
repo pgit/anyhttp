@@ -1,11 +1,12 @@
 #include "anyhttp/client_impl.hpp"
+#include "anyhttp/alt_svc.hpp"
 #include "anyhttp/common.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/h1_backend.hpp"
 #include "anyhttp/h2_backend.hpp"
 #include "anyhttp/h3_backend.hpp"
 
-#include <boost/asio.hpp>
+#include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
@@ -60,6 +61,51 @@ Client::Impl::~Impl() { logi("Client: dtor"); }
 
 // -------------------------------------------------------------------------------------------------
 
+void Client::Impl::on_alt_svc(std::string_view field_value)
+{
+   if (!config().follow_alt_svc)
+      return;
+
+   const auto alt_svc = parse_alt_svc(field_value);
+
+   //
+   // "clear" tells us to forget what we know, and so does an alternative with "ma=0": it expires
+   // the moment it arrives (RFC 7838, section 3.1).
+   //
+   const auto* service = alt_svc.find("h3");
+   if (alt_svc.clear || (service && service->max_age.count() == 0))
+   {
+      auto lock = std::lock_guard(m_altSvcMutex);
+      if (m_altSvc)
+         logi("Client: Alt-Svc: dropping the HTTP/3 alternative");
+      m_altSvc.reset();
+      return;
+   }
+
+   if (!service)
+      return;
+
+   logi("Client: Alt-Svc: HTTP/3 at {}:{} for {}s", //
+        service->host.empty() ? config().url.host_address() : service->host, service->port,
+        service->max_age.count());
+
+   auto lock = std::lock_guard(m_altSvcMutex);
+   m_altSvc = AlternativeService{.host = service->host,
+                                 .port = service->port,
+                                 .expires = std::chrono::steady_clock::now() + service->max_age};
+}
+
+std::optional<Client::Impl::AlternativeService> Client::Impl::alt_svc() const
+{
+   auto lock = std::lock_guard(m_altSvcMutex);
+   if (m_altSvc && m_altSvc->expires <= std::chrono::steady_clock::now())
+      return std::nullopt; // its "ma" has run out; the next advertisement overwrites it
+
+   return m_altSvc;
+}
+
+// -------------------------------------------------------------------------------------------------
+
 //
 //
 void Client::Impl::async_connect(ConnectHandler handler)
@@ -71,17 +117,15 @@ void Client::Impl::async_connect(ConnectHandler handler)
    //
    auto slot = get_associated_cancellation_slot(handler);
    auto executor = get_associated_executor(handler);
-   auto completion =
-      [this, handler = std::move(handler)](std::exception_ptr ep, Session session) mutable
-   {
+   auto completion = [this, handler = std::move(handler)](std::exception_ptr ep,
+                                                          Session session) mutable {
       if (ep)
          loge("Client: async_connect: {}", what(ep));
       std::move(handler)(code(ep), std::move(session));
    };
 
-   co_spawn(get_executor(), [this] mutable -> awaitable<Session> {
-      co_return co_await async_connect();
-   }, bind_executor(executor, bind_cancellation_slot(slot, std::move(completion))));
+   co_spawn(get_executor(), async_connect(),
+            bind_executor(executor, bind_cancellation_slot(slot, std::move(completion))));
 }
 
 awaitable<Session> Client::Impl::async_connect()
@@ -91,6 +135,20 @@ awaitable<Session> Client::Impl::async_connect()
    //
    std::string host = config().url.host_address();
    std::string port = config().url.port();
+
+   //
+   // An HTTP/3 alternative service a previous session was told about takes precedence over the
+   // configured protocol -- that is what following it means, see Config::follow_alt_svc. The
+   // origin does not change with it, only where it is reached: requests still go out with the
+   // authority of config().url.
+   //
+   if (auto alt = alt_svc())
+   {
+      auto alt_host = alt->host.empty() ? host : alt->host;
+      logi("Client: connecting to {}:{} over HTTP/3, as advertised by Alt-Svc", alt_host,
+           alt->port);
+      co_return Session{co_await async_connect_http3(m_executor, alt_host, alt->port, config())};
+   }
 
    //
    // HTTP/3 runs over QUIC (UDP), so it needs an entirely different transport setup (TLS,
@@ -146,7 +204,8 @@ awaitable<Session> Client::Impl::async_connect()
    // There are different types of upgrades:
    //
    // 1) HTTP/1.1 to HTTP/2 via Connection: upgrade header
-   // 2) HTTP/1.1 to HTTP/3 via Alt-Svc header
+   // 2) HTTP/1.1 or HTTP/2 to HTTP/3 via Alt-Svc -- implemented, see Config::follow_alt_svc and
+   //    on_alt_svc() above, which the sessions feed
    // 3) Proactively connect using HTTP/1 (using TCP) and HTTP/3 (UDP) in parallel
    // 4) Support DNS HTTPS RR (serving the same purpose as Alt-Svc)
    //
@@ -176,8 +235,7 @@ awaitable<Session> Client::Impl::async_connect()
    //        of the user-facing "Session" object. So we should use only the "impl" internally.
    //
 #if 1
-   co_spawn(m_executor, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable
-   {
+   co_spawn(m_executor, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable {
       if (ex)
          logw("client run: {}", what(ex));
       else

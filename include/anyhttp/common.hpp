@@ -170,60 +170,6 @@ inline void complete_immediately(Handler&& handler, const asio::any_io_executor&
 
 // =================================================================================================
 
-namespace impl
-{
-class Reader : public std::enable_shared_from_this<Reader>
-{
-public:
-   virtual ~Reader() = default;
-   virtual asio::any_io_executor get_executor() const noexcept = 0;
-   virtual std::optional<size_t> content_length() const noexcept = 0;
-
-   //
-   // Reads at most one buffer worth of the incoming body. The end of the body is reported the way
-   // ASIO reports it everywhere else: \c asio::error::eof with zero bytes, and again for every
-   // further read -- including reads issued after the underlying stream object is long gone. A
-   // body that ends before it was supposed to -- a reset stream, a connection that went away
-   // mid-message -- is reported as \c http::error::partial_message instead, so the two cases stay
-   // distinguishable.
-   //
-   // An empty buffer is not a request to do anything; it completes immediately with success and
-   // zero bytes, wherever the body stands.
-   //
-   virtual void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) = 0;
-   virtual void detach() = 0;
-   virtual void destroy() {};
-};
-
-class Writer : public std::enable_shared_from_this<Writer>
-{
-public:
-   virtual ~Writer() = default;
-   virtual asio::any_io_executor get_executor() const noexcept = 0;
-   virtual void content_length(std::optional<size_t> content_length) = 0;
-
-   //
-   // Writes \p buffer and, if \p eof is set, ends the outgoing body after it. The two travel
-   // together on purpose: every backend can put the last bytes of a body and the flag that ends
-   // it into the same protocol element -- one DATA frame with END_STREAM (HTTP/2), one QUIC
-   // STREAM frame with FIN (HTTP/3), one last chunk (HTTP/1.1) -- so a message that ends with
-   // data needs no second, empty write to close it out.
-   //
-   // Every implementation answers the same entry ladder, in this order: an empty buffer with
-   // \p eof clear writes nothing at all and completes immediately with success, wherever the
-   // body stands -- it is not, as it once was, how a body is ended. Once the body has been ended,
-   // writing data -- through either entry point -- completes with \c errc::broken_pipe, while
-   // re-ending it with no data attached is an idempotent no-op. Only then do stream-level
-   // failures (closed, cancelled) get their say.
-   //
-   virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) = 0;
-   virtual void detach() = 0;
-   virtual void destroy() {};
-};
-} // namespace impl
-
-// =================================================================================================
-
 template <class T>
 constexpr std::string_view make_string_view(const T* data, size_t len)
 {

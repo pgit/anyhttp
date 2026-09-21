@@ -295,8 +295,7 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
    if (!cs.is_connected() || cs.has_handler())
       return;
 
-   cs.assign([this, token](asio::cancellation_type_t ct)
-   {
+   cs.assign([this, token](asio::cancellation_type_t ct) {
       //
       // Cancellation completes the write immediately, without waiting for what it would normally
       // complete on -- see below for what that costs in either write mode.
@@ -404,8 +403,7 @@ nghttp3_ssize Http3Stream::data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t
    // the FIN does not complete the write: in ZeroCopy it still completes on acknowledgement, in
    // Staged on confirmation of that final chunk.
    //
-   auto flag_eof_if_last = [&]
-   {
+   auto flag_eof_if_last = [&] {
       const size_t handed = write_mode == WriteMode::ZeroCopy ? write_offered : write_source_copied;
       if (write_is_eof && handed == total)
       {

@@ -6,9 +6,9 @@
 #include "server_impl.hpp"
 #include "session_impl.hpp"
 
-#include <boost/asio.hpp>
-
+#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/buffer.hpp>
+
 #include <boost/beast/core.hpp>
 #include <boost/beast/http/buffer_body.hpp>
 #include <boost/beast/http/parser.hpp>
@@ -16,8 +16,6 @@
 
 #include <utility>
 #include <vector>
-
-using namespace boost::asio;
 
 namespace anyhttp::beast_impl
 {
@@ -28,17 +26,17 @@ template <typename Stream>
 class BeastSession : public ::anyhttp::Session::Impl
 {
 protected:
-   BeastSession(std::string_view logPrefix, any_io_executor executor, Stream&& stream);
+   BeastSession(std::string_view logPrefix, asio::any_io_executor executor, Stream&& stream);
 
 public:
    ~BeastSession() override;
 
    std::string_view logPrefix() const { return m_logPrefix; }
-   
+
    // ----------------------------------------------------------------------------------------------
-   
+
    void destroy() noexcept override;
-   
+
    boost::asio::any_io_executor get_executor() const noexcept override { return m_executor; }
 
    // ----------------------------------------------------------------------------------------------
@@ -48,10 +46,10 @@ public:
    // registers here for as long as it exists, to be detach()ed when the session goes away first.
    // With pipelining, a client session may have more than one of each at a time.
    //
-   void attach(impl::Reader& reader) { m_readers.push_back(&reader); }
-   void attach(impl::Writer& writer) { m_writers.push_back(&writer); }
-   void release(impl::Reader& reader) { std::erase(m_readers, &reader); }
-   void release(impl::Writer& writer) { std::erase(m_writers, &writer); }
+   void attach(Reader::Impl& reader) { m_readers.push_back(&reader); }
+   void attach(Writer::Impl& writer) { m_writers.push_back(&writer); }
+   void release(Reader::Impl& reader) { std::erase(m_readers, &reader); }
+   void release(Writer::Impl& writer) { std::erase(m_writers, &writer); }
 
    void detach_readers()
    {
@@ -80,10 +78,10 @@ public:
 
 private:
    /// Non-owning pointers to the attached readers, see attach().
-   std::vector<impl::Reader*> m_readers;
+   std::vector<Reader::Impl*> m_readers;
 
    /// Non-owning pointers to the attached writers, see attach().
-   std::vector<impl::Writer*> m_writers;
+   std::vector<Writer::Impl*> m_writers;
 };
 
 // =================================================================================================
@@ -108,15 +106,15 @@ class ServerSession : public ServerSessionBase, public BeastSession<Stream>
    using super = BeastSession<Stream>;
 
    // FIXME: maybe use CRTP or something similar to avoid this?
-   using super::logPrefix;
-   using super::m_buffer;
-   using super::m_stream;
-   using super::m_closed;
    using super::detach_readers;
    using super::detach_writers;
+   using super::logPrefix;
+   using super::m_buffer;
+   using super::m_closed;
+   using super::m_stream;
 
 public:
-   ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
+   ServerSession(server::Server::Impl& parent, asio::any_io_executor executor, Stream&& stream);
 
    void destroy() noexcept override;
    void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
@@ -193,7 +191,7 @@ class ClientSession : public ClientSessionBase, public BeastSession<Stream>
    using super::m_stream;
 
 public:
-   ClientSession(client::Client::Impl& parent, any_io_executor executor, Stream&& stream);
+   ClientSession(client::Client::Impl& parent, asio::any_io_executor executor, Stream&& stream);
 
    void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
                      const Fields& headers) override;

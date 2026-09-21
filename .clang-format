@@ -105,7 +105,7 @@ BraceWrapping:
   AfterUnion:      true
   BeforeCatch:     true
   BeforeElse:      true
-  BeforeLambdaBody: true
+  BeforeLambdaBody: false
   BeforeWhile:     false
   IndentBraces:    false
   SplitEmptyFunction: true
@@ -190,7 +190,7 @@ KeepEmptyLines:
   AtStartOfBlock:  true
   AtStartOfFile:   true
 KeepFormFeed:    false
-LambdaBodyIndentation: OuterScope
+LambdaBodyIndentation: Signature
 LineEnding:      DeriveLF
 MacroBlockBegin: ''
 MacroBlockEnd:   ''

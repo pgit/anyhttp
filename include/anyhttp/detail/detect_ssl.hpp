@@ -1,5 +1,10 @@
 #pragma once
-#include <boost/asio.hpp>
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/as_tuple.hpp>
+#include <boost/asio/async_result.hpp>
+#include <boost/asio/buffer.hpp>
+#include <boost/asio/cancellation_type.hpp>
+#include <boost/asio/default_completion_token.hpp>
 #include <boost/asio/experimental/co_composed.hpp>
 
 #include <boost/beast/core/detect_ssl.hpp>
@@ -34,23 +39,23 @@ auto async_detect_ssl_awaitable(AsyncReadStream& stream, DynamicBuffer& buffer,
    using namespace boost::asio;
    return async_initiate<CompletionToken, void(boost::system::error_code, size_t)>(
       co_composed<void(boost::system::error_code, bool)>(
-         [](auto state, AsyncReadStream& stream, DynamicBuffer& buffer) -> void
-   {
-      state.reset_cancellation_state(enable_terminal_cancellation());
+         [](auto state, AsyncReadStream& stream, DynamicBuffer& buffer) -> void {
+            state.reset_cancellation_state(enable_terminal_cancellation());
 
-      for (;;)
-      {
-         boost::tribool result = detail::is_tls_client_hello(buffer.data());
-         if (!boost::indeterminate(result))
-            co_return std::make_tuple(boost::system::error_code{}, static_cast<bool>(result));
+            for (;;)
+            {
+               boost::tribool result = detail::is_tls_client_hello(buffer.data());
+               if (!boost::indeterminate(result))
+                  co_return std::make_tuple(boost::system::error_code{}, static_cast<bool>(result));
 
-         auto prepared = buffer.prepare(1460);
-         auto [ec, n] = co_await stream.async_read_some(prepared, as_tuple);
-         if (ec)
-            co_return {ec, false};
-         buffer.commit(n);
-      }
-   }, stream),
+               auto prepared = buffer.prepare(1460);
+               auto [ec, n] = co_await stream.async_read_some(prepared, as_tuple);
+               if (ec)
+                  co_return {ec, false};
+               buffer.commit(n);
+            }
+         },
+         stream),
       token, std::ref(stream), std::ref(buffer));
 }
 

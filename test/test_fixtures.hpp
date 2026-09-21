@@ -10,21 +10,27 @@
 #include "anyhttp/session.hpp"
 #include "anyhttp/utils.hpp"
 
-#include <boost/asio.hpp>
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/bind_immediate_executor.hpp>
 #include <boost/asio/buffer.hpp>
+#include <boost/asio/cancel_after.hpp>
 #include <boost/asio/cancellation_signal.hpp>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/experimental/promise.hpp>
 #include <boost/asio/experimental/use_promise.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/read.hpp>
+#include <boost/asio/read_until.hpp>
+#include <boost/asio/readable_pipe.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include <boost/asio/write.hpp>
 
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/http/error.hpp>
@@ -121,32 +127,31 @@ protected:
       //
       server.emplace(context.get_executor(), config);
       server->setRequestHandler(
-         [this](server::Request request, server::Response response) -> awaitable<void>
-      {
-         logd("{} ({})", request.url().path(), request.url().buffer());
+         [this](server::Request request, server::Response response) -> awaitable<void> {
+            logd("{} ({})", request.url().path(), request.url().buffer());
 
-         if (auto delay = request.get_param_as<std::chrono::milliseconds::rep>("delay"))
-            co_await sleep(std::chrono::milliseconds{*delay});
+            if (auto delay = request.get_param_as<std::chrono::milliseconds::rep>("delay"))
+               co_await sleep(std::chrono::milliseconds{*delay});
 
-         if (request.url().path() == "/echo")
-            co_await echo(std::move(request), std::move(response));
-         else if (request.url().path() == "/eat_request")
-            co_await eat_request(std::move(request), std::move(response));
-         else if (request.url().path() == "/discard")
-            co_return;
-         else if (request.url().path() == "/h2spec")
-            co_await h2spec(std::move(request), std::move(response));
-         else if (request.url().path() == "/dump")
-            co_await dump(std::move(request), std::move(response));
-         else if (request.url().path() == "/dump space")
-            co_await dump(std::move(request), std::move(response));
-         else if (request.url().path() == "/detach")
-            co_await detach(std::move(request), std::move(response));
-         else if (request.url().path().starts_with("/custom"))
-            co_await custom(std::move(request), std::move(response));
-         else
-            co_await not_found(std::move(request), std::move(response));
-      });
+            if (request.url().path() == "/echo")
+               co_await echo(std::move(request), std::move(response));
+            else if (request.url().path() == "/eat_request")
+               co_await eat_request(std::move(request), std::move(response));
+            else if (request.url().path() == "/discard")
+               co_return;
+            else if (request.url().path() == "/h2spec")
+               co_await h2spec(std::move(request), std::move(response));
+            else if (request.url().path() == "/dump")
+               co_await dump(std::move(request), std::move(response));
+            else if (request.url().path() == "/dump space")
+               co_await dump(std::move(request), std::move(response));
+            else if (request.url().path() == "/detach")
+               co_await detach(std::move(request), std::move(response));
+            else if (request.url().path().starts_with("/custom"))
+               co_await requestHandler(std::move(request), std::move(response));
+            else
+               co_await not_found(std::move(request), std::move(response));
+         });
    }
 
    void run()
@@ -162,9 +167,10 @@ protected:
       // The extra threads use context.run() directly: the per-operation logging of ::run() is
       // meant for single-threaded debugging and would just interleave into noise here.
       //
-      auto pool = rv::iota(size_t{1}, n) | rv::transform([this](size_t) {
-         return std::jthread([this] { context.run(); });
-      }) | std::ranges::to<std::vector>();
+      auto pool =
+         rv::iota(size_t{1}, n) |
+         rv::transform([this](size_t) { return std::jthread([this] { context.run(); }); }) |
+         std::ranges::to<std::vector>();
 
       context.run();
    }
@@ -172,10 +178,14 @@ protected:
    /// Lets a derived fixture adjust the server configuration before the server is created.
    virtual void configure_server(server::Config&) {}
 
+   /// Returns listening port of the server.
+   auto port() const noexcept { return server->local_endpoint().port(); }
+
 protected:
    boost::asio::io_context context;
    std::optional<server::Server> server;
-   std::function<awaitable<void>(server::Request request, server::Response response)> custom;
+   std::function<awaitable<void>(server::Request request, server::Response response)>
+      requestHandler;
 };
 
 // =================================================================================================
@@ -211,8 +221,7 @@ class ClientAsync : public Client
 public:
    auto token()
    {
-      return [this](const std::exception_ptr& ep)
-      {
+      return [this](const std::exception_ptr& ep) {
          auto ec = code(ep);
          if (ec)
             logw("client completed with \x1b[1;31m{}\x1b[0m", what(ec));
@@ -237,14 +246,16 @@ public:
       //
       // Spawn the testcase coroutine on the client's executor so that access to it is serialized.
       //
-      co_spawn(client->get_executor(), [this]() -> awaitable<void>
-      {
-         if (test)
-         {
-            auto session = co_await client->async_connect();
-            co_await test(std::move(session));
-         }
-      }, token());
+      co_spawn(
+         client->get_executor(),
+         [this]() -> awaitable<void> {
+            if (clientSession)
+            {
+               auto session = co_await client->async_connect();
+               co_await clientSession(std::move(session));
+            }
+         },
+         token());
    }
 
    void TearDown() override
@@ -255,7 +266,7 @@ public:
 
 public:
    decltype(boost::asio::make_work_guard(context)) work = boost::asio::make_work_guard(context);
-   std::function<awaitable<void>(Session session)> test;
+   std::function<awaitable<void>(Session session)> clientSession;
 };
 
 // =================================================================================================

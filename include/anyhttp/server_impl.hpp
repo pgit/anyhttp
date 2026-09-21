@@ -1,9 +1,13 @@
 #pragma once
+#include "reader_impl.hpp"
 #include "server.hpp"
 #include "session.hpp"
+#include "writer_impl.hpp"
 
-#include <boost/asio.hpp>
 #include <boost/asio/any_completion_handler.hpp>
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/awaitable.hpp>
+#include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/context.hpp>
 
 #include <memory>
@@ -19,23 +23,24 @@ namespace anyhttp::server
 
 // =================================================================================================
 
-class Request::Impl : public impl::Reader
+class Request::Impl : public Reader::Impl
 {
 public:
    Impl() noexcept;
    virtual ~Impl();
 
-   // FIXME: doesn't make sense to have a status_code() for a server request, but keeps beast happy
-   virtual unsigned int status_code() const noexcept = 0;
+   //
+   // The request line, as it arrived. A request has no status code -- that is the other half of
+   // the exchange, on client::Response::Impl.
+   //
+   virtual std::string_view method() const noexcept = 0;
    virtual boost::url_view url() const = 0;
    virtual const Fields& fields() const = 0;
-
-   using ReaderOrWriter = impl::Reader;
 };
 
 // -------------------------------------------------------------------------------------------------
 
-class Response::Impl : public impl::Writer
+class Response::Impl : public Writer::Impl
 {
 public:
    Impl() noexcept;
@@ -43,8 +48,6 @@ public:
 
    virtual void async_submit(StatusHandler&& handler, unsigned int status_code,
                              const Fields& fields) = 0;
-
-   using ReaderOrWriter = impl::Writer;
 };
 
 // =================================================================================================
@@ -74,6 +77,13 @@ public:
    //
    boost::asio::ssl::context& tls_context() noexcept { return m_tlsContext; }
 
+   //
+   // The "Alt-Svc" field value pointing at this server's HTTP/3 endpoint, put into every response
+   // sent over HTTP/1.1 and HTTP/2, see Config::alt_svc_max_age. Empty when there is nothing to
+   // advertise, which is also what HTTP/3 sessions see -- they are already there.
+   //
+   const std::string& alt_svc() const noexcept { return m_altSvc; }
+
    asio::awaitable<void> tcp_accept_loop();
    asio::awaitable<void> handle_connection(asio::ip::tcp::socket socket);
 
@@ -101,6 +111,7 @@ private:
    boost::asio::any_io_executor m_executor;
    boost::asio::ssl::context m_tlsContext;
    std::optional<asio::ip::tcp::acceptor> m_acceptor;
+   std::string m_altSvc;
 
    std::mutex m_sessionMutex;
    std::set<std::shared_ptr<Session::Impl>> m_sessions;

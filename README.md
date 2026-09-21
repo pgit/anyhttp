@@ -78,59 +78,17 @@ The convenience is paid for with memory, as the body is buffered in full: anythi
 look at the body while it arrives, or to send a body of its own, still goes through
 `async_submit()`.
 
+# Class Hierarchy
+
+![Class hierarchy](docs/overview.drawio.svg)
+
 # Implementation
 
 The asynchronous operations exposed by server and client are [ASIO asynchronous operations](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/asynchronous_operations.html). As such, they support a range of [completion tokens](https://think-async.com/Asio/asio-1.30.2/doc/asio/overview/model/completion_tokens.html) like [use_awaitable](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/use_awaitable.html) or plain callbacks.
 
 The implementation is hidden behind [any_completion_handler](https://www.boost.org/doc/libs/1_86_0/doc/html/boost_asio/reference/any_completion_handler.html) so that it can be compiled separately.
 
-
 This work is partly inspired by [asio-grpc](https://github.com/Tradias/asio-grpc), which takes the idea even one step further and also supports the upcoming sender/receiver model of execution.
-
-```mermaid
-classDiagram
-
-Response --|> Reader
-Request_Impl --|> Writer
-
-namespace client {
-   class Response {
-      async_read_some(buffer)
-   }
-   class Request {
-      async_get_response()
-      async_write(buffer)
-      async_write_eof(buffer)
-   }
-   class Client {
-      async_connect()
-   }
-
-   class Request_Impl {
-
-   }
-}
-
-namespace impl {
-   class Reader {
-      get_executor()
-      content_length()
-      async_read_some(buffer)
-      detach()
-      destroy()
-   }
-   class Writer {
-      get_executor()
-      content_length(optional<size_t>)
-      async_write(buffer, eof)
-      detach()
-      destroy()
-   }
-   class Client {
-      get_executor()
-   }
-}
-```
 
 
 ## Concurrent Requests
@@ -166,6 +124,60 @@ Pipelining is still possible: complete requests can be sent before any of their 
 HTTP/2 and HTTP/3 have a limit of their own: the peer's `SETTINGS_MAX_CONCURRENT_STREAMS`, or the QUIC stream limit. With that limit reached, they should behave just like HTTP/1.1 -- fail with `would_block` instead of waiting. Currently, anyhttp does not check that limit itself, and leaves it to nghttp2 and ngtcp2; tests for that are still to be added.
 
 One difference remains to be decided: in HTTP/2 and HTTP/3, a stream counts against the limit until it is closed in *both* directions, that is, until its response has been received as well. Taken strictly, "max concurrent streams = 1" would forbid submitting the next request before the previous response has been read -- which is stricter than HTTP/1.1 pipelining as implemented.
+
+## Moving to HTTP/3: Alt-Svc
+
+HTTP/3 runs on QUIC, and QUIC is not something a TCP connection can turn into: there is no
+`Connection: Upgrade` on the way to HTTP/3, the way there is one from HTTP/1.1 to HTTP/2. What
+there is instead is the server saying where else it can be reached
+([RFC 7838](https://www.rfc-editor.org/rfc/rfc7838)), and the client making its *next* connection
+there.
+
+The server does that for its own HTTP/3 endpoint, which shares the address and port the TCP
+acceptor is listening on, so the advertised alt-authority is a port and nothing else -- an empty
+host in one means "the host of the origin":
+
+```
+Alt-Svc: h3=":8080"; ma=86400
+```
+
+It goes into every response sent over HTTP/1.1 and HTTP/2, but never over HTTP/3, which is already
+there. `server::Config::alt_svc_max_age` is how long a client may remember it, and `0s` advertises
+nothing at all.
+
+A client only acts on it with `client::Config::follow_alt_svc` set, and then it takes precedence
+over `client::Config::protocol`:
+
+```c++
+   client::Client client(executor, {.url = url, .protocol = Protocol::h2, .follow_alt_svc = true});
+
+   auto first = co_await client.async_connect();  // HTTP/2, and learns about the alternative
+   auto second = co_await client.async_connect(); // HTTP/3
+```
+
+The session that learns about the alternative keeps speaking what it speaks -- a connection in the
+middle of a request can not be moved -- and the alternative is remembered for as long as `ma` says,
+but only for the lifetime of the `Client`: there is no cache on disk. The origin does not change
+with any of this, only where it is reached: requests still go out with the authority of
+`Config::url`.
+
+Over HTTP/2, an alternative may also arrive in an `ALTSVC` frame instead of a header field, which
+lets a server advertise before the first request has even been sent. anyhttp's client reads both;
+its server sends the header field only.
+
+`curl` does the same thing, which is the easy way to watch it happen -- it honours `Alt-Svc` for
+`https://` origins only, so this needs TLS, and a cache file to remember the alternative between
+invocations:
+
+```sh
+./build/src/server -p 8080
+```
+
+```sh
+curl --alt-svc altsvc.txt --cacert pki/out/root.pem https://localhost:8080/echo -d hello -so/dev/null -w '%{http_version}\n'
+```
+
+The first run answers `2`, and every one after it `3`.
 
 ## Links
 

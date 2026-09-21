@@ -67,36 +67,32 @@ protected:
       const auto authority = std::format("127.0.0.2:{}", server->local_endpoint().port());
 
       Responses responses;
-      auto callbacks = std::invoke([]
-      {
+      auto callbacks = std::invoke([] {
          nghttp2_session_callbacks* cbs;
          nghttp2_session_callbacks_new(&cbs);
          nghttp2_session_callbacks_set_on_header_callback(
             cbs,
             [](nghttp2_session*, const nghttp2_frame* frame, const uint8_t* name, size_t namelen,
-               const uint8_t* value, size_t valuelen, uint8_t, void* user_data) -> int
-         {
-            auto& responses = *static_cast<Responses*>(user_data);
-            if (std::string_view(reinterpret_cast<const char*>(name), namelen) == ":status")
-               responses[frame->hd.stream_id].status =
-                  std::stoul(std::string(reinterpret_cast<const char*>(value), valuelen));
-            return 0;
-         });
+               const uint8_t* value, size_t valuelen, uint8_t, void* user_data) -> int {
+               auto& responses = *static_cast<Responses*>(user_data);
+               if (std::string_view(reinterpret_cast<const char*>(name), namelen) == ":status")
+                  responses[frame->hd.stream_id].status =
+                     std::stoul(std::string(reinterpret_cast<const char*>(value), valuelen));
+               return 0;
+            });
          nghttp2_session_callbacks_set_on_data_chunk_recv_callback(
             cbs,
             [](nghttp2_session*, uint8_t, int32_t stream_id, const uint8_t* data, size_t len,
-               void* user_data) -> int
-         {
-            auto& responses = *static_cast<Responses*>(user_data);
-            responses[stream_id].body.append(reinterpret_cast<const char*>(data), len);
-            return 0;
-         });
+               void* user_data) -> int {
+               auto& responses = *static_cast<Responses*>(user_data);
+               responses[stream_id].body.append(reinterpret_cast<const char*>(data), len);
+               return 0;
+            });
          nghttp2_session_callbacks_set_on_stream_close_callback(
-            cbs, [](nghttp2_session*, int32_t stream_id, uint32_t, void* user_data) -> int
-         {
-            static_cast<Responses*>(user_data)->operator[](stream_id).closed = true;
-            return 0;
-         });
+            cbs, [](nghttp2_session*, int32_t stream_id, uint32_t, void* user_data) -> int {
+               static_cast<Responses*>(user_data)->operator[](stream_id).closed = true;
+               return 0;
+            });
          return std::unique_ptr<nghttp2_session_callbacks, void (*)(nghttp2_session_callbacks*)>(
             cbs, nghttp2_session_callbacks_del);
       });
@@ -148,22 +144,19 @@ protected:
          EXPECT_GT(id, 0) << nghttp2_strerror(id);
       }
 
-      auto recv = [&](const_buffer data)
-      {
+      auto recv = [&](const_buffer data) {
          auto n = nghttp2_session_mem_recv2(session, static_cast<const uint8_t*>(data.data()),
                                             data.size());
          EXPECT_EQ(n, data.size()) << nghttp2_strerror(n);
       };
 
-      auto done = [&]
-      {
+      auto done = [&] {
          return std::ranges::count_if(responses, [](auto& item) { return item.second.closed; }) ==
                 targets.size();
       };
 
       std::string out; // nghttp2 starts with the client magic by itself
-      auto send = [&]() -> awaitable<void>
-      {
+      auto send = [&]() -> awaitable<void> {
          const uint8_t* data;
          while (auto n = nghttp2_session_mem_send2(session, &data))
          {
@@ -220,8 +213,7 @@ protected:
    T run(awaitable<T> task)
    {
       T result;
-      co_spawn(context, std::move(task), [&](const std::exception_ptr& ep, T value)
-      {
+      co_spawn(context, std::move(task), [&](const std::exception_ptr& ep, T value) {
          if (ep)
             ADD_FAILURE() << what(ep);
          result = std::move(value);
@@ -252,6 +244,7 @@ TEST_F(H2CUpgrade, WHEN_upgrade_is_requested_THEN_request_continues_as_stream_1)
    ASSERT_TRUE(responses.contains(1));
    EXPECT_EQ(responses[1].status, 200);
    EXPECT_TRUE(responses[1].closed);
+   EXPECT_THAT(responses[1].body, HasSubstr("method: GET")); // carried over by the upgrade
    EXPECT_THAT(responses[1].body, HasSubstr("path: /dump"));
    EXPECT_THAT(responses[1].body, HasSubstr("query: first"));
 }

@@ -24,8 +24,7 @@ INSTANTIATE_TEST_SUITE_P(ClientAsyncCancellation, ClientAsyncCancellation,
 
 TEST_P(ClientAsyncCancellation, Backpressure)
 {
-   test = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       auto response = co_await request.async_get_response();
       auto sender = send(request, rv::iota(uint8_t(0)));
@@ -66,8 +65,7 @@ TEST_P(ClientAsyncCancellation, Backpressure)
 //
 TEST_P(ClientAsyncCancellation, CancellationContentLength)
 {
-   test = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       const size_t length = 50_m;
       const std::vector<char> buffer(length);
       for (size_t i = 0; i <= 20; ++i)
@@ -113,8 +111,7 @@ TEST_P(ClientAsyncCancellation, CancellationContentLength)
 //
 TEST_P(ClientAsyncCancellation, Cancellation)
 {
-   test = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       const size_t length = 50_m;
       const std::vector<char> buffer(length, 'a');
       for (size_t i = 0; i <= 20; ++i)
@@ -156,8 +153,7 @@ TEST_P(ClientAsyncCancellation, Cancellation)
 //
 TEST_P(ClientAsyncCancellation, CancellationRange)
 {
-   test = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       for (size_t i = 6; i <= 6; ++i)
       {
          co_await yield();
@@ -177,8 +173,7 @@ TEST_P(ClientAsyncCancellation, CancellationRange)
 
 TEST_P(ClientAsyncCancellation, PerOperationCancellation)
 {
-   test = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       auto response = co_await request.async_get_response();
 
@@ -197,8 +192,7 @@ TEST_P(ClientAsyncCancellation, PerOperationCancellation)
 
 TEST_P(ClientAsyncCancellation, CancelAfter)
 {
-   test = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto request =
          co_await session.async_submit(url.set_path("echo").set_params({{"delay", "1000"}}), {});
       auto [ec, response] = co_await request.async_get_response(cancel_after(250ms, as_tuple));
@@ -218,8 +212,7 @@ TEST_P(ClientAsyncCancellation, CancelAfter)
 
 TEST_P(ClientAsyncCancellation, WHEN_send_more_than_content_length_THEN_connection_is_reset)
 {
-   test = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       Fields fields;
       fields.set("content-length", "1024");
       auto request = co_await session.async_submit(url.set_path("eat_request"), fields);
@@ -244,8 +237,7 @@ TEST_P(ClientAsyncCancellation, WHEN_send_more_than_content_length_THEN_connecti
 
 TEST_P(ClientAsyncCancellation, ClientDropRequest)
 {
-   test = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       auto response = co_await request.async_get_response();
    };
@@ -255,8 +247,7 @@ TEST_P(ClientAsyncCancellation, ClientDropRequest)
 
 TEST_P(ClientAsyncCancellation, ResetServerDuringRequest)
 {
-   test = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       auto response = co_await request.async_get_response();
 
@@ -298,21 +289,21 @@ TEST_P(ClientAsyncCancellation, DISABLED_SpawnAndForget)
    if (GetParam() == anyhttp::Protocol::http11)
       GTEST_SKIP(); // FIXME: ASAN errors
 
-   test = [this](Session session) -> awaitable<void>
-   {
+   clientSession = [this](Session session) -> awaitable<void> {
       auto request = co_await session.async_submit(url.set_path("echo"), {});
       auto response = co_await request.async_get_response();
       co_await yield();
 
       std::println("- - spawning - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ");
-      co_spawn(context,
-               [request = std::move(request)]() mutable -> awaitable<void>
-      { //
-         std::println("- - SPAWNED - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
-         co_await yield(5);
-         std::println("- - SPAWNED, sending  - - - - - - - - - - - - - - - - - - - - - - - - -");
-         co_await send(request, rv::iota(uint8_t(0)));
-      }, detached);
+      co_spawn(
+         context,
+         [request = std::move(request)]() mutable -> awaitable<void> { //
+            std::println("- - SPAWNED - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+            co_await yield(5);
+            std::println("- - SPAWNED, sending  - - - - - - - - - - - - - - - - - - - - - - - - -");
+            co_await send(request, rv::iota(uint8_t(0)));
+         },
+         detached);
    };
 }
 

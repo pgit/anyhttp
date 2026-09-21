@@ -7,7 +7,7 @@
 #include "server_impl.hpp"
 #include "session_impl.hpp"
 
-#include <boost/asio.hpp>
+#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/core/stream_traits.hpp>
@@ -16,10 +16,6 @@
 #include <optional>
 
 #include "nghttp2/nghttp2.h"
-
-using namespace std::chrono_literals;
-
-using namespace boost::asio;
 
 namespace anyhttp::nghttp2
 {
@@ -49,10 +45,10 @@ class NGHttp2Stream;
 class NGHttp2Session : public anyhttp::Session::Impl
 {
 public:
-   NGHttp2Session(std::string_view prefix, any_io_executor executor);
+   NGHttp2Session(std::string_view prefix, asio::any_io_executor executor);
    virtual ~NGHttp2Session();
 
-   boost::asio::any_io_executor get_executor() const noexcept override { return m_executor; }
+   asio::any_io_executor get_executor() const noexcept override { return m_executor; }
    const std::string& logPrefix() const { return m_logPrefix; }
 
    std::string logPrefix(int stream_id) const
@@ -86,8 +82,7 @@ public:
    auto async_wait_send(CompletionToken&& token = CompletionToken())
    {
       return asio::async_initiate<CompletionToken, Resume>(
-         [&](ResumeHandler handler)
-         {
+         [&](ResumeHandler handler) {
             assert(!m_send_handler);
             m_send_handler = std::move(handler);
          },
@@ -111,6 +106,13 @@ public:
 
    nghttp2_unique_ptr<nghttp2_session_callbacks> setup_callbacks();
 
+   /**
+    * Called with the value of an "Alt-Svc" received from the peer, either as a response header
+    * field or as an ALTSVC frame (RFC 7838). A server has nothing to do with one, so this does
+    * nothing unless the session is a client's, see ClientSession.
+    */
+   virtual void on_alt_svc(std::string_view field_value) {}
+
    NGHttp2Stream* create_stream(int32_t stream_id);
    NGHttp2Stream* find_stream(int32_t stream_id);
    void close_stream(int32_t stream_id);
@@ -118,7 +120,7 @@ public:
 
 public:
    std::string m_logPrefix;
-   boost::asio::any_io_executor m_executor;
+   asio::any_io_executor m_executor;
 
    nghttp2_session* session = nullptr;
    std::map<int32_t, std::shared_ptr<NGHttp2Stream>> m_streams;
@@ -127,6 +129,12 @@ public:
 
    /// The largest header section accepted from the peer, see Config::max_header_size.
    size_t m_max_header_size = default_max_header_size;
+
+   //
+   // What to advertise as this origin's HTTP/3 endpoint in every response, see
+   // server::Config::alt_svc_max_age. Only a server session ever has one.
+   //
+   std::string m_alt_svc;
 
    Buffer m_buffer;
 };
@@ -137,7 +145,7 @@ template <typename Stream>
 class NGHttp2SessionImpl : public NGHttp2Session
 {
 protected:
-   NGHttp2SessionImpl(std::string_view logPrefix, any_io_executor executor, Stream&& stream)
+   NGHttp2SessionImpl(std::string_view logPrefix, asio::any_io_executor executor, Stream&& stream)
       : NGHttp2Session(logPrefix, executor), m_stream(std::move(stream))
    {
    }
@@ -180,13 +188,14 @@ class ServerSession : public ServerReference, public NGHttp2SessionImpl<Stream>
    using super::recv_loop;
    using super::send_loop;
 
+   using super::m_alt_svc;
    using super::m_buffer;
    using super::m_max_header_size;
    using super::m_stream;
    using super::session;
 
 public:
-   ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
+   ServerSession(server::Server::Impl& parent, asio::any_io_executor executor, Stream&& stream);
 
    awaitable<void> do_session(Buffer&& data) override;
 
@@ -229,9 +238,11 @@ class ClientSession : public ClientReference, public NGHttp2SessionImpl<Stream>
    using super::session;
 
 public:
-   ClientSession(client::Client::Impl& parent, any_io_executor executor, Stream&& stream);
+   ClientSession(client::Client::Impl& parent, asio::any_io_executor executor, Stream&& stream);
 
    awaitable<void> do_session(Buffer&& data) override;
+
+   void on_alt_svc(std::string_view field_value) override { client().on_alt_svc(field_value); }
 };
 
 // =================================================================================================

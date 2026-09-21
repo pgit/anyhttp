@@ -35,6 +35,9 @@
 
 using namespace boost::asio::experimental::awaitable_operators;
 
+namespace errc = boost::system::errc;
+namespace http = boost::beast::http;
+
 // =================================================================================================
 
 namespace anyhttp::nghttp2
@@ -239,6 +242,24 @@ int on_invalid_frame_recv_callback(nghttp2_session* session, const nghttp2_frame
 int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
 {
    const auto handler = static_cast<NGHttp2Session*>(user_data);
+
+   //
+   // ALTSVC is an extension frame, and only ever received when it has been enabled for the
+   // session -- which the client does and the server doesn't, see ClientSession::do_session(). It
+   // may arrive on stream 0, carrying the origin it is about, or on a request stream, where the
+   // origin is that of the request. Either way it is handled before the stream is looked up: an
+   // ALTSVC for a stream that is already gone is to be ignored (RFC 7838, section 4), not
+   // answered with the RST_STREAM below.
+   //
+   if (frame->hd.type == NGHTTP2_ALTSVC)
+   {
+      const auto* altsvc = static_cast<const nghttp2_ext_altsvc*>(frame->ext.payload);
+      const auto value = make_string_view(altsvc->field_value, altsvc->field_value_len);
+      logd("[{}] on_frame_recv_callback: ALTSVC: {}", handler->logPrefix(frame), value);
+      handler->on_alt_svc(value);
+      return 0;
+   }
+
    const auto stream = handler->find_stream(frame->hd.stream_id);
 
    if (!stream && frame->hd.stream_id > 0)
@@ -278,7 +299,16 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
       if (frame->headers.cat == NGHTTP2_HCAT_REQUEST)
          stream->on_request();
       else if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE)
+      {
+         //
+         // A response may carry an alternative service as a header field instead of, or as well
+         // as, in an ALTSVC frame -- the two say the same thing in the same syntax.
+         //
+         if (auto alt_svc = stream->fields["alt-svc"]; !alt_svc.empty())
+            handler->on_alt_svc(std::string_view(alt_svc));
+
          stream->on_response();
+      }
 
       // end of of stream already? --> no body
       if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)
@@ -405,7 +435,7 @@ nghttp2_unique_ptr<nghttp2_session_callbacks> NGHttp2Session::setup_callbacks()
 
 // =================================================================================================
 
-NGHttp2Session::NGHttp2Session(std::string_view prefix, any_io_executor executor)
+NGHttp2Session::NGHttp2Session(std::string_view prefix, asio::any_io_executor executor)
    : m_executor(std::move(executor)), m_logPrefix(prefix)
 {
    mlogd("session created");
@@ -482,8 +512,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    nghttp2_data_provider2 prd;
    prd.source.ptr = stream.get();
    prd.read_callback = [](nghttp2_session* session, int32_t stream_id, uint8_t* buf, size_t length,
-                          uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t
-   {
+                          uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t {
       auto stream = static_cast<NGHttp2Stream*>(source->ptr);
       assert(stream);
       assert(stream->id == stream_id);
@@ -509,10 +538,9 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    m_streams.emplace(id, stream);
    post(get_executor(),
         [handler = std::move(handler),
-         writer = std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)]() mutable
-   {
-      std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)}); //
-   });
+         writer = std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)]() mutable {
+           std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)}); //
+        });
    start_write();
 }
 
@@ -681,13 +709,13 @@ std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
    return std::make_shared<ClientSession<Stream>>(client, std::move(executor), std::move(stream));
 }
 
-template std::shared_ptr<Session::Impl>
-make_server_session<socket>(server::Server::Impl&, socket&&, std::optional<Upgrade>);
+template std::shared_ptr<Session::Impl> make_server_session<socket>(server::Server::Impl&, socket&&,
+                                                                    std::optional<Upgrade>);
 template std::shared_ptr<Session::Impl>
 make_server_session<SslStream>(server::Server::Impl&, SslStream&&, std::optional<Upgrade>);
 template std::shared_ptr<Session::Impl>
 make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&,
-                                    std::optional<Upgrade>);
+                                      std::optional<Upgrade>);
 
 template std::shared_ptr<Session::Impl> make_client_session<socket>(client::Client::Impl&,
                                                                     socket&&);

@@ -191,19 +191,15 @@ TEST(FormatterTest, CancellationTypeMultipleCombined)
 
 namespace
 {
-   // Helper to create nghttp2_nv from string literals
-   // Note: const_cast is safe here as the formatter doesn't modify the data
-   nghttp2_nv make_nghttp2_nv(const char* name, const char* value)
-   {
-      return nghttp2_nv{
-         const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(name)),
-         const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(value)),
-         strlen(name),
-         strlen(value),
-         NGHTTP2_NV_FLAG_NONE
-      };
-   }
+// Helper to create nghttp2_nv from string literals
+// Note: const_cast is safe here as the formatter doesn't modify the data
+nghttp2_nv make_nghttp2_nv(const char* name, const char* value)
+{
+   return nghttp2_nv{const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(name)),
+                     const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(value)), strlen(name),
+                     strlen(value), NGHTTP2_NV_FLAG_NONE};
 }
+} // namespace
 
 TEST(FormatterTest, NgHttp2NvDefault)
 {

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "anyhttp/client.hpp"
-#include "anyhttp/server.hpp"
 #include "anyhttp/literals.hpp"
+#include "anyhttp/server.hpp"
 
 #include <array>
 #include <exception>
@@ -20,8 +20,6 @@
 #include <boost/system/system_error.hpp>
 
 #include <range/v3/view/chunk.hpp>
-
-using namespace std::chrono_literals;
 
 namespace anyhttp
 {
@@ -78,8 +76,8 @@ awaitable<void> discard(server::Request request, server::Response response);
 
 // =================================================================================================
 
-awaitable<void> generate(client::Request& request, size_t bytes);
-awaitable<std::string> read(client::Response& response);
+awaitable<void> generate(Writer& writer, size_t bytes);
+awaitable<std::string> read(Reader& reader);
 
 //
 // Reads and discards whatever is left of an incoming body, and returns how much that was.
@@ -88,35 +86,13 @@ awaitable<std::string> read(client::Response& response);
 // EOF, and let anything else -- a reset stream, a connection that went away mid-body -- come out
 // as an exception.
 //
-template <typename Reader>
-awaitable<size_t> drain(Reader& reader)
-{
-   size_t bytes = 0;
-   std::array<uint8_t, 16_k> buffer;
-   for (;;)
-   {
-      auto [ec, n] = co_await reader.async_read_some(asio::buffer(buffer), asio::as_tuple);
-      bytes += n;
+awaitable<size_t> drain(Reader& reader);
 
-      // the regular end of the body is not something to report as an error
-      if (ec == asio::error::eof)
-      {
-         logd("drain: EOF after reading {} bytes", bytes);
-         co_return bytes;
-      }
-      else if (ec)
-      {
-         logw("drain: \x1b[1;31m{}\x1b[0m after reading {} bytes, throwing", what(ec), bytes);
-         throw boost::system::system_error(ec);
-      }
-   }
-}
-
-awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response);
-awaitable<size_t> try_receive(client::Response& response, boost::system::error_code& ec);
+awaitable<std::tuple<size_t, error_code>> try_receive(Reader& reader);
+awaitable<size_t> try_receive(Reader& reader, boost::system::error_code& ec);
 awaitable<size_t> count_response(client::Request& request);
 awaitable<expected<size_t>> try_read_response(client::Request& request);
-awaitable<void> send_eof(client::Request& request);
+awaitable<void> send_eof(Writer& writer);
 
 // =================================================================================================
 
@@ -128,7 +104,7 @@ concept ByteRange =
 // FIXME: Do we really need to restrict to "borrowed range" here? The range is kept alive in
 //        the coroutine frame, so we do not need to worry about it's lifetime.
 //
-template <typename Writer, ByteRange Range>
+template <ByteRange Range>
    requires std::ranges::contiguous_range<Range>
 awaitable<void> send(Writer& request, Range range)
 {
@@ -140,7 +116,7 @@ awaitable<void> send(Writer& request, Range range)
 //
 // For a non-contiguous range, we need to copy into a buffer first.
 //
-template <typename Writer, ByteRange Range>
+template <ByteRange Range>
    requires(!std::ranges::contiguous_range<Range>)
 awaitable<void> send(Writer& request, Range range)
 {
@@ -202,7 +178,7 @@ awaitable<void> sendAndDrop(client::Request request, Range range)
 
 // -------------------------------------------------------------------------------------------------
 
-template <typename Writer, ByteRange Range>
+template <ByteRange Range>
 awaitable<void> sendAndForceEOF(Writer& request, Range range)
 {
    using namespace asio;

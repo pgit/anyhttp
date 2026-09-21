@@ -27,8 +27,8 @@ namespace anyhttp::nghttp2
 
 /**
  * A request received as HTTP/1.1 with "Upgrade: h2c" (RFC 7540, section 3.2) that has been answered
- * with "101 Switching Protocols". The HTTP/2 session continues it as stream 1. Only requests without
- * a body are upgraded, so the stream starts out half-closed (remote).
+ * with "101 Switching Protocols". The HTTP/2 session continues it as stream 1. Only requests
+ * without a body are upgraded, so the stream starts out half-closed (remote).
  */
 struct Upgrade
 {
@@ -53,15 +53,13 @@ std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
 template <SocketStream Stream>
 std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Stream&& stream);
 
-extern template std::shared_ptr<Session::Impl>
-make_server_session<boost::asio::ip::tcp::socket>(server::Server::Impl&,
-                                                  boost::asio::ip::tcp::socket&&,
-                                                  std::optional<Upgrade>);
+extern template std::shared_ptr<Session::Impl> make_server_session<boost::asio::ip::tcp::socket>(
+   server::Server::Impl&, boost::asio::ip::tcp::socket&&, std::optional<Upgrade>);
 extern template std::shared_ptr<Session::Impl>
 make_server_session<SslStream>(server::Server::Impl&, SslStream&&, std::optional<Upgrade>);
 extern template std::shared_ptr<Session::Impl>
 make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&,
-                                    std::optional<Upgrade>);
+                                      std::optional<Upgrade>);
 
 extern template std::shared_ptr<Session::Impl>
 make_client_session<boost::asio::ip::tcp::socket>(client::Client::Impl&,
