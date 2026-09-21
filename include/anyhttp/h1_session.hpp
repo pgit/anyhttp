@@ -17,8 +17,6 @@
 #include <utility>
 #include <vector>
 
-using namespace boost::asio;
-
 namespace anyhttp::beast_impl
 {
 
@@ -28,7 +26,7 @@ template <typename Stream>
 class BeastSession : public ::anyhttp::Session::Impl
 {
 protected:
-   BeastSession(std::string_view logPrefix, any_io_executor executor, Stream&& stream);
+   BeastSession(std::string_view logPrefix, asio::any_io_executor executor, Stream&& stream);
 
 public:
    ~BeastSession() override;
@@ -116,7 +114,7 @@ class ServerSession : public ServerSessionBase, public BeastSession<Stream>
    using super::m_stream;
 
 public:
-   ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
+   ServerSession(server::Server::Impl& parent, asio::any_io_executor executor, Stream&& stream);
 
    void destroy() noexcept override;
    void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
@@ -193,7 +191,7 @@ class ClientSession : public ClientSessionBase, public BeastSession<Stream>
    using super::m_stream;
 
 public:
-   ClientSession(client::Client::Impl& parent, any_io_executor executor, Stream&& stream);
+   ClientSession(client::Client::Impl& parent, asio::any_io_executor executor, Stream&& stream);
 
    void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
                      const Fields& headers) override;

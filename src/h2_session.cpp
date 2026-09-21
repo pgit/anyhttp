@@ -35,6 +35,9 @@
 
 using namespace boost::asio::experimental::awaitable_operators;
 
+namespace errc = boost::system::errc;
+namespace http = boost::beast::http;
+
 // =================================================================================================
 
 namespace anyhttp::nghttp2
@@ -432,7 +435,7 @@ nghttp2_unique_ptr<nghttp2_session_callbacks> NGHttp2Session::setup_callbacks()
 
 // =================================================================================================
 
-NGHttp2Session::NGHttp2Session(std::string_view prefix, any_io_executor executor)
+NGHttp2Session::NGHttp2Session(std::string_view prefix, asio::any_io_executor executor)
    : m_executor(std::move(executor)), m_logPrefix(prefix)
 {
    mlogd("session created");

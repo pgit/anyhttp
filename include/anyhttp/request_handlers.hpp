@@ -21,8 +21,6 @@
 
 #include <range/v3/view/chunk.hpp>
 
-using namespace std::chrono_literals;
-
 namespace anyhttp
 {
 template <typename T>

@@ -22,15 +22,11 @@
 
 #include <nghttp2/nghttp2.h>
 
-using namespace boost::asio::experimental::awaitable_operators;
-
 namespace anyhttp::nghttp2
 {
 
 // =================================================================================================
 
-using namespace boost::asio;
-using namespace boost::beast;
 using socket = asio::ip::tcp::socket;
 
 // =================================================================================================
@@ -40,7 +36,7 @@ void NGHttp2SessionImpl<Stream>::destroy() noexcept
 {
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
-   get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
+   get_socket(m_stream).shutdown(asio::socket_base::shutdown_both, ec);
    logwi(ec, "[{}] destroy: socket shutdown: {}", m_logPrefix, ec.message());
    // });
 }
@@ -107,7 +103,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
       {
          const std::array<asio::const_buffer, 2> seq{buffer.data(), asio::buffer(data, nread)};
          mylogd("send loop: writing {} bytes...", bytes_to_write);
-         auto [ec, written] = co_await asio::async_write(m_stream, seq, as_tuple);
+         auto [ec, written] = co_await asio::async_write(m_stream, seq, asio::as_tuple);
          if (ec)
          {
             mloge("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
@@ -133,7 +129,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
             break; // nghttp2 doesn't want to send or receive any more, so we are done
 
          mylogd("send loop: waiting...");
-         co_await async_wait_send(deferred);
+         co_await async_wait_send(asio::deferred);
          mylogd("send loop: waiting... done");
       }
    }
@@ -160,7 +156,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
    while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
    {
       auto free = m_buffer.capacity() - m_buffer.size();
-      auto [ec, n] = co_await m_stream.async_read_some(m_buffer.prepare(free), as_tuple);
+      auto [ec, n] = co_await m_stream.async_read_some(m_buffer.prepare(free), asio::as_tuple);
       if (ec)
       {
          mylogd("read: {}, terminating session", ec.message());
@@ -182,7 +178,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
 // =================================================================================================
 
 template <typename Stream>
-ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_executor executor,
+ServerSession<Stream>::ServerSession(server::Server::Impl& parent, asio::any_io_executor executor,
                                      Stream&& stream)
    : ServerReference(parent), super("\x1b[1;31mserver\x1b[0m", executor, std::move(stream))
 {
@@ -267,6 +263,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    //
    // send/receive loop
    //
+   using namespace asio::experimental::awaitable_operators;
    co_await (send_loop() && recv_loop());
 
    mlogd("server session done");
@@ -286,7 +283,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 // =================================================================================================
 
 template <typename Stream>
-ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_executor executor,
+ClientSession<Stream>::ClientSession(client::Client::Impl& parent, asio::any_io_executor executor,
                                      Stream&& stream)
    : ClientReference(parent), super("\x1b[1;32mclient\x1b[0m", executor, std::move(stream))
 {
@@ -347,6 +344,7 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    //
    // send/receive loop
    //
+   using namespace asio::experimental::awaitable_operators;
    co_await (send_loop() && recv_loop());
 
    mlogd("client session done");

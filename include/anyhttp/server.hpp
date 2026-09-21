@@ -18,8 +18,6 @@
 #include <string_view>
 #include <type_traits>
 
-using namespace std::chrono_literals;
-
 namespace anyhttp::server
 {
 
@@ -56,7 +54,7 @@ struct Config
    // Advertising over cleartext HTTP is of no use to browsers and curl, which honour "Alt-Svc"
    // for https:// origins only -- the alternative has to be at least as secure as the origin.
    //
-   std::chrono::seconds alt_svc_max_age = 24h;
+   std::chrono::seconds alt_svc_max_age = std::chrono::hours{24};
 
    //
    // HTTP/3 only: how long a QUIC connection may go without a packet from its peer before it is
@@ -64,7 +62,7 @@ struct Config
    // client, a machine that went to sleep -- is ever noticed, so it also bounds how long its
    // session and streams stay around. 30s is what the ngtcp2 examples use.
    //
-   std::chrono::nanoseconds idle_timeout = 30s;
+   std::chrono::nanoseconds idle_timeout = std::chrono::seconds{30};
 
    //
    // HTTP/3 only, testing aid: probability (0.0 ... 1.0) with which an individual QUIC datagram

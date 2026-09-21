@@ -17,10 +17,6 @@
 
 #include "nghttp2/nghttp2.h"
 
-using namespace std::chrono_literals;
-
-using namespace boost::asio;
-
 namespace anyhttp::nghttp2
 {
 
@@ -49,10 +45,10 @@ class NGHttp2Stream;
 class NGHttp2Session : public anyhttp::Session::Impl
 {
 public:
-   NGHttp2Session(std::string_view prefix, any_io_executor executor);
+   NGHttp2Session(std::string_view prefix, asio::any_io_executor executor);
    virtual ~NGHttp2Session();
 
-   boost::asio::any_io_executor get_executor() const noexcept override { return m_executor; }
+   asio::any_io_executor get_executor() const noexcept override { return m_executor; }
    const std::string& logPrefix() const { return m_logPrefix; }
 
    std::string logPrefix(int stream_id) const
@@ -124,7 +120,7 @@ public:
 
 public:
    std::string m_logPrefix;
-   boost::asio::any_io_executor m_executor;
+   asio::any_io_executor m_executor;
 
    nghttp2_session* session = nullptr;
    std::map<int32_t, std::shared_ptr<NGHttp2Stream>> m_streams;
@@ -149,7 +145,7 @@ template <typename Stream>
 class NGHttp2SessionImpl : public NGHttp2Session
 {
 protected:
-   NGHttp2SessionImpl(std::string_view logPrefix, any_io_executor executor, Stream&& stream)
+   NGHttp2SessionImpl(std::string_view logPrefix, asio::any_io_executor executor, Stream&& stream)
       : NGHttp2Session(logPrefix, executor), m_stream(std::move(stream))
    {
    }
@@ -199,7 +195,7 @@ class ServerSession : public ServerReference, public NGHttp2SessionImpl<Stream>
    using super::session;
 
 public:
-   ServerSession(server::Server::Impl& parent, any_io_executor executor, Stream&& stream);
+   ServerSession(server::Server::Impl& parent, asio::any_io_executor executor, Stream&& stream);
 
    awaitable<void> do_session(Buffer&& data) override;
 
@@ -242,7 +238,7 @@ class ClientSession : public ClientReference, public NGHttp2SessionImpl<Stream>
    using super::session;
 
 public:
-   ClientSession(client::Client::Impl& parent, any_io_executor executor, Stream&& stream);
+   ClientSession(client::Client::Impl& parent, asio::any_io_executor executor, Stream&& stream);
 
    awaitable<void> do_session(Buffer&& data) override;
 
