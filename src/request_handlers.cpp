@@ -159,18 +159,41 @@ awaitable<void> discard(server::Request request, server::Response response) { co
 
 // =================================================================================================
 
-awaitable<void> generate(client::Request& request, size_t bytes)
+awaitable<void> generate(Writer& writer, size_t bytes)
 {
-   return sendAndForceEOF(request, rv::iota(uint8_t{0}) | rv::take(bytes));
+   return sendAndForceEOF(writer, rv::iota(uint8_t{0}) | rv::take(bytes));
 }
 
-awaitable<std::string> read(client::Response& response)
+awaitable<size_t> drain(Reader& reader)
+{
+   size_t bytes = 0;
+   std::array<uint8_t, 16_k> buffer;
+   for (;;)
+   {
+      auto [ec, n] = co_await reader.async_read_some(asio::buffer(buffer), as_tuple);
+      bytes += n;
+
+      // the regular end of the body is not something to report as an error
+      if (ec == asio::error::eof)
+      {
+         logd("drain: EOF after reading {} bytes", bytes);
+         co_return bytes;
+      }
+      else if (ec)
+      {
+         logw("drain: \x1b[1;31m{}\x1b[0m after reading {} bytes, throwing", what(ec), bytes);
+         throw boost::system::system_error(ec);
+      }
+   }
+}
+
+awaitable<std::string> read(Reader& reader)
 {
    std::string body;
    std::array<char, 16_k> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
+      auto [ec, n] = co_await reader.async_read_some(asio::buffer(buffer), as_tuple);
       body += std::string_view(buffer.data(), n);
       if (ec == asio::error::eof)
       {
@@ -187,13 +210,13 @@ awaitable<std::string> read(client::Response& response)
    }
 }
 
-awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response)
+awaitable<std::tuple<size_t, error_code>> try_receive(Reader& reader)
 {
    size_t bytes = 0;
    std::array<uint8_t, 16_k> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
+      auto [ec, n] = co_await reader.async_read_some(asio::buffer(buffer), as_tuple);
       bytes += n;
 
       // the regular end of the body is not something to report as an error
@@ -210,10 +233,10 @@ awaitable<std::tuple<size_t, error_code>> try_receive(client::Response& response
    }
 }
 
-awaitable<size_t> try_receive(client::Response& response, error_code& ec)
+awaitable<size_t> try_receive(Reader& reader, error_code& ec)
 {
    size_t bytes;
-   std::tie(bytes, ec) = co_await try_receive(response);
+   std::tie(bytes, ec) = co_await try_receive(reader);
    co_return bytes;
 }
 
@@ -236,7 +259,7 @@ awaitable<expected<size_t>> try_read_response(client::Request& request)
    }
 }
 
-awaitable<void> send_eof(client::Request& request) { co_await request.async_write_eof(); }
+awaitable<void> send_eof(Writer& writer) { co_await writer.async_write_eof(); }
 
 awaitable<void> h2spec(server::Request request, server::Response response)
 {

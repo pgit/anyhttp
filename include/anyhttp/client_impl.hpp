@@ -1,5 +1,7 @@
 #pragma once
 #include "client.hpp"
+#include "reader.hpp"
+#include "writer.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_completion_handler.hpp>
@@ -15,7 +17,7 @@ namespace anyhttp::client
 
 // =================================================================================================
 
-class Request::Impl : public impl::Writer
+class Request::Impl : public Writer::Impl
 {
 public:
    Impl() noexcept;
@@ -24,13 +26,11 @@ public:
    virtual void async_submit(StatusHandler&& handler, unsigned int status_code,
                              const Fields& headers) = 0;
    virtual void async_get_response(GetResponseHandler&& handler) = 0;
-
-   using ReaderOrWriter = impl::Writer;
 };
 
 // -------------------------------------------------------------------------------------------------
 
-class Response::Impl : public impl::Reader
+class Response::Impl : public Reader::Impl
 {
 public:
    Impl() noexcept;
@@ -39,8 +39,6 @@ public:
    virtual unsigned int status_code() const noexcept = 0;
    virtual boost::url_view url() const = 0;
    virtual const Fields& fields() const = 0;
-
-   using ReaderOrWriter = impl::Reader;
 };
 
 // =================================================================================================

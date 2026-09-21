@@ -1,6 +1,8 @@
 #pragma once
 
 #include "anyhttp/common.hpp"
+#include "anyhttp/reader.hpp"
+#include "anyhttp/writer.hpp"
 
 #include <boost/asio/any_completion_executor.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
@@ -161,8 +163,8 @@ public:
    //
    // Lifecycle.
    //
-   impl::Reader* reader = nullptr; // the Http3Reader, while attached
-   impl::Writer* writer = nullptr; // the Http3Writer, while attached
+   Reader::Impl* reader = nullptr; // the Http3Reader, while attached
+   Writer::Impl* writer = nullptr; // the Http3Writer, while attached
    bool closed = false;
 
    asio::any_io_executor get_executor() const noexcept;

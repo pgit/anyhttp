@@ -1,6 +1,8 @@
 #pragma once
 
 #include "common.hpp" // IWYU pragma: keep
+#include "reader.hpp"
+#include "writer.hpp"
 
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/buffer.hpp>
@@ -60,7 +62,7 @@ using Message = boost::beast::http::response<boost::beast::http::string_body>;
 
 // -------------------------------------------------------------------------------------------------
 
-class Response
+class Response : public Reader
 {
 public:
    class Impl;
@@ -71,55 +73,22 @@ public:
    void reset() noexcept;
    ~Response();
 
-   constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
-
-   using executor_type = asio::any_io_executor;
-   executor_type get_executor() const noexcept;
-
 public:
    int status_code() const noexcept;
 
    /// The response header fields, without HTTP/2 and HTTP/3 pseudo-headers.
    const Fields& fields() const;
 
-public:
-   /**
-    * Reads a part of the response body.
-    *
-    * The end of the body is reported as \c asio::error::eof with zero bytes, as ASIO does
-    * everywhere else, and so is every read after it. A body cut short by a reset stream or a lost
-    * connection completes with \c http::error::partial_message instead.
-    */
-   template <typename Buffers,
-             BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
-      requires(boost::asio::is_mutable_buffer_sequence<Buffers>::value)
-   auto async_read_some(const Buffers& buffers, CompletionToken&& token = CompletionToken())
-   {
-      for (auto& buffer : buffers)
-         if (buffer.size() > 0)
-            return async_read_some(buffer, std::forward<CompletionToken>(token));
-   }
-
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
-   auto async_read_some(asio::mutable_buffer buffer, CompletionToken&& token = CompletionToken())
-   {
-      return asio::async_initiate<CompletionToken, ReadSome>(
-         [&](ReadSomeHandler handler, asio::mutable_buffer buffer) { //
-            async_read_some_any(buffer, std::move(handler));
-         },
-         token, buffer);
-   }
-
 private:
-   void async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler);
-   std::shared_ptr<Impl> impl;
+   /// Hides Reader::pimpl(), narrowing it to the implementation this handle was built from.
+   Impl& pimpl() const noexcept;
 };
 
 static_assert(boost::beast::is_async_read_stream<Response>::value);
 
 // -------------------------------------------------------------------------------------------------
 
-class Request
+class Request : public Writer
 {
 public:
    class Impl;
@@ -128,11 +97,6 @@ public:
    Request& operator=(Request&& other) noexcept;
    void reset() noexcept;
    ~Request();
-
-   constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
-
-   using executor_type = asio::any_io_executor;
-   executor_type get_executor() const noexcept;
 
 public:
    using GetResponse = void(boost::system::error_code, Response);
@@ -160,59 +124,11 @@ public:
          token);
    }
 
-public:
-   /**
-    * Writes \p buffer as part of the request body, which stays open for more.
-    *
-    * An empty buffer writes nothing and completes immediately -- use \c async_write_eof() to end
-    * the body.
-    */
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
-   auto async_write(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
-   {
-      // FIXME: get_executor() breaks testcase SpawnAndForget because the impl is already gone there
-      auto executor = asio::get_associated_executor(token); // , get_executor());
-      return asio::async_initiate<CompletionToken, Write>(
-         asio::bind_executor(executor,
-                             [this](auto&& handler, asio::const_buffer buffer) { //
-                                async_write_any(std::move(handler), buffer, false);
-                             }),
-         token, buffer);
-   }
-
-   /**
-    * Writes \p buffer as the last part of the request body and ends it.
-    *
-    * Both go out together, so ending a body that has a tail of data left costs no more than
-    * writing that tail: no second, empty write and no extra round trip through the protocol
-    * stack. Re-ending an already-ended body with an empty buffer completes immediately and
-    * changes nothing; with data attached it completes with \c errc::broken_pipe, just as writing
-    * that data would -- there is no body left for it to belong to.
-    */
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
-   auto async_write_eof(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
-   {
-      // see async_write() above for why the executor is not defaulted to get_executor()
-      auto executor = asio::get_associated_executor(token);
-      return asio::async_initiate<CompletionToken, Write>(
-         asio::bind_executor(executor,
-                             [this](auto&& handler, asio::const_buffer buffer) { //
-                                async_write_any(std::move(handler), buffer, true);
-                             }),
-         token, buffer);
-   }
-
-   /// Ends the request body without writing anything more.
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
-   auto async_write_eof(CompletionToken&& token = CompletionToken())
-   {
-      return async_write_eof(asio::const_buffer{}, std::forward<CompletionToken>(token));
-   }
-
 private:
-   void async_write_any(WriteHandler&& handler, asio::const_buffer buffer, bool eof);
    void async_get_response_any(GetResponseHandler&& handler);
-   std::shared_ptr<Impl> impl;
+
+   /// Hides Writer::pimpl(), narrowing it to the implementation this handle was built from.
+   Impl& pimpl() const noexcept;
 };
 
 // static_assert(boost::beast::is_async_write_stream<Request>::value);

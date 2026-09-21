@@ -9,7 +9,7 @@ namespace anyhttp::server
 
 // =================================================================================================
 
-Request::Request(std::shared_ptr<Request::Impl> impl) : impl(std::move(impl))
+Request::Request(std::shared_ptr<Request::Impl> impl) : Reader(std::move(impl))
 {
    logd("\x1b[1;35mServer::Request: ctor\x1b[0m");
 }
@@ -19,11 +19,10 @@ Request& Request::operator=(Request&& other) noexcept = default;
 
 void Request::reset() noexcept
 {
-   if (impl)
+   if (*this)
    {
       logd("\x1b[35mServer::Request: dtor\x1b[0m");
-      impl->destroy();
-      impl.reset();
+      Reader::reset();
    }
 }
 
@@ -31,35 +30,14 @@ Request::~Request() { reset(); }
 
 // -------------------------------------------------------------------------------------------------
 
-asio::any_io_executor Request::get_executor() const noexcept { return impl->get_executor(); }
+Request::Impl& Request::pimpl() const noexcept { return static_cast<Impl&>(Reader::pimpl()); }
 
-boost::url_view Request::url() const
-{
-   assert(impl);
-   return impl->url();
-}
-
-std::optional<size_t> Request::content_length() const noexcept
-{
-   assert(impl);
-   return impl->content_length();
-}
-
-const Fields& Request::fields() const
-{
-   assert(impl);
-   return impl->fields();
-}
-
-void Request::async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler)
-{
-   assert(impl);
-   impl->async_read_some(buffer, std::move(handler));
-}
+boost::url_view Request::url() const { return pimpl().url(); }
+const Fields& Request::fields() const { return pimpl().fields(); }
 
 // =================================================================================================
 
-Response::Response(std::shared_ptr<Response::Impl> impl) : impl(std::move(impl))
+Response::Response(std::shared_ptr<Response::Impl> impl) : Writer(std::move(impl))
 {
    logd("\x1b[1;35mServer::Response: ctor\x1b[0m");
 }
@@ -69,11 +47,10 @@ Response& Response::operator=(Response&& other) noexcept = default;
 
 void Response::reset() noexcept
 {
-   if (impl)
+   if (*this)
    {
       logd("\x1b[35mServer::Response: dtor\x1b[0m");
-      impl->destroy();
-      impl.reset();
+      Writer::reset();
    }
 }
 
@@ -81,25 +58,12 @@ Response::~Response() { reset(); }
 
 // -------------------------------------------------------------------------------------------------
 
-asio::any_io_executor Response::get_executor() const noexcept { return impl->get_executor(); }
-
-void Response::content_length(std::optional<size_t> content_length)
-{
-   assert(impl);
-   impl->content_length(content_length);
-}
+Response::Impl& Response::pimpl() const noexcept { return static_cast<Impl&>(Writer::pimpl()); }
 
 void Response::async_submit_any(StatusHandler&& handler, unsigned int status_code,
                                 const Fields& headers)
 {
-   assert(impl);
-   impl->async_submit(std::move(handler), status_code, std::move(headers));
-}
-
-void Response::async_write_any(WriteHandler&& handler, asio::const_buffer buffer, bool eof)
-{
-   assert(impl);
-   impl->async_write(std::move(handler), buffer, eof);
+   pimpl().async_submit(std::move(handler), status_code, headers);
 }
 
 // =================================================================================================

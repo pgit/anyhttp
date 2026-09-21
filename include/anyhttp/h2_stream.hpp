@@ -2,6 +2,8 @@
 
 #include "client.hpp"
 #include "common.hpp"
+#include "reader.hpp"
+#include "writer.hpp"
 
 #include "nghttp2/nghttp2.h"
 
@@ -297,8 +299,8 @@ public:
    /// Log and discard the headers collected by on_header_callback().
    void log_received_headers();
 
-   impl::Reader* reader = nullptr;
-   impl::Writer* writer = nullptr;
+   Reader::Impl* reader = nullptr;
+   Writer::Impl* writer = nullptr;
 
    void delete_reader();
    void delete_writer();

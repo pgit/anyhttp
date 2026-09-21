@@ -48,10 +48,10 @@ public:
    // registers here for as long as it exists, to be detach()ed when the session goes away first.
    // With pipelining, a client session may have more than one of each at a time.
    //
-   void attach(impl::Reader& reader) { m_readers.push_back(&reader); }
-   void attach(impl::Writer& writer) { m_writers.push_back(&writer); }
-   void release(impl::Reader& reader) { std::erase(m_readers, &reader); }
-   void release(impl::Writer& writer) { std::erase(m_writers, &writer); }
+   void attach(Reader::Impl& reader) { m_readers.push_back(&reader); }
+   void attach(Writer::Impl& writer) { m_writers.push_back(&writer); }
+   void release(Reader::Impl& reader) { std::erase(m_readers, &reader); }
+   void release(Writer::Impl& writer) { std::erase(m_writers, &writer); }
 
    void detach_readers()
    {
@@ -80,10 +80,10 @@ public:
 
 private:
    /// Non-owning pointers to the attached readers, see attach().
-   std::vector<impl::Reader*> m_readers;
+   std::vector<Reader::Impl*> m_readers;
 
    /// Non-owning pointers to the attached writers, see attach().
-   std::vector<impl::Writer*> m_writers;
+   std::vector<Writer::Impl*> m_writers;
 };
 
 // =================================================================================================
