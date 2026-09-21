@@ -1,8 +1,8 @@
 #pragma once
 
 #include "anyhttp/common.hpp"
-#include "anyhttp/reader.hpp"
-#include "anyhttp/writer.hpp"
+#include "anyhttp/reader_impl.hpp"
+#include "anyhttp/writer_impl.hpp"
 
 #include <boost/asio/any_completion_executor.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>

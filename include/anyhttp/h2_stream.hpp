@@ -2,8 +2,8 @@
 
 #include "client.hpp"
 #include "common.hpp"
-#include "reader.hpp"
-#include "writer.hpp"
+#include "reader_impl.hpp"
+#include "writer_impl.hpp"
 
 #include "nghttp2/nghttp2.h"
 

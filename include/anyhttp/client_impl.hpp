@@ -1,7 +1,7 @@
 #pragma once
 #include "client.hpp"
-#include "reader.hpp"
-#include "writer.hpp"
+#include "reader_impl.hpp"
+#include "writer_impl.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/any_completion_handler.hpp>
