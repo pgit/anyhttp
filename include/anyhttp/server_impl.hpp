@@ -87,11 +87,7 @@ public:
    asio::awaitable<void> tcp_accept_loop();
    asio::awaitable<void> handle_connection(asio::ip::tcp::socket socket);
 
-   asio::ip::tcp::endpoint local_endpoint() const
-   {
-      assert(m_acceptor);
-      return m_acceptor->local_endpoint();
-   }
+   asio::ip::tcp::endpoint local_endpoint() const { return m_acceptor.local_endpoint(); }
 
    void setRequestHandler(RequestHandler&& handler) { m_requestHandler = std::move(handler); }
    const RequestHandler& requestHandler() const { return m_requestHandler; }
@@ -110,7 +106,7 @@ private:
 
    boost::asio::any_io_executor m_executor;
    boost::asio::ssl::context m_tlsContext;
-   std::optional<asio::ip::tcp::acceptor> m_acceptor;
+   asio::ip::tcp::acceptor m_acceptor;
    std::string m_altSvc;
 
    std::mutex m_sessionMutex;

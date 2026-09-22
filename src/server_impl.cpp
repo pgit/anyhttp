@@ -73,7 +73,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    // HTTP/3 shares the endpoint the TCP acceptor is listening on, so it has to be set up after
    // listen_tcp(): with port=0 the actual port is only known once the acceptor is bound.
    //
-   auto tcp_ep = m_acceptor->local_endpoint();
+   auto tcp_ep = m_acceptor.local_endpoint();
    m_http3 = make_http3_server(*this, ip::udp::endpoint{tcp_ep.address(), tcp_ep.port()});
 
    //
@@ -116,8 +116,7 @@ void Server::Impl::destroy()
 {
    logi("Server: destroy");
 
-   if (m_acceptor)
-      m_acceptor->close(); // breaks listen_loop()
+   m_acceptor.close(); // breaks listen_loop()
 
    //
    // Destroy all active sessions (TCP and QUIC) so their timers and async operations are
@@ -167,9 +166,6 @@ void Server::Impl::remove_session(const std::shared_ptr<Session::Impl>& session)
 
 void Server::Impl::listen_tcp()
 {
-   assert(m_acceptor);
-   auto& acceptor = *m_acceptor;
-
    boost::system::error_code ec;
    auto address = ip::make_address(config().listen_address, ec);
    if (ec)
@@ -177,14 +173,14 @@ void Server::Impl::listen_tcp()
 
    ip::tcp::endpoint ep(address, config().port);
    if (ep.protocol() == ip::tcp::v6())
-      acceptor.set_option(ip::v6_only(false), ec);
+      m_acceptor.set_option(ip::v6_only(false), ec);
 
-   acceptor.open(ep.protocol());
-   acceptor.set_option(asio::socket_base::reuse_address(true));
-   acceptor.bind(ep);
-   acceptor.listen();
+   m_acceptor.open(ep.protocol());
+   m_acceptor.set_option(asio::socket_base::reuse_address(true));
+   m_acceptor.bind(ep);
+   m_acceptor.listen();
 
-   ep = acceptor.local_endpoint();
+   ep = m_acceptor.local_endpoint();
    logi("Server: TCP listening on {}", ep);
 }
 
@@ -376,8 +372,6 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
  */
 awaitable<void> Server::Impl::tcp_accept_loop()
 {
-   assert(m_acceptor);
-   auto& acceptor = *m_acceptor;
    const auto executor = co_await boost::asio::this_coro::executor;
 
    //
@@ -411,7 +405,7 @@ awaitable<void> Server::Impl::tcp_accept_loop()
       //       or explicit thread pools where really needed.
       //
       ip::tcp::socket socket(config().use_strand ? boost::asio::make_strand(executor) : executor);
-      auto [ec] = co_await acceptor.async_accept(socket, as_tuple);
+      auto [ec] = co_await m_acceptor.async_accept(socket, as_tuple);
       if (ec)
       {
          if (ec == boost::system::errc::operation_canceled)
