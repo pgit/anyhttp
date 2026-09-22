@@ -904,7 +904,7 @@ void NGHttp2Stream::on_request()
    if (header_limit_exceeded)
       asio::co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
                asio::detached);
-   else if (auto& handler = server.requestHandler())
+   else if (auto& handler = server.request_handler())
       asio::co_spawn(get_executor(), handler(std::move(request), std::move(response)), asio::detached);
    else
    {

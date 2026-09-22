@@ -349,7 +349,7 @@ public:
    //
    Server::Impl& parent() noexcept { return parent_; }
    const Config& config() const noexcept { return parent_.config(); }
-   const RequestHandler& requestHandler() const { return parent_.requestHandler(); }
+   const RequestHandler& request_handler() const noexcept { return parent_.request_handler(); }
    asio::any_io_executor get_executor() const noexcept { return parent_.get_executor(); }
 
    //
@@ -461,7 +461,7 @@ void Http3ServerStream::on_headers_complete()
    if (header_limit_exceeded)
       co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
                detached);
-   else if (auto& handler = sv.requestHandler())
+   else if (auto& handler = sv.request_handler())
       co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
    else
    {

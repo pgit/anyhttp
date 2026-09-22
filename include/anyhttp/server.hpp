@@ -99,6 +99,7 @@ public:
    /// The request method, as it arrived: "GET", "POST", ...
    std::string_view method() const noexcept;
 
+   /// The requested URL: scheme, authority (host and port) and path.
    boost::url_view url() const;
 
    /// The request header fields, without HTTP/2 and HTTP/3 pseudo-headers.
@@ -147,15 +148,6 @@ private:
 };
 
 // -------------------------------------------------------------------------------------------------
-
-template <typename T>
-awaitable<void> sleep(T duration)
-{
-   using namespace asio;
-   steady_timer timer(co_await this_coro::executor);
-   timer.expires_after(duration);
-   co_await timer.async_wait();
-}
 
 class Response : public Writer
 {
@@ -208,7 +200,7 @@ public:
    using executor_type = asio::any_io_executor;
    executor_type get_executor() const noexcept;
 
-   void setRequestHandler(RequestHandler&& handler);
+   void request_handler(RequestHandler&& handler);
 
    asio::ip::tcp::endpoint local_endpoint() const;
 

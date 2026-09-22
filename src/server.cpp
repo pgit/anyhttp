@@ -82,9 +82,9 @@ Server::~Server() { impl->destroy(); }
 
 // -------------------------------------------------------------------------------------------------
 
-void Server::setRequestHandler(RequestHandler&& handler)
+void Server::request_handler(RequestHandler&& handler)
 {
-   impl->setRequestHandler(std::move(handler));
+   impl->request_handler(std::move(handler));
 }
 
 asio::any_io_executor Server::get_executor() const noexcept { return impl->get_executor(); }

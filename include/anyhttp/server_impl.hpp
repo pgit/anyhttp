@@ -89,8 +89,11 @@ public:
 
    asio::ip::tcp::endpoint local_endpoint() const { return m_acceptor.local_endpoint(); }
 
-   void setRequestHandler(RequestHandler&& handler) { m_requestHandler = std::move(handler); }
-   const RequestHandler& requestHandler() const { return m_requestHandler; }
+   void request_handler(RequestHandler&& handler) noexcept
+   {
+      m_requestHandler = std::move(handler);
+   }
+   const RequestHandler& request_handler() const noexcept { return m_requestHandler; }
 
    //
    // Session registry, shared by all three protocols: every session is destroyed from here when

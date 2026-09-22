@@ -139,7 +139,7 @@ int main(int argc, char* argv[])
       server.reset();
    });
 
-   server->setRequestHandler(
+   server->request_handler(
       [](server::Request request, server::Response response) -> awaitable<void> {
          std::string path = request.url().path();
          if (path == "/echo")
