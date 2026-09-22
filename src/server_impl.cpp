@@ -172,11 +172,21 @@ void Server::Impl::listen_tcp()
       logw("Server: error resolving '{}': {}", config().listen_address, ec.what());
 
    ip::tcp::endpoint ep(address, config().port);
-   if (ep.protocol() == ip::tcp::v6())
-      m_acceptor.set_option(ip::v6_only(false), ec);
-
    m_acceptor.open(ep.protocol());
    m_acceptor.set_option(asio::socket_base::reuse_address(true));
+
+   //
+   // Accept IPv4 clients on an IPv6 listener, too. This has to go after open() -- there is no
+   // socket to set it on before that -- and before bind(), which is when it takes effect. Not
+   // fatal if it fails: most systems are dual-stack by default (net.ipv6.bindv6only=0) anyway.
+   //
+   if (ep.protocol() == ip::tcp::v6())
+   {
+      m_acceptor.set_option(ip::v6_only(false), ec);
+      if (ec)
+         logw("Server: error enabling dual-stack on {}: {}", ep, ec.what());
+   }
+
    m_acceptor.bind(ep);
    m_acceptor.listen();
 
