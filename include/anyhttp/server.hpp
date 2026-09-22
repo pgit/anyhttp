@@ -200,7 +200,7 @@ public:
    using executor_type = asio::any_io_executor;
    executor_type get_executor() const noexcept;
 
-   void request_handler(RequestHandler&& handler);
+   void on_request(RequestHandler&& handler);
 
    asio::ip::tcp::endpoint local_endpoint() const;
 

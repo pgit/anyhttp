@@ -89,10 +89,7 @@ public:
 
    asio::ip::tcp::endpoint local_endpoint() const { return m_acceptor.local_endpoint(); }
 
-   void request_handler(RequestHandler&& handler) noexcept
-   {
-      m_requestHandler = std::move(handler);
-   }
+   void on_request(RequestHandler&& handler) noexcept { m_requestHandler = std::move(handler); }
    const RequestHandler& request_handler() const noexcept { return m_requestHandler; }
 
    //
