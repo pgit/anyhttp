@@ -117,10 +117,10 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
       return 0;
 
    stream->header_size += header_field_size(name, value);
-   if (stream->header_size > handler->m_max_header_size)
+   if (stream->header_size > handler->max_header_size_)
    {
       logw("[{}] header section exceeds {} bytes, ignoring the rest", handler->logPrefix(frame),
-           handler->m_max_header_size);
+           handler->max_header_size_);
       stream->header_limit_exceeded = true;
       stream->received_headers.clear();
       return 0;
@@ -436,14 +436,14 @@ nghttp2_unique_ptr<nghttp2_session_callbacks> NGHttp2Session::setup_callbacks()
 // =================================================================================================
 
 NGHttp2Session::NGHttp2Session(std::string_view prefix, asio::any_io_executor executor)
-   : m_executor(std::move(executor)), m_logPrefix(prefix)
+   : executor_(std::move(executor)), log_prefix_(prefix)
 {
    mlogd("session created");
 }
 
 NGHttp2Session::~NGHttp2Session()
 {
-   m_streams.clear();
+   streams_.clear();
    mlogd("streams deleted");
    nghttp2_session_del(session);
    mlogd("session destroyed");
@@ -532,10 +532,10 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
 
    stream->id = id;
    stream->logPrefix = std::format("{}.{}", logPrefix(), id);
-   m_last_id = id;
+   last_id_ = id;
 
    logd("[{}] submit: new stream ID: {}", stream->logPrefix, id);
-   m_streams.emplace(id, stream);
+   streams_.emplace(id, stream);
    post(get_executor(),
         [handler = std::move(handler),
          writer = std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)]() mutable {
@@ -549,8 +549,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
 void NGHttp2Session::handle_buffer_contents()
 {
    mlogd("");
-   mlogd("read: nghttp2_session_mem_recv2... ({} bytes)", m_buffer.size());
-   auto data = m_buffer.data();
+   mlogd("read: nghttp2_session_mem_recv2... ({} bytes)", buffer_.size());
+   auto data = buffer_.data();
    ssize_t rv = nghttp2_session_mem_recv2(session, static_cast<uint8_t*>(data.data()), data.size());
    mlogd("read: nghttp2_session_mem_recv2... done ({})", rv);
 
@@ -563,8 +563,8 @@ void NGHttp2Session::handle_buffer_contents()
    }
 
    assert(rv == data.size());
-   m_buffer.consume(rv);
-   m_buffer.clear();
+   buffer_.consume(rv);
+   buffer_.clear();
 }
 
 // =================================================================================================
@@ -572,26 +572,26 @@ void NGHttp2Session::handle_buffer_contents()
 NGHttp2Stream* NGHttp2Session::create_stream(int32_t stream_id)
 {
    auto [it, inserted] =
-      m_streams.emplace(stream_id, std::make_shared<NGHttp2Stream>(*this, stream_id));
+      streams_.emplace(stream_id, std::make_shared<NGHttp2Stream>(*this, stream_id));
    assert(inserted);
-   m_requestCounter++;
+   request_counter_++;
    return it->second.get();
 }
 
 NGHttp2Stream* NGHttp2Session::find_stream(int32_t stream_id)
 {
-   if (auto it = m_streams.find(stream_id); it != std::end(m_streams))
+   if (auto it = streams_.find(stream_id); it != std::end(streams_))
       return it->second.get();
    else
       return nullptr;
 }
 
-void NGHttp2Session::delete_stream(int32_t stream_id) { m_streams.erase(stream_id); }
+void NGHttp2Session::delete_stream(int32_t stream_id) { streams_.erase(stream_id); }
 
 void NGHttp2Session::close_stream(int32_t stream_id)
 {
-   auto it = m_streams.find(stream_id);
-   if (it == std::end(m_streams))
+   auto it = streams_.find(stream_id);
+   if (it == std::end(streams_))
    {
       logd("[{}] close_stream: stream already gone", logPrefix(stream_id));
       return;
@@ -631,10 +631,10 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    //
    // Finally, erase stream from map.
    //
-   m_streams.erase(it);
+   streams_.erase(it);
 
    logd("[{}] close_stream: found {}, {} streams left", logPrefix(stream_id), (void*)stream.get(),
-        m_streams.size());
+        streams_.size());
 
    //
    // This callback is invoked in two situations:
@@ -642,10 +642,10 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    // 2) We submit a RST frame ourselves
    // In both situations, this stream is deleted. It seems that this may happen multiple times...
    //
-   if (stream->m_read_handler)
+   if (stream->read_handler_)
    {
       logd("[{}] stream closed while reading, raising 'partial_message'", logPrefix(stream_id));
-      swap_and_invoke(stream->m_read_handler, boost::beast::http::error::partial_message, 0);
+      swap_and_invoke(stream->read_handler_, boost::beast::http::error::partial_message, 0);
    }
 
    if (stream->response_handler)
@@ -663,12 +663,12 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    // FIXME: Use virtual function instead of dynamic cast for the client-specific code.
    // FIXME: Or even better, use static polymorphism.
    //
-   if (auto client = dynamic_cast<ClientReference*>(this) && m_streams.empty())
+   if (auto client = dynamic_cast<ClientReference*>(this) && streams_.empty())
    {
       // nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
       logi("[{}] last stream closed (id={}), submitting GOAWAY (last stream ID: {})...",
-           m_logPrefix, stream_id, m_last_id);
-      nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, m_last_id, NGHTTP2_NO_ERROR, nullptr, 0);
+           log_prefix_, stream_id, last_id_);
+      nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, last_id_, NGHTTP2_NO_ERROR, nullptr, 0);
    }
 
    // see NGHttp2Stream::call_read_handler() why this is needed
@@ -678,11 +678,11 @@ void NGHttp2Session::close_stream(int32_t stream_id)
 
 void NGHttp2Session::start_write()
 {
-   if (m_send_handler)
+   if (send_handler_)
    {
-      logd("[{}] start_write: signalling write loop...", m_logPrefix);
-      swap_and_invoke(m_send_handler);
-      logd("[{}] start_write: signalling write loop... done", m_logPrefix);
+      logd("[{}] start_write: signalling write loop...", log_prefix_);
+      swap_and_invoke(send_handler_);
+      logd("[{}] start_write: signalling write loop... done", log_prefix_);
    }
 }
 
@@ -698,7 +698,7 @@ std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
    auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
    auto session =
       std::make_shared<ServerSession<Stream>>(server, std::move(executor), std::move(stream));
-   session->m_upgrade = std::move(upgrade);
+   session->upgrade_ = std::move(upgrade);
    return session;
 }
 

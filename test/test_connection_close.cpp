@@ -44,7 +44,7 @@ protected:
       co_await http::async_write(socket, request);
 
       Response response;
-      co_await http::async_read(socket, m_buffer, response);
+      co_await http::async_read(socket, buffer_, response);
       co_return response;
    }
 
@@ -52,7 +52,7 @@ protected:
    template <typename Stream>
    awaitable<error_code> read_eof(Stream& socket)
    {
-      EXPECT_EQ(m_buffer.size(), 0) << "unread data left over from the response";
+      EXPECT_EQ(buffer_.size(), 0) << "unread data left over from the response";
 
       std::array<char, 64> buffer;
       auto [ec, n] = co_await socket.async_read_some(asio::buffer(buffer), as_tuple);
@@ -73,7 +73,7 @@ protected:
       Server::run();
    }
 
-   boost::beast::flat_buffer m_buffer;
+   boost::beast::flat_buffer buffer_;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -184,7 +184,7 @@ TEST_F(RejectedRequest, WHEN_request_is_rejected_THEN_the_response_arrives_anywa
          co_return ec;
       };
       auto receive = [&]() -> awaitable<error_code> {
-         auto [ec, n] = co_await http::async_read(socket, m_buffer, response, as_tuple);
+         auto [ec, n] = co_await http::async_read(socket, buffer_, response, as_tuple);
          co_return ec;
       };
 
@@ -210,13 +210,13 @@ protected:
 
    awaitable<SslStream> connect_tls()
    {
-      SslStream stream(co_await this_coro::executor, m_context);
+      SslStream stream(co_await this_coro::executor, context_);
       co_await stream.next_layer().async_connect(server->local_endpoint());
       co_await stream.async_handshake(asio::ssl::stream_base::client);
       co_return stream;
    }
 
-   asio::ssl::context m_context = std::invoke([] {
+   asio::ssl::context context_ = std::invoke([] {
       asio::ssl::context context{asio::ssl::context::tlsv13};
       context.load_verify_file("pki/out/root.pem");
       context.set_verify_mode(asio::ssl::verify_peer);

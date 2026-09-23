@@ -69,28 +69,28 @@ public:
 
    void listen_tcp();
 
-   const Config& config() const { return m_config; }
-   boost::asio::any_io_executor get_executor() const noexcept { return m_executor; }
+   const Config& config() const { return config_; }
+   boost::asio::any_io_executor get_executor() const noexcept { return executor_; }
 
    //
    // The TLS context used for every TCP connection, see make_tls_server_context().
    //
-   boost::asio::ssl::context& tls_context() noexcept { return m_tlsContext; }
+   boost::asio::ssl::context& tls_context() noexcept { return tls_context_; }
 
    //
    // The "Alt-Svc" field value pointing at this server's HTTP/3 endpoint, put into every response
    // sent over HTTP/1.1 and HTTP/2, see Config::alt_svc_max_age. Empty when there is nothing to
    // advertise, which is also what HTTP/3 sessions see -- they are already there.
    //
-   const std::string& alt_svc() const noexcept { return m_altSvc; }
+   const std::string& alt_svc() const noexcept { return alt_svc_; }
 
    asio::awaitable<void> tcp_accept_loop();
    asio::awaitable<void> handle_connection(asio::ip::tcp::socket socket);
 
-   asio::ip::tcp::endpoint local_endpoint() const { return m_acceptor.local_endpoint(); }
+   asio::ip::tcp::endpoint local_endpoint() const { return acceptor_.local_endpoint(); }
 
-   void on_request(RequestHandler&& handler) noexcept { m_requestHandler = std::move(handler); }
-   const RequestHandler& request_handler() const noexcept { return m_requestHandler; }
+   void on_request(RequestHandler&& handler) noexcept { request_handler_ = std::move(handler); }
+   const RequestHandler& request_handler() const noexcept { return request_handler_; }
 
    //
    // Session registry, shared by all three protocols: every session is destroyed from here when
@@ -102,20 +102,20 @@ public:
    void remove_session(const std::shared_ptr<Session::Impl>& session);
 
 private:
-   Config m_config;
+   Config config_;
 
-   asio::any_io_executor m_executor;
-   asio::ssl::context m_tlsContext;
-   asio::ip::tcp::acceptor m_acceptor;
-   std::string m_altSvc;
+   asio::any_io_executor executor_;
+   asio::ssl::context tls_context_;
+   asio::ip::tcp::acceptor acceptor_;
+   std::string alt_svc_;
 
-   std::mutex m_sessionMutex;
-   std::set<std::shared_ptr<Session::Impl>> m_sessions;
+   std::mutex session_mutex_;
+   std::set<std::shared_ptr<Session::Impl>> sessions_;
 
-   std::shared_ptr<Http3Server> m_http3;
+   std::shared_ptr<Http3Server> http3_;
 
-   RequestHandler m_requestHandler;
-   bool m_destroyed = false;
+   RequestHandler request_handler_;
+   bool destroyed_ = false;
 };
 
 // =================================================================================================

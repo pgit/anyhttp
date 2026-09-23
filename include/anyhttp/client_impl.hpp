@@ -54,10 +54,10 @@ public:
    explicit Impl(asio::any_io_executor executor, Config config);
    ~Impl();
 
-   boost::asio::any_io_executor get_executor() const noexcept { return m_executor; }
+   boost::asio::any_io_executor get_executor() const noexcept { return executor_; }
 
    void async_connect(ConnectHandler handler);
-   const Config& config() const { return m_config; }
+   const Config& config() const { return config_; }
 
    // ----------------------------------------------------------------------------------------------
 
@@ -92,16 +92,16 @@ private:
    awaitable<Session> async_connect();
 
 private:
-   Config m_config;
-   asio::any_io_executor m_executor;
-   std::optional<asio::ip::tcp::resolver> m_resolver;
+   Config config_;
+   asio::any_io_executor executor_;
+   std::optional<asio::ip::tcp::resolver> resolver_;
 
    //
    // Sessions run on their own executor, which is not necessarily the one the next connect is
    // made from, so this is reached from more than one thread.
    //
-   mutable std::mutex m_altSvcMutex;
-   std::optional<AlternativeService> m_altSvc;
+   mutable std::mutex alt_svc_mutex_;
+   std::optional<AlternativeService> alt_svc_;
 };
 
 // =================================================================================================

@@ -52,7 +52,7 @@ Response::Impl::~Impl() = default;
 // =================================================================================================
 
 Client::Impl::Impl(asio::any_io_executor executor, Config config)
-   : m_config(std::move(config)), m_executor(std::move(executor)), m_resolver(m_executor)
+   : config_(std::move(config)), executor_(std::move(executor)), resolver_(executor_)
 {
    logi("Client: ctor");
 }
@@ -75,10 +75,10 @@ void Client::Impl::on_alt_svc(std::string_view field_value)
    const auto* service = alt_svc.find("h3");
    if (alt_svc.clear || (service && service->max_age.count() == 0))
    {
-      auto lock = std::lock_guard(m_altSvcMutex);
-      if (m_altSvc)
+      auto lock = std::lock_guard(alt_svc_mutex_);
+      if (alt_svc_)
          logi("Client: Alt-Svc: dropping the HTTP/3 alternative");
-      m_altSvc.reset();
+      alt_svc_.reset();
       return;
    }
 
@@ -89,19 +89,19 @@ void Client::Impl::on_alt_svc(std::string_view field_value)
         service->host.empty() ? config().url.host_address() : service->host, service->port,
         service->max_age.count());
 
-   auto lock = std::lock_guard(m_altSvcMutex);
-   m_altSvc = AlternativeService{.host = service->host,
+   auto lock = std::lock_guard(alt_svc_mutex_);
+   alt_svc_ = AlternativeService{.host = service->host,
                                  .port = service->port,
                                  .expires = std::chrono::steady_clock::now() + service->max_age};
 }
 
 std::optional<Client::Impl::AlternativeService> Client::Impl::alt_svc() const
 {
-   auto lock = std::lock_guard(m_altSvcMutex);
-   if (m_altSvc && m_altSvc->expires <= std::chrono::steady_clock::now())
+   auto lock = std::lock_guard(alt_svc_mutex_);
+   if (alt_svc_ && alt_svc_->expires <= std::chrono::steady_clock::now())
       return std::nullopt; // its "ma" has run out; the next advertisement overwrites it
 
-   return m_altSvc;
+   return alt_svc_;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -147,7 +147,7 @@ awaitable<Session> Client::Impl::async_connect()
       auto alt_host = alt->host.empty() ? host : alt->host;
       logi("Client: connecting to {}:{} over HTTP/3, as advertised by Alt-Svc", alt_host,
            alt->port);
-      co_return Session{co_await async_connect_http3(m_executor, alt_host, alt->port, config())};
+      co_return Session{co_await async_connect_http3(executor_, alt_host, alt->port, config())};
    }
 
    //
@@ -155,13 +155,13 @@ awaitable<Session> Client::Impl::async_connect()
    // handshake, ...) than the TCP-based http11/h2 paths below.
    //
    if (config().protocol == Protocol::h3)
-      co_return Session{co_await async_connect_http3(m_executor, host, port, config())};
+      co_return Session{co_await async_connect_http3(executor_, host, port, config())};
 
    std::vector<ip::tcp::endpoint> endpoints;
    logd("Client: resolving {}:{} ...", host, port);
    {
       auto flags = ip::tcp::resolver::numeric_service;
-      for (auto&& elem : co_await m_resolver->async_resolve(host, port, flags)) // may throw
+      for (auto&& elem : co_await resolver_->async_resolve(host, port, flags)) // may throw
       {
          logd("Client: {}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
          endpoints.push_back(std::move(elem));
@@ -173,7 +173,7 @@ awaitable<Session> Client::Impl::async_connect()
    //
    // TODO: TLS
    //
-   ip::tcp::socket socket(m_executor);
+   ip::tcp::socket socket(executor_);
    auto endpoint = co_await asio::async_connect(socket, endpoints);
 
    logi("Client: connected to {}", socket.remote_endpoint());
@@ -235,7 +235,7 @@ awaitable<Session> Client::Impl::async_connect()
    //        of the user-facing "Session" object. So we should use only the "impl" internally.
    //
 #if 1
-   co_spawn(m_executor, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable {
+   co_spawn(executor_, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable {
       if (ex)
          logw("client run: {}", what(ex));
       else

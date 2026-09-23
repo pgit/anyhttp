@@ -90,7 +90,7 @@ class BeastReader : public Interface
 public:
    inline BeastReader(BeastSession<Stream>& session_, Stream& stream_, Buffer& buffer_)
       : session(&session_), stream(stream_), buffer(buffer_),
-        m_executor(session_.get_executor()) // survives detach(), see get_executor()
+        executor_(session_.get_executor()) // survives detach(), see get_executor()
    {
       // parser.header_limit(std::numeric_limits<uint32_t>::max());
       parser.body_limit(std::numeric_limits<uint64_t>::max());
@@ -110,7 +110,7 @@ public:
          error_code ec;
          // get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send, ec);
          get_socket(stream).shutdown(boost::asio::socket_base::shutdown_receive, ec);
-         session->m_closed = true;
+         session->closed_ = true;
          if (ec)
             logw("destroy: shutdown: {}", what(ec));
       }
@@ -221,14 +221,14 @@ public:
          stream, buffer, parser, bind_executor(ex, bind_cancellation_slot(cs, std::move(cb))));
    }
 
-   asio::any_io_executor get_executor() const noexcept { return m_executor; }
+   asio::any_io_executor get_executor() const noexcept { return executor_; }
    inline auto logPrefix() const { return session ? session->logPrefix() : "DETACHED"; }
 
    BeastSession<Stream>* session;
    Stream& stream;
    Buffer& buffer;
    Parser parser;
-   asio::any_io_executor m_executor; // kept as a copy so a detached reader can still complete
+   asio::any_io_executor executor_; // kept as a copy so a detached reader can still complete
    bool reading = false;
    bool finished = false; // see finish()
 };
@@ -253,11 +253,11 @@ public:
    using Base::Base;
 
    std::string_view method() const noexcept override { return this->parser.get().method_string(); }
-   boost::url_view url() const override { return m_url; }
+   boost::url_view url() const override { return url_; }
 
    /// Assembled from the request target, the host header and the kind of socket this arrived on,
    /// by the session, right after the header was parsed.
-   boost::url m_url;
+   boost::url url_;
 };
 
 template <typename Stream, typename Buffer>
@@ -317,7 +317,7 @@ class WriterBase : public Parent
 public:
    inline WriterBase(BeastSession<Stream>& session_, Stream& stream_)
       : session(&session_), stream(stream_),
-        m_executor(session_.get_executor()) // survives detach(), see get_executor()
+        executor_(session_.get_executor()) // survives detach(), see get_executor()
    {
       session_.attach(*this);
    }
@@ -333,7 +333,7 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   asio::any_io_executor get_executor() const noexcept override { return m_executor; }
+   asio::any_io_executor get_executor() const noexcept override { return executor_; }
 
    void detach() override
    {
@@ -526,7 +526,7 @@ public:
    Stream& stream;
    Message message;
    Serializer serializer{message};
-   asio::any_io_executor m_executor; // kept as a copy so a detached writer can still complete
+   asio::any_io_executor executor_; // kept as a copy so a detached writer can still complete
    bool writing = false;
    bool cancelled = false;
    bool response_requested = false;
@@ -744,21 +744,21 @@ public:
       //
       auto& cs = client_session();
       error_code ec;
-      if (cs.m_receive_failed)
+      if (cs.receive_failed_)
          ec = asio::error::connection_aborted;
-      else if (sequence != cs.m_responses_read)
+      else if (sequence != cs.responses_read_)
          ec = asio::error::would_block;
       if (ec)
       {
          mlogw("async_get_response: {} (request #{}, {} responses read)", what(ec), sequence,
-               cs.m_responses_read);
+               cs.responses_read_);
          complete_immediately(std::move(handler), get_executor(), ec, client::Response{nullptr});
          return;
       }
       response_requested = true;
 
-      auto& buffer = session->m_buffer;
-      // auto& stream = session->m_stream;
+      auto& buffer = session->buffer_;
+      // auto& stream = session->stream_;
 
       auto reader =
          std::make_unique<BeastResponseReader<std::decay_t<decltype(stream)>, decltype(buffer)>>(
@@ -823,7 +823,7 @@ public:
 template <typename Stream>
 BeastSession<Stream>::BeastSession(std::string_view prefix, asio::any_io_executor executor,
                                    Stream&& stream)
-   : m_executor(std::move(executor)), m_logPrefix(prefix), m_stream(std::move(stream))
+   : executor_(std::move(executor)), log_prefix_(prefix), stream_(std::move(stream))
 {
    mlogd("session created");
 }
@@ -832,11 +832,11 @@ template <typename Stream>
 BeastSession<Stream>::~BeastSession()
 {
    mlogd("session deleted");
-   if (!m_writers.empty())
-      mlogw("dtor: detaching {} writer(s)", m_writers.size());
+   if (!writers_.empty())
+      mlogw("dtor: detaching {} writer(s)", writers_.size());
    detach_writers();
-   if (!m_readers.empty())
-      mlogw("dtor: detaching {} reader(s)", m_readers.size());
+   if (!readers_.empty())
+      mlogw("dtor: detaching {} reader(s)", readers_.size());
    detach_readers();
 }
 
@@ -866,16 +866,16 @@ void BeastSession<Stream>::destroy() noexcept
 
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
-   get_socket(m_stream).shutdown(socket_base::shutdown_both, ec);
-   logwi(ec, "[{}] destroy: socket shutdown: {}", m_logPrefix, ec.message());
+   get_socket(stream_).shutdown(socket_base::shutdown_both, ec);
+   logwi(ec, "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
    // });
 }
 
 template <typename Stream>
 void ServerSession<Stream>::destroy() noexcept
 {
-   if (m_upgraded)
-      m_upgraded->destroy(); // the stream has been moved there
+   if (upgraded_)
+      upgraded_->destroy(); // the stream has been moved there
    else
       super::destroy();
 }
@@ -982,33 +982,33 @@ static std::optional<nghttp2::Upgrade> h2c_upgrade(const http::request<http::buf
 template <typename Stream>
 awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 {
-   m_buffer = std::move(buffer);
+   buffer_ = std::move(buffer);
 
-   mlogd("do_server_session, {} bytes in buffer", m_buffer.size());
+   mlogd("do_server_session, {} bytes in buffer", buffer_.size());
 
    bool close = false;
    beast::error_code ec;
 
    size_t requestCounter = 0;
-   while (!m_closed)
+   while (!closed_)
    {
       detach_readers(); // the previous request, if still around, is done with the stream
-      auto reader = std::make_unique<BeastRequestReader<decltype(m_stream), decltype(m_buffer)>>(
-         *this, m_stream, m_buffer);
+      auto reader = std::make_unique<BeastRequestReader<decltype(stream_), decltype(buffer_)>>(
+         *this, stream_, buffer_);
 
       logd("");
-      mlogd("waiting for request (size={} capacity={})", m_buffer.size(), m_buffer.capacity());
+      mlogd("waiting for request (size={} capacity={})", buffer_.size(), buffer_.capacity());
       auto& parser = reader->parser;
       parser.header_limit(header_limit(server().config().max_header_size));
-      auto [ec, len] = co_await async_read_header(m_stream, m_buffer, parser, as_tuple);
+      auto [ec, len] = co_await async_read_header(stream_, buffer_, parser, as_tuple);
       if (!ec)
-         mlogd("async_read_header: len={} size={} capacity={} ec={}", len, m_buffer.size(),
-               m_buffer.capacity(), ec.message());
+         mlogd("async_read_header: len={} size={} capacity={} ec={}", len, buffer_.size(),
+               buffer_.capacity(), ec.message());
       else if (ec == http::error::end_of_stream)
          mlogd("async_read_header: end of stream");
       else
          mlogw("async_read_header: len={} size={} capacity={} ec=\x1b[1;31m{}\x1b[0m", len,
-               m_buffer.size(), m_buffer.capacity(), ec.message());
+               buffer_.size(), buffer_.capacity(), ec.message());
 
       //
       // The rest of the request can not be told apart from whatever follows it on the connection,
@@ -1020,7 +1020,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          res.set(http::field::server, "anyhttp");
          res.set(http::field::connection, "close");
          res.content_length(0);
-         if (auto [ec, n] = co_await http::async_write(m_stream, res, as_tuple); ec)
+         if (auto [ec, n] = co_await http::async_write(stream_, res, as_tuple); ec)
             mlogw("writing 431 response: {}", ec.message());
       }
       if (ec)
@@ -1032,7 +1032,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
       // if (auto url = boost::urls::parse_relative_ref(request.target()); url.has_value())
       if (auto url = boost::urls::parse_uri_reference(request.target()); url.has_value())
-         reader->m_url = url.value();
+         reader->url_ = url.value();
       else
          mlogw("{} {}: invalid target: {}", request.method_string(), request.target(),
                url.error().message());
@@ -1044,23 +1044,23 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       //
       // https://datatracker.ietf.org/doc/html/rfc7230#section-5.3
       //
-      if (reader->m_url.has_scheme())
+      if (reader->url_.has_scheme())
          ; // keep it
       else if constexpr (std::is_same_v<Stream, asio::ssl::stream<asio::ip::tcp::socket>>)
-         reader->m_url.set_scheme("https");
+         reader->url_.set_scheme("https");
       else
-         reader->m_url.set_scheme("http");
+         reader->url_.set_scheme("http");
 
       try
       {
-         reader->m_url.set_encoded_authority(request[http::field::host]);
+         reader->url_.set_encoded_authority(request[http::field::host]);
       }
       catch (std::exception& ex)
       {
          mlogw("ignoring invalid host header: {}", request[http::field::host]);
       }
 
-      mlogd("{} {} (need_eof={})", request.method_string(), reader->m_url.buffer(), need_eof);
+      mlogd("{} {} (need_eof={})", request.method_string(), reader->url_.buffer(), need_eof);
       for (auto& header : request)
          mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
                truncated(header.value()));
@@ -1070,25 +1070,25 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       // stream to an HTTP/2 session, which continues this request as stream 1. Anything that
       // follows in the buffer (the client preface) is already HTTP/2.
       //
-      if (auto upgrade = h2c_upgrade(request, reader->m_url, parser.is_done()))
+      if (auto upgrade = h2c_upgrade(request, reader->url_, parser.is_done()))
       {
          http::response<http::empty_body> res{http::status::switching_protocols, request.version()};
          res.set(http::field::connection, "Upgrade");
          res.set(http::field::upgrade, "h2c");
          reader.reset(); // owns the parser and thereby 'request'
 
-         if (auto [ec, n] = co_await http::async_write(m_stream, res, as_tuple); ec)
+         if (auto [ec, n] = co_await http::async_write(stream_, res, as_tuple); ec)
          {
             mlogw("upgrade: writing 101 response: {}", ec.message());
             break;
          }
 
-         mlogi("upgrading to h2c, {} bytes in buffer", m_buffer.size());
+         mlogi("upgrading to h2c, {} bytes in buffer", buffer_.size());
          // Stream is whatever this session runs on, but never a TLS one: h2c_upgrade() takes
          // cleartext requests only, as h2 over TLS is negotiated by ALPN instead.
-         m_upgraded =
-            nghttp2::make_server_session(server(), std::move(m_stream), std::move(*upgrade));
-         co_await m_upgraded->do_session(std::move(m_buffer));
+         upgraded_ =
+            nghttp2::make_server_session(server(), std::move(stream_), std::move(*upgrade));
+         co_await upgraded_->do_session(std::move(buffer_));
          mlogi("h2c session done, served {} requests before upgrade", requestCounter - 1);
          co_return;
       }
@@ -1097,7 +1097,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       // Prepare response.
       //
       detach_writers(); // likewise for the previous response
-      auto writer = std::make_shared<ResponseWriter<Stream>>(*this, m_stream);
+      auto writer = std::make_shared<ResponseWriter<Stream>>(*this, stream_);
 
       http::response<http::buffer_body>& response = writer->message;
       http::response_serializer<http::buffer_body>& serializer = writer->serializer;
@@ -1142,7 +1142,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          catch (const boost::system::system_error& e)
          {
             mloge("exception in request handler: {}", e.code().message());
-            get_socket(m_stream).shutdown(socket_base::shutdown_both);
+            get_socket(stream_).shutdown(socket_base::shutdown_both);
             throw;
          }
       }
@@ -1154,7 +1154,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       //
       //        We should have a parser here, and call is_done() on it.
       //
-      mlogd("request handler finished (size={} capacity={})", m_buffer.size(), m_buffer.capacity());
+      mlogd("request handler finished (size={} capacity={})", buffer_.size(), buffer_.capacity());
 
       //
       // Honor 'Connection: close'
@@ -1181,7 +1181,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    // End the stream itself first: over TLS, that is the "close_notify" the peer needs to tell the
    // end of the data from a connection that was cut. Everything else has nothing to send here.
    //
-   if (auto teardown_ec = co_await async_teardown(m_stream); teardown_ec)
+   if (auto teardown_ec = co_await async_teardown(stream_); teardown_ec)
       mlogw("teardown: {}", teardown_ec.message());
 
    //
@@ -1190,10 +1190,10 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    // whatever has not been delivered yet -- which can be the very response that said the
    // connection was ending.
    //
-   get_socket(m_stream).shutdown(asio::ip::tcp::socket::shutdown_send, ec);
+   get_socket(stream_).shutdown(asio::ip::tcp::socket::shutdown_send, ec);
    if (ec && ec != asio::error::not_connected) // the peer may be gone already
       mlogw("shutdown: {}", ec.message());
-   get_socket(m_stream).close(ec);
+   get_socket(stream_).close(ec);
 
    mlogd("session done");
 }
@@ -1203,12 +1203,12 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 template <typename Stream>
 awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
-   m_buffer = std::move(buffer);
+   buffer_ = std::move(buffer);
 
-   mlogd("do_client_session, {} bytes in buffer", m_buffer.size());
+   mlogd("do_client_session, {} bytes in buffer", buffer_.size());
 
    // Set the low-level TCP stream timeout. This is relevant for some testcases...
-   // m_stream.expires_after(5s);
+   // stream_.expires_after(5s);
 
    //
    // Even in HTTP/1.1, where the current request and the current response's serializers take
@@ -1238,7 +1238,7 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    timer.expires_after(2s);
    co_await timer.async_wait(deferred);
 
-   // auto [ec, len] = co_await async_read_header(m_stream, buffer, parser, as_tuple);
+   // auto [ec, len] = co_await async_read_header(stream_, buffer, parser, as_tuple);
    co_return;
 }
 
@@ -1261,19 +1261,19 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
    // error.
    //
    error_code ec;
-   if (m_send_failed)
+   if (send_failed_)
       ec = asio::error::connection_aborted;
-   else if (m_sending)
+   else if (sending_)
       ec = asio::error::would_block;
    if (ec)
    {
       mlogw("async_submit: {} ({})", what(ec),
-            m_sending ? "previous request not complete yet" : "an earlier request failed");
+            sending_ ? "previous request not complete yet" : "an earlier request failed");
       complete_immediately(std::move(handler), super::get_executor(), ec, client::Request{nullptr});
       return;
    }
 
-   auto writer = std::make_unique<RequestWriter<Stream>>(*this, m_stream);
+   auto writer = std::make_unique<RequestWriter<Stream>>(*this, stream_);
    auto& request = writer->message;
 
    //
@@ -1295,8 +1295,8 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
       mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
             truncated(header.value()));
 
-   writer->sequence = m_requests_sent++;
-   m_sending = writer.get();
+   writer->sequence = requests_sent_++;
+   sending_ = writer.get();
 
    auto& serializer = writer->serializer;
    auto ex = get_associated_executor(handler, super::get_executor());
@@ -1306,7 +1306,7 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
          std::move(handler)(ec, client::Request(std::move(writer)));
       };
 
-   async_write_header(m_stream, serializer, bind_executor(ex, std::move(cb)));
+   async_write_header(stream_, serializer, bind_executor(ex, std::move(cb)));
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1314,17 +1314,17 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
 template <typename Stream>
 void ClientSession<Stream>::request_complete(RequestWriter<Stream>& request)
 {
-   assert(m_sending == &request);
+   assert(sending_ == &request);
    mlogd("request #{} complete", request.sequence);
-   m_sending = nullptr;
+   sending_ = nullptr;
 }
 
 template <typename Stream>
 void ClientSession<Stream>::request_failed(RequestWriter<Stream>& request)
 {
    mlogw("request #{} failed, no more requests can be sent", request.sequence);
-   m_send_failed = true;
-   m_sending = nullptr;
+   send_failed_ = true;
+   sending_ = nullptr;
 }
 
 template <typename Stream>
@@ -1333,7 +1333,7 @@ void ClientSession<Stream>::request_released(RequestWriter<Stream>& request)
    //
    // The connection is in the middle of this request, and nothing else can be sent any more.
    //
-   if (m_sending == &request)
+   if (sending_ == &request)
       request_failed(request);
 
    //
@@ -1342,7 +1342,7 @@ void ClientSession<Stream>::request_released(RequestWriter<Stream>& request)
    if (!request.response_requested)
    {
       mlogw("request #{} released without getting its response", request.sequence);
-      m_receive_failed = true;
+      receive_failed_ = true;
    }
 }
 
@@ -1350,11 +1350,11 @@ template <typename Stream>
 void ClientSession<Stream>::reader_finished(bool complete)
 {
    if (complete)
-      ++m_responses_read;
+      ++responses_read_;
    else
    {
-      mlogw("response #{} not read completely", m_responses_read);
-      m_receive_failed = true;
+      mlogw("response #{} not read completely", responses_read_);
+      receive_failed_ = true;
    }
 }
 

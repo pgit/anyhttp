@@ -8,7 +8,7 @@ namespace anyhttp
 
 // =================================================================================================
 
-Reader::Reader(std::shared_ptr<Reader::Impl> impl) noexcept : m_impl(std::move(impl)) {}
+Reader::Reader(std::shared_ptr<Reader::Impl> impl) noexcept : impl_(std::move(impl)) {}
 
 Reader::Reader(Reader&&) noexcept = default;
 Reader& Reader::operator=(Reader&&) noexcept = default;
@@ -17,10 +17,10 @@ Reader::~Reader() { reset(); }
 
 void Reader::reset() noexcept
 {
-   if (m_impl)
+   if (impl_)
    {
-      m_impl->destroy();
-      m_impl.reset();
+      impl_->destroy();
+      impl_.reset();
    }
 }
 
@@ -28,18 +28,18 @@ void Reader::reset() noexcept
 
 Reader::executor_type Reader::get_executor() const noexcept
 {
-   return m_impl ? m_impl->get_executor() : executor_type{};
+   return impl_ ? impl_->get_executor() : executor_type{};
 }
 
 std::optional<size_t> Reader::content_length() const noexcept
 {
-   return m_impl ? m_impl->content_length() : std::nullopt;
+   return impl_ ? impl_->content_length() : std::nullopt;
 }
 
 void Reader::async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler)
 {
-   if (m_impl)
-      m_impl->async_read_some(buffer, std::move(handler));
+   if (impl_)
+      impl_->async_read_some(buffer, std::move(handler));
    else
       std::move(handler)(asio::error::bad_descriptor, 0);
 }

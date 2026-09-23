@@ -18,14 +18,14 @@ namespace anyhttp
 
 Session::Session(std::shared_ptr<Session::Impl> impl) : impl(std::move(impl))
 {
-   // logd("Session::ctor: use_count={}", m_impl.use_count());
+   // logd("Session::ctor: use_count={}", impl_.use_count());
 }
 
 // -------------------------------------------------------------------------------------------------
 
 Session::Session(Session&& other) noexcept : impl(std::move(other.impl))
 {
-   // logd("Session::move: use_count={}", m_impl.use_count());
+   // logd("Session::move: use_count={}", impl_.use_count());
 }
 
 Session& Session::operator=(Session&& other) noexcept

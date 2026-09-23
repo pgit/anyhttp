@@ -48,8 +48,8 @@ public:
    NGHttp2Session(std::string_view prefix, asio::any_io_executor executor);
    virtual ~NGHttp2Session();
 
-   asio::any_io_executor get_executor() const noexcept override { return m_executor; }
-   const std::string& logPrefix() const { return m_logPrefix; }
+   asio::any_io_executor get_executor() const noexcept override { return executor_; }
+   const std::string& logPrefix() const { return log_prefix_; }
 
    std::string logPrefix(int stream_id) const
    {
@@ -75,7 +75,7 @@ public:
    using ResumeHandler = asio::any_completion_handler<Resume>;
 
    // If set, the send loop has run out of data to send and is waiting for re-activation.
-   ResumeHandler m_send_handler;
+   ResumeHandler send_handler_;
 
    // Wait to be resumed via `start_write()`, called from within `send_loop()`.
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Resume) CompletionToken = DefaultCompletionToken>
@@ -83,8 +83,8 @@ public:
    {
       return asio::async_initiate<CompletionToken, Resume>(
          [&](ResumeHandler handler) {
-            assert(!m_send_handler);
-            m_send_handler = std::move(handler);
+            assert(!send_handler_);
+            send_handler_ = std::move(handler);
          },
          std::forward<CompletionToken>(token));
    }
@@ -94,7 +94,7 @@ public:
    // ----------------------------------------------------------------------------------------------
 
    /**
-    * Helper function to pass data from #m_buffer to nghttp2, invoked by recv_loop().
+    * Helper function to pass data from #buffer_ to nghttp2, invoked by recv_loop().
     * The buffer will be empty when this function returns. Terminates the session on error.
     */
    void handle_buffer_contents();
@@ -119,24 +119,24 @@ public:
    void delete_stream(int32_t stream_id);
 
 public:
-   std::string m_logPrefix;
-   asio::any_io_executor m_executor;
+   std::string log_prefix_;
+   asio::any_io_executor executor_;
 
    nghttp2_session* session = nullptr;
-   std::map<int32_t, std::shared_ptr<NGHttp2Stream>> m_streams;
-   int32_t m_last_id = 0;
-   size_t m_requestCounter = 0;
+   std::map<int32_t, std::shared_ptr<NGHttp2Stream>> streams_;
+   int32_t last_id_ = 0;
+   size_t request_counter_ = 0;
 
    /// The largest header section accepted from the peer, see Config::max_header_size.
-   size_t m_max_header_size = default_max_header_size;
+   size_t max_header_size_ = default_max_header_size;
 
    //
    // What to advertise as this origin's HTTP/3 endpoint in every response, see
    // server::Config::alt_svc_max_age. Only a server session ever has one.
    //
-   std::string m_alt_svc;
+   std::string alt_svc_;
 
-   Buffer m_buffer;
+   Buffer buffer_;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -146,7 +146,7 @@ class NGHttp2SessionImpl : public NGHttp2Session
 {
 protected:
    NGHttp2SessionImpl(std::string_view logPrefix, asio::any_io_executor executor, Stream&& stream)
-      : NGHttp2Session(logPrefix, executor), m_stream(std::move(stream))
+      : NGHttp2Session(logPrefix, executor), stream_(std::move(stream))
    {
    }
 
@@ -156,7 +156,7 @@ public:
    void destroy() noexcept override;
 
 public:
-   Stream m_stream;
+   Stream stream_;
 };
 
 // =================================================================================================
@@ -164,15 +164,15 @@ public:
 class ServerReference
 {
 public:
-   inline ServerReference(server::Server::Impl& parent) : m_server(&parent) {}
+   inline ServerReference(server::Server::Impl& parent) : server_(&parent) {}
    server::Server::Impl& server()
    {
-      assert(m_server);
-      return *m_server;
+      assert(server_);
+      return *server_;
    }
 
 private:
-   server::Server::Impl* m_server = nullptr;
+   server::Server::Impl* server_ = nullptr;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -188,11 +188,11 @@ class ServerSession : public ServerReference, public NGHttp2SessionImpl<Stream>
    using super::recv_loop;
    using super::send_loop;
 
-   using super::m_alt_svc;
-   using super::m_buffer;
-   using super::m_max_header_size;
-   using super::m_stream;
+   using super::alt_svc_;
+   using super::buffer_;
+   using super::max_header_size_;
    using super::session;
+   using super::stream_;
 
 public:
    ServerSession(server::Server::Impl& parent, asio::any_io_executor executor, Stream&& stream);
@@ -200,7 +200,7 @@ public:
    awaitable<void> do_session(Buffer&& data) override;
 
    /// Set if this session continues an HTTP/1.1 request that has been upgraded to h2c.
-   std::optional<Upgrade> m_upgrade;
+   std::optional<Upgrade> upgrade_;
 };
 
 // =================================================================================================
@@ -208,15 +208,15 @@ public:
 class ClientReference
 {
 public:
-   inline ClientReference(client::Client::Impl& parent) : m_client(&parent) {}
+   inline ClientReference(client::Client::Impl& parent) : client_(&parent) {}
    client::Client::Impl& client()
    {
-      assert(m_client);
-      return *m_client;
+      assert(client_);
+      return *client_;
    }
 
 private:
-   client::Client::Impl* m_client = nullptr;
+   client::Client::Impl* client_ = nullptr;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -232,10 +232,10 @@ class ClientSession : public ClientReference, public NGHttp2SessionImpl<Stream>
    using super::recv_loop;
    using super::send_loop;
 
-   using super::m_buffer;
-   using super::m_max_header_size;
-   using super::m_stream;
+   using super::buffer_;
+   using super::max_header_size_;
    using super::session;
+   using super::stream_;
 
 public:
    ClientSession(client::Client::Impl& parent, asio::any_io_executor executor, Stream&& stream);

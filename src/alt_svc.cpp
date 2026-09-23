@@ -96,31 +96,31 @@ bool split_authority(std::string_view authority, std::string& host, std::string&
 class Parser
 {
 public:
-   explicit Parser(std::string_view input) noexcept : m_input(input) {}
+   explicit Parser(std::string_view input) noexcept : input_(input) {}
 
-   bool eof() const noexcept { return m_pos >= m_input.size(); }
-   bool next_is(char c) const noexcept { return !eof() && m_input[m_pos] == c; }
+   bool eof() const noexcept { return pos_ >= input_.size(); }
+   bool next_is(char c) const noexcept { return !eof() && input_[pos_] == c; }
 
    void skip_ows() noexcept
    {
-      while (!eof() && is_ows(m_input[m_pos]))
-         ++m_pos;
+      while (!eof() && is_ows(input_[pos_]))
+         ++pos_;
    }
 
    bool consume(char c) noexcept
    {
       if (!next_is(c))
          return false;
-      ++m_pos;
+      ++pos_;
       return true;
    }
 
    std::string_view token() noexcept
    {
-      const auto start = m_pos;
-      while (!eof() && is_tchar(m_input[m_pos]))
-         ++m_pos;
-      return m_input.substr(start, m_pos - start);
+      const auto start = pos_;
+      while (!eof() && is_tchar(input_[pos_]))
+         ++pos_;
+      return input_.substr(start, pos_ - start);
    }
 
    /// Reads a quoted string and returns its content, with the backslash escapes resolved.
@@ -132,11 +132,11 @@ public:
       std::string result;
       while (!eof())
       {
-         char c = m_input[m_pos++];
+         char c = input_[pos_++];
          if (c == '"')
             return result;
          if (c == '\\' && !eof())
-            c = m_input[m_pos++];
+            c = input_[pos_++];
          result.push_back(c);
       }
 
@@ -162,7 +162,7 @@ public:
       bool quoted = false;
       while (!eof())
       {
-         const char c = m_input[m_pos++];
+         const char c = input_[pos_++];
          if (!quoted)
          {
             if (c == ',')
@@ -170,15 +170,15 @@ public:
             quoted = c == '"';
          }
          else if (c == '\\' && !eof())
-            ++m_pos;
+            ++pos_;
          else if (c == '"')
             quoted = false;
       }
    }
 
 private:
-   std::string_view m_input;
-   size_t m_pos = 0;
+   std::string_view input_;
+   size_t pos_ = 0;
 };
 
 // -------------------------------------------------------------------------------------------------

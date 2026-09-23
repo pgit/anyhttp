@@ -73,7 +73,7 @@ public:
    NGHttp2Stream* stream;
    asio::any_io_executor executor; // kept as a copy so a detached writer can still complete
    bool detached_eof_submitted = false; // latched by detach(): the body was cleanly ended
-   std::optional<size_t> m_content_length;
+   std::optional<size_t> content_length_;
 };
 
 // =================================================================================================
@@ -100,16 +100,16 @@ public:
     * buffering if possible, but if there is currently no user-provided read handler to deliver
     * the data to, we have to store it -- decreasing the stream's receive window in the process.
     *
-    * As long as \c m_pending_read_buffers is non-empty, \c m_read_buffer is viewing the part of
+    * As long as \c pending_read_buffers_ is non-empty, \c read_buffer_ is viewing the part of
     * the first pending read buffer that has not been delivered, yet.
     *
-    * If (and only if) the list of pending read buffers is empty, \c m_read_buffer may be empty as
+    * If (and only if) the list of pending read buffers is empty, \c read_buffer_ may be empty as
     * well. While in \c call_read_handler(), it may be viewing the newly received data that has not
     * been added to the pending read buffers, yet.
     */
-   asio::const_buffer m_read_buffer;
+   asio::const_buffer read_buffer_;
    using Buffer = std::vector<uint8_t>;
-   std::deque<Buffer> m_pending_read_buffers;
+   std::deque<Buffer> pending_read_buffers_;
 
    inline Buffer make_buffer(asio::const_buffer buffer)
    {
@@ -125,7 +125,7 @@ public:
     */
    inline bool reading_finished() const
    {
-      return !reader || eof_received && is_empty(m_read_buffer);
+      return !reader || eof_received && is_empty(read_buffer_);
    }
 
    /// Returns true if the user has submitted EOF and this has been delivered to nghttp2.
@@ -203,9 +203,9 @@ public:
 
    // =================================================================================================
 
-   ReadSomeHandler m_read_handler;
-   boost::asio::mutable_buffer m_read_handler_buffer;
-   bool m_inside_call_read_handler = false;
+   ReadSomeHandler read_handler_;
+   boost::asio::mutable_buffer read_handler_buffer_;
+   bool inside_call_read_handler_ = false;
    void call_read_handler(asio::const_buffer buffer = {});
 
 #if 0
@@ -222,7 +222,7 @@ public:
       //
       auto init = [&](ReadSomeHandler handler)
       {
-         assert(!m_read_handler);
+         assert(!read_handler_);
          if (reading_finished())
          {
             logw("[{}] async_read_some: stream already finished", logPrefix);
@@ -230,7 +230,7 @@ public:
             return;
          }
 #if 1
-         m_read_handler = std::move(handler);
+         read_handler_ = std::move(handler);
 #else
          // According to the rules for asynchronous operations, we need to track
          // outstanding work against the handler's associated executor until the
@@ -239,7 +239,7 @@ public:
 
          // Launch the operation with a callback that will receive the result and
          // pass it through to the asynchronous operation's completion handler.
-         m_read_handler = [handler = std::move(handler), work = std::move(work),
+         read_handler_ = [handler = std::move(handler), work = std::move(work),
                            logPrefix = logPrefix](boost::system::error_code ec,
                                                   std::vector<std::uint8_t> result) mutable
          {
