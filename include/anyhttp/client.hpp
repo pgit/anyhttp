@@ -27,25 +27,25 @@ struct Config
    boost::urls::url url{"localhost:8080"};
    Protocol protocol{Protocol::h2};
 
-   //
-   // The largest header section of a response the client accepts, in bytes, counted as for
-   // server::Config::max_header_size. For a response with more, async_get_response() fails with
-   // boost::beast::http::error::header_limit and the stream is reset -- with HTTP/1.1, which has no
-   // streams, the connection can not be used any more.
-   //
+   /**
+    * The largest header section of a response the client accepts, in bytes, counted as for
+    * \c server::Config::max_header_size. For a response with more, \c async_get_response() fails
+    * with \c boost::beast::http::error::header_limit and the stream is reset -- with HTTP/1.1,
+    * which has no streams, the connection can not be used any more.
+    */
    size_t max_header_size = default_max_header_size;
 
-   //
-   // Whether to take up an HTTP/3 alternative service the server advertises (RFC 7838), as an
-   // "Alt-Svc" header field on a response or, over HTTP/2, an ALTSVC frame. QUIC has no in-band
-   // upgrade, so this is what an "upgrade" to HTTP/3 comes down to: the connection that learns
-   // about the alternative keeps speaking what it speaks, and the *next* async_connect() goes to
-   // the advertised endpoint over HTTP/3 instead of using \c protocol.
-   //
-   // The alternative is remembered for as long as its "ma" parameter says, which is 24 hours
-   // unless the server gives one, and only for as long as the Client itself lives -- there is no
-   // cache on disk, so a fresh process starts over with \c protocol.
-   //
+   /**
+    * Whether to take up an HTTP/3 alternative service the server advertises (RFC 7838), as an
+    * "Alt-Svc" header field on a response or, over HTTP/2, an ALTSVC frame. QUIC has no in-band
+    * upgrade, so this is what an "upgrade" to HTTP/3 comes down to: the connection that learns
+    * about the alternative keeps speaking what it speaks, and the *next* async_connect() goes to
+    * the advertised endpoint over HTTP/3 instead of using \c protocol.
+    *
+    * The alternative is remembered for as long as its "ma" parameter says, which is 24 hours
+    * unless the server gives one, and only for as long as the Client itself lives -- there is no
+    * cache on disk, so a fresh process starts over with \c protocol.
+    */
    bool follow_alt_svc = false;
 };
 

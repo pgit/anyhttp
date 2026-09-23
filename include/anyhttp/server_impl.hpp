@@ -104,8 +104,8 @@ public:
 private:
    Config m_config;
 
-   boost::asio::any_io_executor m_executor;
-   boost::asio::ssl::context m_tlsContext;
+   asio::any_io_executor m_executor;
+   asio::ssl::context m_tlsContext;
    asio::ip::tcp::acceptor m_acceptor;
    std::string m_altSvc;
 

@@ -1039,8 +1039,14 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
       //
       // Deduce scheme from underlying socket type.
+      // Other than that, HTTP does not have a way to convey a custom "scheme".
+      // Only in HTTP/2 and HTTP/3 there is a pseudo-header for that.
       //
-      if constexpr (std::is_same_v<Stream, asio::ssl::stream<asio::ip::tcp::socket>>)
+      // https://datatracker.ietf.org/doc/html/rfc7230#section-5.3
+      //
+      if (reader->m_url.has_scheme())
+         ; // keep it
+      else if constexpr (std::is_same_v<Stream, asio::ssl::stream<asio::ip::tcp::socket>>)
          reader->m_url.set_scheme("https");
       else
          reader->m_url.set_scheme("http");
@@ -1247,7 +1253,7 @@ void ServerSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
 
 template <typename Stream>
 void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_view method,
-                                         boost::urls::url url, const Fields& headers)
+                                         boost::urls::url target, const Fields& headers)
 {
    //
    // Only one request can be incomplete at a time, see ClientSession. Instead of waiting for the
@@ -1270,16 +1276,21 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
    auto writer = std::make_unique<RequestWriter<Stream>>(*this, m_stream);
    auto& request = writer->message;
 
-   request.base().target(url.encoded_target());
+   //
+   // FIXME: https://datatracker.ietf.org/doc/html/rfc7230#section-5.3
+   //        Usually, target should be in "origin form", but we need to support other forms, too.
+   //
+   request.base().target(target.encoded_target());
+   // request.base().target(url.buffer());
    request.method_string(method);
    request.set(http::field::user_agent, "anyhttp");
    add_fields(request, headers);
    if (request.find(http::field::host) == request.end())
-      request.set(http::field::host, url.encoded_authority());
+      request.set(http::field::host, target.encoded_host_and_port());
    if (!request.has_content_length())
       request.chunked(true);
 
-   mlogd("{} {}", request.method_string(), url.buffer());
+   mlogd("{} {}", request.method_string(), target.buffer());
    for (const auto& header : request)
       mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
             truncated(header.value()));

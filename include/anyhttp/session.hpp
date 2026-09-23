@@ -60,7 +60,7 @@ public:
     *
     */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Submit) CompletionToken = DefaultCompletionToken>
-   auto async_submit(boost::urls::url url, const Fields& headers = {},
+   auto async_submit(boost::urls::url target, const Fields& headers = {},
                      CompletionToken&& token = CompletionToken())
    {
       auto executor = asio::get_associated_executor(token, get_executor());
@@ -70,7 +70,7 @@ public:
             [this](auto&& handler, boost::urls::url url, const Fields& headers) { //
                async_submit_any(std::move(handler), std::move(url), headers);
             }),
-         token, std::move(url), headers);
+         token, std::move(target), headers);
    }
 
    /**
