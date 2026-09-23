@@ -145,7 +145,7 @@ TEST_P(AsyncGet, WHEN_cancelled_THEN_completes_with_operation_canceled_and_empty
 //
 TEST(AsyncGetRaw, WHEN_get_THEN_request_line_says_GET)
 {
-   setupLogging();
+   setup_logging();
    io_context context;
    tcp::acceptor acceptor(context, tcp::endpoint(ip::make_address("127.0.0.1"), 0));
 

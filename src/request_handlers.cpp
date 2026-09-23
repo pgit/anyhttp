@@ -162,7 +162,7 @@ awaitable<void> discard(server::Request request, server::Response response) { co
 
 awaitable<void> generate(Writer& writer, size_t bytes)
 {
-   return sendAndForceEOF(writer, rv::iota(uint8_t{0}) | rv::take(bytes));
+   return send_and_force_eof(writer, rv::iota(uint8_t{0}) | rv::take(bytes));
 }
 
 awaitable<size_t> drain(Reader& reader)

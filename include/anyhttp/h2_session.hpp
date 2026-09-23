@@ -49,19 +49,19 @@ public:
    virtual ~NGHttp2Session();
 
    asio::any_io_executor get_executor() const noexcept override { return executor_; }
-   const std::string& logPrefix() const { return log_prefix_; }
+   const std::string& log_prefix() const { return log_prefix_; }
 
-   std::string logPrefix(int stream_id) const
+   std::string log_prefix(int stream_id) const
    {
       if (stream_id)
-         return std::format("{}.{}", logPrefix(), stream_id);
+         return std::format("{}.{}", log_prefix(), stream_id);
       else
-         return logPrefix();
+         return log_prefix();
    }
 
-   inline std::string logPrefix(const nghttp2_frame* frame) const
+   inline std::string log_prefix(const nghttp2_frame* frame) const
    {
-      return logPrefix(frame->hd.stream_id);
+      return log_prefix(frame->hd.stream_id);
    }
 
    // ----------------------------------------------------------------------------------------------
@@ -145,8 +145,8 @@ template <typename Stream>
 class NGHttp2SessionImpl : public NGHttp2Session
 {
 protected:
-   NGHttp2SessionImpl(std::string_view logPrefix, asio::any_io_executor executor, Stream&& stream)
-      : NGHttp2Session(logPrefix, executor), stream_(std::move(stream))
+   NGHttp2SessionImpl(std::string_view log_prefix, asio::any_io_executor executor, Stream&& stream)
+      : NGHttp2Session(log_prefix, executor), stream_(std::move(stream))
    {
    }
 
@@ -184,7 +184,7 @@ class ServerSession : public ServerReference, public NGHttp2SessionImpl<Stream>
 
    // FIXME: maybe use CRTP or something similar to avoid this?
    using super::handle_buffer_contents;
-   using super::logPrefix;
+   using super::log_prefix;
    using super::recv_loop;
    using super::send_loop;
 
@@ -228,7 +228,7 @@ class ClientSession : public ClientReference, public NGHttp2SessionImpl<Stream>
 
    // FIXME: maybe use CRTP or something similar to avoid this?
    using super::handle_buffer_contents;
-   using super::logPrefix;
+   using super::log_prefix;
    using super::recv_loop;
    using super::send_loop;
 

@@ -222,7 +222,7 @@ public:
    }
 
    asio::any_io_executor get_executor() const noexcept { return executor_; }
-   inline auto logPrefix() const { return session ? session->logPrefix() : "DETACHED"; }
+   inline auto log_prefix() const { return session ? session->log_prefix() : "DETACHED"; }
 
    BeastSession<Stream>* session;
    Stream& stream;
@@ -329,7 +329,7 @@ public:
          session->release(*this);
    }
 
-   inline auto logPrefix() const { return session ? session->logPrefix() : "DETACHED"; }
+   inline auto log_prefix() const { return session ? session->log_prefix() : "DETACHED"; }
 
    // ----------------------------------------------------------------------------------------------
 
@@ -543,7 +543,7 @@ class ResponseWriter
       WriterBase<server::Response::Impl, Stream, http::response_serializer<http::buffer_body>>;
 
 public:
-   using super::logPrefix;
+   using super::log_prefix;
    using super::message;
    using super::serializer;
    using super::session;
@@ -613,7 +613,7 @@ class RequestWriter
 public:
    using super::cancelled;
    using super::eof_submitted;
-   using super::logPrefix;
+   using super::log_prefix;
    using super::message;
    using super::response_requested;
    using super::serializer;

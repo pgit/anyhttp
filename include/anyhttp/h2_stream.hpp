@@ -171,7 +171,7 @@ public:
    /// Set instead of has_response for a response that is not delivered, but fails.
    boost::system::error_code response_error;
 
-   std::string logPrefix;
+   std::string log_prefix_;
    std::string method;
    boost::urls::url url;
 
@@ -225,7 +225,7 @@ public:
          assert(!read_handler_);
          if (reading_finished())
          {
-            logw("[{}] async_read_some: stream already finished", logPrefix);
+            logw("[{}] async_read_some: stream already finished", log_prefix_);
             handler(boost::asio::error::misc_errors::eof, std::vector<std::uint8_t>{});
             return;
          }
@@ -240,7 +240,7 @@ public:
          // Launch the operation with a callback that will receive the result and
          // pass it through to the asynchronous operation's completion handler.
          read_handler_ = [handler = std::move(handler), work = std::move(work),
-                           logPrefix = logPrefix](boost::system::error_code ec,
+                           log_prefix_ = log_prefix_](boost::system::error_code ec,
                                                   std::vector<std::uint8_t> result) mutable
          {
             // Get the handler's associated allocator. If the handler does not
@@ -250,19 +250,19 @@ public:
 
             // Dispatch the completion handler through the handler's associated
             // executor, using the handler's associated allocator.
-            logd("[{}] async_read_some: dispatching...", logPrefix);
+            logd("[{}] async_read_some: dispatching...", log_prefix_);
             boost::asio::dispatch(
                work.get_executor(),
                boost::asio::bind_allocator(alloc, [handler = std::move(handler), ec,
                                                    result = std::move(result),
-                                                   logPrefix = logPrefix]() mutable { //
-                  logd("[{}] async_read_some: running dispatched handler...", logPrefix);
+                                                   log_prefix_ = log_prefix_]() mutable { //
+                  logd("[{}] async_read_some: running dispatched handler...", log_prefix_);
                   std::move(handler)(ec, result);
-                  logd("[{}] async_read_some: running dispatched handler... done", logPrefix);
+                  logd("[{}] async_read_some: running dispatched handler... done", log_prefix_);
                }));
-            logd("[{}] async_read_some: dispatching... done", logPrefix);
+            logd("[{}] async_read_some: dispatching... done", log_prefix_);
          };
-         logd("[{}] async_read_some: read handler set", logPrefix);
+         logd("[{}] async_read_some: read handler set", log_prefix_);
 #endif
          call_read_handler();
       };

@@ -82,7 +82,7 @@ TEST_P(ClientAsyncCancellation, CancellationContentLength)
          // This is a single large buffer and will be serialized as a single chunk. When writing
          // gets cancelled, there is no way to recover gracefully.
          //
-         auto sender = sendAndForceEOF(request, std::string_view(buffer));
+         auto sender = send_and_force_eof(request, std::string_view(buffer));
 
          boost::system::error_code ec;
          auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
@@ -118,7 +118,7 @@ TEST_P(ClientAsyncCancellation, Cancellation)
       {
          auto request = co_await session.async_submit(url.set_path("echo"), {});
          auto response = co_await request.async_get_response();
-         auto sender = sendAndDrop(std::move(request), std::string_view(buffer));
+         auto sender = send_and_drop(std::move(request), std::string_view(buffer));
 
          boost::system::error_code ec;
          auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
@@ -159,8 +159,8 @@ TEST_P(ClientAsyncCancellation, CancellationRange)
          co_await yield();
          auto request = co_await session.async_submit(url.set_path("echo"), {});
          auto response = co_await request.async_get_response();
-         // auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)));
-         auto sender = sendAndDrop(std::move(request), rv::iota(uint8_t(0)));
+         // auto sender = send_and_force_eof(request, rv::iota(uint8_t(0)));
+         auto sender = send_and_drop(std::move(request), rv::iota(uint8_t(0)));
 
          boost::system::error_code ec;
          auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));

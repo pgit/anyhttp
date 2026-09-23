@@ -51,7 +51,7 @@ public:
    ngtcp2_conn* conn() const noexcept { return conn_; }
    nghttp3_conn* h3() const noexcept { return h3_; }
    bool closed() const noexcept { return closed_; }
-   const std::string& logPrefix() const noexcept { return log_prefix_; }
+   const std::string& log_prefix() const noexcept { return log_prefix_; }
 
    /// The largest header section accepted from the peer, see Config::max_header_size.
    size_t max_header_size() const noexcept { return max_header_size_; }

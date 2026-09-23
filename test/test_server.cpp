@@ -47,7 +47,7 @@ protected:
 
    void SetUp() override
    {
-      setupLogging();
+      setup_logging();
 
       server.emplace(
          context.get_executor(),

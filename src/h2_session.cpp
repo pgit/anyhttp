@@ -43,7 +43,7 @@ namespace http = boost::beast::http;
 namespace anyhttp::nghttp2
 {
 
-static std::string_view frameType(uint8_t type)
+static std::string_view frame_type(uint8_t type)
 {
    switch (type)
    {
@@ -119,7 +119,7 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
    stream->header_size += header_field_size(name, value);
    if (stream->header_size > handler->max_header_size_)
    {
-      logw("[{}] header section exceeds {} bytes, ignoring the rest", handler->logPrefix(frame),
+      logw("[{}] header section exceeds {} bytes, ignoring the rest", handler->log_prefix(frame),
            handler->max_header_size_);
       stream->header_limit_exceeded = true;
       stream->received_headers.clear();
@@ -173,7 +173,7 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
    }
    catch (std::exception& ex)
    {
-      logw("[{}] ignoring invalid header: {} ({})", handler->logPrefix(frame), value, ex.what());
+      logw("[{}] ignoring invalid header: {} ({})", handler->log_prefix(frame), value, ex.what());
    }
 
    return 0;
@@ -183,8 +183,8 @@ int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* fr
                                int lib_error_code, void* user_data)
 {
    const auto handler = static_cast<NGHttp2Session*>(user_data);
-   logw("[{}] on_frame_not_send_callback: {} {}", handler->logPrefix(frame),
-        frameType(frame->hd.type), nghttp2_strerror(lib_error_code));
+   logw("[{}] on_frame_not_send_callback: {} {}", handler->log_prefix(frame),
+        frame_type(frame->hd.type), nghttp2_strerror(lib_error_code));
 
    //
    // nghttp2 closes the stream of a request HEADERS frame that could not be sent, but leaves the
@@ -202,7 +202,7 @@ int on_error_callback(nghttp2_session* session, int lib_error_code, const char* 
                       void* user_data)
 {
    auto handler = static_cast<NGHttp2Session*>(user_data);
-   loge("[{}] on_error_callback: {}", handler->logPrefix(), std::string_view(msg, len));
+   loge("[{}] on_error_callback: {}", handler->log_prefix(), std::string_view(msg, len));
    return 0;
 }
 
@@ -223,7 +223,7 @@ int on_invalid_header_callback(nghttp2_session* session, const nghttp2_frame* fr
    auto handler = static_cast<NGHttp2Session*>(user_data);
    auto nameBuf = nghttp2_rcbuf_get_buf(name);
    loge("[{}] invalid_header_callback: {}: {}", //
-        handler->logPrefix(), to_string_view(name), to_string_view(value));
+        handler->log_prefix(), to_string_view(name), to_string_view(value));
    return 0;
 }
 
@@ -231,8 +231,8 @@ int on_invalid_frame_recv_callback(nghttp2_session* session, const nghttp2_frame
                                    int lib_error_code, void* user_data)
 {
    const auto handler = static_cast<NGHttp2Session*>(user_data);
-   logw("[{}] on_invalid_frame_recv_callback: {} {}", handler->logPrefix(frame),
-        frameType(frame->hd.type), nghttp2_strerror(lib_error_code));
+   logw("[{}] on_invalid_frame_recv_callback: {} {}", handler->log_prefix(frame),
+        frame_type(frame->hd.type), nghttp2_strerror(lib_error_code));
    return 0;
 }
 
@@ -255,7 +255,7 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
    {
       const auto* altsvc = static_cast<const nghttp2_ext_altsvc*>(frame->ext.payload);
       const auto value = make_string_view(altsvc->field_value, altsvc->field_value_len);
-      logd("[{}] on_frame_recv_callback: ALTSVC: {}", handler->logPrefix(frame), value);
+      logd("[{}] on_frame_recv_callback: ALTSVC: {}", handler->log_prefix(frame), value);
       handler->on_alt_svc(value);
       return 0;
    }
@@ -264,8 +264,8 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
 
    if (!stream && frame->hd.stream_id > 0)
    {
-      logw("[{}] on_frame_recv_callback: {}, but no stream found (id={})", handler->logPrefix(),
-           frameType(frame->hd.type), frame->hd.stream_id);
+      logw("[{}] on_frame_recv_callback: {}, but no stream found (id={})", handler->log_prefix(),
+           frame_type(frame->hd.type), frame->hd.stream_id);
 
       // fixes h2spec http/5.1/7
       nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
@@ -277,7 +277,7 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
    {
    case NGHTTP2_DATA:
       assert(stream);
-      logd("[{}] on_frame_recv_callback: DATA len={} flags={}", handler->logPrefix(frame),
+      logd("[{}] on_frame_recv_callback: DATA len={} flags={}", handler->log_prefix(frame),
            frame->hd.length, frame->hd.flags);
 
       if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM)
@@ -290,9 +290,9 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
       assert(stream);
       using namespace boost::beast::http;
       if (frame->headers.cat == NGHTTP2_HCAT_REQUEST)
-         logd("[{}] {} {}", stream->logPrefix, stream->method, stream->url.buffer());
+         logd("[{}] {} {}", stream->log_prefix_, stream->method, stream->url.buffer());
       else if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE && stream->status_code)
-         logd("[{}] {} {}", stream->logPrefix, *stream->status_code,
+         logd("[{}] {} {}", stream->log_prefix_, *stream->status_code,
               obsolete_reason(int_to_status(*stream->status_code)));
       stream->log_received_headers();
 
@@ -319,17 +319,18 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
    }
 
    case NGHTTP2_WINDOW_UPDATE:
-      logd("[{}] on_frame_recv_callback: WINDOW_UPDATE, increment={}", handler->logPrefix(frame),
+      logd("[{}] on_frame_recv_callback: WINDOW_UPDATE, increment={}", handler->log_prefix(frame),
            frame->window_update.window_size_increment);
       break;
 
    case NGHTTP2_GOAWAY:
-      logd("[{}] on_frame_recv_callback: GOAWAY", handler->logPrefix(frame));
+      logd("[{}] on_frame_recv_callback: GOAWAY", handler->log_prefix(frame));
       handler->destroy(); // fixes h2spec generic/3.8
       break;
 
    default:
-      logd("[{}] on_frame_recv_callback: {}", handler->logPrefix(frame), frameType(frame->hd.type));
+      logd("[{}] on_frame_recv_callback: {}", handler->log_prefix(frame),
+           frame_type(frame->hd.type));
       break;
    }
 
@@ -347,11 +348,11 @@ int on_data_chunk_recv_callback(nghttp2_session* session, uint8_t flags, int32_t
    if (!stream)
    {
       logw("[{}.{}] on_data_chunk_recv_callback: DATA, but no stream found (id={})",
-           handler->logPrefix(), stream_id, stream_id);
+           handler->log_prefix(), stream_id, stream_id);
       return 0;
    }
 
-   logd("[{}.{}] on_data_chunk_recv_callback: DATA, len={}", handler->logPrefix(), stream_id, len);
+   logd("[{}.{}] on_data_chunk_recv_callback: DATA, len={}", handler->log_prefix(), stream_id, len);
    stream->on_data(session, stream_id, data, len);
    handler->start_write(); // might re-open windows
 
@@ -363,14 +364,14 @@ int on_frame_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
    std::ignore = session;
    std::ignore = frame;
 
-   auto type = frameType(frame->hd.type);
+   auto type = frame_type(frame->hd.type);
 
    auto handler = static_cast<NGHttp2Session*>(user_data);
    if (frame->hd.stream_id)
-      logd("[{}] on_frame_send_callback: {} length={} flags={}", handler->logPrefix(frame),
-           frameType(frame->hd.type), frame->hd.length, frame->hd.flags);
+      logd("[{}] on_frame_send_callback: {} length={} flags={}", handler->log_prefix(frame),
+           frame_type(frame->hd.type), frame->hd.length, frame->hd.flags);
    else
-      logd("[{}] on_frame_send_callback: {}", handler->logPrefix(), frameType(frame->hd.type));
+      logd("[{}] on_frame_send_callback: {}", handler->log_prefix(), frame_type(frame->hd.type));
 
    return 0;
 }
@@ -383,7 +384,7 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
 
    auto handler = static_cast<NGHttp2Session*>(user_data);
    logd("[{}] on_stream_close_callback: {} ({}) (local={}, remote={})",
-        handler->logPrefix(stream_id), nghttp2_http2_strerror(error_code), error_code, local_close,
+        handler->log_prefix(stream_id), nghttp2_http2_strerror(error_code), error_code, local_close,
         remote_close);
 
    handler->close_stream(stream_id);
@@ -494,14 +495,14 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    {
       if (item.name_string().starts_with(':'))
          logw("[{}] async_submit: invalid header '{}': setting pseudo headers is not allowed",
-              stream->logPrefix, item.name_string());
+              stream->log_prefix_, item.name_string());
 
       nva.push_back(make_nv_ls(item.name_string(), item.value()));
    }
 
-   logd("[{}] {} {}", stream->logPrefix, method_str, url.buffer());
+   logd("[{}] {} {}", stream->log_prefix_, method_str, url.buffer());
    for (auto nv : nva)
-      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->logPrefix, truncated(name_of(nv)),
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->log_prefix_, truncated(name_of(nv)),
            truncated(value_of(nv)));
 
    //
@@ -531,10 +532,10 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    }
 
    stream->id = id;
-   stream->logPrefix = std::format("{}.{}", logPrefix(), id);
+   stream->log_prefix_ = std::format("{}.{}", log_prefix(), id);
    last_id_ = id;
 
-   logd("[{}] submit: new stream ID: {}", stream->logPrefix, id);
+   logd("[{}] submit: new stream ID: {}", stream->log_prefix_, id);
    streams_.emplace(id, stream);
    post(get_executor(),
         [handler = std::move(handler),
@@ -593,7 +594,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    auto it = streams_.find(stream_id);
    if (it == std::end(streams_))
    {
-      logd("[{}] close_stream: stream already gone", logPrefix(stream_id));
+      logd("[{}] close_stream: stream already gone", log_prefix(stream_id));
       return;
    }
 
@@ -622,7 +623,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
       //
       if (stream->has_response || stream->response_error)
       {
-         logd("[{}] close_stream: response not delivered yet", logPrefix(stream_id));
+         logd("[{}] close_stream: response not delivered yet", log_prefix(stream_id));
          it->second->call_read_handler(); // FIXME: this seems to be not needed
          return; // keep stream for now
       }
@@ -633,7 +634,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    //
    streams_.erase(it);
 
-   logd("[{}] close_stream: found {}, {} streams left", logPrefix(stream_id), (void*)stream.get(),
+   logd("[{}] close_stream: found {}, {} streams left", log_prefix(stream_id), (void*)stream.get(),
         streams_.size());
 
    //
@@ -644,7 +645,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    //
    if (stream->read_handler_)
    {
-      logd("[{}] stream closed while reading, raising 'partial_message'", logPrefix(stream_id));
+      logd("[{}] stream closed while reading, raising 'partial_message'", log_prefix(stream_id));
       swap_and_invoke(stream->read_handler_, boost::beast::http::error::partial_message, 0);
    }
 

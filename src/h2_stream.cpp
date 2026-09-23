@@ -131,7 +131,7 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    {
       cs.assign([this](asio::cancellation_type_t ct) {
          logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m ({})", //
-              stream->logPrefix, "cancelled", int(ct));
+              stream->log_prefix_, "cancelled", int(ct));
 
          if (stream->read_handler_)
          {
@@ -144,7 +144,7 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
 #endif
 
    assert(!stream->read_handler_);
-   logd("[{}] async_read_some:", stream->logPrefix);
+   logd("[{}] async_read_some:", stream->log_prefix_);
    stream->read_handler_buffer_ = buffer;
    stream->read_handler_ = std::move(handler);
    stream->call_read_handler();
@@ -242,7 +242,8 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    }
 
    using namespace boost::beast::http;
-   logd("[{}] {} {}", stream->logPrefix, status_code, obsolete_reason(int_to_status(status_code)));
+   logd("[{}] {} {}", stream->log_prefix_, status_code,
+        obsolete_reason(int_to_status(status_code)));
 
    const std::string status_code_str = std::format("{}", status_code);
    const std::string date = format_http_date(std::chrono::system_clock::now());
@@ -263,7 +264,7 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    for (auto&& item : headers)
    {
       if (item.name_string().starts_with(':'))
-         logw("[{}] async_submit: invalid header '{}'", stream->logPrefix, item.name_string());
+         logw("[{}] async_submit: invalid header '{}'", stream->log_prefix_, item.name_string());
 
       nva.push_back(make_nv_ls(item.name_string(), item.value()));
    }
@@ -276,7 +277,7 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    }
 
    for (auto nv : nva)
-      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->logPrefix, truncated(name_of(nv)),
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->log_prefix_, truncated(name_of(nv)),
            truncated(value_of(nv)));
 
    // TODO: If we already know that there is no body, don't set a producer.
@@ -341,9 +342,9 @@ void NGHttp2Writer<Base>::async_get_response(client::Request::GetResponseHandler
 // =================================================================================================
 
 NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int id_)
-   : parent(parent), id(id_), logPrefix(std::format("{}.{}", parent.logPrefix(), id_))
+   : parent(parent), id(id_), log_prefix_(std::format("{}.{}", parent.log_prefix(), id_))
 {
-   logd("[{}] \x1b[1;33mStream: ctor\x1b[0m", logPrefix);
+   logd("[{}] \x1b[1;33mStream: ctor\x1b[0m", log_prefix_);
 }
 
 size_t NGHttp2Stream::read_buffers_size() const
@@ -373,7 +374,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
             read_buffer_ = asio::buffer(pending_read_buffers_.front());
       }
       logd("[{}] read_callback: no pending read handler... ({} buffers and {} bytes pending)",
-           logPrefix, pending_read_buffers_.size(), read_buffers_size());
+           log_prefix_, pending_read_buffers_.size(), read_buffers_size());
       return;
    }
 
@@ -389,7 +390,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    //
    if (inside_call_read_handler_)
    {
-      logd("[{}] read_callback: avoided recursion, returning...", logPrefix);
+      logd("[{}] read_callback: avoided recursion, returning...", log_prefix_);
       return;
    }
 
@@ -419,10 +420,10 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
 
       if (count == 1)
          logd("[{}] read_callback: calling read handler with {} bytes... (buf={})", //
-              logPrefix, copied, asio::buffer_size(read_buffer_));
+              log_prefix_, copied, asio::buffer_size(read_buffer_));
       else
          logd("[{}] read_callback: calling read handler with {} bytes... (#{} in a row, buf={})",
-              logPrefix, copied, count, asio::buffer_size(read_buffer_));
+              log_prefix_, copied, count, asio::buffer_size(read_buffer_));
 
       //
       // swap_and_invoke() moves the read handler into a local variable before invoking it,
@@ -442,9 +443,9 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
       if (read_handler_)
          logd("[{}] read_callback: calling handler with {} bytes... done,"
               " RESPAWNED ({} buffers pending)",
-              logPrefix, copied, pending_read_buffers_.size());
+              log_prefix_, copied, pending_read_buffers_.size());
       else
-         logd("[{}] read_callback: calling handler with {} bytes... done", logPrefix, copied);
+         logd("[{}] read_callback: calling handler with {} bytes... done", log_prefix_, copied);
 
       //
       // Advance to next stored buffer. If there is none, start writing the view that has been
@@ -474,13 +475,13 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    if (consumed)
    {
       nghttp2_session_consume_stream(parent.session, id, consumed);
-      logd("[{}] consumed {} bytes, windows sizes: local {} / remote {}", logPrefix, consumed,
+      logd("[{}] consumed {} bytes, windows sizes: local {} / remote {}", log_prefix_, consumed,
            nghttp2_session_get_stream_local_window_size(parent.session, id),
            nghttp2_session_get_stream_remote_window_size(parent.session, id));
       parent.start_write();
    }
 
-   logd("[{}] read_callback: finished, {} buffers pending, eof_received={}", logPrefix,
+   logd("[{}] read_callback: finished, {} buffers pending, eof_received={}", log_prefix_,
         pending_read_buffers_.size(), eof_received);
 
    //
@@ -509,7 +510,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    {
       while (read_handler_)
       {
-         logd("[{}] read_callback: delivering EOF...", logPrefix);
+         logd("[{}] read_callback: delivering EOF...", log_prefix_);
          swap_and_invoke(read_handler_, error_code{asio::error::eof}, 0);
          //
          // At this point, in testcases like "IgnoreRequest", the stream may already have been
@@ -518,7 +519,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
          //
          // To avoid this, deleting the stream is post()ed in on_stream_close_callback()
          //
-         logd("[{}] read_callback: delivering EOF... done", logPrefix);
+         logd("[{}] read_callback: delivering EOF... done", log_prefix_);
       }
       return;
    }
@@ -542,7 +543,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
       {
          logw("[{}] read_callback: EOF after {} bytes total,"
               " which less than advertised content length of {}",
-              logPrefix, bytesRead, *content_length);
+              log_prefix_, bytesRead, *content_length);
          ec = boost::beast::http::error::partial_message;
       }
 
@@ -552,7 +553,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
    {
       assert(pending_read_buffers_.empty());
       // assert(!is_reading_finished);
-      logw("[{}] call_handler_loop: read after close", logPrefix);
+      logw("[{}] call_handler_loop: read after close", log_prefix_);
       swap_and_invoke(read_handler_, boost::system::error_code{}, 0);
       assert(!read_handler_); // FIXME -- but what if the user sets a new handler anyway?
    }
@@ -565,7 +566,7 @@ void NGHttp2Stream::on_data(nghttp2_session* session, int32_t id_, const uint8_t
    assert(!eof_received);
    assert(len); // for EOF, on_eof() is called instead
 
-   logd("[{}] read callback: {} bytes...", logPrefix, len);
+   logd("[{}] read callback: {} bytes...", log_prefix_, len);
 
    nghttp2_session_consume_connection(session, len);
 
@@ -581,7 +582,7 @@ void NGHttp2Stream::on_eof(nghttp2_session* session, int32_t id_)
    assert(id == id_);
    assert(!eof_received);
 
-   logd("[{}] read callback: EOF", logPrefix);
+   logd("[{}] read callback: EOF", log_prefix_);
 
    eof_received = true;
    call_read_handler({/* empty buffer */});
@@ -589,35 +590,35 @@ void NGHttp2Stream::on_eof(nghttp2_session* session, int32_t id_)
 
 NGHttp2Stream::~NGHttp2Stream()
 {
-   logd("[{}] \x1b[33mStream: dtor... \x1b[0m", logPrefix);
+   logd("[{}] \x1b[33mStream: dtor... \x1b[0m", log_prefix_);
    if (reader)
    {
-      logd("Stream: dtor... detaching reader", logPrefix);
+      logd("Stream: dtor... detaching reader", log_prefix_);
       reader->detach();
    }
    if (writer)
    {
-      logd("Stream: dtor... detaching writer", logPrefix);
+      logd("Stream: dtor... detaching writer", log_prefix_);
       writer->detach();
    }
    if (response_handler)
    {
-      logw("Stream: dtor... cancelling async_get_response()", logPrefix);
+      logw("Stream: dtor... cancelling async_get_response()", log_prefix_);
       swap_and_invoke(response_handler, errc::make_error_code(errc::operation_canceled),
                       client::Response{nullptr});
    }
    if (read_handler_)
    {
-      logw("Stream: dtor... cancelling async_read_some()", logPrefix);
+      logw("Stream: dtor... cancelling async_read_some()", log_prefix_);
       swap_and_invoke(read_handler_, boost::beast::http::error::partial_message, bytesRead);
    }
    if (write_handler)
    {
-      logw("Stream: dtor... cancelling async_write()", logPrefix);
+      logw("Stream: dtor... cancelling async_write()", log_prefix_);
       swap_and_invoke(write_handler, errc::make_error_code(errc::operation_canceled));
    }
 
-   logd("[{}] \x1b[33mStream: dtor... done\x1b[0m", logPrefix);
+   logd("[{}] \x1b[33mStream: dtor... done\x1b[0m", log_prefix_);
 }
 
 // =================================================================================================
@@ -642,7 +643,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
    {
       if (!empty)
       {
-         loge("[{}] async_write: body has already been ended", logPrefix);
+         loge("[{}] async_write: body has already been ended", log_prefix_);
          complete_immediately(std::move(handler), get_executor(),
                               errc::make_error_code(errc::broken_pipe));
          return;
@@ -664,7 +665,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
 
    if (closed)
    {
-      logw("[{}] async_write: stream already closed", logPrefix);
+      logw("[{}] async_write: stream already closed", log_prefix_);
       complete_immediately(std::move(handler), get_executor(),
                            errc::make_error_code(errc::operation_canceled));
       return;
@@ -672,7 +673,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
 
    assert(!write_handler);
 
-   logd("[{}] async_write: buffer={} eof={} is_deferred={}", logPrefix, buffer.size(), eof,
+   logd("[{}] async_write: buffer={} eof={} is_deferred={}", log_prefix_, buffer.size(), eof,
         is_deferred);
 
    write_buffer = buffer;
@@ -683,7 +684,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
    if (slot.is_connected() && !slot.has_handler())
    {
       slot.assign([this](asio::cancellation_type_t ct) {
-         logd("[{}] async_write: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", ct);
+         logd("[{}] async_write: \x1b[1;31m{}\x1b[0m ({})", log_prefix_, "cancelled", ct);
          // delete_writer();
 
          if (write_handler)
@@ -705,7 +706,8 @@ void NGHttp2Stream::resume()
 {
    if (is_deferred)
    {
-      logd("[{}] async_write: resuming stream ({} bytes to write)", logPrefix, write_buffer.size());
+      logd("[{}] async_write: resuming stream ({} bytes to write)", log_prefix_,
+           write_buffer.size());
 
       //
       // It is important to reset the deferred state BEFORE resuming, because it may result in
@@ -721,13 +723,13 @@ void NGHttp2Stream::resume()
 
 void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& handler)
 {
-   logd("[{}] async_get_response:", logPrefix);
+   logd("[{}] async_get_response:", log_prefix_);
 
    assert(!response_handler);
    if (response_delivered)
    {
       auto ec = asio::error::basic_errors::already_started;
-      logw("[{}] async_get_response: \x1b[1;31m{}\x1b[0m", logPrefix, what(ec));
+      logw("[{}] async_get_response: \x1b[1;31m{}\x1b[0m", log_prefix_, what(ec));
       asio::any_completion_executor ex = asio::get_associated_immediate_executor(handler, get_executor());
       ex.execute([handler = std::move(handler), ec = std::move(ec)]() mutable { //
          std::move(handler)(ec, client::Response{nullptr});
@@ -739,7 +741,7 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
    if (cs.is_connected())
    {
       cs.assign([this](asio::cancellation_type_t ct) {
-         logd("[{}] async_get_response: \x1b[1;31m{}\x1b[0m ({})", logPrefix, "cancelled", ct);
+         logd("[{}] async_get_response: \x1b[1;31m{}\x1b[0m ({})", log_prefix_, "cancelled", ct);
 
          if (response_handler)
          {
@@ -766,17 +768,17 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
 {
    if (closed)
    {
-      logd("[{}] write callback: stream closed", logPrefix);
+      logd("[{}] write callback: stream closed", log_prefix_);
       return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
    }
 
    assert(!is_deferred);
    assert(!eof_submitted);
-   logd("[{}] write callback (buffer size={} bytes)", logPrefix, length);
+   logd("[{}] write callback (buffer size={} bytes)", log_prefix_, length);
 
    if (!write_handler)
    {
-      logd("[{}] write callback: nothing to send, DEFERRING", logPrefix);
+      logd("[{}] write callback: nothing to send, DEFERRING", log_prefix_);
       is_deferred = true;
       return NGHTTP2_ERR_DEFERRED;
    }
@@ -791,7 +793,7 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
       //
       copied = asio::buffer_copy(boost::asio::buffer(buf, length), write_buffer);
 
-      logd("[{}] write callback: copied {} bytes", logPrefix, copied);
+      logd("[{}] write callback: copied {} bytes", log_prefix_, copied);
       write_buffer += copied;
       if (write_buffer.size() == 0)
       {
@@ -803,26 +805,26 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
          //
          if (eof_requested)
          {
-            logd("[{}] write callback: EOF along with the last {} bytes", logPrefix, copied);
+            logd("[{}] write callback: EOF along with the last {} bytes", log_prefix_, copied);
             eof_submitted = true;
             *data_flags |= NGHTTP2_DATA_FLAG_EOF;
          }
 
-         logd("[{}] write callback: running handler...", logPrefix);
+         logd("[{}] write callback: running handler...", log_prefix_);
          swap_and_invoke(write_handler, boost::system::error_code{});
          if (write_handler)
-            logd("[{}] write callback: running handler... done -- RESPAWNED", logPrefix);
+            logd("[{}] write callback: running handler... done -- RESPAWNED", log_prefix_);
          else
-            logd("[{}] write callback: running handler... done", logPrefix);
+            logd("[{}] write callback: running handler... done", log_prefix_);
       }
 
-      logd("[{}] write callback: {} bytes left", logPrefix, write_buffer.size());
+      logd("[{}] write callback: {} bytes left", log_prefix_, write_buffer.size());
    }
    else
    {
       // an empty write is only ever accepted as the end of the body, see async_write()
       assert(eof_requested);
-      logd("[{}] write callback: EOF", logPrefix);
+      logd("[{}] write callback: EOF", log_prefix_);
       eof_submitted = true;
       *data_flags |= NGHTTP2_DATA_FLAG_EOF;
       swap_and_invoke(write_handler, boost::system::error_code{});
@@ -834,7 +836,7 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
 void NGHttp2Stream::log_received_headers()
 {
    for (const auto& [name, value] : received_headers)
-      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", logPrefix, truncated(name), truncated(value));
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", log_prefix_, truncated(name), truncated(value));
    received_headers.clear();
 }
 
@@ -859,15 +861,15 @@ void NGHttp2Stream::deliver_response()
 {
    if (!has_response && !response_error)
    {
-      logd("[{}] deliver_response: no response, yet", logPrefix);
+      logd("[{}] deliver_response: no response, yet", log_prefix_);
    }
    else if (!response_handler)
    {
-      logw("[{}] deliver_response: not waiting for a response, yet", logPrefix);
+      logw("[{}] deliver_response: not waiting for a response, yet", log_prefix_);
    }
    else if (response_error)
    {
-      logw("[{}] deliver_response: {}", logPrefix, what(response_error));
+      logw("[{}] deliver_response: {}", log_prefix_, what(response_error));
       response_delivered = true;
       swap_and_invoke(response_handler, response_error, client::Response{nullptr});
 
@@ -907,7 +909,7 @@ void NGHttp2Stream::on_request()
       asio::co_spawn(get_executor(), handler(std::move(request), std::move(response)), asio::detached);
    else
    {
-      loge("[{}] on_request: no request handler!", logPrefix);
+      loge("[{}] on_request: no request handler!", log_prefix_);
       asio::co_spawn(get_executor(), not_found(std::move(response)), asio::detached);
    }
 }
@@ -929,18 +931,18 @@ asio::any_io_executor NGHttp2Stream::get_executor() const noexcept { return pare
  */
 void NGHttp2Stream::delete_reader()
 {
-   logd("[{}] delete_reader", logPrefix);
+   logd("[{}] delete_reader", log_prefix_);
 
    assert(!read_handler_);
 
    if (closed)
-      logd("[{}] delete_reader: stream already closed", logPrefix);
+      logd("[{}] delete_reader: stream already closed", log_prefix_);
    else if (reading_finished())
-      logd("[{}] delete_reader: reading finished", logPrefix);
+      logd("[{}] delete_reader: reading finished", log_prefix_);
    else if (size_t pending = read_buffers_size())
    {
       logw("[{}] delete_reader: reading not finished, discarding {} pending bytes in {} buffers",
-           logPrefix, pending, pending_read_buffers_.size());
+           log_prefix_, pending, pending_read_buffers_.size());
 
       // Don't re-open the stream window here, or the peer will resume sending data to us.
       read_buffer_ = asio::const_buffer{};
@@ -953,7 +955,7 @@ void NGHttp2Stream::delete_reader()
 
 void NGHttp2Stream::delete_writer()
 {
-   logd("[{}] delete_writer", logPrefix);
+   logd("[{}] delete_writer", log_prefix_);
 
    //
    // If the writer is deleted before it has delivered all data, we have to close the stream
@@ -971,13 +973,13 @@ void NGHttp2Stream::delete_writer()
    // For normal operation, the sender has to be end()ed anyway.
    //
    if (closed)
-      logd("[{}] delete_writer: stream already closed", logPrefix);
+      logd("[{}] delete_writer: stream already closed", log_prefix_);
    else if (eof_submitted)
-      logd("[{}] delete_writer: writing finished", logPrefix);
+      logd("[{}] delete_writer: writing finished", log_prefix_);
    /*
    else
    {
-      logw("[{}] delete_writer: not done yet, submitting RST with STREAM_CLOSED", logPrefix);
+      logw("[{}] delete_writer: not done yet, submitting RST with STREAM_CLOSED", log_prefix_);
       nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_CANCEL);
       parent.start_write();
    }
@@ -990,14 +992,14 @@ void NGHttp2Stream::delete_writer()
 void NGHttp2Stream::maybe_close_stream()
 {
    if (closed)
-      logd("[{}] cleanup_stream: stream already closed", logPrefix);
+      logd("[{}] cleanup_stream: stream already closed", log_prefix_);
    else if (writer)
-      logd("[{}] cleanup_stream: still writing", logPrefix);
+      logd("[{}] cleanup_stream: still writing", log_prefix_);
    else if (!eof_submitted || (!eof_received && !reader))
    {
       logw("[{}] cleanup_stream: not reading or writing any more, "
            "submitting RST with STREAM_CLOSED",
-           logPrefix);
+           log_prefix_);
 
       // submitting RST will lead to on_stream_close_callback(), eventually
       nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);

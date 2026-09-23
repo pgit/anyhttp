@@ -41,9 +41,9 @@
          spdlog::default_logger_raw()->debug(__VA_ARGS__);                                         \
    } while (false)
 
-#define mloge(x, ...) loge("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
-#define mlogd(x, ...) logd("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
-#define mlogi(x, ...) logi("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
-#define mlogw(x, ...) logw("[{}] " x, logPrefix() __VA_OPT__(, ) __VA_ARGS__)
+#define mloge(x, ...) loge("[{}] " x, log_prefix() __VA_OPT__(, ) __VA_ARGS__)
+#define mlogd(x, ...) logd("[{}] " x, log_prefix() __VA_OPT__(, ) __VA_ARGS__)
+#define mlogi(x, ...) logi("[{}] " x, log_prefix() __VA_OPT__(, ) __VA_ARGS__)
+#define mlogw(x, ...) logw("[{}] " x, log_prefix() __VA_OPT__(, ) __VA_ARGS__)
 
 // =================================================================================================

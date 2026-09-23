@@ -118,7 +118,7 @@ using ReadSome = void(boost::system::error_code, size_t);
 using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
 
 using WriteSome = void(boost::system::error_code, size_t);
-using writeSomeHandler = asio::any_completion_handler<WriteSome>;
+using WriteSomeHandler = asio::any_completion_handler<WriteSome>;
 
 using Write = void(boost::system::error_code);
 using WriteHandler = asio::any_completion_handler<Write>;

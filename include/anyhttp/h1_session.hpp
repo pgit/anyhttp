@@ -26,12 +26,12 @@ template <typename Stream>
 class BeastSession : public ::anyhttp::Session::Impl
 {
 protected:
-   BeastSession(std::string_view logPrefix, asio::any_io_executor executor, Stream&& stream);
+   BeastSession(std::string_view log_prefix, asio::any_io_executor executor, Stream&& stream);
 
 public:
    ~BeastSession() override;
 
-   std::string_view logPrefix() const { return log_prefix_; }
+   std::string_view log_prefix() const { return log_prefix_; }
 
    // ----------------------------------------------------------------------------------------------
 
@@ -110,7 +110,7 @@ class ServerSession : public ServerSessionBase, public BeastSession<Stream>
    using super::closed_;
    using super::detach_readers;
    using super::detach_writers;
-   using super::logPrefix;
+   using super::log_prefix;
    using super::stream_;
 
 public:
@@ -187,7 +187,7 @@ class ClientSession : public ClientSessionBase, public BeastSession<Stream>
 
    // FIXME: maybe use CRTP or something similar to avoid this?
    using super::buffer_;
-   using super::logPrefix;
+   using super::log_prefix;
    using super::stream_;
 
 public:

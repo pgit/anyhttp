@@ -7,7 +7,7 @@ using namespace testing;
 class ClientConnect : public Test
 {
 public:
-   void SetUp() override { setupLogging(); }
+   void SetUp() override { setup_logging(); }
 };
 
 // -------------------------------------------------------------------------------------------------

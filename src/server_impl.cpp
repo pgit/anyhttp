@@ -388,7 +388,7 @@ awaitable<void> Server::Impl::tcp_accept_loop()
    // FIXME: sessionCounter and sessions_ are not thread safe, yet
    //
    // The main problem with sessions_ is that the new session is emplaced within
-   // handleConnection(), which is already outside this coroutines strand.
+   // handle_connection(), which is already outside this coroutines strand.
    //
    // Maybe the simplest solution is to put a mutex around it...
    //
