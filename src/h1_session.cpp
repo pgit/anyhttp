@@ -34,6 +34,7 @@
 #include <boost/beast/http/write.hpp>
 #include <boost/beast/ssl/ssl_stream.hpp>
 #include <boost/beast/version.hpp>
+
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <boost/system/errc.hpp>
@@ -43,7 +44,6 @@
 #include <algorithm>
 #include <charconv>
 #include <optional>
-#include <stdexcept>
 #include <string_view>
 
 using namespace std::chrono_literals;
