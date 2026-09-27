@@ -449,6 +449,31 @@ TEST_P(ClientAsync, WHEN_body_ends_THEN_read_reports_eof)
 }
 
 //
+// A sequence of buffers is read into its first non-empty buffer.
+//
+TEST_P(ClientAsync, WHEN_reading_into_buffer_sequence_THEN_empty_buffers_are_skipped)
+{
+   static const auto hello = "Hello, World!"sv;
+   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+      co_await drain(request);
+      co_await response.async_submit(200, fields({{"Content-Length", hello.size()}}));
+      co_await response.async_write_eof(asio::buffer(hello));
+   };
+   clientSession = [this](Session session) -> awaitable<void> {
+      auto request = co_await session.async_submit(url);
+      co_await request.async_write_eof();
+      auto response = co_await request.async_get_response();
+
+      std::array<char, 0> empty;
+      std::array<char, 64> buffer;
+      auto n = co_await response.async_read_some(
+         std::array{asio::buffer(empty), asio::buffer(buffer)});
+      EXPECT_GT(n, 0u);
+      EXPECT_THAT(hello, StartsWith(std::string_view(buffer.data(), n)));
+   };
+}
+
+//
 // An empty async_write() no longer ends a body -- async_write_eof() does, and nothing else. So a
 // message with an empty write in the middle of it still carries everything written after that.
 //
