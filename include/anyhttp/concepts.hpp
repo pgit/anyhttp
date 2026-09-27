@@ -3,7 +3,9 @@
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/system/error_code.hpp>
+
 #include <concepts>
+#include <functional>
 
 namespace anyhttp
 {
@@ -31,12 +33,12 @@ concept AsyncStream =
       { stream.async_write_some(const_buffer, handler) } -> std::same_as<void>;
    };
 
-template <typename T, typename MutableBufferSequence, typename Token>
-concept AsyncReadStream = requires(T t, const MutableBufferSequence& buffers, Token&& token) {
-   { t.async_read_some(buffers, std::forward<Token>(token)) };
-   { t.get_executor() };
-   requires std::is_destructible_v<T>;
-   requires std::is_move_constructible_v<T>;
-};
+template <typename T>
+concept AsyncReadStream =
+   requires(T& stream, boost::asio::mutable_buffer buffer,
+            std::function<void(boost::system::error_code, std::size_t)> handler) {
+      stream.get_executor();
+      stream.async_read_some(buffer, handler);
+   };
 
 } // namespace anyhttp

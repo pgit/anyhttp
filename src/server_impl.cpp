@@ -63,8 +63,8 @@ Response::Impl::~Impl() = default;
 static asio::ssl::context make_tls_server_context();
 
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
-   : m_config(std::move(config)), m_executor(std::move(executor)),
-     m_tlsContext(make_tls_server_context()), m_acceptor(m_executor)
+   : config_(std::move(config)), executor_(std::move(executor)),
+     tls_context_(make_tls_server_context()), acceptor_(executor_)
 {
    logi("Server: ctor");
    listen_tcp();
@@ -73,18 +73,18 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    // HTTP/3 shares the endpoint the TCP acceptor is listening on, so it has to be set up after
    // listen_tcp(): with port=0 the actual port is only known once the acceptor is bound.
    //
-   auto tcp_ep = m_acceptor->local_endpoint();
-   m_http3 = make_http3_server(*this, ip::udp::endpoint{tcp_ep.address(), tcp_ep.port()});
+   auto tcp_ep = acceptor_.local_endpoint();
+   http3_ = make_http3_server(*this, ip::udp::endpoint{tcp_ep.address(), tcp_ep.port()});
 
    //
    // Advertise that endpoint to HTTP/1.1 and HTTP/2 clients, see Config::alt_svc_max_age. The
    // alt-authority carries the port alone: an empty host in one means the host of the origin
    // itself, which is exactly where HTTP/3 is, one transport over.
    //
-   if (m_http3 && m_config.alt_svc_max_age > 0s)
+   if (http3_ && config_.alt_svc_max_age > 0s)
    {
-      m_altSvc = std::format("h3=\":{}\"; ma={}", tcp_ep.port(), m_config.alt_svc_max_age.count());
-      logi("Server: advertising '{}'", m_altSvc);
+      alt_svc_ = std::format("h3=\":{}\"; ma={}", tcp_ep.port(), config_.alt_svc_max_age.count());
+      logi("Server: advertising '{}'", alt_svc_);
    }
 }
 
@@ -98,7 +98,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
  */
 void Server::Impl::start()
 {
-   co_spawn(m_executor, tcp_accept_loop(),
+   co_spawn(executor_, tcp_accept_loop(),
             [self = shared_from_this()](const std::exception_ptr& ex) {
                if (ex)
                   logw("TCP accept loop: {}", what(ex));
@@ -106,8 +106,8 @@ void Server::Impl::start()
                   logi("TCP accept loop: done");
             });
 
-   if (m_http3)
-      m_http3->start();
+   if (http3_)
+      http3_->start();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -116,26 +116,25 @@ void Server::Impl::destroy()
 {
    logi("Server: destroy");
 
-   if (m_acceptor)
-      m_acceptor->close(); // breaks listen_loop()
+   acceptor_.close(); // breaks listen_loop()
 
    //
    // Destroy all active sessions (TCP and QUIC) so their timers and async operations are
    // cancelled, allowing the io_context to drain. QUIC sessions send a final CONNECTION_CLOSE
    // as part of destroy() -- through their own dup()ed fd, so closing the shared UDP socket
-   // below doesn't race with it. Setting m_destroyed under the same lock is what keeps
+   // below doesn't race with it. Setting destroyed_ under the same lock is what keeps
    // process_quic_batch(), running on some session strand, from registering a new session
    // after this loop has run: it re-checks the flag under the lock before inserting.
    //
    {
-      auto lock = std::lock_guard(m_sessionMutex);
-      m_destroyed = true;
-      for (auto& session : m_sessions)
+      auto lock = std::lock_guard(session_mutex_);
+      destroyed_ = true;
+      for (auto& session : sessions_)
          session->destroy();
    }
 
-   if (m_http3)
-      m_http3->destroy();
+   if (http3_)
+      http3_->destroy();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -143,48 +142,55 @@ void Server::Impl::destroy()
 Server::Impl::~Impl()
 {
    logi("Server: dtor");
-   assert(m_destroyed);
+   assert(destroyed_);
 }
 
 // -------------------------------------------------------------------------------------------------
 
 bool Server::Impl::add_session(std::shared_ptr<Session::Impl> session)
 {
-   auto lock = std::lock_guard(m_sessionMutex);
-   if (m_destroyed)
+   auto lock = std::lock_guard(session_mutex_);
+   if (destroyed_)
       return false;
-   m_sessions.emplace(std::move(session));
+   sessions_.emplace(std::move(session));
    return true;
 }
 
 void Server::Impl::remove_session(const std::shared_ptr<Session::Impl>& session)
 {
-   auto lock = std::lock_guard(m_sessionMutex);
-   m_sessions.erase(session);
+   auto lock = std::lock_guard(session_mutex_);
+   sessions_.erase(session);
 }
 
 // =================================================================================================
 
 void Server::Impl::listen_tcp()
 {
-   assert(m_acceptor);
-   auto& acceptor = *m_acceptor;
-
    boost::system::error_code ec;
    auto address = ip::make_address(config().listen_address, ec);
    if (ec)
       logw("Server: error resolving '{}': {}", config().listen_address, ec.what());
 
    ip::tcp::endpoint ep(address, config().port);
+   acceptor_.open(ep.protocol());
+   acceptor_.set_option(asio::socket_base::reuse_address(true));
+
+   //
+   // Accept IPv4 clients on an IPv6 listener, too. This has to go after open() -- there is no
+   // socket to set it on before that -- and before bind(), which is when it takes effect. Not
+   // fatal if it fails: most systems are dual-stack by default (net.ipv6.bindv6only=0) anyway.
+   //
    if (ep.protocol() == ip::tcp::v6())
-      acceptor.set_option(ip::v6_only(false), ec);
+   {
+      acceptor_.set_option(ip::v6_only(false), ec);
+      if (ec)
+         logw("Server: error enabling dual-stack on {}: {}", ep, ec.what());
+   }
 
-   acceptor.open(ep.protocol());
-   acceptor.set_option(asio::socket_base::reuse_address(true));
-   acceptor.bind(ep);
-   acceptor.listen();
+   acceptor_.bind(ep);
+   acceptor_.listen();
 
-   ep = acceptor.local_endpoint();
+   ep = acceptor_.local_endpoint();
    logi("Server: TCP listening on {}", ep);
 }
 
@@ -289,7 +295,7 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    {
       logi("[{}] detected TLS client hello, {} bytes in buffer", prefix, buffer.size());
 
-      ssl_stream.emplace(std::move(socket), m_tlsContext);
+      ssl_stream.emplace(std::move(socket), tls_context_);
       auto n = co_await ssl_stream->async_handshake(asio::ssl::stream_base::server, buffer.data());
       buffer.consume(n);
 
@@ -376,15 +382,13 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
  */
 awaitable<void> Server::Impl::tcp_accept_loop()
 {
-   assert(m_acceptor);
-   auto& acceptor = *m_acceptor;
    const auto executor = co_await boost::asio::this_coro::executor;
 
    //
-   // FIXME: sessionCounter and m_sessions are not thread safe, yet
+   // FIXME: sessionCounter and sessions_ are not thread safe, yet
    //
-   // The main problem with m_sessions is that the new session is emplaced within
-   // handleConnection(), which is already outside this coroutines strand.
+   // The main problem with sessions_ is that the new session is emplaced within
+   // handle_connection(), which is already outside this coroutines strand.
    //
    // Maybe the simplest solution is to put a mutex around it...
    //
@@ -411,7 +415,7 @@ awaitable<void> Server::Impl::tcp_accept_loop()
       //       or explicit thread pools where really needed.
       //
       ip::tcp::socket socket(config().use_strand ? boost::asio::make_strand(executor) : executor);
-      auto [ec] = co_await acceptor.async_accept(socket, as_tuple);
+      auto [ec] = co_await acceptor_.async_accept(socket, as_tuple);
       if (ec)
       {
          if (ec == boost::system::errc::operation_canceled)
@@ -429,14 +433,14 @@ awaitable<void> Server::Impl::tcp_accept_loop()
       // track their lifetime.
       //
       {
-         auto lock = std::lock_guard(m_sessionMutex);
+         auto lock = std::lock_guard(session_mutex_);
          ++sessionCounter;
       }
 
       auto connection_executor = socket.get_executor();
       co_spawn(connection_executor, handle_connection(std::move(socket)),
                [&, ep](const std::exception_ptr& ex) mutable {
-                  auto lock = std::lock_guard(m_sessionMutex);
+                  auto lock = std::lock_guard(session_mutex_);
                   --sessionCounter;
                   std::ignore = sessionDone.try_send(boost::system::error_code{});
                   if (ex)
@@ -451,16 +455,16 @@ awaitable<void> Server::Impl::tcp_accept_loop()
    // that was already in flight when the acceptor closed may still register itself after the
    // first sweep, and destroying it is what makes it finish.
    //
-   auto lock = std::unique_lock(m_sessionMutex);
+   auto lock = std::unique_lock(session_mutex_);
    const auto waitingFor = sessionCounter;
    logi("accept terminated, waiting for {} sessions...", waitingFor);
 
    size_t i = 0;
    for (; sessionCounter; ++i)
    {
-      for (auto& session : m_sessions)
+      for (auto& session : sessions_)
          session->destroy();
-      m_sessions.clear();
+      sessions_.clear();
 
       lock.unlock();
       std::ignore = co_await sessionDone.async_receive(as_tuple);

@@ -36,22 +36,22 @@ class MappedFile
 public:
    MappedFile() = default;
    MappedFile(MappedFile&& other) noexcept
-      : m_data(std::exchange(other.m_data, nullptr)), m_size(std::exchange(other.m_size, 0)),
-        m_mtime(other.m_mtime), m_id(other.m_id)
+      : data_(std::exchange(other.data_, nullptr)), size_(std::exchange(other.size_, 0)),
+        mtime_(other.mtime_), id_(other.id_)
    {
    }
    MappedFile& operator=(MappedFile&& other) noexcept
    {
-      std::swap(m_data, other.m_data);
-      std::swap(m_size, other.m_size);
-      std::swap(m_mtime, other.m_mtime);
-      std::swap(m_id, other.m_id);
+      std::swap(data_, other.data_);
+      std::swap(size_, other.size_);
+      std::swap(mtime_, other.mtime_);
+      std::swap(id_, other.id_);
       return *this;
    }
    ~MappedFile()
    {
-      if (m_data)
-         ::munmap(m_data, m_size);
+      if (data_)
+         ::munmap(data_, size_);
    }
 
    static expected<MappedFile> open(const fs::path& path)
@@ -73,18 +73,18 @@ public:
          return std::unexpected(from_errno(S_ISDIR(st.st_mode) ? EISDIR : EINVAL));
 
       MappedFile file;
-      file.m_size = static_cast<size_t>(st.st_size);
-      file.m_mtime = std::chrono::system_clock::from_time_t(st.st_mtime);
-      file.m_id = Identity{st};
-      if (file.m_size == 0)
+      file.size_ = static_cast<size_t>(st.st_size);
+      file.mtime_ = std::chrono::system_clock::from_time_t(st.st_mtime);
+      file.id_ = Identity{st};
+      if (file.size_ == 0)
          return file;
 
-      void* data = ::mmap(nullptr, file.m_size, PROT_READ, MAP_PRIVATE, fd, 0);
+      void* data = ::mmap(nullptr, file.size_, PROT_READ, MAP_PRIVATE, fd, 0);
       if (data == MAP_FAILED)
          return std::unexpected(from_errno(errno));
 
-      ::posix_madvise(data, file.m_size, POSIX_MADV_SEQUENTIAL);
-      file.m_data = data;
+      ::posix_madvise(data, file.size_, POSIX_MADV_SEQUENTIAL);
+      file.data_ = data;
       return file;
    }
 
@@ -104,26 +104,27 @@ public:
          : dev(st.st_dev), ino(st.st_ino), size(st.st_size), mtim(st.st_mtim)
       {
       }
+
       bool operator==(const Identity& other) const noexcept
       {
-         return dev == other.dev && ino == other.ino && size == other.size &&
-                mtim.tv_sec == other.mtim.tv_sec && mtim.tv_nsec == other.mtim.tv_nsec;
+         return std::tie(this->dev, this->ino, this->size, this->mtim.tv_sec, this->mtim.tv_nsec) ==
+                std::tie(other.dev, other.ino, other.size, other.mtim.tv_sec, other.mtim.tv_nsec);
       }
    };
 
-   size_t size() const noexcept { return m_size; }
-   auto mtime() const noexcept { return m_mtime; }
-   const Identity& identity() const noexcept { return m_id; }
+   size_t size() const noexcept { return size_; }
+   auto mtime() const noexcept { return mtime_; }
+   const Identity& identity() const noexcept { return id_; }
    std::span<const std::byte> bytes() const noexcept
    {
-      return {static_cast<const std::byte*>(m_data), m_size};
+      return {static_cast<const std::byte*>(data_), size_};
    }
 
 private:
-   void* m_data = nullptr;
-   size_t m_size = 0;
-   std::chrono::system_clock::time_point m_mtime;
-   Identity m_id{};
+   void* data_ = nullptr;
+   size_t size_ = 0;
+   std::chrono::system_clock::time_point mtime_;
+   Identity id_{};
 };
 
 //
@@ -267,39 +268,39 @@ public:
 private:
    std::shared_ptr<const CachedFile> lookup(const std::string& key)
    {
-      const std::lock_guard lock{m_mutex};
-      const auto it = m_entries.find(key);
-      if (it == m_entries.end())
+      const std::lock_guard lock{mutex_};
+      const auto it = entries_.find(key);
+      if (it == entries_.end())
          return nullptr;
-      m_lru.splice(m_lru.begin(), m_lru, it->second.lru); // most recently used first
+      lru_.splice(lru_.begin(), lru_, it->second.lru); // most recently used first
       return it->second.entry;
    }
 
    void insert(const std::string& key, std::shared_ptr<const CachedFile> entry)
    {
-      const std::lock_guard lock{m_mutex};
+      const std::lock_guard lock{mutex_};
 
-      if (const auto it = m_entries.find(key); it != m_entries.end())
+      if (const auto it = entries_.find(key); it != entries_.end())
       {
-         m_bytes -= it->second.entry->file.size();
-         m_lru.erase(it->second.lru);
-         m_entries.erase(it);
+         bytes_ -= it->second.entry->file.size();
+         lru_.erase(it->second.lru);
+         entries_.erase(it);
       }
 
-      m_bytes += entry->file.size();
-      m_lru.push_front(key);
-      m_entries.emplace(key, Slot{std::move(entry), m_lru.begin()});
+      bytes_ += entry->file.size();
+      lru_.push_front(key);
+      entries_.emplace(key, Slot{std::move(entry), lru_.begin()});
 
       //
       // Keep at least the entry just inserted, so a file larger than the byte budget still gets
       // served from the cache rather than being evicted immediately every time.
       //
-      while (m_entries.size() > 1 && (m_entries.size() > max_entries || m_bytes > max_bytes))
+      while (entries_.size() > 1 && (entries_.size() > max_entries || bytes_ > max_bytes))
       {
-         const auto victim = m_entries.find(m_lru.back());
-         m_bytes -= victim->second.entry->file.size();
-         m_entries.erase(victim);
-         m_lru.pop_back();
+         const auto victim = entries_.find(lru_.back());
+         bytes_ -= victim->second.entry->file.size();
+         entries_.erase(victim);
+         lru_.pop_back();
       }
    }
 
@@ -309,10 +310,10 @@ private:
       std::list<std::string>::iterator lru;
    };
 
-   std::mutex m_mutex;
-   std::unordered_map<std::string, Slot> m_entries;
-   std::list<std::string> m_lru;
-   size_t m_bytes = 0;
+   std::mutex mutex_;
+   std::unordered_map<std::string, Slot> entries_;
+   std::list<std::string> lru_;
+   size_t bytes_ = 0;
 };
 
 FileCache g_cache;

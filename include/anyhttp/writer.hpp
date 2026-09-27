@@ -34,7 +34,6 @@ public:
 
    using executor_type = asio::any_io_executor;
 
-   Writer() noexcept = default;
    explicit Writer(std::shared_ptr<Impl> impl) noexcept;
    Writer(Writer&&) noexcept;
    Writer& operator=(Writer&&) noexcept;
@@ -43,7 +42,7 @@ public:
    /// Releases the implementation, as the destructor does. Writing afterwards fails.
    void reset() noexcept;
 
-   constexpr operator bool() const noexcept { return static_cast<bool>(m_impl); }
+   constexpr operator bool() const noexcept { return static_cast<bool>(impl_); }
 
    /// The executor of the session this message belongs to, or an empty one after \c reset().
    executor_type get_executor() const noexcept;
@@ -97,7 +96,7 @@ public:
 
 protected:
    /// The implementation, for the derived handle to narrow to its own \c Impl. Never null.
-   Impl& pimpl() const noexcept { return *m_impl; }
+   Impl& pimpl() const noexcept { return *impl_; }
 
 private:
    //
@@ -116,7 +115,7 @@ private:
 
    void async_write_any(WriteHandler&& handler, asio::const_buffer buffer, bool eof);
 
-   std::shared_ptr<Impl> m_impl;
+   std::shared_ptr<Impl> impl_;
 };
 
 // =================================================================================================

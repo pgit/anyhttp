@@ -104,7 +104,8 @@ protected:
       //
       // HTTP/1.1 request asking for the upgrade
       //
-      std::array<nghttp2_settings_entry, 1> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100}}};
+      auto iv =
+         std::to_array<nghttp2_settings_entry>({{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100}});
       std::array<uint8_t, 16> settings;
       auto len =
          nghttp2_pack_settings_payload2(settings.data(), settings.size(), iv.data(), iv.size());

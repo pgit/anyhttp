@@ -449,6 +449,31 @@ TEST_P(ClientAsync, WHEN_body_ends_THEN_read_reports_eof)
 }
 
 //
+// A sequence of buffers is read into its first non-empty buffer.
+//
+TEST_P(ClientAsync, WHEN_reading_into_buffer_sequence_THEN_empty_buffers_are_skipped)
+{
+   static const auto hello = "Hello, World!"sv;
+   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+      co_await drain(request);
+      co_await response.async_submit(200, fields({{"Content-Length", hello.size()}}));
+      co_await response.async_write_eof(asio::buffer(hello));
+   };
+   clientSession = [this](Session session) -> awaitable<void> {
+      auto request = co_await session.async_submit(url);
+      co_await request.async_write_eof();
+      auto response = co_await request.async_get_response();
+
+      std::array<char, 0> empty;
+      std::array<char, 64> buffer;
+      auto n = co_await response.async_read_some(
+         std::array{asio::buffer(empty), asio::buffer(buffer)});
+      EXPECT_GT(n, 0u);
+      EXPECT_THAT(hello, StartsWith(std::string_view(buffer.data(), n)));
+   };
+}
+
+//
 // An empty async_write() no longer ends a body -- async_write_eof() does, and nothing else. So a
 // message with an empty write in the middle of it still carries everything written after that.
 //
@@ -674,7 +699,7 @@ TEST_P(ClientAsync, ServerYieldFirst)
 
 // ----------------------------------------------------------------------------------------------
 
-static std::optional<size_t> stackRemainingBytes()
+static std::optional<size_t> stack_remaining_bytes()
 {
    pthread_attr_t attr;
    if (pthread_getattr_np(pthread_self(), &attr) != 0)
@@ -705,7 +730,7 @@ TEST_P(ClientAsync, Recursion)
 #if __has_feature(address_sanitizer)
    GTEST_SKIP() << "skipped under address sanitizer";
 #endif
-   if (!stackRemainingBytes())
+   if (!stack_remaining_bytes())
       GTEST_SKIP() << "unable to measure stack on this platform";
 
    clientSession = [this](Session session) -> awaitable<void> {
@@ -716,14 +741,14 @@ TEST_P(ClientAsync, Recursion)
       // verify that immediate completion (here, due to an empty buffer) does not cause recursion
       std::array<uint8_t, 0> empty;
       co_await response.async_read_some(asio::buffer(empty));
-      auto s0 = stackRemainingBytes().value();
+      auto s0 = stack_remaining_bytes().value();
       co_await response.async_read_some(asio::buffer(empty));
-      auto s1 = stackRemainingBytes().value();
+      auto s1 = stack_remaining_bytes().value();
       EXPECT_EQ(s0, s1);
 
       // however, ASIO allows us to control this behavior using "immediate executors"
       co_await response.async_read_some(asio::buffer(empty), bind_immediate_executor(ex));
-      auto s2 = stackRemainingBytes().value();
+      auto s2 = stack_remaining_bytes().value();
       EXPECT_GT(s1, s2);
    };
 }
@@ -795,7 +820,7 @@ TEST_P(ClientAsync, PostRange)
       // std::string s(10_m, 'a');
       // auto sender = send(request, std::string_view("blah"));
       // auto sender = send(request, std::string(10_m, 'a'));
-      auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1_m));
+      auto sender = send_and_force_eof(request, rv::iota(uint8_t(0)) | rv::take(1_m));
       auto received = co_await (std::move(sender) && drain(response));
       loge("received: {}", received);
       EXPECT_EQ(received, 1_m);
@@ -806,7 +831,7 @@ TEST_P(ClientAsync, PostRangeImmediate)
 {
    clientSession = [this](Session session) -> awaitable<void> {
       auto request = co_await session.async_submit(url.set_path("echo"), {});
-      auto sender = sendAndForceEOF(request, rv::iota(uint8_t(0)) | rv::take(1_m));
+      auto sender = send_and_force_eof(request, rv::iota(uint8_t(0)) | rv::take(1_m));
       auto received = co_await (std::move(sender) && count_response(request));
       loge("received: {}", received);
       EXPECT_EQ(received, 1_m);

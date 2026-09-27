@@ -47,12 +47,12 @@ protected:
 
    void SetUp() override
    {
-      setupLogging();
+      setup_logging();
 
       server.emplace(
          context.get_executor(),
          server::Config{.listen_address = "127.0.0.2", .port = 0, .idle_timeout = IdleTimeout});
-      server->setRequestHandler(
+      server->on_request(
          [this](server::Request request, server::Response response) -> awaitable<void> {
             co_await response.async_submit(200, {});
 

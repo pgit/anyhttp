@@ -46,8 +46,6 @@ void Request::async_get_response_any(Request::GetResponseHandler&& handler)
 
 // =================================================================================================
 
-Response::Response() = default;
-
 Response::Response(std::unique_ptr<Response::Impl> impl) : Reader(std::move(impl))
 {
    if (*this)

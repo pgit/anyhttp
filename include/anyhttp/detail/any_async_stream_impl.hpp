@@ -54,22 +54,22 @@ template <SocketStream Stream>
 class any_async_stream_impl final : public any_async_stream::Impl
 {
 public:
-   explicit any_async_stream_impl(Stream stream) : m_stream(std::move(stream)) {}
+   explicit any_async_stream_impl(Stream stream) : stream_(std::move(stream)) {}
 
    executor_type get_executor() noexcept override
    {
-      return stream_traits<Stream>::get_executor(m_stream);
+      return stream_traits<Stream>::get_executor(stream_);
    }
-   TcpSocketBase& get_socket() override { return anyhttp::get_socket(m_stream); }
+   TcpSocketBase& get_socket() override { return anyhttp::get_socket(stream_); }
 
    void async_write_some(ReadWriteHandler handler, ConstBufferVector buffers) override
    {
-      m_stream.async_write_some(buffers, std::move(handler));
+      stream_.async_write_some(buffers, std::move(handler));
    }
 
    void async_read_some(ReadWriteHandler handler, MutableBufferVector buffers) override
    {
-      m_stream.async_read_some(buffers, std::move(handler));
+      stream_.async_read_some(buffers, std::move(handler));
    }
 
    //
@@ -78,14 +78,14 @@ public:
    //
    void async_shutdown_impl(ShutdownHandler handler) override
    {
-      if constexpr (requires { m_stream.async_shutdown(std::move(handler)); })
-         m_stream.async_shutdown(std::move(handler));
+      if constexpr (requires { stream_.async_shutdown(std::move(handler)); })
+         stream_.async_shutdown(std::move(handler));
       else
          Impl::async_shutdown_impl(std::move(handler));
    }
 
 private:
-   Stream m_stream;
+   Stream stream_;
 };
 
 // -------------------------------------------------------------------------------------------------

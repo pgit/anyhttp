@@ -7,7 +7,7 @@ using namespace testing;
 class ClientConnect : public Test
 {
 public:
-   void SetUp() override { setupLogging(); }
+   void SetUp() override { setup_logging(); }
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -25,7 +25,7 @@ TEST_F(ClientConnect, WHEN_unknown_host_THEN_completes_with_host_not_found_event
    context.run();
 }
 
-TEST_F(ClientConnect, WHEN_wrong_port_THEN_completes_with_host_not_found_eventually)
+TEST_F(ClientConnect, WHEN_wrong_port_THEN_completes_with_connection_refused)
 {
    boost::asio::io_context context;
    auto port = get_unused_port(context);
@@ -38,7 +38,7 @@ TEST_F(ClientConnect, WHEN_wrong_port_THEN_completes_with_host_not_found_eventua
    context.run();
 }
 
-TEST_F(ClientConnect, WHEN_async_connect_is_cancelled_THEN_returns_operation_aborted)
+TEST_F(ClientConnect, WHEN_async_connect_is_cancelled_THEN_returns_operation_canceled)
 {
    boost::asio::io_context context;
    client::Config config{.url = boost::urls::url("http://localhost:12345")};

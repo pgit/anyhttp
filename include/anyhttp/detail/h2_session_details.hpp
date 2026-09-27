@@ -36,8 +36,8 @@ void NGHttp2SessionImpl<Stream>::destroy() noexcept
 {
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
-   get_socket(m_stream).shutdown(asio::socket_base::shutdown_both, ec);
-   logwi(ec, "[{}] destroy: socket shutdown: {}", m_logPrefix, ec.message());
+   get_socket(stream_).shutdown(asio::socket_base::shutdown_both, ec);
+   logwi(ec, "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
    // });
 }
 
@@ -79,7 +79,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
       if (nread < 0)
       {
          logw("send loop: closing stream and throwing");
-         get_socket(m_stream).close(); // will also cancel the read loop
+         get_socket(stream_).close(); // will also cancel the read loop
          throw std::runtime_error("nghttp2_session_mem_send");
       }
 
@@ -101,9 +101,9 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
       //
       else if (const auto bytes_to_write = buffer.size() + nread; bytes_to_write > 0)
       {
-         const std::array<asio::const_buffer, 2> seq{buffer.data(), asio::buffer(data, nread)};
+         const auto seq = std::to_array<const_buffer>({buffer.data(), asio::buffer(data, nread)});
          mylogd("send loop: writing {} bytes...", bytes_to_write);
-         auto [ec, written] = co_await asio::async_write(m_stream, seq, asio::as_tuple);
+         auto [ec, written] = co_await asio::async_write(stream_, seq, asio::as_tuple);
          if (ec)
          {
             mloge("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
@@ -135,7 +135,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
    }
 
    mylogd("send loop: destroying streams...");
-   m_streams.clear();
+   streams_.clear();
    mylogd("send loop: destroying streams... done");
 
    mylogd("send loop: done");
@@ -150,20 +150,20 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
 template <typename Stream>
 awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
 {
-   m_buffer.reserve(64_k);
+   buffer_.reserve(64_k);
 
    unsigned int reason = NGHTTP2_NO_ERROR;
    while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
    {
-      auto free = m_buffer.capacity() - m_buffer.size();
-      auto [ec, n] = co_await m_stream.async_read_some(m_buffer.prepare(free), asio::as_tuple);
+      auto free = buffer_.capacity() - buffer_.size();
+      auto [ec, n] = co_await stream_.async_read_some(buffer_.prepare(free), asio::as_tuple);
       if (ec)
       {
          mylogd("read: {}, terminating session", ec.message());
          reason = NGHTTP2_STREAM_CLOSED;
          break;
       }
-      m_buffer.commit(n);
+      buffer_.commit(n);
 
       handle_buffer_contents();
       start_write();
@@ -172,7 +172,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
    nghttp2_session_terminate_session(session, reason);
    start_write();
 
-   mlogi("recv loop: done, served {} requests", m_requestCounter);
+   mlogi("recv loop: done, served {} requests", request_counter_);
 }
 
 // =================================================================================================
@@ -182,8 +182,8 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, asio::any_io_
                                      Stream&& stream)
    : ServerReference(parent), super("\x1b[1;31mserver\x1b[0m", executor, std::move(stream))
 {
-   m_max_header_size = parent.config().max_header_size;
-   m_alt_svc = parent.alt_svc();
+   max_header_size_ = parent.config().max_header_size;
+   alt_svc_ = parent.alt_svc();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -191,7 +191,7 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, asio::any_io_
 template <typename Stream>
 awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 {
-   m_buffer = std::move(buffer);
+   buffer_ = std::move(buffer);
    auto callbacks = super::setup_callbacks();
 
    //
@@ -204,7 +204,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    nghttp2_option_set_no_http_messaging(options.get(), 0); // h2spec: fails ~16 tests if 1
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
    nghttp2_option_set_max_send_header_block_length(options.get(), 1_m);
-   nghttp2_option_set_max_continuations(options.get(), max_continuations(m_max_header_size));
+   nghttp2_option_set_max_continuations(options.get(), max_continuations(max_header_size_));
 
    if (auto rv = nghttp2_session_server_new2(&session, callbacks.get(), this, options.get()))
       throw std::runtime_error("nghttp2_session_server_new");
@@ -216,8 +216,10 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    // enforces it in neither direction. Header sections beyond max_header_size are rejected where
    // they arrive, see on_header_callback().
    //
-   std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
+   auto iv =
+      std::to_array<nghttp2_settings_entry>({{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
+                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size},
+                                             {NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL, 1}});
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
 #else
@@ -230,10 +232,10 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    // so nghttp2 opens it half-closed (remote). No HEADERS frame will arrive for it, so do what
    // on_begin_headers_callback() and on_frame_recv_callback() would have done.
    //
-   if (m_upgrade)
+   if (upgrade_)
    {
-      const auto& settings = m_upgrade->settings;
-      const bool head_request = m_upgrade->method == "HEAD";
+      const auto& settings = upgrade_->settings;
+      const bool head_request = upgrade_->method == "HEAD";
       if (auto rv =
              nghttp2_session_upgrade2(session, reinterpret_cast<const uint8_t*>(settings.data()),
                                       settings.size(), head_request, nullptr))
@@ -244,14 +246,14 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       else
       {
          auto stream = this->create_stream(1);
-         stream->method = std::move(m_upgrade->method);
-         stream->url = std::move(m_upgrade->url);
-         stream->fields = std::move(m_upgrade->fields);
+         stream->method = std::move(upgrade_->method);
+         stream->url = std::move(upgrade_->url);
+         stream->fields = std::move(upgrade_->fields);
          mlogd("upgraded from HTTP/1.1: {} {}", stream->method, stream->url.buffer());
          stream->on_request();
          stream->on_eof(session, 1);
       }
-      m_upgrade.reset();
+      upgrade_.reset();
    }
 
    //
@@ -272,7 +274,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    // End the stream itself: over TLS, that is the "close_notify" the peer needs to tell the end
    // of the data from a connection that was cut, see async_teardown().
    //
-   if (auto ec = co_await async_teardown(m_stream); ec)
+   if (auto ec = co_await async_teardown(stream_); ec)
       mlogd("teardown: {}", ec.message());
 
    nghttp2_session_del(session);
@@ -287,7 +289,7 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, asio::any_io_
                                      Stream&& stream)
    : ClientReference(parent), super("\x1b[1;32mclient\x1b[0m", executor, std::move(stream))
 {
-   m_max_header_size = parent.config().max_header_size;
+   max_header_size_ = parent.config().max_header_size;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -295,7 +297,7 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, asio::any_io_
 template <typename Stream>
 awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
-   m_buffer = std::move(buffer);
+   buffer_ = std::move(buffer);
    auto callbacks = super::setup_callbacks();
 
    //
@@ -308,7 +310,7 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    nghttp2_option_set_no_http_messaging(options.get(), 1);
    nghttp2_option_set_no_auto_window_update(options.get(), 1);
    nghttp2_option_set_max_send_header_block_length(options.get(), 1_m);
-   nghttp2_option_set_max_continuations(options.get(), max_continuations(m_max_header_size));
+   nghttp2_option_set_max_continuations(options.get(), max_continuations(max_header_size_));
 
    //
    // ALTSVC (RFC 7838, section 4) is an extension frame: without this, nghttp2 drops it before
@@ -327,8 +329,9 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    // enforces it in neither direction. Header sections beyond max_header_size are rejected where
    // they arrive, see on_header_callback().
    //
-   std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
+   auto iv =
+      std::to_array<nghttp2_settings_entry>({{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
+                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}});
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
 #else

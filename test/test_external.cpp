@@ -210,7 +210,7 @@ TEST_P(External, curl_multiple)
 class ExternalTLS : public External
 {
 protected:
-   std::string curlProtocolParam()
+   std::string curl_protocol_param()
    {
       switch (GetParam())
       {
@@ -274,7 +274,7 @@ TEST_P(ExternalTLS, curl)
 {
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
    // clang-format off
-   Args args = {curlProtocolParam(), "-sS", "-v",
+   Args args = {curl_protocol_param(), "-sS", "-v",
                 "--cacert", "pki/out/root.pem",
                 "--data-binary", std::format("@{}", testFile.string()),
                 url};
@@ -295,7 +295,7 @@ TEST_P(ExternalTLS, curl_many)
    {
       auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
       // clang-format off
-      Args args = {curlProtocolParam(), "-sS", "-v",
+      Args args = {curl_protocol_param(), "-sS", "-v",
                   "--cacert", "pki/out/root.pem",
                   "--data-binary", std::format("@{}", testFile.string()),
                   url};
@@ -314,7 +314,7 @@ TEST_P(ExternalTLS, curl_multiple)
 {
    auto url = std::format("https://127.0.0.2:{}/echo", server->local_endpoint().port());
    // clang-format off
-   Args args = {curlProtocolParam(), "-sS", "-v",
+   Args args = {curl_protocol_param(), "-sS", "-v",
                 "--cacert", "pki/out/root.pem",
                 "--data-binary", std::format("@{}", testFile.string()),
                 url, url, url, url};

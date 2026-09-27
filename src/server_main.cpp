@@ -36,7 +36,7 @@ struct Config
    server::Config server{.port = 8080};
 };
 
-std::expected<Config, int> parseConfig(int argc, char* argv[])
+std::expected<Config, int> parse_config(int argc, char* argv[])
 {
    Config config;
 
@@ -116,7 +116,7 @@ std::expected<Config, int> parseConfig(int argc, char* argv[])
 
 int main(int argc, char* argv[])
 {
-   auto config = parseConfig(argc, argv);
+   auto config = parse_config(argc, argv);
    if (!config)
       return config.error();
 
@@ -139,7 +139,7 @@ int main(int argc, char* argv[])
       server.reset();
    });
 
-   server->setRequestHandler(
+   server->on_request(
       [](server::Request request, server::Response response) -> awaitable<void> {
          std::string path = request.url().path();
          if (path == "/echo")

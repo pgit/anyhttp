@@ -165,13 +165,13 @@ awaitable<void> send(Writer& request, Range range)
 // -------------------------------------------------------------------------------------------------
 
 template <ByteRange Range>
-awaitable<void> sendAndDrop(client::Request request, Range range)
+awaitable<void> send_and_drop(client::Request request, Range range)
 {
    using namespace asio;
    auto ex = co_await this_coro::executor;
    if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
    {
-      loge("sendAndDrop: {}", what(ep));
+      loge("send_and_drop: {}", what(ep));
       std::rethrow_exception(ep);
    }
 }
@@ -179,13 +179,13 @@ awaitable<void> sendAndDrop(client::Request request, Range range)
 // -------------------------------------------------------------------------------------------------
 
 template <ByteRange Range>
-awaitable<void> sendAndForceEOF(Writer& request, Range range)
+awaitable<void> send_and_force_eof(Writer& request, Range range)
 {
    using namespace asio;
    auto ex = co_await this_coro::executor;
    if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
    {
-      loge("sendAndForceEOF: {}", what(ep));
+      loge("send_and_force_eof: {}", what(ep));
       co_await this_coro::reset_cancellation_state();
    }
    std::ignore = co_await request.async_write_eof(as_tuple);
@@ -211,7 +211,7 @@ inline awaitable<void> generate(server::Request request, server::Response respon
 
    logd("generate: {} bytes", *length);
    co_await response.async_submit(200, fields({{"Content-Length", *length}}));
-   co_await sendAndForceEOF(response, rv::iota(uint8_t(0)) | rv::take(*length));
+   co_await send_and_force_eof(response, rv::iota(uint8_t(0)) | rv::take(*length));
 }
 
 // -------------------------------------------------------------------------------------------------

@@ -349,7 +349,7 @@ public:
    //
    Server::Impl& parent() noexcept { return parent_; }
    const Config& config() const noexcept { return parent_.config(); }
-   const RequestHandler& requestHandler() const { return parent_.requestHandler(); }
+   const RequestHandler& request_handler() const noexcept { return parent_.request_handler(); }
    asio::any_io_executor get_executor() const noexcept { return parent_.get_executor(); }
 
    //
@@ -448,8 +448,8 @@ void Http3ServerStream::on_pseudo_header(std::string_view name, std::string_view
 
 void Http3ServerStream::on_headers_complete()
 {
-   logd("[{}] {} {}", log_prefix, method, url.buffer());
-   log_headers(log_prefix, std::exchange(received_headers, {}));
+   logd("[{}] {} {}", log_prefix_, method, url.buffer());
+   log_headers(log_prefix_, std::exchange(received_headers, {}));
 
    //
    // Build the user-facing Request/Response and dispatch through the shared handler.
@@ -461,11 +461,11 @@ void Http3ServerStream::on_headers_complete()
    if (header_limit_exceeded)
       co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
                detached);
-   else if (auto& handler = sv.requestHandler())
+   else if (auto& handler = sv.request_handler())
       co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
    else
    {
-      loge("[{}] no request handler set", log_prefix);
+      loge("[{}] no request handler set", log_prefix_);
       co_spawn(get_executor(), not_found(std::move(response)), detached);
    }
 }
@@ -495,14 +495,15 @@ void Http3ServerStream::submit_response(unsigned int status, const Fields& user_
    {
       if (item.name_string().starts_with(':'))
       {
-         logw("[{}] submit_response: dropping pseudo-header '{}'", log_prefix, item.name_string());
+         logw("[{}] submit_response: dropping pseudo-header '{}'", log_prefix_, item.name_string());
          continue;
       }
       nva.push_back(make_nv(item.name_string(), item.value()));
    }
 
    using namespace boost::beast::http;
-   logd("[{}] {} {}", log_prefix, response_status, obsolete_reason(int_to_status(response_status)));
+   logd("[{}] {} {}", log_prefix_, response_status,
+        obsolete_reason(int_to_status(response_status)));
 
    if (submit_headers(nva, false /* response */))
       session.wake_write();
@@ -859,7 +860,7 @@ void Http3ServerSession::schedule_close_timer()
       auto session = std::static_pointer_cast<Http3ServerSession>(self.lock());
       if (!session)
          return;
-      logd("[{}] closing/draining period over", session->logPrefix());
+      logd("[{}] closing/draining period over", session->log_prefix());
       session->server_.erase_quic_session(session.get());
       session->signal_done();
    });
@@ -1161,7 +1162,7 @@ void Http3ServerImpl::process_quic_batch(const std::shared_ptr<Http3ServerSessio
       co_spawn(session->get_executor(), session->do_session({}),
                [self = shared_from_this(), owner = owner(), session](const std::exception_ptr& ex) {
                   if (ex)
-                     logw("[{}] {}", session->logPrefix(), what(ex));
+                     logw("[{}] {}", session->log_prefix(), what(ex));
                   self->parent_.remove_session(session);
                });
    }

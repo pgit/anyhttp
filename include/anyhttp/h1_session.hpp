@@ -26,18 +26,18 @@ template <typename Stream>
 class BeastSession : public ::anyhttp::Session::Impl
 {
 protected:
-   BeastSession(std::string_view logPrefix, asio::any_io_executor executor, Stream&& stream);
+   BeastSession(std::string_view log_prefix, asio::any_io_executor executor, Stream&& stream);
 
 public:
    ~BeastSession() override;
 
-   std::string_view logPrefix() const { return m_logPrefix; }
+   std::string_view log_prefix() const { return log_prefix_; }
 
    // ----------------------------------------------------------------------------------------------
 
    void destroy() noexcept override;
 
-   boost::asio::any_io_executor get_executor() const noexcept override { return m_executor; }
+   boost::asio::any_io_executor get_executor() const noexcept override { return executor_; }
 
    // ----------------------------------------------------------------------------------------------
 
@@ -46,20 +46,20 @@ public:
    // registers here for as long as it exists, to be detach()ed when the session goes away first.
    // With pipelining, a client session may have more than one of each at a time.
    //
-   void attach(Reader::Impl& reader) { m_readers.push_back(&reader); }
-   void attach(Writer::Impl& writer) { m_writers.push_back(&writer); }
-   void release(Reader::Impl& reader) { std::erase(m_readers, &reader); }
-   void release(Writer::Impl& writer) { std::erase(m_writers, &writer); }
+   void attach(Reader::Impl& reader) { readers_.push_back(&reader); }
+   void attach(Writer::Impl& writer) { writers_.push_back(&writer); }
+   void release(Reader::Impl& reader) { std::erase(readers_, &reader); }
+   void release(Writer::Impl& writer) { std::erase(writers_, &writer); }
 
    void detach_readers()
    {
-      for (auto* reader : std::exchange(m_readers, {}))
+      for (auto* reader : std::exchange(readers_, {}))
          reader->detach();
    }
 
    void detach_writers()
    {
-      for (auto* writer : std::exchange(m_writers, {}))
+      for (auto* writer : std::exchange(writers_, {}))
          writer->detach();
    }
 
@@ -70,18 +70,18 @@ public:
    // ----------------------------------------------------------------------------------------------
 
 public:
-   std::string m_logPrefix;
-   asio::any_io_executor m_executor;
-   Stream m_stream;
-   Buffer m_buffer;
-   bool m_closed = false;
+   std::string log_prefix_;
+   asio::any_io_executor executor_;
+   Stream stream_;
+   Buffer buffer_;
+   bool closed_ = false;
 
 private:
    /// Non-owning pointers to the attached readers, see attach().
-   std::vector<Reader::Impl*> m_readers;
+   std::vector<Reader::Impl*> readers_;
 
    /// Non-owning pointers to the attached writers, see attach().
-   std::vector<Writer::Impl*> m_writers;
+   std::vector<Writer::Impl*> writers_;
 };
 
 // =================================================================================================
@@ -89,15 +89,15 @@ private:
 class ServerSessionBase
 {
 public:
-   inline ServerSessionBase(server::Server::Impl& parent) : m_server(&parent) {}
+   inline ServerSessionBase(server::Server::Impl& parent) : server_(&parent) {}
    server::Server::Impl& server()
    {
-      assert(m_server);
-      return *m_server;
+      assert(server_);
+      return *server_;
    }
 
 private:
-   server::Server::Impl* m_server = nullptr;
+   server::Server::Impl* server_ = nullptr;
 };
 
 template <typename Stream>
@@ -106,12 +106,12 @@ class ServerSession : public ServerSessionBase, public BeastSession<Stream>
    using super = BeastSession<Stream>;
 
    // FIXME: maybe use CRTP or something similar to avoid this?
+   using super::buffer_;
+   using super::closed_;
    using super::detach_readers;
    using super::detach_writers;
-   using super::logPrefix;
-   using super::m_buffer;
-   using super::m_closed;
-   using super::m_stream;
+   using super::log_prefix;
+   using super::stream_;
 
 public:
    ServerSession(server::Server::Impl& parent, asio::any_io_executor executor, Stream&& stream);
@@ -123,7 +123,7 @@ public:
 
 private:
    /// Takes over the stream after an upgrade to h2c, see do_session().
-   std::shared_ptr<Session::Impl> m_upgraded;
+   std::shared_ptr<Session::Impl> upgraded_;
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -131,15 +131,15 @@ private:
 class ClientSessionBase
 {
 public:
-   inline ClientSessionBase(client::Client::Impl& parent) : m_client(&parent) {}
+   inline ClientSessionBase(client::Client::Impl& parent) : client_(&parent) {}
    client::Client::Impl& client()
    {
-      assert(m_client);
-      return *m_client;
+      assert(client_);
+      return *client_;
    }
 
 private:
-   client::Client::Impl* m_client = nullptr;
+   client::Client::Impl* client_ = nullptr;
 };
 
 template <typename Stream>
@@ -186,9 +186,9 @@ class ClientSession : public ClientSessionBase, public BeastSession<Stream>
    using super = BeastSession<Stream>;
 
    // FIXME: maybe use CRTP or something similar to avoid this?
-   using super::logPrefix;
-   using super::m_buffer;
-   using super::m_stream;
+   using super::buffer_;
+   using super::log_prefix;
+   using super::stream_;
 
 public:
    ClientSession(client::Client::Impl& parent, asio::any_io_executor executor, Stream&& stream);
@@ -213,12 +213,12 @@ public:
    // ----------------------------------------------------------------------------------------------
 
    /// The request that is not complete yet, if any. There can be only one.
-   RequestWriter<Stream>* m_sending = nullptr;
+   RequestWriter<Stream>* sending_ = nullptr;
 
-   size_t m_requests_sent = 0; ///< number of requests submitted
-   size_t m_responses_read = 0; ///< number of responses that have been read completely
-   bool m_send_failed = false; ///< set when a request could not be completed
-   bool m_receive_failed = false; ///< set when a response could not be read completely
+   size_t requests_sent_ = 0; ///< number of requests submitted
+   size_t responses_read_ = 0; ///< number of responses that have been read completely
+   bool send_failed_ = false; ///< set when a request could not be completed
+   bool receive_failed_ = false; ///< set when a response could not be read completely
 };
 
 // =================================================================================================

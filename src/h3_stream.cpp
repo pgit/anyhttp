@@ -25,7 +25,7 @@ namespace anyhttp::http3
 Http3Stream::Http3Stream(Http3Session& s, int64_t stream_id, WriteMode mode)
    : id(stream_id), session(s), write_mode(mode)
 {
-   log_prefix = std::format("{}.{}", session.logPrefix(), id);
+   log_prefix_ = std::format("{}.{}", session.log_prefix(), id);
    mlogd("\x1b[1;33mStream: ctor\x1b[0m");
 }
 
@@ -193,7 +193,7 @@ void Http3Stream::call_read_handler()
 void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof)
 {
    auto n = asio::buffer_size(buffer);
-   logd("[{}] start_write: n={} eof={}", log_prefix, n, eof);
+   logd("[{}] start_write: n={} eof={}", log_prefix_, n, eof);
 
    auto complete_immediately = [&](error_code ec) { //
       anyhttp::complete_immediately(std::move(handler), get_executor(), ec);
@@ -223,7 +223,7 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer,
    {
       if (n > 0)
       {
-         loge("[{}] start_write: body has already been ended", log_prefix);
+         loge("[{}] start_write: body has already been ended", log_prefix_);
          complete_immediately(errc::make_error_code(errc::broken_pipe));
          return;
       }
@@ -238,7 +238,7 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer,
       if (write_active && write_is_eof && !closed)
       {
          assert(!write_handler); // only a detached FIN may be adopted, never a live handler
-         logd("[{}] start_write: FIN already pending, adopting handler", log_prefix);
+         logd("[{}] start_write: FIN already pending, adopting handler", log_prefix_);
          bind_write_cancellation(handler, write_token);
          write_handler = std::move(handler);
          return;
@@ -251,7 +251,7 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer,
 
    if (closed)
    {
-      logw("[{}] start_write: stream already closed", log_prefix);
+      logw("[{}] start_write: stream already closed", log_prefix_);
       complete_immediately(errc::make_error_code(errc::connection_reset));
       return;
    }
@@ -316,14 +316,14 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
          // exactly like any other data write below -- keeping it active would leave nghttp3 and
          // ngtcp2 pointing into freed memory.
          //
-         logd("[{}] async_write: \x1b[1;31mcancelled\x1b[0m ({}), FIN still pending", log_prefix,
+         logd("[{}] async_write: \x1b[1;31mcancelled\x1b[0m ({}), FIN still pending", log_prefix_,
               ct);
          asio::post(get_executor(), [handler = std::move(write_handler)]() mutable { //
             std::move(handler)(errc::make_error_code(errc::operation_canceled));
          });
          return;
       }
-      logd("[{}] async_write: \x1b[1;31mcancelled\x1b[0m ({})", log_prefix, ct);
+      logd("[{}] async_write: \x1b[1;31mcancelled\x1b[0m ({})", log_prefix_, ct);
 
       if (write_mode == WriteMode::ZeroCopy)
       {
@@ -342,7 +342,7 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
          if (write_offered > write_acked && !closed)
          {
             logw("[{}] async_write: cancelled with {} bytes unacknowledged, resetting stream",
-                 log_prefix, write_offered - write_acked);
+                 log_prefix_, write_offered - write_acked);
             session.reset_stream(id, NGHTTP3_H3_REQUEST_CANCELLED);
             closed = true;
          }
@@ -521,7 +521,7 @@ void Http3Stream::on_write_acked(size_t n)
       return; // a bare end-of-body completes in data_reader(), with nothing left to acknowledge
 
    write_acked = std::min(write_acked + n, asio::buffer_size(write_source));
-   logd("[{}] on_write_acked: {} bytes, {}/{} acknowledged", log_prefix, n, write_acked,
+   logd("[{}] on_write_acked: {} bytes, {}/{} acknowledged", log_prefix_, n, write_acked,
         asio::buffer_size(write_source));
 
    if (write_acked == asio::buffer_size(write_source))
@@ -624,7 +624,7 @@ void Http3Stream::on_header(std::string_view name, std::string_view value)
    header_size += header_field_size(name, value);
    if (header_size > session.max_header_size())
    {
-      logw("[{}] header section exceeds {} bytes, ignoring the rest", log_prefix,
+      logw("[{}] header section exceeds {} bytes, ignoring the rest", log_prefix_,
            session.max_header_size());
       header_limit_exceeded = true;
       received_headers.clear();
@@ -653,7 +653,7 @@ void Http3Stream::on_header(std::string_view name, std::string_view value)
    }
    catch (const std::exception& ex)
    {
-      logw("[{}] ignoring invalid header: {} ({})", log_prefix, value, ex.what());
+      logw("[{}] ignoring invalid header: {} ({})", log_prefix_, value, ex.what());
    }
 }
 
@@ -679,7 +679,7 @@ bool Http3Stream::submit_headers(std::span<const nghttp3_nv> nva, bool is_reques
    auto* h3 = session.h3();
    if (!h3)
    {
-      loge("[{}] submit_headers: HTTP/3 layer is gone", log_prefix);
+      loge("[{}] submit_headers: HTTP/3 layer is gone", log_prefix_);
       return false;
    }
 
@@ -695,7 +695,7 @@ bool Http3Stream::submit_headers(std::span<const nghttp3_nv> nva, bool is_reques
    {
       if (auto rv = nghttp3_conn_submit_request(h3, id, nv, nva.size(), &dr, this); rv != 0)
       {
-         loge("[{}] nghttp3_conn_submit_request: {}", log_prefix, nghttp3_strerror(rv));
+         loge("[{}] nghttp3_conn_submit_request: {}", log_prefix_, nghttp3_strerror(rv));
          return false;
       }
    }
@@ -703,18 +703,18 @@ bool Http3Stream::submit_headers(std::span<const nghttp3_nv> nva, bool is_reques
    {
       if (auto rv = nghttp3_conn_set_stream_user_data(h3, id, this); rv != 0)
       {
-         loge("[{}] nghttp3_conn_set_stream_user_data: {}", log_prefix, nghttp3_strerror(rv));
+         loge("[{}] nghttp3_conn_set_stream_user_data: {}", log_prefix_, nghttp3_strerror(rv));
          return false;
       }
       if (auto rv = nghttp3_conn_submit_response(h3, id, nv, nva.size(), &dr); rv != 0)
       {
-         loge("[{}] nghttp3_conn_submit_response: {}", log_prefix, nghttp3_strerror(rv));
+         loge("[{}] nghttp3_conn_submit_response: {}", log_prefix_, nghttp3_strerror(rv));
          return false;
       }
    }
 
    headers_submitted = true;
-   log_headers(log_prefix, nva);
+   log_headers(log_prefix_, nva);
    return true;
 }
 
@@ -783,7 +783,7 @@ void Http3Stream::delete_reader()
    //
    if (!eof_received && !closed)
    {
-      logd("[{}] delete_reader: body not read to end, sending STOP_SENDING", log_prefix);
+      logd("[{}] delete_reader: body not read to end, sending STOP_SENDING", log_prefix_);
       session.stop_reading(id, NGHTTP3_H3_NO_ERROR);
    }
 
@@ -805,7 +805,7 @@ void Http3Stream::delete_writer()
    //
    if (closed)
    {
-      logd("[{}] delete_writer: stream already closed", log_prefix);
+      logd("[{}] delete_writer: stream already closed", log_prefix_);
       maybe_close();
       return;
    }
@@ -821,7 +821,7 @@ void Http3Stream::delete_writer()
       // here (rather than e.g. INTERNAL_ERROR): choosing not to respond isn't itself a protocol
       // error -- the peer just needs to be told the stream is over so it doesn't wait forever.
       //
-      logd("[{}] delete_writer: no headers were ever submitted, shutting stream down", log_prefix);
+      logd("[{}] delete_writer: no headers were ever submitted, shutting stream down", log_prefix_);
       if (auto* conn = session.conn())
          ngtcp2_conn_shutdown_stream(conn, 0, id, NGHTTP3_H3_NO_ERROR);
       closed = true;
@@ -839,7 +839,7 @@ void Http3Stream::delete_writer()
       // the HTTP/2 side submits RST_STREAM once its writer is gone with no EOF submitted, and
       // fail the local read the same way nghttp2's stream close does, with partial_message.
       //
-      logw("[{}] delete_writer: body never ended, resetting stream", log_prefix);
+      logw("[{}] delete_writer: body never ended, resetting stream", log_prefix_);
       session.reset_stream(id, NGHTTP3_H3_REQUEST_CANCELLED);
       fail(boost::beast::http::error::partial_message);
    }

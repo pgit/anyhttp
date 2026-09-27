@@ -76,7 +76,7 @@ static std::string NameGenerator(const testing::TestParamInfo<anyhttp::Protocol>
    return to_string(info.param);
 }
 
-static void setupLogging()
+static void setup_logging()
 {
 #if defined(GITHUB_ACTIONS)
    spdlog::set_level(spdlog::level::warn);
@@ -115,7 +115,7 @@ protected:
 
    void SetUp() override
    {
-      setupLogging();
+      setup_logging();
 
       auto config = server::Config{.listen_address = "127.0.0.2", .port = 0};
       config.use_strand = threads() > 1;
@@ -126,7 +126,7 @@ protected:
       // strand is created after accepting a new connection.
       //
       server.emplace(context.get_executor(), config);
-      server->setRequestHandler(
+      server->on_request(
          [this](server::Request request, server::Response response) -> awaitable<void> {
             logd("{} ({})", request.url().path(), request.url().buffer());
 

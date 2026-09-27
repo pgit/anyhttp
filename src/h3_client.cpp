@@ -298,8 +298,8 @@ void Http3ClientStream::on_headers_complete()
    }
 
    using namespace boost::beast::http;
-   logd("[{}] {} {}", log_prefix, status_code, obsolete_reason(int_to_status(status_code)));
-   log_headers(log_prefix, std::exchange(received_headers, {}));
+   logd("[{}] {} {}", log_prefix_, status_code, obsolete_reason(int_to_status(status_code)));
+   log_headers(log_prefix_, std::exchange(received_headers, {}));
    deliver_response();
 }
 
@@ -347,12 +347,12 @@ bool Http3ClientStream::submit_request(std::string_view method, const boost::url
    {
       if (item.name_string().starts_with(':'))
          logw("[{}] async_submit: invalid header '{}': setting pseudo headers is not allowed",
-              log_prefix, item.name_string());
+              log_prefix_, item.name_string());
 
       nva.push_back(make_nv(item.name_string(), item.value()));
    }
 
-   logd("[{}] {} {}", log_prefix, method_str, request_url.buffer());
+   logd("[{}] {} {}", log_prefix_, method_str, request_url.buffer());
    return submit_headers(nva, true /* request */);
 }
 
@@ -372,7 +372,7 @@ void Http3ClientStream::async_get_response(client::Request::GetResponseHandler&&
    if (cs.is_connected())
    {
       cs.assign([this](asio::cancellation_type_t ct) {
-         logd("[{}] async_get_response: cancelled ({})", log_prefix, ct);
+         logd("[{}] async_get_response: cancelled ({})", log_prefix_, ct);
          if (response_handler)
          {
             asio::post(get_executor(), [handler = std::move(response_handler)]() mutable {
@@ -686,7 +686,7 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, std::string_view 
       return;
    }
 
-   logd("[{}] async_submit: new stream ID: {}", stream->log_prefix, stream_id);
+   logd("[{}] async_submit: new stream ID: {}", stream->log_prefix_, stream_id);
    wake_write();
 
    post(get_executor(), [handler = std::move(handler),

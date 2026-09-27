@@ -74,7 +74,7 @@ public:
 
    int64_t id;
    Http3Session& session;
-   std::string log_prefix;
+   std::string log_prefix_;
 
    //
    // Incoming message (request on the server, response on the client), populated by the nghttp3
@@ -168,7 +168,7 @@ public:
    bool closed = false;
 
    asio::any_io_executor get_executor() const noexcept;
-   const std::string& logPrefix() const noexcept { return log_prefix; }
+   const std::string& log_prefix() const noexcept { return log_prefix_; }
 
    //
    // Data flow into user land (incoming body).

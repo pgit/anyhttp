@@ -90,6 +90,7 @@ void Headers::round_trip(Fields sent)
       co_await response.async_submit(200, fields);
       co_await response.async_write_eof();
    };
+
    clientSession = [this, sent](Session session) -> awaitable<void> {
       auto message = co_await session.async_get(url, sent);
       EXPECT_EQ(message.result_int(), 200);
@@ -124,6 +125,7 @@ TEST_P(Headers, WHEN_header_name_repeats_THEN_all_values_arrive_in_order)
       co_await response.async_submit(200, fields);
       co_await response.async_write_eof();
    };
+
    clientSession = [this, sent, values](Session session) -> awaitable<void> {
       auto message = co_await session.async_get(url, sent);
       EXPECT_THAT(values_of(message, "x-repeated"), ElementsAreArray(values));
@@ -156,9 +158,36 @@ TEST_P(Headers, WHEN_request_headers_exceed_default_limit_THEN_server_responds_4
       co_await response.async_submit(200, {});
       co_await response.async_write_eof();
    };
+
    clientSession = [this, sent](Session session) -> awaitable<void> {
       auto message = co_await session.async_get(url, sent);
       EXPECT_EQ(message.result_int(), 431);
+   };
+}
+
+// -------------------------------------------------------------------------------------------------
+
+TEST_P(Headers, WHEN_complex_url_is_submitted_THEN_is_provided_to_request_handler)
+{
+   url.set_scheme_id(boost::urls::scheme::https);
+   url.set_scheme("custom");
+   url.set_user("user");
+   url.set_password("password");
+   url.set_query("x=y&white= space ");
+
+   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+      std::println("URL: {}", request.url().buffer());
+      EXPECT_EQ(url.query(), request.url().query());
+      EXPECT_EQ(url.host(), request.url().host());
+      // EXPECT_EQ(url.port(), request.url().port());
+      co_await response.async_submit(200, {});
+      co_await response.async_write_eof();
+   };
+
+   clientSession = [this](Session session) -> awaitable<void> {
+      std::println("URL: {}", url.buffer());
+      auto message = co_await session.async_get(url, {});
+      EXPECT_EQ(message.result_int(), 200);
    };
 }
 
