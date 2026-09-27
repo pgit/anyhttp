@@ -21,8 +21,14 @@ material through relative paths (`pki/out/server-key.pem`, see `server_impl.cpp`
 loop and every HTTP/3 test hangs for a 30s idle timeout before failing with "Connection refused"
 -- which looks exactly like a protocol bug.
 
-The full suite takes about 40s (h2spec and the HTTP/3 timing tests dominate). Anything running
-much longer means a test is hanging; kill it and run that test alone.
+The full suite takes about 50s serially (h2spec and the HTTP/3 timing tests dominate). Anything
+running much longer means a test is hanging; kill it and run that test alone.
+
+For routine runs use `gtest-parallel build/test/test_all` (same working-directory rule): about 7s.
+Every server binds an ephemeral port, so parallel processes do not collide. It prints only
+failing tests and does not report skips, and since each test gets its own process it cannot
+catch interference through process-wide state (e.g. `h3_server.cpp`'s static `tls_context()`) --
+do a serial run before committing changes to shared or global state.
 
 Parametrized tests are suffixed `/HTTP11`, `/HTTP2`, `/HTTP3` -- not h2/h3. `--gtest_filter` knows
 only `*` and `?`, and a filter that matches nothing exits 0 with no output, which reads like a
