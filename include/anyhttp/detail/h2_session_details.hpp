@@ -180,7 +180,9 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
 template <typename Stream>
 ServerSession<Stream>::ServerSession(server::Server::Impl& parent, asio::any_io_executor executor,
                                      Stream&& stream)
-   : ServerReference(parent), super("\x1b[1;31mserver\x1b[0m", executor, std::move(stream))
+   : ServerReference(parent),
+     super(anyhttp::log_prefix(Role::server, is_tls(stream) ? "h2" : "h2c", get_socket(stream)),
+           executor, std::move(stream))
 {
    max_header_size_ = parent.config().max_header_size;
    alt_svc_ = parent.alt_svc();
@@ -287,7 +289,9 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 template <typename Stream>
 ClientSession<Stream>::ClientSession(client::Client::Impl& parent, asio::any_io_executor executor,
                                      Stream&& stream)
-   : ClientReference(parent), super("\x1b[1;32mclient\x1b[0m", executor, std::move(stream))
+   : ClientReference(parent),
+     super(anyhttp::log_prefix(Role::client, is_tls(stream) ? "h2" : "h2c", get_socket(stream)),
+           executor, std::move(stream))
 {
    max_header_size_ = parent.config().max_header_size;
 }

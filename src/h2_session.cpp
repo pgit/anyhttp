@@ -667,8 +667,8 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    if (auto client = dynamic_cast<ClientReference*>(this) && streams_.empty())
    {
       // nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
-      logi("[{}] last stream closed (id={}), submitting GOAWAY (last stream ID: {})...",
-           log_prefix_, stream_id, last_id_);
+      mlogi("last stream closed (id={}), submitting GOAWAY (last stream ID: {})...", stream_id,
+            last_id_);
       nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, last_id_, NGHTTP2_NO_ERROR, nullptr, 0);
    }
 
@@ -681,9 +681,9 @@ void NGHttp2Session::start_write()
 {
    if (send_handler_)
    {
-      logd("[{}] start_write: signalling write loop...", log_prefix_);
+      mlogd("start_write: signalling write loop...");
       swap_and_invoke(send_handler_);
-      logd("[{}] start_write: signalling write loop... done", log_prefix_);
+      mlogd("start_write: signalling write loop... done");
    }
 }
 

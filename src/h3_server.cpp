@@ -96,7 +96,6 @@ using anyhttp::http3::msghdr_get_local_addr;
 using anyhttp::http3::QUIC_SCIDLEN;
 using anyhttp::http3::set_port;
 using anyhttp::http3::sockaddr_union;
-using anyhttp::http3::straddr;
 
 namespace anyhttp::server
 {
@@ -337,6 +336,9 @@ class Http3ServerImpl : public Http3Server, public std::enable_shared_from_this<
 public:
    Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endpoint& endpoint);
 
+   /// For log lines that belong to no connection, see anyhttp::log_prefix().
+   std::string log_prefix() const { return anyhttp::log_prefix(Role::server); }
+
    //
    // Http3Server
    //
@@ -448,7 +450,7 @@ void Http3ServerStream::on_pseudo_header(std::string_view name, std::string_view
 
 void Http3ServerStream::on_headers_complete()
 {
-   logd("[{}] {} {}", log_prefix_, method, url.buffer());
+   mlogd("{} {}", method, url.buffer());
    log_headers(log_prefix_, std::exchange(received_headers, {}));
 
    //
@@ -465,7 +467,7 @@ void Http3ServerStream::on_headers_complete()
       co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
    else
    {
-      loge("[{}] no request handler set", log_prefix_);
+      mloge("no request handler set");
       co_spawn(get_executor(), not_found(std::move(response)), detached);
    }
 }
@@ -495,15 +497,14 @@ void Http3ServerStream::submit_response(unsigned int status, const Fields& user_
    {
       if (item.name_string().starts_with(':'))
       {
-         logw("[{}] submit_response: dropping pseudo-header '{}'", log_prefix_, item.name_string());
+         mlogw("submit_response: dropping pseudo-header '{}'", item.name_string());
          continue;
       }
       nva.push_back(make_nv(item.name_string(), item.value()));
    }
 
    using namespace boost::beast::http;
-   logd("[{}] {} {}", log_prefix_, response_status,
-        obsolete_reason(int_to_status(response_status)));
+   mlogd("{} {}", response_status, obsolete_reason(int_to_status(response_status)));
 
    if (submit_headers(nva, false /* response */))
       session.wake_write();
@@ -521,7 +522,7 @@ Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Add
      no_gso_(server.config().disable_gso)
 {
    max_header_size_ = server.config().max_header_size;
-   log_prefix_ = std::format("h3:{}", straddr(&remote_.su.sa, remote_.len));
+   log_prefix_ = http3::log_prefix(Role::server, "h3", &remote_.su.sa, remote_.len);
 
    //
    // Own a dup() of the shared UDP fd rather than borrowing the server's. Sends happen from this
@@ -536,7 +537,7 @@ Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Add
       owns_fd_ = true;
    }
    else
-      loge("[{}] dup: {}", log_prefix_, strerror(errno));
+      mloge("dup: {}", strerror(errno));
 
    // done_signal_ is armed at "never" until signal_done() moves it to the past.
    done_signal_.expires_at(asio::steady_timer::time_point::max());
@@ -702,7 +703,7 @@ int Http3ServerSession::send_datagrams(const ngtcp2_path& path, std::span<const 
             no_gso_ = true;
             return send_datagrams(path, data, gso_size);
          }
-         loge("[{}] sendmsg (GSO): {}", log_prefix_, strerror(errno));
+         mloge("sendmsg (GSO): {}", strerror(errno));
          return -1;
       }
       return 0;
@@ -730,7 +731,7 @@ int Http3ServerSession::send_udp(const ngtcp2_addr& remote, std::span<const uint
             continue;
          if (errno == EAGAIN || errno == EWOULDBLOCK)
             return 0; // best-effort; ngtcp2 will retransmit
-         loge("[{}] sendto: {}", log_prefix_, strerror(errno));
+         mloge("sendto: {}", strerror(errno));
          return -1;
       }
       return 0;
@@ -745,7 +746,7 @@ int Http3ServerSession::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uin
    scid_.datalen = QUIC_SCIDLEN;
    if (RAND_bytes(scid_.data, static_cast<int>(scid_.datalen)) != 1)
    {
-      loge("[{}] init: RAND_bytes for SCID failed", log_prefix_);
+      mloge("init: RAND_bytes for SCID failed");
       return -1;
    }
 
@@ -769,15 +770,14 @@ int Http3ServerSession::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uin
                                         &settings, &params, nullptr, this);
        rv != 0)
    {
-      loge("[{}] ngtcp2_conn_server_new: {}", log_prefix_, ngtcp2_strerror(rv));
+      mloge("ngtcp2_conn_server_new: {}", ngtcp2_strerror(rv));
       return -1;
    }
 
    if (setup_tls(server_.tls_context(), true /* server */) != 0)
       return -1;
 
-   logi("[{}] new connection, scid={} version=0x{:x}", log_prefix_,
-        format_hex(scid_.data, scid_.datalen), version);
+   mlogi("new connection, scid={} version=0x{:x}", format_hex(scid_.data, scid_.datalen), version);
 
    return on_read(pi, data, remote_);
 }
@@ -832,7 +832,7 @@ int Http3ServerSession::handle_error(int /*rv*/)
       if (!packet.empty())
       {
          conn_closebuf_.resize(packet.size());
-         logi("[{}] sending CONNECTION_CLOSE", log_prefix_);
+         mlogi("sending CONNECTION_CLOSE");
          send_udp(ps.path.remote, conn_closebuf_);
       }
       else
@@ -873,7 +873,7 @@ void Http3ServerSession::resend_conn_close()
    auto* path = ngtcp2_conn_get_path(conn_);
    if (!path)
       return;
-   logd("[{}] resending CONNECTION_CLOSE", log_prefix_);
+   mlogd("resending CONNECTION_CLOSE");
    send_udp(path->remote, conn_closebuf_);
 }
 
@@ -910,8 +910,8 @@ Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endp
    socket_->non_blocking(true);
 
    socket_->bind(endpoint);
-   logi("Server: UDP listening on {} (GRO {}, GSO {})", endpoint,
-        config().disable_gro ? "off" : "on", config().disable_gso ? "off" : "on");
+   mlogi("UDP listening on {} (GRO {}, GSO {})", endpoint, config().disable_gro ? "off" : "on",
+         config().disable_gso ? "off" : "on");
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -922,9 +922,9 @@ void Http3ServerImpl::start()
    co_spawn(socket_->get_executor(), udp_receive_loop(),
             [self = shared_from_this(), owner = owner()](const std::exception_ptr& ex) {
                if (ex)
-                  logw("UDP receive loop: {}", what(ex));
+                  logw("[{}] UDP receive loop: {}", self->log_prefix(), what(ex));
                else
-                  logi("UDP receive loop: done");
+                  logi("[{}] UDP receive loop: done", self->log_prefix());
             });
 }
 
@@ -1236,9 +1236,9 @@ awaitable<void> Http3ServerImpl::udp_receive_loop()
       if (ec)
       {
          if (ec == boost::asio::error::operation_aborted)
-            logi("UDP receive: {}", ec.message());
+            mlogi("UDP receive: {}", ec.message());
          else
-            logw("UDP receive: {}", ec.message());
+            mlogw("UDP receive: {}", ec.message());
          co_return;
       }
 

@@ -73,6 +73,7 @@ public:
 
    executor_type get_executor() noexcept;
    TcpSocketBase& get_socket();
+   bool is_tls() const noexcept;
 
    //
    // async_write_some

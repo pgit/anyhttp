@@ -69,7 +69,6 @@ namespace errc = boost::system::errc;
 using anyhttp::http3::format_hex;
 using anyhttp::http3::log_headers;
 using anyhttp::http3::make_nv;
-using anyhttp::http3::straddr;
 
 namespace anyhttp::client
 {
@@ -298,7 +297,7 @@ void Http3ClientStream::on_headers_complete()
    }
 
    using namespace boost::beast::http;
-   logd("[{}] {} {}", log_prefix_, status_code, obsolete_reason(int_to_status(status_code)));
+   mlogd("{} {}", status_code, obsolete_reason(int_to_status(status_code)));
    log_headers(log_prefix_, std::exchange(received_headers, {}));
    deliver_response();
 }
@@ -346,13 +345,13 @@ bool Http3ClientStream::submit_request(std::string_view method, const boost::url
    for (auto&& item : headers)
    {
       if (item.name_string().starts_with(':'))
-         logw("[{}] async_submit: invalid header '{}': setting pseudo headers is not allowed",
-              log_prefix_, item.name_string());
+         mlogw("async_submit: invalid header '{}': setting pseudo headers is not allowed",
+               item.name_string());
 
       nva.push_back(make_nv(item.name_string(), item.value()));
    }
 
-   logd("[{}] {} {}", log_prefix_, method_str, request_url.buffer());
+   mlogd("{} {}", method_str, request_url.buffer());
    return submit_headers(nva, true /* request */);
 }
 
@@ -372,7 +371,7 @@ void Http3ClientStream::async_get_response(client::Request::GetResponseHandler&&
    if (cs.is_connected())
    {
       cs.assign([this](asio::cancellation_type_t ct) {
-         logd("[{}] async_get_response: cancelled ({})", log_prefix_, ct);
+         mlogd("async_get_response: cancelled ({})", ct);
          if (response_handler)
          {
             asio::post(get_executor(), [handler = std::move(response_handler)]() mutable {
@@ -422,7 +421,6 @@ Http3ClientSession::Http3ClientSession(asio::any_io_executor executor, const Con
    max_header_size_ = config.max_header_size;
    // Sentinel timers: expires_at(max) means "not yet"; a wait completes once moved to "min".
    ready_signal_.expires_at(asio::steady_timer::time_point::max());
-   logi("Http3ClientSession: ctor");
 }
 
 Http3ClientSession::~Http3ClientSession()
@@ -433,7 +431,7 @@ Http3ClientSession::~Http3ClientSession()
    //
    ready_signal_.cancel();
    clear_streams();
-   logi("Http3ClientSession: dtor");
+   mlogd("session deleted");
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -462,20 +460,21 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote)
       return -1;
    }
 
-   log_prefix_ = std::format("h3:{}", straddr(remote.data(), remote.size()));
+   log_prefix_ = http3::log_prefix(Role::client, "h3", remote.data(), remote.size());
+   mlogd("session created");
 
    ngtcp2_cid scid{};
    scid.datalen = 17;
    if (RAND_bytes(scid.data, static_cast<int>(scid.datalen)) != 1)
    {
-      loge("[{}] init: RAND_bytes for SCID failed", log_prefix_);
+      mloge("init: RAND_bytes for SCID failed");
       return -1;
    }
    ngtcp2_cid dcid{};
    dcid.datalen = http3::QUIC_SCIDLEN;
    if (RAND_bytes(dcid.data, static_cast<int>(dcid.datalen)) != 1)
    {
-      loge("[{}] init: RAND_bytes for DCID failed", log_prefix_);
+      mloge("init: RAND_bytes for DCID failed");
       return -1;
    }
 
@@ -498,14 +497,14 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote)
                                         &callbacks, &settings, &params, nullptr, this);
        rv != 0)
    {
-      loge("[{}] ngtcp2_conn_client_new: {}", log_prefix_, ngtcp2_strerror(rv));
+      mloge("ngtcp2_conn_client_new: {}", ngtcp2_strerror(rv));
       return -1;
    }
 
    if (setup_tls(tls_context().ctx, false /* client */) != 0)
       return -1;
 
-   logi("[{}] connecting, scid={}", log_prefix_, format_hex(scid.data, scid.datalen));
+   mlogi("connecting, scid={}", format_hex(scid.data, scid.datalen));
    return 0;
 }
 
@@ -528,7 +527,7 @@ awaitable<void> Http3ClientSession::do_session(Buffer&&)
       if (ec)
       {
          if (ec != asio::error::operation_aborted)
-            logw("[{}] receive: {}", log_prefix_, ec.message());
+            mlogw("receive: {}", ec.message());
          break;
       }
 
@@ -636,7 +635,7 @@ int Http3ClientSession::send_datagrams(const ngtcp2_path& /*path*/, std::span<co
       socket_.send(asio::buffer(data.data(), len), 0, ec);
       if (ec && ec != asio::error::would_block && ec != asio::error::try_again)
       {
-         logw("[{}] send: {}", log_prefix_, ec.message());
+         mlogw("send: {}", ec.message());
          return 0; // best-effort; ngtcp2 will retransmit
       }
       data = data.subspan(len);
@@ -665,7 +664,7 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, std::string_view 
 {
    if (closed() || !h3())
    {
-      loge("[{}] async_submit: session not ready", log_prefix_);
+      mloge("async_submit: session not ready");
       std::move(handler)(errc::make_error_code(errc::operation_canceled), client::Request{nullptr});
       return;
    }
@@ -673,7 +672,7 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, std::string_view 
    int64_t stream_id = -1;
    if (auto rv = ngtcp2_conn_open_bidi_stream(conn_, &stream_id, nullptr); rv != 0)
    {
-      loge("[{}] async_submit: ngtcp2_conn_open_bidi_stream: {}", log_prefix_, ngtcp2_strerror(rv));
+      mloge("async_submit: ngtcp2_conn_open_bidi_stream: {}", ngtcp2_strerror(rv));
       std::move(handler)(errc::make_error_code(errc::invalid_argument), client::Request{nullptr});
       return;
    }
@@ -713,13 +712,14 @@ awaitable<std::shared_ptr<Session::Impl>> async_connect_http3(asio::any_io_execu
 
    std::shared_ptr<Session::Impl> impl = session;
 
-   co_spawn(executor, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable {
-      if (ex)
-         logw("client run: {}", what(ex));
-      else
-         logi("client run: done");
-      impl.reset();
-   });
+   co_spawn(executor, impl->do_session(Buffer{}),
+            [impl, prefix = session->log_prefix()](const std::exception_ptr& ex) mutable {
+               if (ex)
+                  logw("[{}] client run: {}", prefix, what(ex));
+               else
+                  logi("[{}] client run: done", prefix);
+               impl.reset();
+            });
 
    //
    // Note: wait_ready() uses a sentinel steady_timer as a one-shot gate (see the comment on

@@ -6,8 +6,8 @@
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/awaitable.hpp>
-#include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/experimental/co_composed.hpp>
+#include <boost/asio/ip/tcp.hpp>
 
 #include <chrono>
 #include <mutex>
@@ -53,6 +53,9 @@ class Client::Impl
 public:
    explicit Impl(asio::any_io_executor executor, Config config);
    ~Impl();
+
+   /// For log lines that belong to no connection, see anyhttp::log_prefix().
+   std::string log_prefix() const { return anyhttp::log_prefix(Role::client); }
 
    boost::asio::any_io_executor get_executor() const noexcept { return executor_; }
 

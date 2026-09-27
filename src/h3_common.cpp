@@ -7,7 +7,7 @@
 
 #include <spdlog/spdlog.h>
 
-#include <netdb.h>
+#include <boost/asio/ip/udp.hpp>
 
 #include <array>
 #include <cassert>
@@ -131,20 +131,15 @@ ngtcp2_tstamp timestamp()
       duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count());
 }
 
-std::string straddr(const sockaddr* sa, socklen_t salen)
+std::string log_prefix(Role role, std::string_view protocol, const sockaddr* sa, socklen_t salen)
 {
-   std::array<char, NI_MAXHOST> host;
-   std::array<char, NI_MAXSERV> port;
+   boost::asio::ip::udp::endpoint endpoint;
+   if (salen > endpoint.capacity())
+      return std::string(protocol);
 
-   auto rv = getnameinfo(sa, salen, host.data(), host.size(), port.data(), port.size(),
-                         NI_NUMERICHOST | NI_NUMERICSERV);
-   if (rv != 0)
-   {
-      loge("getnameinfo: {}", gai_strerror(rv));
-      return {};
-   }
-
-   return std::format("[{}]:{}", host.data(), port.data());
+   std::memcpy(endpoint.data(), sa, salen);
+   endpoint.resize(salen);
+   return anyhttp::log_prefix(role, protocol, endpoint.address(), endpoint.port());
 }
 
 std::string format_hex(const uint8_t* data, size_t len)

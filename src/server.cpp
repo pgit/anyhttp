@@ -11,7 +11,8 @@ namespace anyhttp::server
 
 Request::Request(std::shared_ptr<Request::Impl> impl) : Reader(std::move(impl))
 {
-   logd("\x1b[1;35mServer::Request: ctor\x1b[0m");
+   if (*this)
+      logd("[{}] \x1b[1;35mServer::Request: ctor\x1b[0m", pimpl().log_prefix());
 }
 
 Request::Request(Request&&) noexcept = default;
@@ -21,7 +22,7 @@ void Request::reset() noexcept
 {
    if (*this)
    {
-      logd("\x1b[35mServer::Request: dtor\x1b[0m");
+      logd("[{}] \x1b[35mServer::Request: dtor\x1b[0m", pimpl().log_prefix());
       Reader::reset();
    }
 }
@@ -40,7 +41,8 @@ const Fields& Request::fields() const { return pimpl().fields(); }
 
 Response::Response(std::shared_ptr<Response::Impl> impl) : Writer(std::move(impl))
 {
-   logd("\x1b[1;35mServer::Response: ctor\x1b[0m");
+   if (*this)
+      logd("[{}] \x1b[1;35mServer::Response: ctor\x1b[0m", pimpl().log_prefix());
 }
 
 Response::Response(Response&&) noexcept = default;
@@ -50,7 +52,7 @@ void Response::reset() noexcept
 {
    if (*this)
    {
-      logd("\x1b[35mServer::Response: dtor\x1b[0m");
+      logd("[{}] \x1b[35mServer::Response: dtor\x1b[0m", pimpl().log_prefix());
       Writer::reset();
    }
 }

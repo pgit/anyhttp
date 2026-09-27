@@ -30,6 +30,7 @@ public:
    using executor_type = boost::asio::any_io_executor;
    virtual executor_type get_executor() noexcept = 0;
    virtual TcpSocketBase& get_socket() = 0;
+   virtual bool is_tls() const noexcept = 0;
 
    virtual void async_write_some(ReadWriteHandler handler, ConstBufferVector buffer) = 0;
    virtual void async_read_some(ReadWriteHandler handler, MutableBufferVector buffer) = 0;
@@ -61,6 +62,7 @@ public:
       return stream_traits<Stream>::get_executor(stream_);
    }
    TcpSocketBase& get_socket() override { return anyhttp::get_socket(stream_); }
+   bool is_tls() const noexcept override { return stream_traits<Stream>::is_tls(stream_); }
 
    void async_write_some(ReadWriteHandler handler, ConstBufferVector buffers) override
    {

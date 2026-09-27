@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace anyhttp
 {
@@ -24,6 +25,9 @@ class Writer::Impl : public std::enable_shared_from_this<Writer::Impl>
 public:
    virtual ~Impl() = default;
    virtual asio::any_io_executor get_executor() const noexcept = 0;
+
+   /// The log prefix of the stream this belongs to, still valid after detach().
+   virtual std::string log_prefix() const = 0;
    virtual void content_length(std::optional<size_t> content_length) = 0;
 
    //

@@ -224,13 +224,14 @@ public:
       return [this](const std::exception_ptr& ep) {
          auto ec = code(ep);
          if (ec)
-            logw("client completed with \x1b[1;31m{}\x1b[0m", what(ec));
+            logw("[{}] completed with \x1b[1;31m{}\x1b[0m", anyhttp::log_prefix(Role::client),
+                 what(ec));
          else
-            logi("client completed successfully");
+            logi("[{}] completed successfully", anyhttp::log_prefix(Role::client));
 
          on_complete(ec);
 
-         logd("stopping server");
+         logd("[{}] stopping", anyhttp::log_prefix(Role::server));
          server.reset();
          work.reset();
       };

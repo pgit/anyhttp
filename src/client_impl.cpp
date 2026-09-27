@@ -54,10 +54,10 @@ Response::Impl::~Impl() = default;
 Client::Impl::Impl(asio::any_io_executor executor, Config config)
    : config_(std::move(config)), executor_(std::move(executor)), resolver_(executor_)
 {
-   logi("Client: ctor");
+   mlogi("ctor");
 }
 
-Client::Impl::~Impl() { logi("Client: dtor"); }
+Client::Impl::~Impl() { mlogi("dtor"); }
 
 // -------------------------------------------------------------------------------------------------
 
@@ -77,7 +77,7 @@ void Client::Impl::on_alt_svc(std::string_view field_value)
    {
       auto lock = std::lock_guard(alt_svc_mutex_);
       if (alt_svc_)
-         logi("Client: Alt-Svc: dropping the HTTP/3 alternative");
+         mlogi("Alt-Svc: dropping the HTTP/3 alternative");
       alt_svc_.reset();
       return;
    }
@@ -85,9 +85,9 @@ void Client::Impl::on_alt_svc(std::string_view field_value)
    if (!service)
       return;
 
-   logi("Client: Alt-Svc: HTTP/3 at {}:{} for {}s", //
-        service->host.empty() ? config().url.host_address() : service->host, service->port,
-        service->max_age.count());
+   mlogi("Alt-Svc: HTTP/3 at {}:{} for {}s", //
+         service->host.empty() ? config().url.host_address() : service->host, service->port,
+         service->max_age.count());
 
    auto lock = std::lock_guard(alt_svc_mutex_);
    alt_svc_ = AlternativeService{.host = service->host,
@@ -120,7 +120,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
    auto completion = [this, handler = std::move(handler)](std::exception_ptr ep,
                                                           Session session) mutable {
       if (ep)
-         loge("Client: async_connect: {}", what(ep));
+         mloge("async_connect: {}", what(ep));
       std::move(handler)(code(ep), std::move(session));
    };
 
@@ -145,8 +145,7 @@ awaitable<Session> Client::Impl::async_connect()
    if (auto alt = alt_svc())
    {
       auto alt_host = alt->host.empty() ? host : alt->host;
-      logi("Client: connecting to {}:{} over HTTP/3, as advertised by Alt-Svc", alt_host,
-           alt->port);
+      mlogi("connecting to {}:{} over HTTP/3, as advertised by Alt-Svc", alt_host, alt->port);
       co_return Session{co_await async_connect_http3(executor_, alt_host, alt->port, config())};
    }
 
@@ -158,12 +157,12 @@ awaitable<Session> Client::Impl::async_connect()
       co_return Session{co_await async_connect_http3(executor_, host, port, config())};
 
    std::vector<ip::tcp::endpoint> endpoints;
-   logd("Client: resolving {}:{} ...", host, port);
+   mlogd("resolving {}:{} ...", host, port);
    {
       auto flags = ip::tcp::resolver::numeric_service;
       for (auto&& elem : co_await resolver_->async_resolve(host, port, flags)) // may throw
       {
-         logd("Client: {}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
+         mlogd("{}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
          endpoints.push_back(std::move(elem));
       }
    }
@@ -176,7 +175,11 @@ awaitable<Session> Client::Impl::async_connect()
    ip::tcp::socket socket(executor_);
    auto endpoint = co_await asio::async_connect(socket, endpoints);
 
-   logi("Client: connected to {}", socket.remote_endpoint());
+   mlogi("connected to {}", socket.remote_endpoint());
+
+   // what the session is going to call itself, see make_client_session() below (no TLS yet)
+   const auto prefix =
+      anyhttp::log_prefix(Role::client, config().protocol == Protocol::h1 ? "h1" : "h2c", socket);
 
    // HTTP/2 is very slow without this, and TLS handshake is faster as well.
    socket.set_option(ip::tcp::no_delay(true));
@@ -189,7 +192,7 @@ awaitable<Session> Client::Impl::async_connect()
    sb::receive_buffer_size receive_buffer_size;
    socket.get_option(send_buffer_size);
    socket.get_option(receive_buffer_size);
-   logd("Client: socket buffer sizes: send={} receive={}", send_buffer_size.value(),
+   logd("[{}] socket buffer sizes: send={} receive={}", prefix, send_buffer_size.value(),
         receive_buffer_size.value());
 
    // socket.set_option(sb::send_buffer_size(8192));
@@ -235,13 +238,14 @@ awaitable<Session> Client::Impl::async_connect()
    //        of the user-facing "Session" object. So we should use only the "impl" internally.
    //
 #if 1
-   co_spawn(executor_, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable {
-      if (ex)
-         logw("client run: {}", what(ex));
-      else
-         logi("client run: done");
-      impl.reset();
-   });
+   co_spawn(executor_, impl->do_session(Buffer{}),
+            [impl, prefix](const std::exception_ptr& ex) mutable {
+               if (ex)
+                  logw("[{}] client run: {}", prefix, what(ex));
+               else
+                  logi("[{}] client run: done", prefix);
+               impl.reset();
+            });
 #endif
 
    //

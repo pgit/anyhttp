@@ -66,7 +66,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : config_(std::move(config)), executor_(std::move(executor)),
      tls_context_(make_tls_server_context()), acceptor_(executor_)
 {
-   logi("Server: ctor");
+   mlogi("ctor");
    listen_tcp();
 
    //
@@ -84,7 +84,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    if (http3_ && config_.alt_svc_max_age > 0s)
    {
       alt_svc_ = std::format("h3=\":{}\"; ma={}", tcp_ep.port(), config_.alt_svc_max_age.count());
-      logi("Server: advertising '{}'", alt_svc_);
+      mlogi("advertising '{}'", alt_svc_);
    }
 }
 
@@ -101,9 +101,9 @@ void Server::Impl::start()
    co_spawn(executor_, tcp_accept_loop(),
             [self = shared_from_this()](const std::exception_ptr& ex) {
                if (ex)
-                  logw("TCP accept loop: {}", what(ex));
+                  logw("[{}] TCP accept loop: {}", self->log_prefix(), what(ex));
                else
-                  logi("TCP accept loop: done");
+                  logi("[{}] TCP accept loop: done", self->log_prefix());
             });
 
    if (http3_)
@@ -114,7 +114,7 @@ void Server::Impl::start()
 
 void Server::Impl::destroy()
 {
-   logi("Server: destroy");
+   mlogi("destroy");
 
    acceptor_.close(); // breaks listen_loop()
 
@@ -141,7 +141,7 @@ void Server::Impl::destroy()
 
 Server::Impl::~Impl()
 {
-   logi("Server: dtor");
+   mlogi("dtor");
    assert(destroyed_);
 }
 
@@ -169,7 +169,7 @@ void Server::Impl::listen_tcp()
    boost::system::error_code ec;
    auto address = ip::make_address(config().listen_address, ec);
    if (ec)
-      logw("Server: error resolving '{}': {}", config().listen_address, ec.what());
+      mlogw("error resolving '{}': {}", config().listen_address, ec.what());
 
    ip::tcp::endpoint ep(address, config().port);
    acceptor_.open(ep.protocol());
@@ -184,14 +184,14 @@ void Server::Impl::listen_tcp()
    {
       acceptor_.set_option(ip::v6_only(false), ec);
       if (ec)
-         logw("Server: error enabling dual-stack on {}: {}", ep, ec.what());
+         mlogw("error enabling dual-stack on {}: {}", ep, ec.what());
    }
 
    acceptor_.bind(ep);
    acceptor_.listen();
 
    ep = acceptor_.local_endpoint();
-   logi("Server: TCP listening on {}", ep);
+   mlogi("TCP listening on {}", ep);
 }
 
 // =================================================================================================
@@ -264,7 +264,7 @@ static asio::ssl::context make_tls_server_context()
 
 awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
 {
-   const auto prefix = normalize(socket.remote_endpoint());
+   const auto prefix = anyhttp::log_prefix(Role::server, "tcp", socket);
    logi("[{}] new connection", prefix);
 
    // HTTP/2 is very slow without this, and TLS handshake is faster as well.
@@ -419,13 +419,13 @@ awaitable<void> Server::Impl::tcp_accept_loop()
       if (ec)
       {
          if (ec == boost::system::errc::operation_canceled)
-            logi("TCP accept: {}", ec.message());
+            mlogi("TCP accept: {}", ec.message());
          else
-            logw("TCP accept: {}", ec.message());
+            mlogw("TCP accept: {}", ec.message());
          break;
       }
 
-      auto ep = normalize(socket.remote_endpoint());
+      auto prefix = anyhttp::log_prefix(Role::server, "tcp", socket);
 
       //
       // Without something like a "nursery" or "async_scope", spawning a task detaches it from
@@ -439,14 +439,14 @@ awaitable<void> Server::Impl::tcp_accept_loop()
 
       auto connection_executor = socket.get_executor();
       co_spawn(connection_executor, handle_connection(std::move(socket)),
-               [&, ep](const std::exception_ptr& ex) mutable {
+               [&, prefix](const std::exception_ptr& ex) mutable {
                   auto lock = std::lock_guard(session_mutex_);
                   --sessionCounter;
                   std::ignore = sessionDone.try_send(boost::system::error_code{});
                   if (ex)
-                     logw("[{}] {}", ep, what(ex));
+                     logw("[{}] {}", prefix, what(ex));
                   else
-                     logi("[{}] session finished, {} sessions left", ep, sessionCounter);
+                     logi("[{}] session finished, {} sessions left", prefix, sessionCounter);
                });
    }
 
@@ -457,7 +457,7 @@ awaitable<void> Server::Impl::tcp_accept_loop()
    //
    auto lock = std::unique_lock(session_mutex_);
    const auto waitingFor = sessionCounter;
-   logi("accept terminated, waiting for {} sessions...", waitingFor);
+   mlogi("accept terminated, waiting for {} sessions...", waitingFor);
 
    size_t i = 0;
    for (; sessionCounter; ++i)
@@ -471,7 +471,7 @@ awaitable<void> Server::Impl::tcp_accept_loop()
       lock.lock();
    }
 
-   logi("accept terminated, waiting for {} sessions... done, {} iterations", waitingFor, i);
+   mlogi("accept terminated, waiting for {} sessions... done, {} iterations", waitingFor, i);
 }
 
 // =================================================================================================

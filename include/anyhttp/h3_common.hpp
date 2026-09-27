@@ -1,5 +1,7 @@
 #pragma once
 
+#include "anyhttp/common.hpp"
+
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
 
@@ -86,8 +88,8 @@ void set_port(Address& dst, const Address& src);
 /// The current steady clock reading in nanoseconds, which is the timestamp ngtcp2 expects.
 ngtcp2_tstamp timestamp();
 
-/// Stringifies \p sa of length \p salen in the format "[IP]:PORT".
-std::string straddr(const sockaddr* sa, socklen_t salen);
+/// The log prefix for a peer at \p sa of length \p salen, see anyhttp::log_prefix().
+std::string log_prefix(Role role, std::string_view protocol, const sockaddr* sa, socklen_t salen);
 
 /// Formats \p len bytes at \p data as lowercase hex, for logging connection IDs.
 std::string format_hex(const uint8_t* data, size_t len);

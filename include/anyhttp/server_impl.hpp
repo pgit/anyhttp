@@ -64,6 +64,9 @@ public:
    Impl(boost::asio::any_io_executor executor, Config config);
    ~Impl();
 
+   /// For log lines that belong to no connection, see anyhttp::log_prefix().
+   std::string log_prefix() const { return anyhttp::log_prefix(Role::server); }
+
    void start();
    void destroy();
 
