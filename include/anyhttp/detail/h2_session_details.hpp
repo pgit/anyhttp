@@ -101,7 +101,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
       //
       else if (const auto bytes_to_write = buffer.size() + nread; bytes_to_write > 0)
       {
-         const std::array<asio::const_buffer, 2> seq{buffer.data(), asio::buffer(data, nread)};
+         const auto seq = std::to_array<const_buffer>({buffer.data(), asio::buffer(data, nread)});
          mylogd("send loop: writing {} bytes...", bytes_to_write);
          auto [ec, written] = co_await asio::async_write(stream_, seq, asio::as_tuple);
          if (ec)
@@ -216,8 +216,9 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    // enforces it in neither direction. Header sections beyond max_header_size are rejected where
    // they arrive, see on_header_callback().
    //
-   std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
+   auto iv =
+      std::to_array<nghttp2_settings_entry>({{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
+                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}});
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
 #else
@@ -327,8 +328,9 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    // enforces it in neither direction. Header sections beyond max_header_size are rejected where
    // they arrive, see on_header_callback().
    //
-   std::array<nghttp2_settings_entry, 2> iv{{{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}}};
+   auto iv =
+      std::to_array<nghttp2_settings_entry>({{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
+                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}});
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
 #else
