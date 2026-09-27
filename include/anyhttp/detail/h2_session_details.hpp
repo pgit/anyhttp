@@ -218,7 +218,8 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    //
    auto iv =
       std::to_array<nghttp2_settings_entry>({{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}});
+                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size},
+                                             {NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL, 1}});
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
 #else
