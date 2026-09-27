@@ -139,36 +139,35 @@ int main(int argc, char* argv[])
       server.reset();
    });
 
-   server->on_request(
-      [](server::Request request, server::Response response) -> awaitable<void> {
-         std::string path = request.url().path();
-         if (path == "/echo")
-            co_await echo(std::move(request), std::move(response));
-         else if (path == "/generate")
-            co_await generate(std::move(request), std::move(response));
-         else if (path == "/dump")
-            co_await dump(std::move(request), std::move(response));
-         else if (path == "/dump space")
-            co_await dump(std::move(request), std::move(response));
-         else if (path == "/discard")
-            co_return;
-         else if (path == "/test" || path.starts_with("/test/"))
-            co_await serve_file(std::move(request), std::move(response), "test", "/test");
-         else if (path == "/eat_request")
-            co_await eat_request(std::move(request), std::move(response));
-         else if (path == "/upload")
-         {
-            // Unlike eat_request, respond only after the whole body is in: clients such as h2load
-            // stop uploading as soon as the response is complete.
-            co_await drain(request);
-            co_await response.async_submit(200, {});
-            co_await response.async_write_eof();
-         }
-         else if (path == "/" || path == "/h2spec")
-            co_await h2spec(std::move(request), std::move(response));
-         else
-            co_await not_found(std::move(response));
-      });
+   server->on_request([](server::Request request, server::Response response) -> awaitable<void> {
+      std::string path = request.url().path();
+      if (path == "/echo")
+         co_await echo(std::move(request), std::move(response));
+      else if (path == "/generate")
+         co_await generate(std::move(request), std::move(response));
+      else if (path == "/dump")
+         co_await dump(std::move(request), std::move(response));
+      else if (path == "/dump space")
+         co_await dump(std::move(request), std::move(response));
+      else if (path == "/discard")
+         co_return;
+      else if (path == "/test" || path.starts_with("/test/"))
+         co_await serve_file(std::move(request), std::move(response), "test", "/test");
+      else if (path == "/eat_request")
+         co_await eat_request(std::move(request), std::move(response));
+      else if (path == "/upload")
+      {
+         // Unlike eat_request, respond only after the whole body is in: clients such as h2load
+         // stop uploading as soon as the response is complete.
+         co_await drain(request);
+         co_await response.async_submit(200, {});
+         co_await response.async_write_eof();
+      }
+      else if (path == "/" || path == "/h2spec")
+         co_await h2spec(std::move(request), std::move(response));
+      else
+         co_await not_found(std::move(response));
+   });
 
    auto threads = rv::iota(0) | rv::take(config->threads > 0 ? config->threads - 1 : 0) |
                   rv::transform([&](size_t) { return std::thread([&] { context.run(); }); }) |

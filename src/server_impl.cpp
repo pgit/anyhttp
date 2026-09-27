@@ -17,9 +17,9 @@
 #include <boost/asio/ip/address_v6.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ip/v6_only.hpp>
-#include <boost/asio/strand.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/stream.hpp>
+#include <boost/asio/strand.hpp>
 
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/ssl/ssl_stream.hpp>

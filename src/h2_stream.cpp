@@ -742,7 +742,8 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
    {
       auto ec = asio::error::basic_errors::already_started;
       mlogw("async_get_response: \x1b[1;31m{}\x1b[0m", what(ec));
-      asio::any_completion_executor ex = asio::get_associated_immediate_executor(handler, get_executor());
+      asio::any_completion_executor ex =
+         asio::get_associated_immediate_executor(handler, get_executor());
       ex.execute([handler = std::move(handler), ec = std::move(ec)]() mutable { //
          std::move(handler)(ec, client::Response{nullptr});
       });
@@ -915,10 +916,12 @@ void NGHttp2Stream::on_request()
 
    auto& server = dynamic_cast<ServerReference&>(parent).server();
    if (header_limit_exceeded)
-      asio::co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
-               asio::detached);
+      asio::co_spawn(get_executor(),
+                     header_fields_too_large(std::move(request), std::move(response)),
+                     asio::detached);
    else if (auto& handler = server.request_handler())
-      asio::co_spawn(get_executor(), handler(std::move(request), std::move(response)), asio::detached);
+      asio::co_spawn(get_executor(), handler(std::move(request), std::move(response)),
+                     asio::detached);
    else
    {
       mloge("on_request: no request handler!");

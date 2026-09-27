@@ -466,8 +466,8 @@ TEST_P(ClientAsync, WHEN_reading_into_buffer_sequence_THEN_empty_buffers_are_ski
 
       std::array<char, 0> empty;
       std::array<char, 64> buffer;
-      auto n = co_await response.async_read_some(
-         std::array{asio::buffer(empty), asio::buffer(buffer)});
+      auto n =
+         co_await response.async_read_some(std::array{asio::buffer(empty), asio::buffer(buffer)});
       EXPECT_GT(n, 0u);
       EXPECT_THAT(hello, StartsWith(std::string_view(buffer.data(), n)));
    };
