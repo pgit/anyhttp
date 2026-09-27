@@ -128,9 +128,6 @@ public:
       return !reader || eof_received && is_empty(read_buffer_);
    }
 
-   /// Returns true if the user has submitted EOF and this has been delivered to nghttp2.
-   inline bool writing_finished() const { return !writer || eof_submitted; };
-
    /**
     * Returns the number of bytes left to read. This is the remaining part of the first buffer
     * and the sum of all following buffers.
