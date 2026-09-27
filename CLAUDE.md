@@ -76,7 +76,7 @@ formatter tests drive nghttp2 by hand.)
 The HTTP/3 server and client share one implementation: `h3_session.*` (all ngtcp2/nghttp3
 callbacks, packet writing, timers, flow control), `h3_stream.*` (read and write paths, header
 parsing, lifecycle, the reader/writer adapters), `h3_common.*` (helpers). `h3_server.cpp` and
-`h3_client.cpp` hold only what is genuinely role-specific. Fix shared behaviour in the shared
+`h3_client.cpp` hold only what is genuinely role-specific. Fix shared behavior in the shared
 files.
 
 ## Conventions
@@ -85,8 +85,8 @@ files.
 - Test `.cpp` files put `using namespace testing;` after the includes and use `HasSubstr`,
   `Values`, `Not` unqualified. Never in `test_fixtures.hpp` (it would leak), and not in
   `test_external.cpp`, whose own `Args` alias collides with gmock's.
-- Commit subjects are prefixed: `fix:`, `refactor:`, `docs:`, `chore:`, `style:`, or the
-  protocol (`h1:`, `h3:`, `tls:`).
+- Commit subjects are prefixed: `fix:`, `refactor:`, `docs:`, `chore:`, `style:`, `test:`, or
+  the protocol (`h1:`, `h2:`, `h3:`).
 
 ## Traps
 
