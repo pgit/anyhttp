@@ -236,6 +236,34 @@ TEST(FormatterTest, NgHttp2NvEmptyValue)
    EXPECT_EQ(formatted, "some-header=");
 }
 
+TEST(FormatterTest, NgHttp2NvInvalidSpecThrows)
+{
+   // std::format() would reject this at compile time, vformat() only at runtime
+   auto nv = make_nghttp2_nv("content-type", "text/html");
+   EXPECT_THROW(std::ignore = std::vformat("{:x}", std::make_format_args(nv)), std::format_error);
+   EXPECT_THROW(std::ignore = std::vformat("{:nv}", std::make_format_args(nv)), std::format_error);
+}
+
+TEST(FormatterTest, NgHttp2NvParseEmptySpec)
+{
+   // std::format() always hands parse() at least the closing '}', only a bare context is empty
+   std::formatter<nghttp2_nv> formatter;
+   std::format_parse_context ctx("");
+   EXPECT_EQ(formatter.parse(ctx), ctx.end());
+   EXPECT_EQ(formatter.what, std::formatter<nghttp2_nv>::part::name_and_value);
+}
+
+TEST(FormatterTest, NgHttp2NvNameOfValueOf)
+{
+   auto nv = make_nghttp2_nv("content-type", "text/html");
+   EXPECT_EQ(anyhttp::name_of(nv), "content-type");
+   EXPECT_EQ(anyhttp::value_of(nv), "text/html");
+
+   auto empty = make_nghttp2_nv("", "");
+   EXPECT_EQ(anyhttp::name_of(empty), "");
+   EXPECT_EQ(anyhttp::value_of(empty), "");
+}
+
 // =================================================================================================
 // Test anyhttp::truncated()
 // =================================================================================================
