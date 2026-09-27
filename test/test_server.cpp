@@ -10,7 +10,7 @@ using namespace testing;
 
 // =================================================================================================
 
-INSTANTIATE_TEST_SUITE_P(Server, Server, Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2),
+INSTANTIATE_TEST_SUITE_P(Server, Server, Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------

@@ -20,7 +20,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(Headers, Headers,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
                                 anyhttp::Protocol::h3),
                          NameGenerator);
 
@@ -244,7 +244,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(HeaderLimits, HeaderLimits,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
                                 anyhttp::Protocol::h3),
                          NameGenerator);
 
@@ -306,7 +306,7 @@ TEST_P(HeaderLimits, WHEN_request_headers_far_exceed_limit_THEN_request_is_rejec
 
 TEST_P(HeaderLimits, WHEN_request_is_rejected_THEN_session_serves_next_request)
 {
-   if (GetParam() == anyhttp::Protocol::http11)
+   if (GetParam() == anyhttp::Protocol::h1)
       GTEST_SKIP() << "HTTP/1.1 closes the connection after 431";
 
    respond_with_headers();
@@ -347,7 +347,7 @@ TEST_P(HeaderLimits, WHEN_response_headers_exceed_limit_before_get_response_THEN
 
 TEST_P(HeaderLimits, WHEN_response_is_rejected_THEN_session_serves_next_request)
 {
-   if (GetParam() == anyhttp::Protocol::http11)
+   if (GetParam() == anyhttp::Protocol::h1)
       GTEST_SKIP() << "HTTP/1.1 can not skip the rest of a response";
 
    respond_with_headers();

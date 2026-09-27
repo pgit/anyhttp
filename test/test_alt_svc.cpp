@@ -147,7 +147,7 @@ protected:
 // Only HTTP/1.1 and HTTP/2 have anywhere to go: a client that already speaks HTTP/3 is there.
 //
 INSTANTIATE_TEST_SUITE_P(AltSvcUpgrade, AltSvcUpgrade,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2), NameGenerator);
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2), NameGenerator);
 
 TEST_P(AltSvcUpgrade, WHEN_the_server_advertises_h3_THEN_the_next_connection_uses_it)
 {
@@ -208,7 +208,7 @@ class AltSvcIgnored : public ClientAsync
 };
 
 INSTANTIATE_TEST_SUITE_P(AltSvcIgnored, AltSvcIgnored,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2), NameGenerator);
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2), NameGenerator);
 
 TEST_P(AltSvcIgnored, WHEN_the_client_does_not_follow_alt_svc_THEN_it_keeps_its_protocol)
 {
@@ -237,7 +237,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(AltSvcDisabled, AltSvcDisabled,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2), NameGenerator);
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2), NameGenerator);
 
 TEST_P(AltSvcDisabled, WHEN_the_server_advertises_nothing_THEN_the_client_stays_where_it_is)
 {

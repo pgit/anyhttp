@@ -82,7 +82,7 @@ protected:
 // -------------------------------------------------------------------------------------------------
 
 INSTANTIATE_TEST_SUITE_P(FileHandler, FileHandler,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
                                 anyhttp::Protocol::h3),
                          NameGenerator);
 

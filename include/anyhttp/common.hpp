@@ -39,7 +39,7 @@ using error_code = boost::system::error_code;
 
 enum class Protocol
 {
-   http11,
+   h1,
    h2,
    h3
 };

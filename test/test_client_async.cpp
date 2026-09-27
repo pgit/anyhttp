@@ -16,7 +16,7 @@ using namespace testing;
 // =================================================================================================
 
 INSTANTIATE_TEST_SUITE_P(ClientAsync, ClientAsync,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
                                 anyhttp::Protocol::h3),
                          NameGenerator);
 
@@ -107,7 +107,7 @@ TEST_P(ClientAsync, WHEN_get_response_is_called_twice_THEN_reports_error)
 
 TEST_P(ClientAsync, WHEN_get_response_is_detached_THEN_does_not_crash)
 {
-   if (GetParam() == anyhttp::Protocol::http11)
+   if (GetParam() == anyhttp::Protocol::h1)
       GTEST_SKIP();
 
    clientSession = [this](Session session) -> awaitable<void> {
@@ -135,7 +135,7 @@ static bool is_connection_error(const boost::system::error_code& ec)
 
 TEST_P(ClientAsync, WHEN_session_is_gone_THEN_request_reports_error)
 {
-   if (GetParam() != anyhttp::Protocol::http11)
+   if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP();
 
    clientSession = [this](Session session) -> awaitable<void> {
@@ -212,7 +212,7 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
 TEST_P(ClientAsync,
        WHEN_earlier_request_is_released_THEN_later_request_still_learns_session_is_gone)
 {
-   if (GetParam() != anyhttp::Protocol::http11)
+   if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP();
 
    clientSession = [this](Session session) -> awaitable<void> {
@@ -230,7 +230,7 @@ TEST_P(ClientAsync,
 
 TEST_P(ClientAsync, WHEN_session_is_gone_THEN_earlier_request_reports_error)
 {
-   if (GetParam() != anyhttp::Protocol::http11)
+   if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP();
 
    clientSession = [this](Session session) -> awaitable<void> {
@@ -248,7 +248,7 @@ TEST_P(ClientAsync, WHEN_session_is_gone_THEN_earlier_request_reports_error)
 TEST_P(ClientAsync,
        WHEN_earlier_response_is_released_THEN_later_response_still_learns_session_is_gone)
 {
-   if (GetParam() != anyhttp::Protocol::http11)
+   if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP();
 
    clientSession = [this](Session session) -> awaitable<void> {
@@ -297,7 +297,7 @@ TEST_P(ClientAsync, WHEN_server_discards_request_while_writing_THEN_connection_i
 
 TEST_P(ClientAsync, WHEN_server_discards_request_and_response_THEN_completes_anyway)
 {
-   // if (GetParam() == anyhttp::Protocol::http11)
+   // if (GetParam() == anyhttp::Protocol::h1)
    //    GTEST_SKIP(); // FIXME: timeout
 
    requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
@@ -315,7 +315,7 @@ TEST_P(ClientAsync, WHEN_server_discards_request_and_response_THEN_completes_any
 
 TEST_P(ClientAsync, WHEN_client_cancels_write_THEN_can_resume)
 {
-   if (GetParam() == anyhttp::Protocol::http11)
+   if (GetParam() == anyhttp::Protocol::h1)
       GTEST_SKIP(); // a chunked body cannot be cancelled correctly --> disconnects
 
    clientSession = [this](Session session) -> awaitable<void> {
@@ -386,7 +386,7 @@ TEST_P(ClientAsync, YieldFuzz)
             "=== {} =========================================================================", i);
          co_await yield(dist(gen));
          Fields fields;
-         if (GetParam() == anyhttp::Protocol::http11)
+         if (GetParam() == anyhttp::Protocol::h1)
             fields.set("Connection", "Keep-Alive");
          fields.set("Content-Length", "0");
          auto request = co_await session.async_submit(url, fields);
@@ -612,7 +612,7 @@ TEST_P(ClientAsync, WHEN_server_cancels_write_eof_THEN_client_sees_truncated_bod
 //
 TEST_P(ClientAsync, WHEN_client_cancels_write_eof_THEN_can_still_end)
 {
-   if (GetParam() == anyhttp::Protocol::http11)
+   if (GetParam() == anyhttp::Protocol::h1)
       GTEST_SKIP(); // a chunked body cannot be cancelled correctly --> disconnects
 
    static const std::vector<uint8_t> body(8_m, 'x');
@@ -889,7 +889,7 @@ static constexpr auto body2 = "Hello, Server #2! XYZ"sv;
 TEST_P(ClientAsync, WHEN_request_is_submitted_before_previous_is_complete_THEN_reports_would_block)
 {
    clientSession = [this](Session session) -> awaitable<void> {
-      const bool limited = GetParam() == anyhttp::Protocol::http11;
+      const bool limited = GetParam() == anyhttp::Protocol::h1;
 
       auto request1 = co_await session.async_submit(url.set_path("echo"), {});
       auto [ec, request2] = co_await session.async_submit(url.set_path("echo"), {}, as_tuple);
@@ -937,7 +937,7 @@ TEST_P(ClientAsync, WHEN_many_requests_are_made_THEN_all_are_answered_in_order)
 //
 TEST_P(ClientAsync, WHEN_getting_response_before_previous_is_read_THEN_reports_would_block)
 {
-   if (GetParam() != anyhttp::Protocol::http11)
+   if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP(); // requests are multiplexed, nothing to wait for
 
    clientSession = [this](Session session) -> awaitable<void> {
@@ -966,7 +966,7 @@ TEST_P(ClientAsync, WHEN_getting_response_before_previous_is_read_THEN_reports_w
 //
 TEST_P(ClientAsync, WHEN_request_has_no_body_THEN_it_is_complete_after_submit)
 {
-   if (GetParam() != anyhttp::Protocol::http11)
+   if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP(); // requests are multiplexed, nothing to wait for
 
    clientSession = [this](Session session) -> awaitable<void> {
@@ -993,7 +993,7 @@ TEST_P(ClientAsync, WHEN_request_has_no_body_THEN_it_is_complete_after_submit)
 //
 TEST_P(ClientAsync, WHEN_content_length_is_written_without_eof_THEN_request_is_not_complete)
 {
-   if (GetParam() != anyhttp::Protocol::http11)
+   if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP(); // requests are multiplexed, nothing to wait for
 
    clientSession = [this](Session session) -> awaitable<void> {
@@ -1021,7 +1021,7 @@ TEST_P(ClientAsync, WHEN_content_length_is_written_without_eof_THEN_request_is_n
 //
 TEST_P(ClientAsync, WHEN_incomplete_request_is_released_THEN_later_requests_report_error)
 {
-   if (GetParam() != anyhttp::Protocol::http11)
+   if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP(); // requests are multiplexed, and independent of each other
 
    clientSession = [this](Session session) -> awaitable<void> {
@@ -1041,7 +1041,7 @@ TEST_P(ClientAsync, WHEN_incomplete_request_is_released_THEN_later_requests_repo
 TEST_P(ClientAsync,
        WHEN_request_is_released_without_getting_response_THEN_later_responses_report_error)
 {
-   if (GetParam() != anyhttp::Protocol::http11)
+   if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP(); // requests are multiplexed, and independent of each other
 
    clientSession = [this](Session session) -> awaitable<void> {

@@ -16,7 +16,7 @@ class ClientAsyncCancellation : public ClientAsync
 };
 
 INSTANTIATE_TEST_SUITE_P(ClientAsyncCancellation, ClientAsyncCancellation,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
                                 anyhttp::Protocol::h3),
                          NameGenerator);
 
@@ -128,7 +128,7 @@ TEST_P(ClientAsyncCancellation, Cancellation)
 
          // HTTP/1.1 needs to reconnect here
          // HTTP/2 can handle this without reconnect -- only the stream is cancelled
-         if (GetParam() == anyhttp::Protocol::http11)
+         if (GetParam() == anyhttp::Protocol::h1)
          {
             session.reset();
             session = co_await client->async_connect();
@@ -286,7 +286,7 @@ TEST_P(ClientAsyncCancellation, ResetServerDuringRequest)
 
 TEST_P(ClientAsyncCancellation, DISABLED_SpawnAndForget)
 {
-   if (GetParam() == anyhttp::Protocol::http11)
+   if (GetParam() == anyhttp::Protocol::h1)
       GTEST_SKIP(); // FIXME: ASAN errors
 
    clientSession = [this](Session session) -> awaitable<void> {

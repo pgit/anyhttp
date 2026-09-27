@@ -30,7 +30,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(IPv6, IPv6,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
                                 anyhttp::Protocol::h3),
                          NameGenerator);
 
@@ -60,7 +60,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(DualStack, DualStack,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
                                 anyhttp::Protocol::h3),
                          NameGenerator);
 

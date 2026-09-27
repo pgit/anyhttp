@@ -21,7 +21,8 @@ A test suite instantiates the fixture for the protocols it covers:
 
 ```cpp
 INSTANTIATE_TEST_SUITE_P(ClientAsync, ClientAsync,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                         Values(anyhttp::Protocol::h1,
+                                anyhttp::Protocol::h2,
                                 anyhttp::Protocol::h3),
                          NameGenerator);
 ```
@@ -31,7 +32,7 @@ selected with `--gtest_filter='*/HTTP3'`. A test body can branch on `GetParam()`
 protocols genuinely differ, typically to skip:
 
 ```cpp
-if (GetParam() == anyhttp::Protocol::http11)
+if (GetParam() == anyhttp::Protocol::h1)
    GTEST_SKIP(); // a chunked body cannot be cancelled correctly --> disconnects
 ```
 

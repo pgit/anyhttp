@@ -10,7 +10,7 @@ std::string to_string(Protocol protocol)
 {
    switch (protocol)
    {
-   case Protocol::http11:
+   case Protocol::h1:
       return "HTTP11";
    case Protocol::h2:
       return "HTTP2";

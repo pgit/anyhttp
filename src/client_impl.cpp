@@ -152,7 +152,7 @@ awaitable<Session> Client::Impl::async_connect()
 
    //
    // HTTP/3 runs over QUIC (UDP), so it needs an entirely different transport setup (TLS,
-   // handshake, ...) than the TCP-based http11/h2 paths below.
+   // handshake, ...) than the TCP-based h1/h2 paths below.
    //
    if (config().protocol == Protocol::h3)
       co_return Session{co_await async_connect_http3(executor_, host, port, config())};
@@ -212,7 +212,7 @@ awaitable<Session> Client::Impl::async_connect()
    std::shared_ptr<Session::Impl> impl;
    switch (config().protocol)
    {
-   case Protocol::http11:
+   case Protocol::h1:
       impl = beast_impl::make_client_session(*this, std::move(socket));
       break;
 

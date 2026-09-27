@@ -33,7 +33,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(AsyncGet, AsyncGet,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
                                 anyhttp::Protocol::h3),
                          NameGenerator);
 
@@ -199,8 +199,7 @@ TEST(AsyncGetRaw, WHEN_get_THEN_request_line_says_GET)
    auto url = boost::urls::url("http://127.0.0.1");
    url.set_port_number(acceptor.local_endpoint().port());
 
-   client::Client client(context.get_executor(),
-                         {.url = url, .protocol = anyhttp::Protocol::http11});
+   client::Client client(context.get_executor(), {.url = url, .protocol = anyhttp::Protocol::h1});
    co_spawn(
       context,
       [&]() -> awaitable<void> {
