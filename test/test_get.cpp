@@ -1,5 +1,9 @@
 #include "test_fixtures.hpp"
 
+#include "anyhttp/tls.hpp"
+
+#include <spdlog/sinks/ringbuffer_sink.h>
+
 #include <string>
 
 using namespace testing;
@@ -45,6 +49,37 @@ TEST_P(AsyncGet, WHEN_get_THEN_message_has_status_fields_and_body)
       EXPECT_EQ(message["x-answer"], "42");
       EXPECT_EQ(message.body(), "Hello, World!");
    };
+}
+
+//
+// The TLS handshake summary is only computed when logging at info, which CI builds do not. Turn it
+// on for this one test so that tls_handshake_info() runs -- over QUIC, where both our client and
+// our server do TLS. setup_logging() in the next SetUp() restores the level.
+//
+TEST_P(AsyncGet, WHEN_logging_at_info_THEN_tls_handshake_is_summarized)
+{
+   auto sink = std::make_shared<spdlog::sinks::ringbuffer_sink_mt>(256);
+   auto& sinks = spdlog::default_logger_raw()->sinks();
+   sinks.push_back(sink);
+   spdlog::set_level(spdlog::level::info);
+
+   respond_with("Hello, World!");
+   clientSession = [this, sink, &sinks](Session session) -> awaitable<void> {
+      auto message = co_await session.async_get(url);
+      EXPECT_EQ(message.body(), "Hello, World!");
+      std::erase(sinks, sink);
+
+      auto handshake = HasSubstr("TLS handshake completed: TLSv1.3, cipher=");
+      if (GetParam() == anyhttp::Protocol::h3)
+         EXPECT_THAT(sink->last_formatted(), Contains(handshake));
+      else
+         EXPECT_THAT(sink->last_formatted(), Not(Contains(handshake)));
+   };
+}
+
+TEST(TlsHandshakeInfo, WHEN_there_is_no_session_THEN_says_so)
+{
+   EXPECT_EQ(anyhttp::tls_handshake_info(nullptr), "no TLS session");
 }
 
 TEST_P(AsyncGet, WHEN_response_has_no_body_THEN_body_is_empty)
