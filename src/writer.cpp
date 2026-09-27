@@ -33,8 +33,7 @@ Writer::executor_type Writer::get_executor() const noexcept
 
 void Writer::content_length(std::optional<size_t> content_length)
 {
-   assert(impl_);
-   impl_->content_length(content_length);
+   return impl_ ? impl_->content_length(content_length) : void{};
 }
 
 void Writer::async_write_any(WriteHandler&& handler, asio::const_buffer buffer, bool eof)

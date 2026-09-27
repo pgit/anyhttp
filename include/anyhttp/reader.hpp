@@ -36,7 +36,6 @@ public:
 
    using executor_type = asio::any_io_executor;
 
-   Reader() noexcept = default;
    explicit Reader(std::shared_ptr<Impl> impl) noexcept;
    Reader(Reader&&) noexcept;
    Reader& operator=(Reader&&) noexcept;
@@ -98,6 +97,8 @@ private:
 
    std::shared_ptr<Impl> impl_;
 };
+
+static_assert(AsyncReadStream<Reader>);
 
 // =================================================================================================
 

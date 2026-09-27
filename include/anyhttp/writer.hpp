@@ -34,7 +34,6 @@ public:
 
    using executor_type = asio::any_io_executor;
 
-   Writer() noexcept = default;
    explicit Writer(std::shared_ptr<Impl> impl) noexcept;
    Writer(Writer&&) noexcept;
    Writer& operator=(Writer&&) noexcept;

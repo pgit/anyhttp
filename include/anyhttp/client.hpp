@@ -7,7 +7,6 @@
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/buffer.hpp>
 
-#include <boost/beast/core/stream_traits.hpp>
 #include <boost/beast/http/message.hpp>
 #include <boost/beast/http/string_body.hpp>
 
@@ -83,8 +82,6 @@ private:
    /// Hides Reader::pimpl(), narrowing it to the implementation this handle was built from.
    Impl& pimpl() const noexcept;
 };
-
-static_assert(boost::beast::is_async_read_stream<Response>::value);
 
 // -------------------------------------------------------------------------------------------------
 
