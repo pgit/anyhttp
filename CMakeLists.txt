@@ -93,7 +93,7 @@ endif()
 # find boost
 # https://github.com/madmongo1/blog-december-2020/blob/master/CMakeLists.txt
 #
-find_package(Boost 1.88 COMPONENTS thread atomic url filesystem process program_options OPTIONAL_COMPONENTS system REQUIRED)
+find_package(Boost 1.88 COMPONENTS thread atomic url filesystem process program_options REQUIRED)
 find_package(Threads)
 
 #
