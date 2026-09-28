@@ -11,7 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 # The image has both GCC and clang, and 'c++' is GCC. Coverage needs clang, and the other jobs
-# should build what the devcontainer's build/ builds.
+# should build what the devcontainer's build/ builds -- except 'gcc', which overrides this to
+# build with GCC and libstdc++, like the devcontainer's build-gcc/.
 env:
   CC: clang
   CXX: clang++
@@ -38,6 +39,27 @@ jobs:
     - name: Run tests (if available)
       run: |
         build/test/test_all
+
+  gcc:
+    name: GCC
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/psedoc/anyhttp:0.30
+    env:
+      CC: gcc
+      CXX: g++
+
+    steps:
+      - *checkout
+
+      - name: Configure CMake with GCC
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - *build
+
+      - name: Run tests (if available)
+        run: |
+          build/test/test_all
 
   asan:
     name: ASAN
