@@ -311,8 +311,7 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
             alpn = std::string_view(reinterpret_cast<const char*>(data), len);
       }
 
-      logi("[{}] TLS handshake completed: {}", prefix,
-           tls_handshake_info(ssl_stream->native_handle()));
+      logi("[{}] {}", prefix, tls_handshake_info(ssl_stream->native_handle()));
 
       //
       // Everything that is not "h2" is served as HTTP/1.1, including the empty ALPN of a client

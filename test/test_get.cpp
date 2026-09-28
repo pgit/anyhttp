@@ -69,7 +69,7 @@ TEST_P(AsyncGet, WHEN_logging_at_info_THEN_tls_handshake_is_summarized)
       EXPECT_EQ(message.body(), "Hello, World!");
       std::erase(sinks, sink);
 
-      auto handshake = HasSubstr("TLS handshake completed: TLSv1.3, cipher=");
+      auto handshake = HasSubstr("TLSv1.3, cipher=");
       if (GetParam() == anyhttp::Protocol::h3)
          EXPECT_THAT(sink->last_formatted(), Contains(handshake));
       else

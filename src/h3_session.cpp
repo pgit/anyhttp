@@ -562,7 +562,7 @@ int Http3Session::setup_http3()
 int Http3Session::cb_handshake_completed(ngtcp2_conn*, void* user)
 {
    auto self = static_cast<Http3Session*>(user);
-   logi("[{}] TLS handshake completed: {}", self->log_prefix_, tls_handshake_info(self->ssl_));
+   logi("[{}] {}", self->log_prefix_, tls_handshake_info(self->ssl_));
    if (self->setup_http3() != 0)
       return NGTCP2_ERR_CALLBACK_FAILURE;
    return 0;
