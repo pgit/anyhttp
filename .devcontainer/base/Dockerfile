@@ -2,7 +2,7 @@
 # https://github.com/microsoft/vscode-dev-containers/tree/main/containers/debian
 # https://github.com/pgit/cpp-devcontainer
 #
-FROM docker.io/psedoc/cpp-devcontainer:0.28
+FROM docker.io/psedoc/cpp-devcontainer:testing
 
 #
 # GDB libc++ pretty printer (works for string, but not for map with llvm-18)
@@ -43,19 +43,19 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
 #
 # https://github.com/gabime/spdlog
 #
-RUN cd opt && \
-    git clone https://github.com/gabime/spdlog.git && \
-    cd spdlog && mkdir build && cd build && \
-    cmake .. && make -j$(nproc) && make install && \
-    cd ../.. && rm -rf spdlog
+# RUN cd opt && \
+#     git clone https://github.com/gabime/spdlog.git && \
+#     cd spdlog && mkdir build && cd build && \
+#     cmake .. && make -j$(nproc) && make install && \
+#     cd ../.. && rm -rf spdlog
 
 # --------------------------------------------------------------------------------------------------
 
 #
 # TODO: consider rpath
 #
-RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig
-ENV LD_LIBRARY_PATH=/usr/local/lib
+# RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig
+# ENV LD_LIBRARY_PATH=/usr/local/lib
 
 #
 # boringssl / nghttp3 / ngtcp2 (using boringssl) / urlparse
@@ -130,13 +130,17 @@ RUN git clone --depth 1 -b v1.7.0 https://github.com/libbpf/libbpf && \
 #
 # --enable-debug (very noisy)
 #
+# CC=clang: the eBPF program for --with-libbpf is compiled with '$(CC) -target bpf', which GCC
+# does not understand.
+#
 ARG NGHTTP2_VERSION=v1.70.0
 RUN git clone --recursive --depth 1 --branch ${NGHTTP2_VERSION} https://github.com/nghttp2/nghttp2.git && \
     cd nghttp2 && \
     autoreconf -i && \
-    ./configure --prefix=/usr/local --enable-http3 --with-libbpf && \
+    ./configure --prefix=/usr/local --enable-http3 --with-libbpf CC=clang && \
     make -j$(nproc) && make install && \
-    cd .. && rm -rf nghttp2
+    cd .. && rm -rf nghttp2 && \
+    ldconfig
 
 #    ./configure --prefix=/usr/local --with-mruby --enable-http3 --with-libbpf \
 #        LIBNGTCP2_CRYPTO_BORINGSSL_CFLAGS="-I/opt/boringssl/include" \
@@ -155,7 +159,8 @@ RUN cd opt && \
                 --with-ngtcp2 --with-nghttp3 --enable-ssls-export \
                 --prefix /usr/local && \
     make -j$(nproc) && make install && \
-    cd .. && rm -rf curl
+    cd .. && rm -rf curl && \
+    ldconfig
 RUN apt-get -y remove curl
 
 # ==================================================================================================
