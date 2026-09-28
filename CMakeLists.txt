@@ -28,16 +28,39 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
 endif()
 
 if (ENABLE_COVERAGE)
-    if (NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        message(FATAL_ERROR "ENABLE_COVERAGE is supported only with GNU or Clang compilers")
+    # source-based coverage (-fprofile-instr-generate, llvm-cov) exists in clang only
+    if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "ENABLE_COVERAGE is supported only with Clang")
     endif()
     set(COVERAGE_RAW_DIR "${CMAKE_BINARY_DIR}/coverage_raw")
     add_compile_options(-O0 -g -fprofile-instr-generate=${COVERAGE_RAW_DIR}/%p.profraw -fcoverage-mapping)
     add_link_options(-fprofile-instr-generate=${COVERAGE_RAW_DIR}/%p.profraw)
 endif()
 
-add_compile_options(-stdlib=libc++)
-add_link_options(-stdlib=libc++ -lstdc++fs)
+#
+# Standard library: libc++ with clang, libstdc++ with GCC. The C++ libraries we link (Boost, fmt,
+# spdlog) have to be built against the same one: the devcontainer has them for libstdc++ in
+# /usr/local and for libc++ in /opt/libc++. GTest is built from source (see test/CMakeLists.txt).
+#
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(USE_LIBCXX_DEFAULT ON)
+else()
+    set(USE_LIBCXX_DEFAULT OFF)
+endif()
+option(USE_LIBCXX "Build against libc++ instead of libstdc++" ${USE_LIBCXX_DEFAULT})
+
+if (USE_LIBCXX)
+    add_compile_options(-stdlib=libc++)
+    add_link_options(-stdlib=libc++)
+    set(LIBCXX_ROOT /opt/libc++ CACHE PATH "Installation prefix of C++ libraries built against libc++")
+    list(PREPEND CMAKE_PREFIX_PATH ${LIBCXX_ROOT})
+    # Statically: the shared libraries share their names with the libstdc++ ones in /usr/local/lib,
+    # so an LD_LIBRARY_PATH pointing there would take precedence over our RUNPATH.
+    set(Boost_USE_STATIC_LIBS ON)
+    message(STATUS "Using C++ standard library: libc++ (libraries from ${LIBCXX_ROOT})")
+else()
+    message(STATUS "Using C++ standard library: libstdc++")
+endif()
 
 # use std::filesystem instead of boost::filesystem
 add_compile_definitions(BOOST_PROCESS_USE_STD_FS)
@@ -60,7 +83,9 @@ add_compile_definitions(BOOST_ASIO_NO_DEPRECATED)
 add_compile_options(-Wno-deprecated-declarations)
 
 # FIXME: nghttp2 reader/writer needs this ATM
-add_compile_options(-Wno-inconsistent-missing-override)
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(-Wno-inconsistent-missing-override)
+endif()
 
 # --------------------------------------------------------------------------------------------------
 

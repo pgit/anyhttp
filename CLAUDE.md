@@ -7,7 +7,9 @@ anything about request/response semantics. This file is about *how to work in th
 ## Build and test
 
 Out-of-source trees, one per configuration. `build/` is Debug, `build-release/` is Release;
-benchmark with the latter, never with `build/`.
+benchmark with the latter, never with `build/`. Both use clang, which builds against libc++ and
+the libraries in `/opt/libc++` (`USE_LIBCXX`, `LIBCXX_ROOT`); `build-gcc/` is GCC with libstdc++
+and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.json`.
 
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug

@@ -221,6 +221,7 @@ protected:
       case anyhttp::Protocol::h3:
          return "--http3-only";
       }
+      std::unreachable();
    }
 
    //

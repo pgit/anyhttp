@@ -1,5 +1,6 @@
 #include "test_fixtures.hpp"
 
+#include <print>
 #include <string>
 
 using namespace testing;
