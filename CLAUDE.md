@@ -41,20 +41,20 @@ purpose, so configure a new tree instead of editing them:
 
 ```
 cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
-  -DCMAKE_CXX_FLAGS="-stdlib=libc++ -fsanitize=address -fno-omit-frame-pointer -g" \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
   -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
-ASAN_OPTIONS=detect_container_overflow=0 build-asan/test/test_all
+build-asan/test/test_all
 ```
 
-`detect_container_overflow=0` is required: the prebuilt GTest is not instrumented, so libc++'s
-container annotations get out of sync and the binary aborts during static test registration,
-before `main`, as a `heap-buffer-overflow` under `testing::TestSuite::AddTestInfo`. False
-positive. The `Recursion` test skips itself under ASAN, so expect 3 extra skips.
+GTest is built from source with the tree's own flags (`test/CMakeLists.txt`), so it is
+instrumented too and needs no `ASAN_OPTIONS`. The `Recursion` test skips itself under ASAN, so
+expect 3 extra skips.
 
-TSAN is the same recipe with `-fsanitize=thread`. AWS-LC is uninstrumented as well, so suppress
-`called_from_lib:libcrypto*` / `called_from_lib:libssl*`; a report whose *both* stacks are inside
-the TLS library is noise, one with an anyhttp frame near the racing access is real.
+TSAN is the same recipe with `-fsanitize=thread` and runs clean without suppressions. AWS-LC is
+uninstrumented, but linked statically into the executable, so `called_from_lib:` cannot match it:
+should a report ever show *both* stacks inside the TLS library, suppress it with `race:` on the
+AWS-LC function instead. One with an anyhttp frame near the racing access is real.
 
 Anything touching lifetimes on the HTTP/3 write path belongs under ASAN before it is committed --
 completions there run on acknowledgement, and the Release build hides the use-after-frees.
