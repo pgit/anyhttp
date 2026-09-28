@@ -10,6 +10,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The image has both GCC and clang, and 'c++' is GCC. Coverage needs clang, and the other jobs
+# should build what the devcontainer's build/ builds.
+env:
+  CC: clang
+  CXX: clang++
+
 jobs:
   release:
     name: RelWithDebInfo
@@ -50,7 +56,7 @@ jobs:
 
       - name: Run tests (if available)
         run: |
-          ASAN_OPTIONS=detect_leaks=1:detect_container_overflow=0 build/test/test_all
+          ASAN_OPTIONS=detect_leaks=1 build/test/test_all
 
   tsan:
     name: TSAN
