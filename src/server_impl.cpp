@@ -418,7 +418,8 @@ awaitable<void> Server::Impl::tcp_accept_loop()
       auto [ec] = co_await acceptor_.async_accept(socket, as_tuple);
       if (ec)
       {
-         if (ec == boost::system::errc::operation_canceled)
+         // bad_descriptor: the acceptor was closed before async_accept() got to it
+         if (ec == boost::system::errc::operation_canceled || ec == asio::error::bad_descriptor)
             mlogi("TCP accept: {}", ec.message());
          else
             mlogw("TCP accept: {}", ec.message());

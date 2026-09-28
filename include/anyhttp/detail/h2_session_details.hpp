@@ -37,7 +37,9 @@ void NGHttp2SessionImpl<Stream>::destroy() noexcept
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
    get_socket(stream_).shutdown(asio::socket_base::shutdown_both, ec);
-   logwi(ec, "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
+   // not_connected: the peer is gone already, which is what we wanted anyway
+   logwi(ec && ec != asio::error::not_connected, "[{}] destroy: socket shutdown: {}", log_prefix_,
+         ec.message());
    // });
 }
 
@@ -106,7 +108,11 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
          auto [ec, written] = co_await asio::async_write(stream_, seq, asio::as_tuple);
          if (ec)
          {
-            mloge("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
+            // a peer that hung up is not our error
+            if (ec == asio::error::broken_pipe || ec == asio::error::connection_reset)
+               mlogi("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
+            else
+               mloge("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
             break;
          }
          mylogd("send loop: writing {} bytes... done, wrote {}", bytes_to_write, written);

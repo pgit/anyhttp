@@ -182,7 +182,8 @@ awaitable<size_t> drain(Reader& reader)
       }
       else if (ec)
       {
-         logw("drain: \x1b[1;31m{}\x1b[0m after reading {} bytes, throwing", what(ec), bytes);
+         logw("[{}] drain: \x1b[1;31m{}\x1b[0m after reading {} bytes, throwing",
+              reader.log_prefix(), what(ec), bytes);
          throw boost::system::system_error(ec);
       }
    }
@@ -203,7 +204,9 @@ awaitable<std::string> read(Reader& reader)
       }
       else if (ec)
       {
-         loge("receive: \x1b[1;31m{}\x1b[0m after reading {} bytes", ec.message(), body.size());
+         // thrown on, whoever catches it reports it
+         logd("[{}] read: {} after reading {} bytes", reader.log_prefix(), ec.message(),
+              body.size());
          throw boost::system::system_error(ec);
       }
 
@@ -228,7 +231,9 @@ awaitable<std::tuple<size_t, error_code>> try_receive(Reader& reader)
       }
       else if (ec)
       {
-         loge("receive: \x1b[1;31m{}\x1b[0m after reading {} bytes", ec.message(), bytes);
+         // handed to the caller, who decides whether that is a problem
+         logi("[{}] receive: \x1b[1;31m{}\x1b[0m after reading {} bytes", reader.log_prefix(),
+              ec.message(), bytes);
          co_return std::make_tuple(bytes, ec);
       }
    }

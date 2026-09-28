@@ -127,7 +127,11 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    //
    if (!stream)
    {
-      logw("[] async_read_some: stream already gone ({})", detached_ec.message());
+      // Reading on after a cleanly finished body is part of the contract, not worth a warning.
+      if (detached_ec == asio::error::eof)
+         mlogd("async_read_some: stream already gone ({})", detached_ec.message());
+      else
+         mlogw("async_read_some: stream already gone ({})", detached_ec.message());
       complete_immediately(std::move(handler), get_executor(), detached_ec, size_t{0});
       return;
    }
@@ -250,7 +254,7 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
 {
    if (!stream)
    {
-      logw("[] async_submit: stream already gone");
+      mlogw("async_submit: stream already gone");
       std::move(handler)(boost::asio::error::basic_errors::connection_aborted);
       return;
    }
@@ -334,7 +338,7 @@ void NGHttp2Writer<Base>::async_write(WriteHandler&& handler, asio::const_buffer
       ec = empty ? error_code{} : errc::make_error_code(errc::broken_pipe);
    else
    {
-      logw("[] async_write: stream already gone");
+      mlogw("async_write: stream already gone");
       ec = boost::asio::error::basic_errors::connection_aborted;
    }
    complete_immediately(std::move(handler), executor, ec);
@@ -345,7 +349,7 @@ void NGHttp2Writer<Base>::async_get_response(client::Request::GetResponseHandler
 {
    if (!stream)
    {
-      logw("[] async_get_response: stream already gone");
+      mlogw("async_get_response: stream already gone");
       std::move(handler)(boost::asio::error::basic_errors::connection_aborted,
                          client::Response{nullptr});
    }
@@ -878,7 +882,7 @@ void NGHttp2Stream::deliver_response()
    }
    else if (!response_handler)
    {
-      mlogw("deliver_response: not waiting for a response, yet");
+      mlogd("deliver_response: not waiting for a response, yet");
    }
    else if (response_error)
    {
@@ -1012,7 +1016,7 @@ void NGHttp2Stream::maybe_close_stream()
       mlogd("cleanup_stream: still writing");
    else if (!eof_submitted || (!eof_received && !reader))
    {
-      mlogw("cleanup_stream: not reading or writing any more, "
+      mlogi("cleanup_stream: not reading or writing any more, "
             "submitting RST with STREAM_CLOSED");
 
       // submitting RST will lead to on_stream_close_callback(), eventually

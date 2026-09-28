@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace anyhttp
 {
@@ -46,6 +47,10 @@ public:
 
    /// The executor of the session this message belongs to, or an empty one after \c reset().
    executor_type get_executor() const noexcept;
+
+   /// The \c [proto:address:port.stream] tag the library's log lines carry for this message,
+   /// without the brackets, or an empty string after \c reset().
+   std::string log_prefix() const;
 
    /// Announces the length of the outgoing body, before its header is submitted.
    void content_length(std::optional<size_t> content_length);

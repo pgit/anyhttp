@@ -113,7 +113,8 @@ public:
          get_socket(stream).shutdown(boost::asio::socket_base::shutdown_receive, ec);
          session->closed_ = true;
          if (ec)
-            mlogw("destroy: shutdown: {}", what(ec));
+            logwi(ec != asio::error::not_connected, "[{}] destroy: shutdown: {}", log_prefix(),
+                  what(ec));
       }
       finish();
    }
@@ -137,7 +138,7 @@ public:
    }
    void detach() override
    {
-      mlogw("detach");
+      mlogd("detach");
       session = nullptr;
    }
 
@@ -340,7 +341,7 @@ public:
 
    void detach() override
    {
-      mlogw("detach");
+      mlogd("detach");
       session = nullptr;
    }
 
@@ -452,11 +453,11 @@ public:
                // TODO: We could try to support partial cancellation, but that would only work
                //       at chunk boundaries.
                //
-               mlogw("async_write: canceled after writing {} of {} bytes", n, expected);
+               mlogi("async_write: canceled after writing {} of {} bytes", n, expected);
                cancelled = true;
                if (session) // otherwise, the stream is gone already
                {
-                  mlogw("async_write: canceled, closing stream");
+                  mlogi("async_write: canceled, closing stream");
                   get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send);
                }
             }
@@ -837,10 +838,10 @@ BeastSession<Stream>::~BeastSession()
 {
    mlogd("session deleted");
    if (!writers_.empty())
-      mlogw("dtor: detaching {} writer(s)", writers_.size());
+      mlogi("dtor: detaching {} writer(s)", writers_.size());
    detach_writers();
    if (!readers_.empty())
-      mlogw("dtor: detaching {} reader(s)", readers_.size());
+      mlogi("dtor: detaching {} reader(s)", readers_.size());
    detach_readers();
 }
 
@@ -863,7 +864,7 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_execut
 template <typename Stream>
 void BeastSession<Stream>::destroy() noexcept
 {
-   mlogw("destroy: closing stream");
+   mlogd("destroy: closing stream");
    //
    // FIXME: ClientAsync.Cancellation runs into a heap-use-after-free here, when the session is
    //        deleted. This is because the request and response may outlive the session and are
@@ -873,7 +874,9 @@ void BeastSession<Stream>::destroy() noexcept
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
    get_socket(stream_).shutdown(socket_base::shutdown_both, ec);
-   logwi(ec, "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
+   // not_connected: the peer is gone already, which is what we wanted anyway
+   logwi(ec && ec != asio::error::not_connected, "[{}] destroy: socket shutdown: {}", log_prefix_,
+         ec.message());
    // });
 }
 

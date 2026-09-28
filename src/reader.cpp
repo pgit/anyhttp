@@ -31,6 +31,8 @@ Reader::executor_type Reader::get_executor() const noexcept
    return impl_ ? impl_->get_executor() : executor_type{};
 }
 
+std::string Reader::log_prefix() const { return impl_ ? impl_->log_prefix() : std::string{}; }
+
 std::optional<size_t> Reader::content_length() const noexcept
 {
    return impl_ ? impl_->content_length() : std::nullopt;

@@ -153,7 +153,12 @@ awaitable<void> send(Writer& request, Range range)
       }
       catch (const boost::system::system_error& ec)
       {
-         loge("send: (range) \x1b[1;31m{}\x1b[0m after {} bytes", ec.code().message(), bytes);
+         if (ec.code() == boost::system::errc::operation_canceled)
+            logd("[{}] send: (range) {} after {} bytes", request.log_prefix(), ec.code().message(),
+                 bytes);
+         else
+            logw("[{}] send: (range) \x1b[1;31m{}\x1b[0m after {} bytes", request.log_prefix(),
+                 ec.code().message(), bytes);
          throw;
       }
 #endif
@@ -164,6 +169,23 @@ awaitable<void> send(Writer& request, Range range)
 
 // -------------------------------------------------------------------------------------------------
 
+/// Whether \p ep holds a cancellation -- how the helpers below are often meant to end.
+inline bool is_cancellation(const std::exception_ptr& ep)
+{
+   try
+   {
+      std::rethrow_exception(ep);
+   }
+   catch (const boost::system::system_error& ex)
+   {
+      return ex.code() == boost::system::errc::operation_canceled;
+   }
+   catch (...)
+   {
+      return false;
+   }
+}
+
 template <ByteRange Range>
 awaitable<void> send_and_drop(client::Request request, Range range)
 {
@@ -171,7 +193,10 @@ awaitable<void> send_and_drop(client::Request request, Range range)
    auto ex = co_await this_coro::executor;
    if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
    {
-      loge("send_and_drop: {}", what(ep));
+      if (is_cancellation(ep))
+         logd("[{}] send_and_drop: {}", request.log_prefix(), what(ep));
+      else
+         logw("[{}] send_and_drop: {}", request.log_prefix(), what(ep));
       std::rethrow_exception(ep);
    }
 }
@@ -185,7 +210,10 @@ awaitable<void> send_and_force_eof(Writer& request, Range range)
    auto ex = co_await this_coro::executor;
    if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
    {
-      loge("send_and_force_eof: {}", what(ep));
+      if (is_cancellation(ep))
+         logd("[{}] send_and_force_eof: {}", request.log_prefix(), what(ep));
+      else
+         logw("[{}] send_and_force_eof: {}", request.log_prefix(), what(ep));
       co_await this_coro::reset_cancellation_state();
    }
    std::ignore = co_await request.async_write_eof(as_tuple);
