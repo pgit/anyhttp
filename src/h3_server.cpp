@@ -276,6 +276,7 @@ public:
 
    const ngtcp2_cid& scid() const noexcept { return scid_; }
    Http3ServerImpl& server() noexcept { return server_; }
+   void count_request() noexcept { ++request_counter_; }
 
 protected:
    int handle_error(int rv) override;
@@ -301,6 +302,7 @@ private:
    asio::steady_timer done_signal_; // used to wake do_session() on connection close
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
    bool no_gso_ = false; // Config::disable_gso, or sendmsg() rejected UDP_SEGMENT
+   size_t request_counter_ = 0;
 };
 
 //
@@ -459,7 +461,9 @@ void Http3ServerStream::on_headers_complete()
    server::Request request(std::make_unique<Http3RequestReader>(*this));
    server::Response response(std::make_unique<http3::Http3Writer<server::Response::Impl>>(*this));
 
-   auto& sv = static_cast<Http3ServerSession&>(session).server();
+   auto& ss = static_cast<Http3ServerSession&>(session);
+   ss.count_request();
+   auto& sv = ss.server();
    if (header_limit_exceeded)
       co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
                detached);
@@ -554,7 +558,7 @@ Http3ServerSession::~Http3ServerSession()
    clear_streams();
    if (owns_fd_)
       ::close(ep_.fd);
-   mlogi("session destroyed");
+   mlogi("session destroyed, served {} requests", request_counter_);
 }
 
 // -------------------------------------------------------------------------------------------------
