@@ -197,7 +197,7 @@ protected:
    {
       Server::SetUp();
       url.set_port_number(server->local_endpoint().port());
-      client::Config config{.url = url, .protocol = GetParam()};
+      client::Config config{.url = url, .protocol = GetParam(), .tls_ca_file = "pki/out/root.pem"};
       configure_client(config);
 #if defined(MULTITHREADED)
       client.emplace(make_strand(context.get_executor()), config);

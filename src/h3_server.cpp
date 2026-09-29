@@ -77,6 +77,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <format>
 #include <memory>
 #include <random>
 #include <span>
@@ -121,7 +122,7 @@ namespace
 //
 struct TlsServerContext
 {
-   TlsServerContext()
+   explicit TlsServerContext(const Config& config)
    {
       ctx = SSL_CTX_new(TLS_server_method());
       if (!ctx)
@@ -139,13 +140,15 @@ struct TlsServerContext
 
       SSL_CTX_set_alpn_select_cb(ctx, &TlsServerContext::alpn_select_cb, nullptr);
 
-      if (SSL_CTX_use_PrivateKey_file(ctx, "pki/out/server-key.pem", SSL_FILETYPE_PEM) != 1)
-         throw std::runtime_error(std::string{"SSL_CTX_use_PrivateKey_file: "} +
-                                  ERR_error_string(ERR_get_error(), nullptr));
+      if (SSL_CTX_use_PrivateKey_file(ctx, config.tls_private_key.c_str(), SSL_FILETYPE_PEM) != 1)
+         throw std::runtime_error(std::format("SSL_CTX_use_PrivateKey_file: {}: {}",
+                                              config.tls_private_key,
+                                              ERR_error_string(ERR_get_error(), nullptr)));
 
-      if (SSL_CTX_use_certificate_chain_file(ctx, "pki/out/server-chain.pem") != 1)
-         throw std::runtime_error(std::string{"SSL_CTX_use_certificate_chain_file: "} +
-                                  ERR_error_string(ERR_get_error(), nullptr));
+      if (SSL_CTX_use_certificate_chain_file(ctx, config.tls_certificate_chain.c_str()) != 1)
+         throw std::runtime_error(std::format("SSL_CTX_use_certificate_chain_file: {}: {}",
+                                              config.tls_certificate_chain,
+                                              ERR_error_string(ERR_get_error(), nullptr)));
 
       if (SSL_CTX_check_private_key(ctx) != 1)
          throw std::runtime_error("SSL_CTX_check_private_key");
@@ -886,7 +889,7 @@ void Http3ServerSession::resend_conn_close()
 // =================================================================================================
 
 Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endpoint& endpoint)
-   : parent_(parent)
+   : parent_(parent), tls_(parent.config())
 {
    namespace socket_option = boost::asio::detail::socket_option;
 

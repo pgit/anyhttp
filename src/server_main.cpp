@@ -64,6 +64,13 @@ std::expected<Config, int> parse_config(int argc, char* argv[])
    opts("max-header-size",
         po::value(&config.server.max_header_size)->default_value(config.server.max_header_size),
         "largest request header section accepted, in bytes (answered with 431 if exceeded)");
+   opts("cert",
+        po::value(&config.server.tls_certificate_chain)
+           ->default_value(config.server.tls_certificate_chain),
+        "PEM file with the server certificate, followed by its intermediates");
+   opts("key",
+        po::value(&config.server.tls_private_key)->default_value(config.server.tls_private_key),
+        "PEM file with the server's private key");
    long alt_svc_max_age = config.server.alt_svc_max_age.count();
    opts("alt-svc-max-age", po::value(&alt_svc_max_age)->default_value(alt_svc_max_age),
         "how long clients may remember the HTTP/3 endpoint advertised as 'Alt-Svc' over HTTP/1.1 "

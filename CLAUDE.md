@@ -18,10 +18,10 @@ build/test/test_all
 ```
 
 **Run the tests from the repo root**, never from inside a build tree: the servers load their TLS
-material through relative paths (`pki/out/server-key.pem`, see `server_impl.cpp` and
-`h3_server.cpp`). From the wrong working directory the HTTP/3 server throws in its UDP receive
-loop and every HTTP/3 test hangs for a 30s idle timeout before failing with "Connection refused"
--- which looks exactly like a protocol bug.
+material and the clients their CA through relative paths (the defaults of
+`server::Config::tls_certificate_chain` / `tls_private_key`, and `pki/out/root.pem`, which the
+test fixtures set as `client::Config::tls_ca_file`). From the wrong working directory every test
+fails in `SetUp()` with "use_certificate_chain_file: No such file or directory".
 
 The full suite takes about 50s serially (h2spec and the HTTP/3 timing tests dominate). Anything
 running much longer means a test is hanging; kill it and run that test alone.
@@ -29,8 +29,7 @@ running much longer means a test is hanging; kill it and run that test alone.
 For routine runs use `gtest-parallel build/test/test_all` (same working-directory rule): about 7s.
 Every server binds an ephemeral port, so parallel processes do not collide. It prints only
 failing tests and does not report skips, and since each test gets its own process it cannot
-catch interference through process-wide state (e.g. `h3_server.cpp`'s static `tls_context()`) --
-do a serial run before committing changes to shared or global state.
+catch interference through process-wide state (statics, the logger) -- do a serial run before committing changes to shared or global state.
 
 Parametrized tests are suffixed `/HTTP11`, `/HTTP2`, `/HTTP3` -- not h2/h3. `--gtest_filter` knows
 only `*` and `?`, and a filter that matches nothing exits 0 with no output, which reads like a
@@ -104,10 +103,10 @@ compiles that would follow, which is indistinguishable from "nothing to do". Run
 or query the stored dep database with `ninja -C build -t deps <object>`.
 
 **Restart the server after regenerating the PKI.** Any build that touches `pki/*.json` wipes
-`pki/out` including the root CA. The TCP path builds its `asio::ssl::context` per connection and
-picks the new chain up transparently; `h3_server.cpp`'s `tls_context()` is a function-local
-`static` and keeps serving the old one. The symptom is curl reporting `verify result: 20` twice
-and then silently falling back to TCP+h2, so the request still looks fine.
+`pki/out` including the root CA. A Server reads its certificate chain and key once, when it is
+constructed, for TCP and QUIC alike, and keeps serving the old ones. curl then fails with
+`verify result: 20`; the HTTP/3 client (which reads its CA file on every connect) with "unable to
+get local issuer certificate".
 
 **One TLS library per process.** anyhttp links AWS-LC (statically, from `/opt/boringssl`, what
 `find_package(ssl CONFIG)` provides) together with `ngtcp2_crypto_boringssl`. Do not add `#ifdef`s

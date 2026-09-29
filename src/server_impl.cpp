@@ -60,11 +60,11 @@ Response::Impl::~Impl() = default;
 //
 // Defined further down, together with the ALPN callbacks it installs.
 //
-static asio::ssl::context make_tls_server_context();
+static asio::ssl::context make_tls_server_context(const Config& config);
 
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : config_(std::move(config)), executor_(std::move(executor)),
-     tls_context_(make_tls_server_context()), acceptor_(executor_)
+     tls_context_(make_tls_server_context(config_)), acceptor_(executor_)
 {
    mlogi("ctor");
    listen_tcp();
@@ -244,18 +244,14 @@ static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned ch
 // server -- unlike HTTP/3, which holds its context for the lifetime of the server. That
 // difference made a regenerated test PKI fail over HTTP/3 while HTTP/2 silently kept working.
 //
-static asio::ssl::context make_tls_server_context()
+static asio::ssl::context make_tls_server_context(const Config& config)
 {
    asio::ssl::context ctx{asio::ssl::context::tlsv13};
    SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, NULL);
    SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, NULL);
 
-   //
-   // This is a testing key only. It is not in the repository, but generated at build time
-   // by the 'pki' target (see cmake/pki.cmake).
-   //
-   ctx.use_certificate_chain_file("pki/out/server-chain.pem");
-   ctx.use_private_key_file("pki/out/server-key.pem", asio::ssl::context::pem);
+   ctx.use_certificate_chain_file(config.tls_certificate_chain);
+   ctx.use_private_key_file(config.tls_private_key, asio::ssl::context::pem);
 
    return ctx;
 }

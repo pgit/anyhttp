@@ -52,10 +52,12 @@
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
+#include <openssl/x509.h>
 
 #include <array>
 #include <charconv>
 #include <cstring>
+#include <format>
 #include <memory>
 #include <span>
 #include <string>
@@ -81,11 +83,13 @@ namespace
 {
 
 //
-// The process-wide client-role BoringSSL SSL_CTX used for every outgoing QUIC connection.
+// The client-role BoringSSL SSL_CTX for one outgoing QUIC connection. It is built per connection
+// because the trust store comes from the Config; SSL_new() takes a reference, so the context can
+// go once the session's SSL exists.
 //
 struct TlsClientContext
 {
-   TlsClientContext()
+   explicit TlsClientContext(const Config& config)
    {
       ctx = SSL_CTX_new(TLS_client_method());
       if (!ctx)
@@ -97,11 +101,18 @@ struct TlsClientContext
       static constexpr unsigned char alpn[] = "\x02h3";
       SSL_CTX_set_alpn_protos(ctx, alpn, sizeof(alpn) - 1);
 
-      //
-      // TODO: verify the server certificate (e.g. against pki/out/root.pem) instead of accepting
-      // anything.
-      //
-      SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+      if (config.tls_ca_file.empty())
+      {
+         if (SSL_CTX_set_default_verify_paths(ctx) != 1)
+            throw std::runtime_error(std::format("SSL_CTX_set_default_verify_paths: {}",
+                                                 ERR_error_string(ERR_get_error(), nullptr)));
+      }
+      else if (SSL_CTX_load_verify_locations(ctx, config.tls_ca_file.c_str(), nullptr) != 1)
+         throw std::runtime_error(std::format("SSL_CTX_load_verify_locations: {}: {}",
+                                              config.tls_ca_file,
+                                              ERR_error_string(ERR_get_error(), nullptr)));
+
+      SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
    }
 
    ~TlsClientContext()
@@ -115,12 +126,6 @@ struct TlsClientContext
 
    SSL_CTX* ctx = nullptr;
 };
-
-TlsClientContext& tls_context()
-{
-   static TlsClientContext instance;
-   return instance;
-}
 
 } // namespace
 
@@ -208,7 +213,7 @@ public:
    //
    // Connect-time setup. Returns 0 on success.
    //
-   int init(asio::ip::udp::endpoint remote);
+   int init(asio::ip::udp::endpoint remote, const Config& config);
 
    //
    // Awaited by client::Client::Impl::async_connect() before handing the Session back to the
@@ -436,8 +441,10 @@ Http3ClientSession::~Http3ClientSession()
 
 // -------------------------------------------------------------------------------------------------
 
-int Http3ClientSession::init(asio::ip::udp::endpoint remote)
+int Http3ClientSession::init(asio::ip::udp::endpoint remote, const Config& config)
 {
+   TlsClientContext tls{config}; // may throw
+
    boost::system::error_code ec;
    socket_.open(remote.protocol(), ec);
    if (ec)
@@ -501,8 +508,25 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote)
       return -1;
    }
 
-   if (setup_tls(tls_context().ctx, false /* client */) != 0)
+   if (setup_tls(tls.ctx, false /* client */) != 0)
       return -1;
+
+   //
+   // The certificate has to be valid for the origin, the host of the URL -- also when `remote` is
+   // an alternative service it advertised (RFC 7838, section 2.1). An IP address is matched
+   // against the certificate's IP SANs and not sent as SNI, which is for host names only.
+   //
+   const std::string host = config.url.host_address();
+   auto* param = SSL_get0_param(ssl_);
+   boost::system::error_code not_an_ip;
+   asio::ip::make_address(host, not_an_ip);
+   if (!not_an_ip ? X509_VERIFY_PARAM_set1_ip_asc(param, host.c_str()) != 1
+                  : X509_VERIFY_PARAM_set1_host(param, host.data(), host.size()) != 1 ||
+                       SSL_set_tlsext_host_name(ssl_, host.c_str()) != 1)
+   {
+      mloge("init: can't verify certificates for '{}'", host);
+      return -1;
+   }
 
    mlogi("connecting, scid={}", format_hex(scid.data, scid.datalen));
    return 0;
@@ -608,6 +632,12 @@ void Http3ClientSession::signal_ready()
 
 int Http3ClientSession::handle_error(int /*rv*/)
 {
+   // X509_V_ERR_INVALID_CALL: the handshake never got as far as verifying anything
+   if (ssl_)
+      if (auto result = SSL_get_verify_result(ssl_);
+          result != X509_V_OK && result != X509_V_ERR_INVALID_CALL)
+         mlogw("server certificate: {}", X509_verify_cert_error_string(result));
+
    close();
    return -1;
 }
@@ -707,7 +737,7 @@ awaitable<std::shared_ptr<Session::Impl>> async_connect_http3(asio::any_io_execu
    auto results = co_await resolver.async_resolve(host, port, flags); // may throw
 
    auto session = std::make_shared<Http3ClientSession>(executor, config);
-   if (session->init(results.begin()->endpoint()) != 0)
+   if (session->init(results.begin()->endpoint(), config) != 0)
       throw boost::system::system_error(errc::make_error_code(errc::connection_refused));
 
    std::shared_ptr<Session::Impl> impl = session;

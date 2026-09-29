@@ -12,6 +12,8 @@
 
 #include <boost/url.hpp>
 
+#include <string>
+
 namespace anyhttp
 {
 class Session;
@@ -46,6 +48,17 @@ struct Config
     * cache on disk, so a fresh process starts over with \c protocol.
     */
    bool follow_alt_svc = false;
+
+   /**
+    * The CA certificates to verify the server against, as a PEM file. Empty uses the default
+    * trust store of the TLS library. The server's certificate must be valid for the host of
+    * \c url -- also when connecting to an alternative service, as RFC 7838 requires -- or
+    * \c async_connect() fails. Read on every connect, so a replaced file takes effect with the
+    * next connection.
+    *
+    * Only HTTP/3 uses TLS so far: HTTP/1.1 and HTTP/2 connect in cleartext.
+    */
+   std::string tls_ca_file;
 };
 
 // =================================================================================================

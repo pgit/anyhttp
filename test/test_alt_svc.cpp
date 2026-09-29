@@ -356,8 +356,10 @@ TEST_P(AltSvcFrame, WHEN_an_altsvc_frame_arrives_THEN_the_next_connection_uses_i
 
    boost::urls::url target{"http://127.0.0.2/echo"};
    target.set_port_number(acceptor.local_endpoint().port());
-   client::Client client(context.get_executor(),
-                         {.url = target, .protocol = Protocol::h2, .follow_alt_svc = true});
+   client::Client client(context.get_executor(), {.url = target,
+                                                  .protocol = Protocol::h2,
+                                                  .follow_alt_svc = true,
+                                                  .tls_ca_file = "pki/out/root.pem"});
 
    co_spawn(
       context,

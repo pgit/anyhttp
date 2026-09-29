@@ -95,7 +95,9 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
    //
    asio::io_context client_context;
    client::Client client(client_context.get_executor(),
-                         client::Config{.url = url, .protocol = anyhttp::Protocol::h3});
+                         client::Config{.url = url,
+                                        .protocol = anyhttp::Protocol::h3,
+                                        .tls_ca_file = "pki/out/root.pem"});
 
    //
    // Session, request and response are kept out here rather than in the coroutine frame, which is
@@ -138,6 +140,31 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
    // Only now, on the way out, is the frozen client allowed to unwind: doing so earlier would
    // have sent the CONNECTION_CLOSE that this test is all about not sending.
    //
+}
+
+// =================================================================================================
+
+//
+// The server reads its certificate chain and key when it is constructed (see
+// server::Config::tls_certificate_chain), so a wrong path shows up right there and not with the
+// first TLS connection.
+//
+TEST(ServerTls, WHEN_certificate_chain_is_missing_THEN_constructor_throws)
+{
+   asio::io_context context;
+   EXPECT_ANY_THROW(server::Server(context.get_executor(),
+                                   server::Config{.listen_address = "127.0.0.2",
+                                                  .port = 0,
+                                                  .tls_certificate_chain = "pki/out/missing.pem"}));
+}
+
+TEST(ServerTls, WHEN_private_key_is_missing_THEN_constructor_throws)
+{
+   asio::io_context context;
+   EXPECT_ANY_THROW(server::Server(context.get_executor(),
+                                   server::Config{.listen_address = "127.0.0.2",
+                                                  .port = 0,
+                                                  .tls_private_key = "pki/out/missing.pem"}));
 }
 
 // =================================================================================================
