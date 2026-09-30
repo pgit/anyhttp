@@ -21,6 +21,7 @@
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
+#include <boost/asio/multiple_exceptions.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/strand.hpp>
@@ -39,8 +40,24 @@
 #include <tuple>
 #include <utility>
 
-/// The error code of what \p ptr holds, as thrown by the runtime (defined in common.cpp).
-boost::system::error_code code(const std::exception_ptr& ptr);
+/// The error code of what \p ptr holds, as thrown by the runtime.
+inline boost::system::error_code code(const std::exception_ptr& ptr)
+{
+   if (!ptr)
+      return {};
+   try
+   {
+      std::rethrow_exception(ptr);
+   }
+   catch (boost::asio::multiple_exceptions& mex)
+   {
+      return code(mex.first_exception());
+   }
+   catch (boost::system::system_error& ex)
+   {
+      return ex.code();
+   }
+}
 
 namespace anyhttp
 {

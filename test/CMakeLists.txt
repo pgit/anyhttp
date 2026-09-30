@@ -29,6 +29,7 @@ target_link_libraries(test_all PRIVATE spdlog::spdlog_header_only)
 
 if (ANYHTTP_CAPY)
     target_link_libraries(test_all PRIVATE Boost::corosio Boost::corosio_openssl)
+    target_include_directories(test_all PRIVATE ${CMAKE_SOURCE_DIR}/include)
 else()
     target_link_libraries(test_all PRIVATE anyhttp)
 

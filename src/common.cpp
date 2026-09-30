@@ -80,27 +80,6 @@ std::string log_prefix(Role role, std::string_view protocol,
 
 // =================================================================================================
 
-anyhttp::error_code code(const std::exception_ptr& ptr)
-{
-   if (!ptr)
-      return {};
-   else
-   {
-      try
-      {
-         std::rethrow_exception(ptr);
-      }
-      catch (boost::asio::multiple_exceptions& mex)
-      {
-         return code(mex.first_exception());
-      }
-      catch (boost::system::system_error& ex)
-      {
-         return ex.code();
-      }
-   }
-}
-
 std::string what(const anyhttp::error_code& ec) { return ec.message(); }
 std::string what(const boost::system::system_error& ex) { return what(ex.code()); }
 std::string what(const std::exception_ptr& ptr)

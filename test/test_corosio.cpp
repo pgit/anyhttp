@@ -26,6 +26,8 @@
 #include <boost/corosio/tcp_socket.hpp>
 #include <boost/corosio/test/socket_pair.hpp>
 
+#include "anyhttp/runtime.hpp"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -167,6 +169,205 @@ TEST(Corosio, ErrorCodeInterop)
    const std::error_code eof = boost::system::error_code{boost::asio::error::eof};
    EXPECT_NE(eof, capy::cond::eof);
    EXPECT_EQ(std::error_code{capy::error::eof}, capy::cond::eof);
+}
+
+// =================================================================================================
+// The CAPY half of the runtime layer (detail/runtime_capy.hpp), without any protocol on top.
+// =================================================================================================
+
+namespace
+{
+
+using namespace anyhttp;
+using ReadSome = void(error_code, size_t);
+
+//
+// A stand-in for a backend that parks operations, as HTTP/2 and HTTP/3 do: the parked completion
+// is completed by whoever calls finish().
+//
+struct Parked
+{
+   Completion<ReadSome> handler;
+   int cancelled = 0;
+
+   auto read()
+   {
+      return initiate<ReadSome>([this](Completion<ReadSome> h) {
+         handler = std::move(h);
+         on_cancel(handler, [this] {
+            ++cancelled;
+            if (handler)
+               complete_later(std::move(handler), Executor{}, errors::canceled, size_t{0});
+         });
+      });
+   }
+
+   void finish(size_t n) { complete_later(std::move(handler), Executor{}, error_code{}, n); }
+};
+
+Task<void> finish_later(Parked& parked, size_t n)
+{
+   co_await yield_now();
+   parked.finish(n);
+}
+
+} // namespace
+
+TEST(CapyRuntime, WHEN_parked_operation_is_completed_THEN_caller_resumes_with_result)
+{
+   corosio::io_context context;
+   Parked parked;
+   std::optional<std::tuple<error_code, size_t>> result;
+
+   auto reader = [](Parked& parked, auto& result) -> Task<void> {
+      result = co_await parked.read();
+   };
+   launch(context.get_executor(), reader(parked, result));
+   launch(context.get_executor(), finish_later(parked, 42));
+   context.run();
+
+   ASSERT_TRUE(result);
+   EXPECT_FALSE(std::get<0>(*result));
+   EXPECT_EQ(std::get<1>(*result), 42);
+}
+
+TEST(CapyRuntime, WHEN_caller_is_stopped_THEN_parked_operation_is_cancelled)
+{
+   corosio::io_context context;
+   Parked parked;
+   std::stop_source stop;
+   std::optional<std::tuple<error_code, size_t>> result;
+
+   auto reader = [](Parked& parked, auto& result) -> Task<void> {
+      result = co_await parked.read();
+   };
+   capy::run_async(context.get_executor(), stop.get_token())(reader(parked, result));
+   run_later(context.get_executor(), [&] { stop.request_stop(); }); // once the read is parked
+   context.run();
+
+   ASSERT_TRUE(result);
+   EXPECT_EQ(std::get<0>(*result), capy::cond::canceled);
+   EXPECT_EQ(parked.cancelled, 1);
+}
+
+TEST(CapyRuntime, WHEN_completion_is_dropped_THEN_caller_resumes_cancelled)
+{
+   corosio::io_context context;
+   Parked parked;
+   std::optional<std::tuple<error_code, size_t>> result;
+
+   auto reader = [](Parked& parked, auto& result) -> Task<void> {
+      result = co_await parked.read();
+   };
+   launch(context.get_executor(), reader(parked, result));
+   run_later(context.get_executor(), [&] { parked.handler = nullptr; }); // once it is parked
+   context.run();
+
+   ASSERT_TRUE(result);
+   EXPECT_EQ(std::get<0>(*result), capy::cond::canceled);
+}
+
+TEST(CapyRuntime, WHEN_task_is_launched_for_a_completion_THEN_its_result_completes_it)
+{
+   corosio::io_context context;
+   std::optional<std::tuple<error_code, size_t>> result;
+
+   auto task = []() -> Task<std::tuple<error_code, size_t>> {
+      co_await yield_now();
+      co_return std::tuple{errors::eof, size_t{7}};
+   };
+   auto caller = [](auto task, auto& result) -> Task<void> {
+      auto executor = co_await capy::this_coro::executor;
+      result = co_await initiate<ReadSome>([&](Completion<ReadSome> handler) {
+         launch(Executor(executor), task(), std::move(handler));
+      });
+   };
+   launch(context.get_executor(), caller(task, result));
+   context.run();
+
+   ASSERT_TRUE(result);
+   EXPECT_EQ(std::get<0>(*result), capy::cond::eof);
+   EXPECT_EQ(std::get<1>(*result), 7);
+}
+
+TEST(CapyRuntime, WHEN_event_is_set_before_and_while_waiting_THEN_waits_end)
+{
+   corosio::io_context context;
+   Event event;
+   int woken = 0;
+
+   auto waiter = [](Event& event, int& woken) -> Task<void> {
+      auto [ec] = co_await event.wait(); // already set: does not wait
+      EXPECT_FALSE(ec);
+      ++woken;
+      event.clear();
+      auto [ec2] = co_await event.wait();
+      EXPECT_FALSE(ec2);
+      ++woken;
+   };
+   event.set();
+   launch(context.get_executor(), waiter(event, woken));
+   run_later(context.get_executor(), [&] { event.set(); });
+   context.run();
+   EXPECT_EQ(woken, 2);
+}
+
+TEST(CapyRuntime, WHEN_timer_is_rearmed_or_cancelled_THEN_only_the_last_callback_runs)
+{
+   corosio::io_context context;
+   Timer timer(context.get_executor());
+   std::vector<int> fired;
+
+   timer.arm(std::chrono::milliseconds(1), [&] { fired.push_back(1); });
+   timer.arm(std::chrono::milliseconds(2), [&] { fired.push_back(2); });
+   Timer other(context.get_executor());
+   other.arm(std::chrono::milliseconds(1), [&] { fired.push_back(3); });
+   other.cancel();
+   context.run();
+   EXPECT_THAT(fired, ElementsAre(2));
+}
+
+TEST(CapyRuntime, WHEN_both_tasks_run_THEN_when_both_waits_for_both)
+{
+   corosio::io_context context;
+   std::vector<int> done;
+
+   auto one = [](std::vector<int>& done, int id) -> Task<void> {
+      for (int i = 0; i < id; ++i)
+         co_await yield_now();
+      done.push_back(id);
+   };
+   auto both = [](auto one, std::vector<int>& done) -> Task<void> {
+      co_await when_both(one(done, 2), one(done, 1));
+      done.push_back(0);
+   };
+   launch(context.get_executor(), both(one, done));
+   context.run();
+   EXPECT_THAT(done, ElementsAre(1, 2, 0));
+}
+
+TEST(CapyRuntime, WHEN_peeking_THEN_bytes_are_seen_but_not_taken)
+{
+   corosio::io_context context;
+   auto [server, client] = corosio::test::make_socket_pair(context);
+   std::string peeked, read;
+
+   auto run = [](corosio::tcp_socket& server, corosio::tcp_socket& client, std::string& peeked,
+                 std::string& read) -> Task<void> {
+      std::ignore = co_await capy::write(client, capy::const_buffer("\x16hello", 6));
+      std::array<char, 1> first;
+      auto [ec, n] = co_await io::peek(server, asio::buffer(first));
+      EXPECT_FALSE(ec);
+      peeked.assign(first.data(), n);
+      std::array<char, 16> all;
+      auto [read_ec, m] = co_await io::read_some(server, asio::buffer(all));
+      EXPECT_FALSE(read_ec);
+      read.assign(all.data(), m);
+   };
+   launch(context.get_executor(), run(server, client, peeked, read));
+   context.run();
+   EXPECT_EQ(peeked, "\x16");
+   EXPECT_EQ(read, "\x16hello");
 }
 
 // =================================================================================================
