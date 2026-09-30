@@ -18,18 +18,26 @@
 #else
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/as_tuple.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/associated_immediate_executor.hpp>
+#include <boost/asio/async_result.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/co_spawn.hpp>
+#include <boost/asio/deferred.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/error.hpp>
+#include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/post.hpp>
+#include <boost/asio/write.hpp>
 #include <boost/system/errc.hpp>
 #include <boost/system/error_code.hpp>
 #endif
 
 #include <boost/beast/http/error.hpp>
+
+#include <cassert>
+#include <utility>
 
 namespace anyhttp
 {
@@ -177,6 +185,85 @@ inline void launch(const Executor& executor, Task<void> task, F&& on_done)
 {
    asio::co_spawn(executor, std::move(task), std::forward<F>(on_done));
 }
+
+/// Runs \p a and \p b concurrently, until both are done. If one of them throws, the other is
+/// cancelled, and the exception is rethrown once both are done.
+inline Task<void> when_both(Task<void> a, Task<void> b)
+{
+   using namespace asio::experimental::awaitable_operators;
+   co_await (std::move(a) && std::move(b));
+}
+
+// =================================================================================================
+
+/**
+ * Wakes up the coroutine that waits for it, as capy's \c async_event does. The event is latched:
+ * one that is set while nobody waits is still set when the next \c wait() comes along, which then
+ * does not wait at all. A loop that waits for more work clears it at its top, before it looks for
+ * work, so that nothing set while it was looking gets lost.
+ *
+ * Only one coroutine may wait at a time, and all calls come from the same strand. For ASIO,
+ * \c set() resumes the waiting coroutine right there, inside \c set().
+ */
+class Event
+{
+public:
+   void set()
+   {
+      set_ = true;
+      if (waiter_)
+         std::exchange(waiter_, nullptr)();
+   }
+
+   void clear() noexcept { set_ = false; }
+   bool is_set() const noexcept { return set_; }
+
+   Task<void> wait()
+   {
+      if (set_)
+         co_return;
+
+      co_await asio::async_initiate<const asio::deferred_t&, void()>(
+         [this](Completion<void()> waiter) {
+            assert(!waiter_);
+            waiter_ = std::move(waiter);
+         },
+         asio::deferred);
+   }
+
+private:
+   bool set_ = false;
+   Completion<void()> waiter_;
+};
+
+// =================================================================================================
+
+//
+// I/O on the streams the sessions run on, yielding a tuple in both runtimes:
+//
+//    auto [ec, n] = co_await io::read_some(stream, buffer);
+//
+// Always call these qualified: unqualified, ADL would find boost::asio's synchronous read_some()
+// and write() for an ASIO stream as well.
+//
+namespace io
+{
+
+/// Reads some bytes into \p buffer: <tt>(error_code, size_t)</tt>.
+template <typename Stream>
+auto read_some(Stream& stream, asio::mutable_buffer buffer)
+{
+   return stream.async_read_some(buffer, asio::as_tuple);
+}
+
+/// Writes all of \p buffers, unless an error comes first: <tt>(error_code, size_t)</tt>.
+template <typename Stream, typename ConstBufferSequence>
+auto write(Stream& stream, const ConstBufferSequence& buffers)
+{
+   return asio::async_write(stream, buffers, asio::as_tuple);
+}
+
+} // namespace io
 
 // =================================================================================================
 

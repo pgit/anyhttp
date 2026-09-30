@@ -71,23 +71,9 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   using Resume = void();
-   using ResumeHandler = Completion<Resume>;
-
-   // If set, the send loop has run out of data to send and is waiting for re-activation.
-   ResumeHandler send_handler_;
-
-   // Wait to be resumed via `start_write()`, called from within `send_loop()`.
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Resume) CompletionToken = DefaultCompletionToken>
-   auto async_wait_send(CompletionToken&& token = CompletionToken())
-   {
-      return asio::async_initiate<CompletionToken, Resume>(
-         [&](ResumeHandler handler) {
-            assert(!send_handler_);
-            send_handler_ = std::move(handler);
-         },
-         std::forward<CompletionToken>(token));
-   }
+   // Set by `start_write()`: nghttp2 may have something to send. The send loop waits for it once
+   // it has run out of data to send.
+   Event send_ready_;
 
    void start_write();
 

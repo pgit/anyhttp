@@ -33,8 +33,6 @@
 #include <charconv>
 #include <string>
 
-using namespace boost::asio::experimental::awaitable_operators;
-
 namespace http = boost::beast::http;
 
 // =================================================================================================
@@ -683,12 +681,9 @@ void NGHttp2Session::close_stream(int32_t stream_id)
 
 void NGHttp2Session::start_write()
 {
-   if (send_handler_)
-   {
-      mlogd("start_write: signalling write loop...");
-      swap_and_invoke(send_handler_);
-      mlogd("start_write: signalling write loop... done");
-   }
+   mlogd("start_write: signalling write loop...");
+   send_ready_.set();
+   mlogd("start_write: signalling write loop... done");
 }
 
 // =================================================================================================

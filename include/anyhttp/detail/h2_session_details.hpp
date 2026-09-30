@@ -12,7 +12,6 @@
 
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/beast/core/static_buffer.hpp>
@@ -69,6 +68,12 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
    for (;;)
    {
       //
+      // Cleared before asking nghttp2, not before waiting: a start_write() while the write below
+      // is suspended must still find its way to the wait.
+      //
+      send_ready_.clear();
+
+      //
       // Retrieve a chunk of data to be sent from NGHTTP2.
       // The buffer is valid until next call nghttp2_session_mem_send, so we don't need to copy it.
       // We still may want to copy it into a local buffer to bundle many small writes.
@@ -105,7 +110,7 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
       {
          const auto seq = std::to_array<const_buffer>({buffer.data(), asio::buffer(data, nread)});
          mylogd("send loop: writing {} bytes...", bytes_to_write);
-         auto [ec, written] = co_await asio::async_write(stream_, seq, asio::as_tuple);
+         auto [ec, written] = co_await io::write(stream_, seq);
          if (ec)
          {
             // a peer that hung up is not our error
@@ -135,7 +140,7 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
             break; // nghttp2 doesn't want to send or receive any more, so we are done
 
          mylogd("send loop: waiting...");
-         co_await async_wait_send(asio::deferred);
+         co_await send_ready_.wait();
          mylogd("send loop: waiting... done");
       }
    }
@@ -162,7 +167,7 @@ Task<void> NGHttp2SessionImpl<Stream>::recv_loop()
    while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
    {
       auto free = buffer_.capacity() - buffer_.size();
-      auto [ec, n] = co_await stream_.async_read_some(buffer_.prepare(free), asio::as_tuple);
+      auto [ec, n] = co_await io::read_some(stream_, buffer_.prepare(free));
       if (ec)
       {
          mylogd("read: {}, terminating session", ec.message());
@@ -273,8 +278,7 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    //
    // send/receive loop
    //
-   using namespace asio::experimental::awaitable_operators;
-   co_await (send_loop() && recv_loop());
+   co_await when_both(send_loop(), recv_loop());
 
    mlogd("server session done");
 
@@ -357,8 +361,7 @@ Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    //
    // send/receive loop
    //
-   using namespace asio::experimental::awaitable_operators;
-   co_await (send_loop() && recv_loop());
+   co_await when_both(send_loop(), recv_loop());
 
    mlogd("client session done");
 
