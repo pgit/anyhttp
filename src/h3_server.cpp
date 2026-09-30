@@ -21,7 +21,7 @@
 // strand (process_quic_batch()), where all ngtcp2/nghttp3 work, the timers and the request
 // handlers run. The CID demux table is the only cross-connection state and is guarded by
 // Http3ServerImpl::mutex_. Sends go straight out via a per-session dup() of the UDP fd --
-// sendto()/sendmsg() are atomic per datagram, so they need no serialization.
+// sendmsg() is atomic per datagram, so they need no serialization.
 //
 // Not yet implemented: retry tokens, version negotiation, stateless reset, connection
 // migration, ECN.
@@ -206,6 +206,39 @@ bool drop_packet(double rate)
 
    static thread_local std::mt19937 rng{std::random_device{}()};
    return std::uniform_real_distribution<double>{0.0, 1.0}(rng) < rate;
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// Fills in `cm` with the control message that makes a datagram go out from `local`, the address
+// its connection was reached on, and returns the space it takes up. Without it, a socket bound
+// to a wildcard address sends from whatever address the kernel picks for the route back -- on a
+// host with more than one, not necessarily the one the client sent to, and a client with a
+// connected socket drops the reply. A dual-stack socket takes IPV6_PKTINFO with a v4-mapped
+// address for an IPv4 peer, which is what IPV6_RECVPKTINFO reported for one.
+//
+size_t set_source_address(cmsghdr* cm, const Address& local)
+{
+   if (local.su.storage.ss_family == AF_INET6)
+   {
+      in6_pktinfo pktinfo{.ipi6_addr = local.su.in6.sin6_addr,
+                          .ipi6_ifindex =
+                             static_cast<decltype(in6_pktinfo::ipi6_ifindex)>(local.ifindex)};
+      cm->cmsg_level = IPPROTO_IPV6;
+      cm->cmsg_type = IPV6_PKTINFO;
+      cm->cmsg_len = CMSG_LEN(sizeof(pktinfo));
+      std::memcpy(CMSG_DATA(cm), &pktinfo, sizeof(pktinfo));
+      return CMSG_SPACE(sizeof(pktinfo));
+   }
+
+   in_pktinfo pktinfo{.ipi_ifindex = static_cast<decltype(in_pktinfo::ipi_ifindex)>(local.ifindex),
+                      .ipi_spec_dst = local.su.in.sin_addr};
+   cm->cmsg_level = IPPROTO_IP;
+   cm->cmsg_type = IP_PKTINFO;
+   cm->cmsg_len = CMSG_LEN(sizeof(pktinfo));
+   std::memcpy(CMSG_DATA(cm), &pktinfo, sizeof(pktinfo));
+   return CMSG_SPACE(sizeof(pktinfo));
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -533,7 +566,7 @@ Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Add
 
    //
    // Own a dup() of the shared UDP fd rather than borrowing the server's. Sends happen from this
-   // session's strand, concurrently with everything else -- sendto()/sendmsg() on a shared
+   // session's strand, concurrently with everything else -- sendmsg() on a shared
    // datagram fd is fine, each call is atomic -- but at shutdown the server closes its socket
    // right after posting destroy() to every session, and the final CONNECTION_CLOSE would
    // otherwise race that close (and, worse, a recycled fd number).
@@ -658,7 +691,7 @@ void Http3ServerSession::on_remove_cid(const ngtcp2_cid& cid) { server_.dissocia
 //
 // Sends a run of same-sized packets (as produced by ngtcp2_conn_write_aggregate_pkt2(), all but
 // the last exactly `gso_size` bytes) with a single sendmsg() using UDP_SEGMENT (GSO), so N QUIC
-// packets cost one syscall instead of N. Falls back to one sendto() per segment -- and remembers
+// packets cost one syscall instead of N. Falls back to one sendmsg() per segment -- and remembers
 // to do so from then on -- if the kernel/NIC doesn't support UDP_SEGMENT here.
 //
 int Http3ServerSession::send_datagrams(const ngtcp2_path& path, std::span<const uint8_t> data,
@@ -678,7 +711,8 @@ int Http3ServerSession::send_datagrams(const ngtcp2_path& path, std::span<const 
    }
 
    iovec msg_iov{const_cast<uint8_t*>(data.data()), data.size()};
-   uint8_t msg_ctrl[CMSG_SPACE(sizeof(uint16_t))];
+   alignas(cmsghdr)
+      uint8_t msg_ctrl[CMSG_SPACE(sizeof(uint16_t)) + CMSG_SPACE(sizeof(in6_pktinfo))]{};
    msghdr msg{};
    msg.msg_name = path.remote.addr;
    msg.msg_namelen = path.remote.addrlen;
@@ -693,6 +727,8 @@ int Http3ServerSession::send_datagrams(const ngtcp2_path& path, std::span<const 
    cm->cmsg_len = CMSG_LEN(sizeof(uint16_t));
    auto seg = static_cast<uint16_t>(gso_size);
    memcpy(CMSG_DATA(cm), &seg, sizeof(seg));
+   msg.msg_controllen =
+      CMSG_SPACE(sizeof(uint16_t)) + set_source_address(CMSG_NXTHDR(&msg, cm), ep_.addr);
 
    for (;;)
    {
@@ -729,16 +765,27 @@ int Http3ServerSession::send_udp(const ngtcp2_addr& remote, std::span<const uint
       return 0; // pretend it went out; ngtcp2 will retransmit
    }
 
+   iovec msg_iov{const_cast<uint8_t*>(packet.data()), packet.size()};
+   alignas(cmsghdr) uint8_t msg_ctrl[CMSG_SPACE(sizeof(in6_pktinfo))]{};
+   msghdr msg{};
+   msg.msg_name = remote.addr;
+   msg.msg_namelen = remote.addrlen;
+   msg.msg_iov = &msg_iov;
+   msg.msg_iovlen = 1;
+   msg.msg_control = msg_ctrl;
+   msg.msg_controllen = sizeof(msg_ctrl);
+   msg.msg_controllen = set_source_address(CMSG_FIRSTHDR(&msg), ep_.addr);
+
    for (;;)
    {
-      auto n = ::sendto(ep_.fd, packet.data(), packet.size(), 0, remote.addr, remote.addrlen);
+      auto n = ::sendmsg(ep_.fd, &msg, 0);
       if (n == -1)
       {
          if (errno == EINTR)
             continue;
          if (errno == EAGAIN || errno == EWOULDBLOCK)
             return 0; // best-effort; ngtcp2 will retransmit
-         mloge("sendto: {}", strerror(errno));
+         mloge("sendmsg: {}", strerror(errno));
          return -1;
       }
       return 0;

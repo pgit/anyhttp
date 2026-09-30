@@ -73,3 +73,33 @@ TEST_P(DualStack, WHEN_ipv6_server_is_reached_over_ipv4_THEN_get_succeeds)
       EXPECT_EQ(message.body(), "Hello, IPv4!");
    };
 }
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// Like DualStack, but over 127.0.0.2, which is not the address the kernel picks as the source for
+// a reply to a loopback peer (127.0.0.1). A reply has to go out from the address the request was
+// sent to, or a client with a connected socket (like ours) never sees it.
+//
+class DualStackSecondaryAddress : public IPv6
+{
+protected:
+   DualStackSecondaryAddress() { url = boost::urls::url{"http://127.0.0.2/custom"}; }
+
+   void configure_server(server::Config& config) override { config.listen_address = "::"; }
+};
+
+INSTANTIATE_TEST_SUITE_P(DualStackSecondaryAddress, DualStackSecondaryAddress,
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
+                                anyhttp::Protocol::h3),
+                         NameGenerator);
+
+TEST_P(DualStackSecondaryAddress, WHEN_server_is_reached_on_a_secondary_address_THEN_get_succeeds)
+{
+   respond_with("Hello, 127.0.0.2!");
+   clientSession = [this](Session session) -> awaitable<void> {
+      auto message = co_await session.async_get(url);
+      EXPECT_EQ(message.result(), http::status::ok);
+      EXPECT_EQ(message.body(), "Hello, 127.0.0.2!");
+   };
+}

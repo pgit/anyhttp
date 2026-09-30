@@ -60,7 +60,7 @@ std::expected<Config, int> parse_config(int argc, char* argv[])
    opts("disable-gro", po::bool_switch(&config.server.disable_gro),
         "HTTP/3 benchmarking: don't enable UDP_GRO (receive offload) on the UDP socket");
    opts("disable-gso", po::bool_switch(&config.server.disable_gso),
-        "HTTP/3 benchmarking: don't use UDP_SEGMENT (send offload), one sendto() per packet");
+        "HTTP/3 benchmarking: don't use UDP_SEGMENT (send offload), one sendmsg() per packet");
    opts("max-header-size",
         po::value(&config.server.max_header_size)->default_value(config.server.max_header_size),
         "largest request header section accepted, in bytes (answered with 431 if exceeded)");
