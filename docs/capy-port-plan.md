@@ -137,6 +137,12 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
      send loop now cancels the pending read when it ends.
 3. **HTTP/1.1 on Beast's parser and serializer**, in ASIO mode. This has the largest
    behavioural risk: h2c upgrade, chunked bodies, 431, the "max concurrent streams = 1" rules.
+   *Done 2026-09-30 (`8d11278`).* `h1_io.hpp` holds Beast's four composed operations as coroutines.
+   The implementation interfaces have each operation in two shapes: handler (`async_*`) and
+   coroutine (`read_some`, `write`, `submit`, `get_response`). A backend implements one and gets
+   the other: via `initiate()` (cheap) or `launch()` (a spawn). The coroutine spelling of the API
+   awaits the coroutine shape directly. That is the CAPY-native interface already: CAPY's front
+   ends only have to await it. HTTP/1.1 is now slightly faster than with Beast's operations.
 4. **Sockets, streams and TLS, portable.** The acceptor and accept loop, the resolver and connect,
    the UDP sockets and endpoints of h3, socket options, `stream_traits` (shutdown, cancel,
    teardown), prefix sniffing, `PrefixedStream`, a TLS stream alias. `any_async_stream` becomes
