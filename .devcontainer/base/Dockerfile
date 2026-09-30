@@ -66,7 +66,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
 # With debian trixie, we now have OpenSSL 3 with QUIC support. Whether or not that is any good,
 # seems to be up for debate: https://www.haproxy.com/blog/state-of-ssl-stacks
 #
-ARG AWS_LC_VERSION=v5.6.0
+ARG AWS_LC_VERSION=v5.10.0
 RUN git clone --depth 1 -b ${AWS_LC_VERSION} https://github.com/aws/aws-lc && \
     cd aws-lc && \
     cmake -B build \
