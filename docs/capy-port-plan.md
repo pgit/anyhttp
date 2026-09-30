@@ -123,6 +123,15 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
    - 2b: h2 loops and streams.
    - 2c: h3.
    - 2d: `server_impl`, `client_impl`, `session`.
+
+   *2a–2c done 2026-09-30* (`fa8b4d5`..`63d0894`). `runtime.hpp` has `Task`, `Executor`,
+   `error_code`, `Completion`, `errc`/`errors`, `complete_immediately`/`complete_later`,
+   `on_cancel`, `run_later`, `dispatch_to`, `new_strand`, `launch`, `when_both`, `Event`, `Timer`,
+   and `io::read_some`/`write`/`receive`/`wait_readable`. Two findings:
+   - `Event::set()` posts in ASIO too, as capy's does, because h3 signals from inside ngtcp2.
+     This made small h2 GETs 19% faster, since `start_write()`s now coalesce.
+   - The h2 receive loop stopped only because `start_write()` used to drain the GOAWAY inline. The
+     send loop now cancels the pending read when it ends.
 3. **HTTP/1.1 on Beast's parser and serializer**, in ASIO mode. This has the largest
    behavioural risk: h2c upgrade, chunked bodies, 431, the "max concurrent streams = 1" rules.
 4. **Detection and stream plumbing, portable.** Prefix sniffing, `PrefixedStream`, a TLS stream
