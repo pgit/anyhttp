@@ -25,12 +25,12 @@ bool any_async_stream::is_tls() const noexcept { return impl->is_tls(); }
 
 void any_async_stream::write_some(ReadWriteHandler handler, ConstBufferVector buffers)
 {
-   impl->async_write_some(std::move(handler), std::move(buffers));
+   impl->async_write_some(std::move(handler), buffers);
 }
 
 void any_async_stream::read_some(ReadWriteHandler handler, MutableBufferVector buffers)
 {
-   impl->async_read_some(std::move(handler), std::move(buffers));
+   impl->async_read_some(std::move(handler), buffers);
 }
 
 void any_async_stream::shutdown(ShutdownHandler handler)

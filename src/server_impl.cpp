@@ -204,11 +204,11 @@ void Server::Impl::listen_tcp()
 //
 static unsigned char next_proto_list[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
 
-unsigned int next_proto_list_len = sizeof(next_proto_list);
+static unsigned int next_proto_list_len = sizeof(next_proto_list);
 static int next_proto_cb(SSL* s, const unsigned char** data, unsigned int* len, void* arg)
 {
    *data = next_proto_list;
-   *len = (unsigned int)next_proto_list_len;
+   *len = next_proto_list_len;
    return SSL_TLSEXT_ERR_OK;
 }
 
@@ -247,8 +247,8 @@ static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned ch
 static asio::ssl::context make_tls_server_context(const Config& config)
 {
    asio::ssl::context ctx{asio::ssl::context::tlsv13};
-   SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, NULL);
-   SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, NULL);
+   SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, nullptr);
+   SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, nullptr);
 
    ctx.use_certificate_chain_file(config.tls_certificate_chain);
    ctx.use_private_key_file(config.tls_private_key, asio::ssl::context::pem);

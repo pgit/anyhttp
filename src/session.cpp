@@ -55,7 +55,7 @@ boost::asio::any_io_executor Session::get_executor() const noexcept { return imp
 
 void Session::async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
 {
-   impl->async_submit(std::move(handler), "POST", url, std::move(headers));
+   impl->async_submit(std::move(handler), "POST", std::move(url), headers);
 }
 
 // =================================================================================================

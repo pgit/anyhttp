@@ -102,11 +102,16 @@ namespace anyhttp::server
 
 // =================================================================================================
 
+namespace
+{
+
 struct Endpoint
 {
    Address addr;
    int fd;
 };
+
+} // namespace
 
 // =================================================================================================
 // Free-standing helpers
@@ -253,6 +258,9 @@ std::optional<Address> to_address(const sockaddr_storage& src, socklen_t len)
 class Http3ServerImpl;
 class Http3ServerSession;
 
+namespace
+{
+
 class Http3ServerStream : public http3::Http3Stream
 {
 public:
@@ -267,6 +275,8 @@ public:
    void on_headers_complete() override;
    void submit_response(unsigned int status_code, const Fields& fields) override;
 };
+
+} // namespace
 
 // -------------------------------------------------------------------------------------------------
 
@@ -332,6 +342,9 @@ private:
    size_t request_counter_ = 0;
 };
 
+namespace
+{
+
 //
 // What one pass of udp_on_read() hands a session: every datagram of the receive batch that was
 // addressed to it, copied out of the receive buffer because the session consumes them on its own
@@ -351,6 +364,8 @@ struct QuicBatch
    ngtcp2_pkt_hd hd{}; // decoded Initial packet header, only valid when is_new
    boost::container::small_vector<Datagram, 8> datagrams;
 };
+
+} // namespace
 
 // -------------------------------------------------------------------------------------------------
 
@@ -427,6 +442,9 @@ private:
 // Http3ServerStream implementation
 // =================================================================================================
 
+namespace
+{
+
 //
 // The reading half of a server request: what http3::Http3Reader has for both roles, plus the
 // request line, which only this role has. Its counterpart on the client is Http3ResponseReader.
@@ -448,6 +466,8 @@ public:
       return stream->url;
    }
 };
+
+} // namespace
 
 // -------------------------------------------------------------------------------------------------
 
@@ -806,8 +826,8 @@ int Http3ServerSession::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uin
    params.original_dcid_present = 1;
 
    ngtcp2_path path{
-      {const_cast<sockaddr*>(&ep_.addr.su.sa), ep_.addr.len},
-      {const_cast<sockaddr*>(&remote_.su.sa), remote_.len},
+      {&ep_.addr.su.sa, ep_.addr.len},
+      {&remote_.su.sa, remote_.len},
       &ep_,
    };
 
@@ -833,7 +853,7 @@ int Http3ServerSession::on_read(const ngtcp2_pkt_info& pi, std::span<const uint8
                                 const Address& remote)
 {
    ngtcp2_path path{
-      {const_cast<sockaddr*>(&ep_.addr.su.sa), ep_.addr.len},
+      {&ep_.addr.su.sa, ep_.addr.len},
       {const_cast<sockaddr*>(&remote.su.sa), remote.len},
       &ep_,
    };

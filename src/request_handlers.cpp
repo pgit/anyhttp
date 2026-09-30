@@ -23,10 +23,15 @@ namespace rv = std::ranges::views;
 
 // =================================================================================================
 
+namespace
+{
+
 struct EscapedString
 {
    std::string_view str;
 };
+
+} // namespace
 
 template <>
 struct std::formatter<EscapedString> : std::formatter<std::string>

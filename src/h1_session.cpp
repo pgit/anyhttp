@@ -67,7 +67,7 @@ using socket = asio::ip::tcp::socket;
  * already has under that name, like a default set before, but repeated fields are all kept.
  */
 template <bool isRequest, typename Body>
-void add_fields(http::message<isRequest, Body>& message, const Fields& headers)
+static void add_fields(http::message<isRequest, Body>& message, const Fields& headers)
 {
    for (auto&& header : headers)
       message.erase(header.name_string());
@@ -76,7 +76,7 @@ void add_fields(http::message<isRequest, Body>& message, const Fields& headers)
 }
 
 /// Converts Config::max_header_size into what a Beast parser takes as its header limit.
-inline std::uint32_t header_limit(size_t max_header_size)
+static std::uint32_t header_limit(size_t max_header_size)
 {
    return static_cast<std::uint32_t>(
       std::min<size_t>(max_header_size, std::numeric_limits<std::uint32_t>::max()));
@@ -84,11 +84,14 @@ inline std::uint32_t header_limit(size_t max_header_size)
 
 // =================================================================================================
 
+namespace
+{
+
 template <typename Interface, typename Stream, typename Buffer, typename Parser>
 class BeastReader : public Interface
 {
 public:
-   inline BeastReader(BeastSession<Stream>& session_, Stream& stream_, Buffer& buffer_)
+   BeastReader(BeastSession<Stream>& session_, Stream& stream_, Buffer& buffer_)
       : session(&session_), stream(stream_), buffer(buffer_),
         executor_(session_.get_executor()), // survives detach(), see get_executor()
         log_prefix_(session_.log_prefix())
@@ -185,7 +188,7 @@ public:
 
       auto ex = get_associated_executor(handler, get_executor());
       auto cs = get_associated_cancellation_slot(handler);
-      auto cb = [this, self = Interface::shared_from_this(), body_buffer = std::move(body_buffer),
+      auto cb = [this, self = Interface::shared_from_this(), body_buffer,
                  handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable {
          reading = false;
 
@@ -222,7 +225,7 @@ public:
          stream, buffer, parser, bind_executor(ex, bind_cancellation_slot(cs, std::move(cb))));
    }
 
-   asio::any_io_executor get_executor() const noexcept { return executor_; }
+   asio::any_io_executor get_executor() const noexcept override { return executor_; }
    std::string log_prefix() const override { return log_prefix_; }
 
    BeastSession<Stream>* session;
@@ -317,7 +320,7 @@ template <typename Parent, typename Stream, typename Serializer,
 class WriterBase : public Parent
 {
 public:
-   inline WriterBase(BeastSession<Stream>& session_, Stream& stream_)
+   WriterBase(BeastSession<Stream>& session_, Stream& stream_)
       : session(&session_), stream(stream_),
         executor_(session_.get_executor()), // survives detach(), see get_executor()
         log_prefix_(session_.log_prefix())
@@ -555,9 +558,7 @@ public:
    using super::submit_headers;
 
 public:
-   inline ResponseWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_)
-   {
-   }
+   ResponseWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_) {}
 
    void content_length(std::optional<size_t> content_length) override
    {
@@ -607,6 +608,8 @@ public:
    }
 };
 
+} // namespace
+
 template <typename Stream>
 class RequestWriter
    : public WriterBase<client::Request::Impl, Stream, http::request_serializer<http::buffer_body>>
@@ -626,9 +629,7 @@ public:
    using super::submit_headers;
 
 public:
-   inline RequestWriter(ClientSession<Stream>& session_, Stream& stream_) : super(session_, stream_)
-   {
-   }
+   RequestWriter(ClientSession<Stream>& session_, Stream& stream_) : super(session_, stream_) {}
 
    ~RequestWriter() override
    {
@@ -726,7 +727,7 @@ public:
          auto ec = asio::error::basic_errors::already_started;
          mlogw("async_get_response: \x1b[1;31m{}\x1b[0m", what(ec));
          any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
-         ex.execute([handler = std::move(handler), ec = std::move(ec)]() mutable { //
+         ex.execute([handler = std::move(handler), ec]() mutable { //
             std::move(handler)(ec, client::Response{nullptr});
          });
          return;
@@ -847,16 +848,16 @@ BeastSession<Stream>::~BeastSession()
 template <typename Stream>
 ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_executor executor,
                                      Stream&& stream)
-   : ServerSessionBase(parent),
-     super(anyhttp::log_prefix(Role::server, "h1", get_socket(stream)), executor, std::move(stream))
+   : ServerSessionBase(parent), super(anyhttp::log_prefix(Role::server, "h1", get_socket(stream)),
+                                      std::move(executor), std::move(stream))
 {
 }
 
 template <typename Stream>
 ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_executor executor,
                                      Stream&& stream)
-   : ClientSessionBase(parent),
-     super(anyhttp::log_prefix(Role::client, "h1", get_socket(stream)), executor, std::move(stream))
+   : ClientSessionBase(parent), super(anyhttp::log_prefix(Role::client, "h1", get_socket(stream)),
+                                      std::move(executor), std::move(stream))
 {
 }
 
@@ -1259,6 +1260,10 @@ template <typename Stream>
 void ServerSession<Stream>::async_submit(SubmitHandler&& handler, std::string_view method,
                                          boost::urls::url url, const Fields& headers)
 {
+   std::ignore = handler;
+   std::ignore = method;
+   std::ignore = url;
+   std::ignore = headers;
    assert(false);
 }
 

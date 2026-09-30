@@ -80,7 +80,7 @@ static std::string_view frame_type(uint8_t type)
 
 // =================================================================================================
 
-int on_begin_headers_callback(nghttp2_session*, const nghttp2_frame* frame, void* user_data)
+static int on_begin_headers_callback(nghttp2_session*, const nghttp2_frame* frame, void* user_data)
 {
    auto handler = static_cast<NGHttp2Session*>(user_data);
 
@@ -94,9 +94,9 @@ int on_begin_headers_callback(nghttp2_session*, const nghttp2_frame* frame, void
 //
 // TODO: there is on_header_callback2, which can help in avoiding copying strings
 //
-int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, const uint8_t* name_,
-                       size_t namelen_, const uint8_t* value_, size_t valuelen_, uint8_t flags,
-                       void* user_data)
+static int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
+                              const uint8_t* name_, size_t namelen_, const uint8_t* value_,
+                              size_t valuelen_, uint8_t flags, void* user_data)
 {
    std::ignore = session;
    std::ignore = flags;
@@ -179,8 +179,8 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame, con
    return 0;
 }
 
-int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
-                               int lib_error_code, void* user_data)
+static int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
+                                      int lib_error_code, void* user_data)
 {
    const auto handler = static_cast<NGHttp2Session*>(user_data);
    logw("[{}] on_frame_not_send_callback: {} {}", handler->log_prefix(frame),
@@ -198,8 +198,8 @@ int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_frame* fr
    return 0;
 }
 
-int on_error_callback(nghttp2_session* session, int lib_error_code, const char* msg, size_t len,
-                      void* user_data)
+static int on_error_callback(nghttp2_session* session, int lib_error_code, const char* msg,
+                             size_t len, void* user_data)
 {
    auto handler = static_cast<NGHttp2Session*>(user_data);
    loge("[{}] on_error_callback: {}", handler->log_prefix(), std::string_view(msg, len));
@@ -216,9 +216,9 @@ static std::string_view to_string_view(nghttp2_rcbuf* buf)
    return to_string_view(nghttp2_rcbuf_get_buf(buf));
 }
 
-int on_invalid_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
-                               nghttp2_rcbuf* name, nghttp2_rcbuf* value, uint8_t flags,
-                               void* user_data)
+static int on_invalid_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
+                                      nghttp2_rcbuf* name, nghttp2_rcbuf* value, uint8_t flags,
+                                      void* user_data)
 {
    auto handler = static_cast<NGHttp2Session*>(user_data);
    auto nameBuf = nghttp2_rcbuf_get_buf(name);
@@ -227,8 +227,8 @@ int on_invalid_header_callback(nghttp2_session* session, const nghttp2_frame* fr
    return 0;
 }
 
-int on_invalid_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
-                                   int lib_error_code, void* user_data)
+static int on_invalid_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
+                                          int lib_error_code, void* user_data)
 {
    const auto handler = static_cast<NGHttp2Session*>(user_data);
    logw("[{}] on_invalid_frame_recv_callback: {} {}", handler->log_prefix(frame),
@@ -239,7 +239,8 @@ int on_invalid_frame_recv_callback(nghttp2_session* session, const nghttp2_frame
 /**
  * This generic callback is invoked after the more specific ones, e.g. on_header_callback().
  */
-int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
+static int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
+                                  void* user_data)
 {
    const auto handler = static_cast<NGHttp2Session*>(user_data);
 
@@ -337,8 +338,8 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
    return 0;
 }
 
-int on_data_chunk_recv_callback(nghttp2_session* session, uint8_t flags, int32_t stream_id,
-                                const uint8_t* data, size_t len, void* user_data)
+static int on_data_chunk_recv_callback(nghttp2_session* session, uint8_t flags, int32_t stream_id,
+                                       const uint8_t* data, size_t len, void* user_data)
 {
    std::ignore = flags;
 
@@ -359,7 +360,8 @@ int on_data_chunk_recv_callback(nghttp2_session* session, uint8_t flags, int32_t
    return 0;
 }
 
-int on_frame_send_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
+static int on_frame_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
+                                  void* user_data)
 {
    std::ignore = session;
    std::ignore = frame;
@@ -376,8 +378,8 @@ int on_frame_send_callback(nghttp2_session* session, const nghttp2_frame* frame,
    return 0;
 }
 
-int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32_t error_code,
-                             void* user_data)
+static int on_stream_close_callback(nghttp2_session* session, int32_t stream_id,
+                                    uint32_t error_code, void* user_data)
 {
    bool local_close = nghttp2_session_get_stream_local_close(session, stream_id);
    bool remote_close = nghttp2_session_get_stream_remote_close(session, stream_id);

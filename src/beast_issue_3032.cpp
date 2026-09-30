@@ -12,7 +12,7 @@ using namespace std::string_view_literals;
 
 namespace asio = boost::asio;
 namespace http = boost::beast::http;
-using error_code = boost::system::error_code;
+using boost::system::error_code;
 
 /// Dummy stream satisfying the AsyncWriteStream requirements
 struct StringWriteStream
@@ -45,12 +45,12 @@ struct StringWriteStream
 
 static_assert(boost::beast::is_sync_write_stream<StringWriteStream>::value);
 
-void test(bool with_nullptr)
+static void test(bool with_nullptr)
 {
    StringWriteStream stream;
 
    using Serializer = http::response_serializer<http::buffer_body>;
-   using Message = std::remove_const_t<typename Serializer::value_type>;
+   using Message = std::remove_const_t<Serializer::value_type>;
    Message message;
    Serializer serializer{message};
 

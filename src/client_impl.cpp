@@ -117,7 +117,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
    //
    auto slot = get_associated_cancellation_slot(handler);
    auto executor = get_associated_executor(handler);
-   auto completion = [this, handler = std::move(handler)](std::exception_ptr ep,
+   auto completion = [this, handler = std::move(handler)](const std::exception_ptr& ep,
                                                           Session session) mutable {
       if (ep)
          mloge("async_connect: {}", what(ep));

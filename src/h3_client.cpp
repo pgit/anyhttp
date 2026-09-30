@@ -133,6 +133,9 @@ struct TlsClientContext
 
 class Http3ClientSession;
 
+namespace
+{
+
 class Http3ClientStream : public http3::Http3Stream
 {
 public:
@@ -192,6 +195,8 @@ public:
    }
 };
 
+} // namespace
+
 // -------------------------------------------------------------------------------------------------
 
 class Http3ClientSession : public http3::Http3Session
@@ -248,6 +253,9 @@ private:
 // Http3ClientStream implementation
 // =================================================================================================
 
+namespace
+{
+
 //
 // The reading half of a client response: what http3::Http3Reader has for both roles, plus the
 // status code, which only this role has. Its counterpart on the server is Http3RequestReader.
@@ -259,6 +267,8 @@ public:
 
    unsigned int status_code() const noexcept override { return stream ? stream->status_code : 0; }
 };
+
+} // namespace
 
 // -------------------------------------------------------------------------------------------------
 
@@ -419,7 +429,8 @@ void Http3ClientStream::deliver_response()
 // =================================================================================================
 
 Http3ClientSession::Http3ClientSession(asio::any_io_executor executor, const Config& config)
-   : http3::Http3Session(executor), socket_(get_executor()), ready_signal_(get_executor())
+   : http3::Http3Session(std::move(executor)), socket_(get_executor()),
+     ready_signal_(get_executor())
 {
    max_header_size_ = config.max_header_size;
    // Sentinel timers: expires_at(max) means "not yet"; a wait completes once moved to "min".

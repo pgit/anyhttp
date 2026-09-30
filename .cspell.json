@@ -40,6 +40,7 @@
         "mylogd",
         "nghttp",
         "ngtcp",
+        "nullptr",
         "ossl",
         "osslclient",
         "osslserver",

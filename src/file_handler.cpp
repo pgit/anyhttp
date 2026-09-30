@@ -150,7 +150,7 @@ expected<fs::path> resolve(std::string_view path, std::string_view prefix, const
    if (ec)
       return std::unexpected(from_errno(ec.value()));
 
-   const auto file = fs::weakly_canonical(base / fs::path(path), ec);
+   auto file = fs::weakly_canonical(base / fs::path(path), ec);
    if (ec)
       return std::unexpected(from_errno(ec.value()));
 

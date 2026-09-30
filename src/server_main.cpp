@@ -29,6 +29,9 @@ using namespace boost::asio;
 using namespace anyhttp;
 namespace po = boost::program_options;
 
+namespace
+{
+
 struct Config
 {
    size_t verbose = 0;
@@ -36,7 +39,9 @@ struct Config
    server::Config server{.port = 8080};
 };
 
-std::expected<Config, int> parse_config(int argc, char* argv[])
+} // namespace
+
+static std::expected<Config, int> parse_config(int argc, char* argv[])
 {
    Config config;
 

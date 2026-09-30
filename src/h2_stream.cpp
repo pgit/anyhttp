@@ -163,6 +163,9 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
 
 // =================================================================================================
 
+namespace
+{
+
 //
 // The two roles a reader can be in. Everything above is the same for both; what they add is the
 // half of the incoming message that only their role has -- a request line, or a status code.
@@ -197,6 +200,8 @@ public:
       return stream->status_code.value_or(0);
    }
 };
+
+} // namespace
 
 // =================================================================================================
 
@@ -748,7 +753,7 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
       mlogw("async_get_response: \x1b[1;31m{}\x1b[0m", what(ec));
       asio::any_completion_executor ex =
          asio::get_associated_immediate_executor(handler, get_executor());
-      ex.execute([handler = std::move(handler), ec = std::move(ec)]() mutable { //
+      ex.execute([handler = std::move(handler), ec]() mutable { //
          std::move(handler)(ec, client::Response{nullptr});
       });
       return;
