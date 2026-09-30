@@ -3,7 +3,9 @@
 #include "common.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/associated_executor.hpp>
 #include <boost/asio/async_result.hpp>
+#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/buffer.hpp>
 
 #include <concepts>
@@ -67,10 +69,15 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
    auto async_read_some(asio::mutable_buffer buffer, CompletionToken&& token = CompletionToken())
    {
+      //
+      // Binding an executor to the initiating function lets tokens that need one -- the timer
+      // behind cancel_after -- find it here, see Writer.
+      //
       return asio::async_initiate<CompletionToken, ReadSome>(
-         [&](ReadSomeHandler handler, asio::mutable_buffer buffer) { //
-            async_read_some_any(buffer, std::move(handler));
-         },
+         asio::bind_executor(asio::get_associated_executor(token, get_executor()),
+                             [this](ReadSomeHandler handler, asio::mutable_buffer buffer) { //
+                                async_read_some_any(buffer, std::move(handler));
+                             }),
          token, buffer);
    }
 
