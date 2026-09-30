@@ -409,6 +409,13 @@ auto read_some(Stream& stream, asio::mutable_buffer buffer)
    return stream.async_read_some(buffer, asio::as_tuple);
 }
 
+/// Peeks at what has arrived on \p socket, without taking it: <tt>(error_code, size_t)</tt>.
+template <typename Socket>
+auto peek(Socket& socket, asio::mutable_buffer buffer)
+{
+   return socket.async_receive(buffer, Socket::message_peek, asio::as_tuple);
+}
+
 /// Receives a datagram into \p buffer, on a connected datagram socket: <tt>(error_code,
 /// size_t)</tt>.
 template <typename Socket>

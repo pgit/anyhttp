@@ -1,8 +1,7 @@
 #include "anyhttp/server_impl.hpp"
 
 #include "anyhttp/detail/any_async_stream.hpp"
-#include "anyhttp/detail/detect_h2.hpp"
-#include "anyhttp/detail/detect_ssl.hpp"
+#include "anyhttp/detail/detect.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/h1_backend.hpp"
 #include "anyhttp/h2_backend.hpp"
@@ -280,19 +279,21 @@ Task<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
 
    auto buffer = boost::beast::flat_buffer();
+   auto [ec, detected] = co_await detail::detect(socket, buffer);
+   if (ec)
+   {
+      logi("[{}] detecting protocol: {}", prefix, ec.message());
+      co_return;
+   }
 
-   //
-   // detect TLS
-   //
    std::shared_ptr<Session::Impl> session;
    std::optional<asio::ssl::stream<asio::ip::tcp::socket>> ssl_stream;
-   if (co_await async_detect_ssl_awaitable(socket, buffer, deferred))
+   if (detected == detail::Detected::tls)
    {
-      logi("[{}] detected TLS client hello, {} bytes in buffer", prefix, buffer.size());
+      logi("[{}] detected TLS", prefix);
 
       ssl_stream.emplace(std::move(socket), tls_context_);
-      auto n = co_await ssl_stream->async_handshake(asio::ssl::stream_base::server, buffer.data());
-      buffer.consume(n);
+      co_await ssl_stream->async_handshake(asio::ssl::stream_base::server);
 
       //
       // perform ALPN
@@ -319,10 +320,7 @@ Task<void> Server::Impl::handle_connection(ip::tcp::socket socket)
          session = beast_impl::make_server_session(*this, std::move(*ssl_stream));
    }
 
-   //
-   // detect HTTP2 client preface
-   //
-   else if (co_await async_detect_http2_client_preface(socket, buffer))
+   else if (detected == detail::Detected::h2c)
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
 #if 1
