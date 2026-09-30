@@ -38,8 +38,8 @@ void NGHttp2SessionImpl<Stream>::destroy() noexcept
    boost::system::error_code ec;
    get_socket(stream_).shutdown(asio::socket_base::shutdown_both, ec);
    // not_connected: the peer is gone already, which is what we wanted anyway
-   logwi(ec && ec != asio::error::not_connected, "[{}] destroy: socket shutdown: {}", log_prefix_,
-         ec.message());
+   logwd(ec && ec != asio::error::not_connected, //
+         "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
    // });
 }
 

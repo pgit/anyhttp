@@ -360,7 +360,7 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    co_await session->do_session(std::move(buffer));
    remove_session(session);
 
-   logi("[{}] session finished", prefix);
+   logd("[{}] session finished", prefix);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -441,8 +441,10 @@ awaitable<void> Server::Impl::tcp_accept_loop()
                   std::ignore = sessionDone.try_send(boost::system::error_code{});
                   if (ex)
                      logw("[{}] {}", prefix, what(ex));
+                  else if (sessionCounter)
+                     logd("[{}] session finished, {} sessions left", prefix, sessionCounter);
                   else
-                     logi("[{}] session finished, {} sessions left", prefix, sessionCounter);
+                     logi("[{}] all sessions finished", prefix);
                });
    }
 

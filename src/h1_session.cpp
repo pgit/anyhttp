@@ -112,9 +112,8 @@ public:
          // get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send, ec);
          get_socket(stream).shutdown(boost::asio::socket_base::shutdown_receive, ec);
          session->closed_ = true;
-         if (ec)
-            logwi(ec != asio::error::not_connected, "[{}] destroy: shutdown: {}", log_prefix(),
-                  what(ec));
+         logwd(ec != asio::error::not_connected, //
+               "[{}] destroy: shutdown: {}", log_prefix(), what(ec));
       }
       finish();
    }
@@ -875,8 +874,8 @@ void BeastSession<Stream>::destroy() noexcept
    boost::system::error_code ec;
    get_socket(stream_).shutdown(socket_base::shutdown_both, ec);
    // not_connected: the peer is gone already, which is what we wanted anyway
-   logwi(ec && ec != asio::error::not_connected, "[{}] destroy: socket shutdown: {}", log_prefix_,
-         ec.message());
+   logwd(ec && ec != asio::error::not_connected, //
+         "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
    // });
 }
 
