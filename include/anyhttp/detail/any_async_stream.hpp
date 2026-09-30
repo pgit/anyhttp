@@ -145,11 +145,10 @@ private:
    //
    struct initiate_shutdown
    {
-      using executor_type = boost::asio::any_io_executor;
+      any_async_stream* self;
+      using executor_type = any_async_stream::executor_type;
       executor_type get_executor() const noexcept { return self->get_executor(); }
       void operator()(ShutdownHandler handler) const { self->shutdown(std::move(handler)); }
-
-      any_async_stream* self;
    };
 
    //

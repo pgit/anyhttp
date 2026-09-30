@@ -59,7 +59,7 @@ public:
          return log_prefix();
    }
 
-   inline std::string log_prefix(const nghttp2_frame* frame) const
+   std::string log_prefix(const nghttp2_frame* frame) const
    {
       return log_prefix(frame->hd.stream_id);
    }
@@ -164,7 +164,7 @@ public:
 class ServerReference
 {
 public:
-   inline ServerReference(server::Server::Impl& parent) : server_(&parent) {}
+   explicit ServerReference(server::Server::Impl& parent) : server_(&parent) {}
    server::Server::Impl& server()
    {
       assert(server_);
@@ -208,7 +208,7 @@ public:
 class ClientReference
 {
 public:
-   inline ClientReference(client::Client::Impl& parent) : client_(&parent) {}
+   explicit ClientReference(client::Client::Impl& parent) : client_(&parent) {}
    client::Client::Impl& client()
    {
       assert(client_);

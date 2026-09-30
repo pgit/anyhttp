@@ -43,7 +43,7 @@ public:
    /// Releases the implementation, as the destructor does. Writing afterwards fails.
    void reset() noexcept;
 
-   constexpr operator bool() const noexcept { return static_cast<bool>(impl_); }
+   explicit constexpr operator bool() const noexcept { return static_cast<bool>(impl_); }
 
    /// The executor of the session this message belongs to, or an empty one after \c reset().
    executor_type get_executor() const noexcept;

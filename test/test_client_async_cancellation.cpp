@@ -179,7 +179,7 @@ TEST_P(ClientAsyncCancellation, PerOperationCancellation)
 
       asio::cancellation_signal cancel;
       asio::steady_timer timer(co_await asio::this_coro::executor, 110ms);
-      timer.async_wait([&cancel](const boost::system::error_code& ec) { //
+      timer.async_wait([&cancel](const boost::system::error_code&) { //
          cancel.emit(asio::cancellation_type::terminal);
       });
 
@@ -220,7 +220,7 @@ TEST_P(ClientAsyncCancellation, WHEN_send_more_than_content_length_THEN_connecti
       co_await drain(response);
 
       auto ex = co_await this_coro::executor;
-      auto [ep] = co_await co_spawn(ex, send(request, rv::iota(uint8_t(0))), as_tuple);
+      auto [ep] = co_await co_spawn(ex, send(request, rv::iota(uint8_t{0})), as_tuple);
 
       //
       // Which of the two the write reports is a matter of how far the kernel has gotten with the

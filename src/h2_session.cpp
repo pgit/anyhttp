@@ -201,6 +201,8 @@ static int on_frame_not_send_callback(nghttp2_session* session, const nghttp2_fr
 static int on_error_callback(nghttp2_session* session, int lib_error_code, const char* msg,
                              size_t len, void* user_data)
 {
+   std::ignore = session;
+   std::ignore = lib_error_code;
    auto handler = static_cast<NGHttp2Session*>(user_data);
    loge("[{}] on_error_callback: {}", handler->log_prefix(), std::string_view(msg, len));
    return 0;
@@ -220,8 +222,10 @@ static int on_invalid_header_callback(nghttp2_session* session, const nghttp2_fr
                                       nghttp2_rcbuf* name, nghttp2_rcbuf* value, uint8_t flags,
                                       void* user_data)
 {
+   std::ignore = session;
+   std::ignore = frame;
+   std::ignore = flags;
    auto handler = static_cast<NGHttp2Session*>(user_data);
-   auto nameBuf = nghttp2_rcbuf_get_buf(name);
    loge("[{}] invalid_header_callback: {}: {}", //
         handler->log_prefix(), to_string_view(name), to_string_view(value));
    return 0;
@@ -230,6 +234,7 @@ static int on_invalid_header_callback(nghttp2_session* session, const nghttp2_fr
 static int on_invalid_frame_recv_callback(nghttp2_session* session, const nghttp2_frame* frame,
                                           int lib_error_code, void* user_data)
 {
+   std::ignore = session;
    const auto handler = static_cast<NGHttp2Session*>(user_data);
    logw("[{}] on_invalid_frame_recv_callback: {} {}", handler->log_prefix(frame),
         frame_type(frame->hd.type), nghttp2_strerror(lib_error_code));
@@ -516,6 +521,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    prd.source.ptr = stream.get();
    prd.read_callback = [](nghttp2_session* session, int32_t stream_id, uint8_t* buf, size_t length,
                           uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t {
+      std::ignore = session;
       auto stream = static_cast<NGHttp2Stream*>(source->ptr);
       assert(stream);
       assert(stream->id == stream_id);
