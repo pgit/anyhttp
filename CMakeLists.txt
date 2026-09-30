@@ -11,6 +11,8 @@ if (DEFINED ENV{GITHUB_ACTIONS})
     add_compile_definitions(GITHUB_ACTIONS)
 endif()
 
+# --------------------------------------------------------------------------------------------------
+
 if (CMAKE_BUILD_TYPE MATCHES Debug)
     # https://www.boost.org/doc/libs/1_89_0/doc/html/boost_asio/overview/core/buffers.html#boost_asio.overview.core.buffers.buffer_debugging
     # add_compile_definitions(BOOST_ASIO_ENABLE_BUFFER_DEBUGGING)
@@ -62,6 +64,8 @@ else()
     message(STATUS "Using C++ standard library: libstdc++")
 endif()
 
+# --------------------------------------------------------------------------------------------------
+
 # use std::filesystem instead of boost::filesystem
 add_compile_definitions(BOOST_PROCESS_USE_STD_FS)
 
@@ -73,21 +77,8 @@ add_compile_definitions(BOOST_PROCESS_USE_STD_FS)
 # exec, so it has no use for the notification in the first place.
 add_compile_definitions(BOOST_PROCESS_V2_DISABLE_NOTIFY_FORK)
 
-# we don't use fmtlib any more
-add_compile_definitions(SPDLOG_USE_STD_FORMAT)
-
 # don't allow use of deprecated ASIO interfaces
 add_compile_definitions(BOOST_ASIO_NO_DEPRECATED)
-
-# needed for ranges/v3 starting with clang 19
-add_compile_options(-Wno-deprecated-declarations)
-
-# FIXME: nghttp2 reader/writer needs this ATM
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    add_compile_options(-Wno-inconsistent-missing-override)
-endif()
-
-# --------------------------------------------------------------------------------------------------
 
 #
 # find boost
@@ -95,6 +86,8 @@ endif()
 #
 find_package(Boost 1.88 COMPONENTS thread atomic url filesystem process program_options REQUIRED)
 find_package(Threads)
+
+# --------------------------------------------------------------------------------------------------
 
 #
 # TLS: AWS-LC (default) or OpenSSL, selected with TLS_LIBRARY.
@@ -125,6 +118,13 @@ else()
     message(FATAL_ERROR "TLS_LIBRARY must be AWS-LC or OpenSSL, not '${TLS_LIBRARY}'")
 endif()
 
+# --------------------------------------------------------------------------------------------------
+
+# FIXME: nghttp2 reader/writer needs this ATM
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(-Wno-inconsistent-missing-override)
+endif()
+
 #
 # nghttp2
 # https://github.com/curl/curl/blob/master/CMake/FindNGHTTP2.cmake
@@ -137,11 +137,22 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2)
 
+# --------------------------------------------------------------------------------------------------
+
+# needed for ranges/v3 starting with clang 19
+add_compile_options(-Wno-deprecated-declarations)
+
+
 #
 # range-v3 -- FIXME: needed only for views:chunked(),
 #                    as the libc++ version doesn't seem to be available, yet
 #
 include_directories(/usr/local/include/range-v3)
+
+# --------------------------------------------------------------------------------------------------
+
+# we don't use fmtlib any more
+add_compile_definitions(SPDLOG_USE_STD_FORMAT)
 
 #
 # spdlog
@@ -194,3 +205,5 @@ if (ENABLE_COVERAGE)
     )
     add_dependencies(coverage test_all)
 endif()
+
+# --------------------------------------------------------------------------------------------------
