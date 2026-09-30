@@ -75,7 +75,7 @@ const Fields& Response::fields() const { return pimpl().fields(); }
 
 // =================================================================================================
 
-Client::Client(boost::asio::any_io_executor executor, Config config)
+Client::Client(Executor executor, Config config)
    : impl(std::make_unique<Client::Impl>(std::move(executor), std::move(config)))
 {
 }
@@ -92,7 +92,7 @@ void Client::async_connect_any(ConnectHandler&& handler)
    impl->async_connect(std::move(handler));
 }
 
-asio::any_io_executor Client::get_executor() const noexcept { return impl->get_executor(); }
+Executor Client::get_executor() const noexcept { return impl->get_executor(); }
 
 // =================================================================================================
 

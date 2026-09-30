@@ -3,6 +3,7 @@
 #include <anyhttp/common.hpp>
 #include <anyhttp/concepts.hpp>
 #include <anyhttp/logging.hpp>
+#include <anyhttp/runtime.hpp>
 
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
@@ -30,11 +31,6 @@
 
 namespace anyhttp
 {
-namespace asio = boost::asio;
-using asio::awaitable;
-
-using error_code = boost::system::error_code;
-
 // =================================================================================================
 
 enum class Protocol
@@ -114,19 +110,19 @@ inline Fields fields(std::initializer_list<std::pair<std::string_view, FieldValu
 
 // =================================================================================================
 
-using ReadSome = void(boost::system::error_code, size_t);
-using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
+using ReadSome = void(error_code, size_t);
+using ReadSomeHandler = Completion<ReadSome>;
 
-using WriteSome = void(boost::system::error_code, size_t);
-using WriteSomeHandler = asio::any_completion_handler<WriteSome>;
+using WriteSome = void(error_code, size_t);
+using WriteSomeHandler = Completion<WriteSome>;
 
-using Write = void(boost::system::error_code);
-using WriteHandler = asio::any_completion_handler<Write>;
+using Write = void(error_code);
+using WriteHandler = Completion<Write>;
 
-using Status = void(boost::system::error_code);
-using StatusHandler = asio::any_completion_handler<Status>;
+using Status = void(error_code);
+using StatusHandler = Completion<Status>;
 
-using DefaultCompletionToken = asio::default_completion_token_t<asio::any_io_executor>;
+using DefaultCompletionToken = asio::default_completion_token_t<Executor>;
 
 // =================================================================================================
 
@@ -155,8 +151,7 @@ inline void swap_and_invoke(F&& function, Args&&... args)
  * dropped -- there is nobody left to tell.
  */
 template <typename Handler, typename... Args>
-inline void complete_immediately(Handler&& handler, const asio::any_io_executor& fallback,
-                                 Args&&... args)
+inline void complete_immediately(Handler&& handler, const Executor& fallback, Args&&... args)
 {
    if (!handler)
       return;
@@ -218,13 +213,13 @@ std::string log_prefix(Role role, std::string_view protocol, const asio::ip::add
 
 /// As above, for the peer of \p socket. Just \p protocol if the socket is not connected.
 std::string log_prefix(Role role, std::string_view protocol,
-                       const asio::basic_socket<asio::ip::tcp, asio::any_io_executor>& socket);
+                       const asio::basic_socket<asio::ip::tcp, Executor>& socket);
 
 }; // namespace anyhttp
 
 // -------------------------------------------------------------------------------------------------
 
-boost::system::error_code code(const std::exception_ptr& ptr);
+anyhttp::error_code code(const std::exception_ptr& ptr);
 
 /// Get error message from exception pointer, as used in the completion signature of \c co_spawn().
 std::string what(const std::exception_ptr& ptr);
@@ -232,8 +227,8 @@ std::string what(const std::exception_ptr& ptr);
 /// Get error message from a boost::system_error, as thrown by boost ASIO if not caught.
 std::string what(const boost::system::system_error& ex);
 
-/// Get error message from \c boost::system::error_code, used by ASIO.
-std::string what(const boost::system::error_code& ec);
+/// Get error message from an \c anyhttp::error_code, as reported by the runtime.
+std::string what(const anyhttp::error_code& ec);
 
 // -------------------------------------------------------------------------------------------------
 

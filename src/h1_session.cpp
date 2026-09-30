@@ -189,7 +189,7 @@ public:
       auto ex = get_associated_executor(handler, get_executor());
       auto cs = get_associated_cancellation_slot(handler);
       auto cb = [this, self = Interface::shared_from_this(), body_buffer,
-                 handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable {
+                 handler = std::move(handler)](error_code ec, size_t n) mutable {
          reading = false;
 
          auto& body = parser.get().body();
@@ -225,14 +225,14 @@ public:
          stream, buffer, parser, bind_executor(ex, bind_cancellation_slot(cs, std::move(cb))));
    }
 
-   asio::any_io_executor get_executor() const noexcept override { return executor_; }
+   Executor get_executor() const noexcept override { return executor_; }
    std::string log_prefix() const override { return log_prefix_; }
 
    BeastSession<Stream>* session;
    Stream& stream;
    Buffer& buffer;
    Parser parser;
-   asio::any_io_executor executor_; // kept as a copy so a detached reader can still complete
+   Executor executor_; // kept as a copy so a detached reader can still complete
    std::string log_prefix_; // likewise, for logging
    bool reading = false;
    bool finished = false; // see finish()
@@ -339,7 +339,7 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   asio::any_io_executor get_executor() const noexcept override { return executor_; }
+   Executor get_executor() const noexcept override { return executor_; }
 
    void detach() override
    {
@@ -425,7 +425,7 @@ public:
 
       auto cb = [this, self = Parent::shared_from_this(), expected = buffer.size(), eof,
                  handler = std::move(handler)] //
-         (boost::system::error_code ec, size_t n) mutable {
+         (error_code ec, size_t n) mutable {
             // async op result 'n' is the number of bytes written to the stream,
             // not the number of bytes read from the buffer
             mlogd("async_write: n={} (\x1b[1;{}m{}\x1b[0m) done={} (body {})", n,
@@ -532,7 +532,7 @@ public:
    Stream& stream;
    Message message;
    Serializer serializer{message};
-   asio::any_io_executor executor_; // kept as a copy so a detached writer can still complete
+   Executor executor_; // kept as a copy so a detached writer can still complete
    std::string log_prefix_; // likewise, for logging
    bool writing = false;
    bool cancelled = false;
@@ -601,7 +601,7 @@ public:
       // post(get_executor(), [this](){write);
 
       auto ex = get_associated_executor(handler, super::get_executor());
-      auto cb = [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
+      auto cb = [handler = std::move(handler)](error_code ec, size_t n) mutable { //
          std::move(handler)(ec);
       };
       async_write_header(stream, serializer, bind_executor(ex, std::move(cb)));
@@ -712,7 +712,7 @@ public:
       //       giving an async_write the chance to add a body to the message first.
       //
       auto ex = get_associated_executor(handler, get_executor());
-      auto cb = [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
+      auto cb = [handler = std::move(handler)](error_code ec, size_t n) mutable { //
          std::move(handler)(ec);
       };
       async_write_header(stream, serializer, bind_executor(ex, std::move(cb)));
@@ -774,7 +774,7 @@ public:
       auto ex = get_associated_executor(handler, get_executor());
       auto slot = get_associated_cancellation_slot(handler);
       auto intermediate = [reader = std::move(reader), handler = std::move(handler),
-                           this](boost::system::error_code ec, size_t len) mutable {
+                           this](error_code ec, size_t len) mutable {
          if (!ec)
          {
             http::response_parser<http::buffer_body>::value_type& msg = reader->parser.get();
@@ -826,8 +826,7 @@ public:
 // =================================================================================================
 
 template <typename Stream>
-BeastSession<Stream>::BeastSession(std::string_view prefix, asio::any_io_executor executor,
-                                   Stream&& stream)
+BeastSession<Stream>::BeastSession(std::string_view prefix, Executor executor, Stream&& stream)
    : executor_(std::move(executor)), log_prefix_(prefix), stream_(std::move(stream))
 {
    mlogd("session created");
@@ -846,7 +845,7 @@ BeastSession<Stream>::~BeastSession()
 }
 
 template <typename Stream>
-ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_executor executor,
+ServerSession<Stream>::ServerSession(server::Server::Impl& parent, Executor executor,
                                      Stream&& stream)
    : ServerSessionBase(parent), super(anyhttp::log_prefix(Role::server, "h1", get_socket(stream)),
                                       std::move(executor), std::move(stream))
@@ -854,7 +853,7 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_execut
 }
 
 template <typename Stream>
-ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_executor executor,
+ClientSession<Stream>::ClientSession(client::Client::Impl& parent, Executor executor,
                                      Stream&& stream)
    : ClientSessionBase(parent), super(anyhttp::log_prefix(Role::client, "h1", get_socket(stream)),
                                       std::move(executor), std::move(stream))
@@ -872,7 +871,7 @@ void BeastSession<Stream>::destroy() noexcept
    //
 
    // post(get_executor(), [this, self]() mutable {
-   boost::system::error_code ec;
+   error_code ec;
    get_socket(stream_).shutdown(socket_base::shutdown_both, ec);
    // not_connected: the peer is gone already, which is what we wanted anyway
    logwd(ec && ec != asio::error::not_connected, //
@@ -992,7 +991,7 @@ static std::optional<nghttp2::Upgrade> h2c_upgrade(std::string_view log_prefix,
  *
  */
 template <typename Stream>
-awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
+Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 {
    buffer_ = std::move(buffer);
 
@@ -1213,7 +1212,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
+Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
    buffer_ = std::move(buffer);
 

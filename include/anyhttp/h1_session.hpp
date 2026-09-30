@@ -26,7 +26,7 @@ template <typename Stream>
 class BeastSession : public ::anyhttp::Session::Impl
 {
 protected:
-   BeastSession(std::string_view log_prefix, asio::any_io_executor executor, Stream&& stream);
+   BeastSession(std::string_view log_prefix, Executor executor, Stream&& stream);
 
 public:
    ~BeastSession() override;
@@ -37,7 +37,7 @@ public:
 
    void destroy() noexcept override;
 
-   boost::asio::any_io_executor get_executor() const noexcept override { return executor_; }
+   Executor get_executor() const noexcept override { return executor_; }
 
    // ----------------------------------------------------------------------------------------------
 
@@ -71,7 +71,7 @@ public:
 
 public:
    std::string log_prefix_;
-   asio::any_io_executor executor_;
+   Executor executor_;
    Stream stream_;
    Buffer buffer_;
    bool closed_ = false;
@@ -114,12 +114,12 @@ class ServerSession : public ServerSessionBase, public BeastSession<Stream>
    using super::stream_;
 
 public:
-   ServerSession(server::Server::Impl& parent, asio::any_io_executor executor, Stream&& stream);
+   ServerSession(server::Server::Impl& parent, Executor executor, Stream&& stream);
 
    void destroy() noexcept override;
    void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
                      const Fields& headers) override;
-   awaitable<void> do_session(Buffer&& data) override;
+   Task<void> do_session(Buffer&& data) override;
 
 private:
    /// Takes over the stream after an upgrade to h2c, see do_session().
@@ -191,11 +191,11 @@ class ClientSession : public ClientSessionBase, public BeastSession<Stream>
    using super::stream_;
 
 public:
-   ClientSession(client::Client::Impl& parent, asio::any_io_executor executor, Stream&& stream);
+   ClientSession(client::Client::Impl& parent, Executor executor, Stream&& stream);
 
    void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
                      const Fields& headers) override;
-   awaitable<void> do_session(Buffer&& data) override;
+   Task<void> do_session(Buffer&& data) override;
 
    // ----------------------------------------------------------------------------------------------
 

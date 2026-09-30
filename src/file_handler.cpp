@@ -16,7 +16,6 @@
 
 using namespace std::string_view_literals;
 using namespace anyhttp;
-using boost::system::error_code;
 
 // =================================================================================================
 
@@ -196,7 +195,7 @@ unsigned status_for(const error_code& ec)
    }
 }
 
-awaitable<void> respond(server::Response& response, unsigned status)
+Task<void> respond(server::Response& response, unsigned status)
 {
    co_await response.async_submit(status, fields({{"Content-Length", 0}}));
    co_await response.async_write_eof();
@@ -323,8 +322,8 @@ FileCache g_cache;
 namespace anyhttp
 {
 
-awaitable<void> serve_file(server::Request request, server::Response response, fs::path root,
-                           std::string prefix)
+Task<void> serve_file(server::Request request, server::Response response, fs::path root,
+                      std::string prefix)
 {
    //
    // Read the request body to EOF before responding. A GET normally carries none, but HTTP/1.1

@@ -38,7 +38,7 @@ public:
    explicit NGHttp2Reader(NGHttp2Stream& stream);
    ~NGHttp2Reader() override;
 
-   asio::any_io_executor get_executor() const noexcept override;
+   Executor get_executor() const noexcept override;
    std::optional<size_t> content_length() const noexcept override;
    void async_read_some(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler) override;
    void detach() override;
@@ -47,7 +47,7 @@ public:
    const Fields& fields() const override;
 
    NGHttp2Stream* stream;
-   asio::any_io_executor executor; // kept as a copy so a detached reader can still complete
+   Executor executor; // kept as a copy so a detached reader can still complete
    std::string detached_log_prefix; // latched by detach()
 
    /// What a read past detach() reports, latched by detach(): the stream may be gone, but a body
@@ -64,7 +64,7 @@ public:
    explicit NGHttp2Writer(NGHttp2Stream& stream);
    ~NGHttp2Writer() override;
 
-   asio::any_io_executor get_executor() const noexcept override;
+   Executor get_executor() const noexcept override;
    void content_length(std::optional<size_t> content_length) override;
    void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) override;
    void detach() override;
@@ -74,7 +74,7 @@ public:
    void async_get_response(client::Request::GetResponseHandler&& handler);
 
    NGHttp2Stream* stream;
-   asio::any_io_executor executor; // kept as a copy so a detached writer can still complete
+   Executor executor; // kept as a copy so a detached writer can still complete
    std::string detached_log_prefix; // latched by detach()
    bool detached_eof_submitted = false; // latched by detach(): the body was cleanly ended
    std::optional<size_t> content_length_;
@@ -170,7 +170,7 @@ public:
    bool response_delivered = false;
 
    /// Set instead of has_response for a response that is not delivered, but fails.
-   boost::system::error_code response_error;
+   error_code response_error;
 
    std::string log_prefix_;
    const std::string& log_prefix() const noexcept { return log_prefix_; }
@@ -242,7 +242,7 @@ public:
          // Launch the operation with a callback that will receive the result and
          // pass it through to the asynchronous operation's completion handler.
          read_handler_ = [handler = std::move(handler), work = std::move(work),
-                           log_prefix_ = log_prefix_](boost::system::error_code ec,
+                           log_prefix_ = log_prefix_](error_code ec,
                                                   std::vector<std::uint8_t> result) mutable
          {
             // Get the handler's associated allocator. If the handler does not
@@ -306,7 +306,7 @@ public:
    void delete_writer();
    void maybe_close_stream();
 
-   asio::any_io_executor get_executor() const noexcept;
+   Executor get_executor() const noexcept;
 
 public:
    NGHttp2Session& parent;

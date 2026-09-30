@@ -443,7 +443,7 @@ nghttp2_unique_ptr<nghttp2_session_callbacks> NGHttp2Session::setup_callbacks()
 
 // =================================================================================================
 
-NGHttp2Session::NGHttp2Session(std::string_view prefix, asio::any_io_executor executor)
+NGHttp2Session::NGHttp2Session(std::string_view prefix, Executor executor)
    : executor_(std::move(executor)), log_prefix_(prefix)
 {
    mlogd("session created");
@@ -548,7 +548,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    post(get_executor(),
         [handler = std::move(handler),
          writer = std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)]() mutable {
-           std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)}); //
+           std::move(handler)(error_code{}, client::Request{std::move(writer)}); //
         });
    start_write();
 }

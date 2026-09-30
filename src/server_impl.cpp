@@ -62,7 +62,7 @@ Response::Impl::~Impl() = default;
 //
 static asio::ssl::context make_tls_server_context(const Config& config);
 
-Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
+Server::Impl::Impl(Executor executor, Config config)
    : config_(std::move(config)), executor_(std::move(executor)),
      tls_context_(make_tls_server_context(config_)), acceptor_(executor_)
 {
@@ -166,7 +166,7 @@ void Server::Impl::remove_session(const std::shared_ptr<Session::Impl>& session)
 
 void Server::Impl::listen_tcp()
 {
-   boost::system::error_code ec;
+   error_code ec;
    auto address = ip::make_address(config().listen_address, ec);
    if (ec)
       mlogw("error resolving '{}': {}", config().listen_address, ec.what());
@@ -258,7 +258,7 @@ static asio::ssl::context make_tls_server_context(const Config& config)
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
+Task<void> Server::Impl::handle_connection(ip::tcp::socket socket)
 {
    const auto prefix = anyhttp::log_prefix(Role::server, "tcp", socket);
    logi("[{}] new connection", prefix);
@@ -375,7 +375,7 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
  * https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p3149r5.html#listener-loop-in-an-http-server
  *
  */
-awaitable<void> Server::Impl::tcp_accept_loop()
+Task<void> Server::Impl::tcp_accept_loop()
 {
    const auto executor = co_await boost::asio::this_coro::executor;
 
@@ -397,7 +397,7 @@ awaitable<void> Server::Impl::tcp_accept_loop()
    // the waiter is about to block, the buffer is empty and every session still counted has its
    // own send() ahead of it.
    //
-   experimental::concurrent_channel<void(boost::system::error_code)> sessionDone{executor, 1};
+   experimental::concurrent_channel<void(error_code)> sessionDone{executor, 1};
 
    for (;;)
    {
@@ -438,7 +438,7 @@ awaitable<void> Server::Impl::tcp_accept_loop()
                [&, prefix](const std::exception_ptr& ex) mutable {
                   auto lock = std::lock_guard(session_mutex_);
                   --sessionCounter;
-                  std::ignore = sessionDone.try_send(boost::system::error_code{});
+                  std::ignore = sessionDone.try_send(error_code{});
                   if (ex)
                      logw("[{}] {}", prefix, what(ex));
                   else if (sessionCounter)

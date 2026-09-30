@@ -35,7 +35,7 @@ template <typename Stream>
 void NGHttp2SessionImpl<Stream>::destroy() noexcept
 {
    // post(get_executor(), [this, self]() mutable {
-   boost::system::error_code ec;
+   error_code ec;
    get_socket(stream_).shutdown(asio::socket_base::shutdown_both, ec);
    // not_connected: the peer is gone already, which is what we wanted anyway
    logwd(ec && ec != asio::error::not_connected, //
@@ -61,7 +61,7 @@ void NGHttp2SessionImpl<Stream>::destroy() noexcept
 // to the stream. Finally, if still no more data is returned, it waits for a signal to resume.
 //
 template <typename Stream>
-awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
+Task<void> NGHttp2SessionImpl<Stream>::send_loop()
 {
    Buffer buffer;
    buffer.reserve(1460);
@@ -154,7 +154,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
 // because it does not need to wait on re-activation by the user.
 //
 template <typename Stream>
-awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
+Task<void> NGHttp2SessionImpl<Stream>::recv_loop()
 {
    buffer_.reserve(64_k);
 
@@ -184,7 +184,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
 // =================================================================================================
 
 template <typename Stream>
-ServerSession<Stream>::ServerSession(server::Server::Impl& parent, asio::any_io_executor executor,
+ServerSession<Stream>::ServerSession(server::Server::Impl& parent, Executor executor,
                                      Stream&& stream)
    : ServerReference(parent),
      super(anyhttp::log_prefix(Role::server, is_tls(stream) ? "h2" : "h2c", get_socket(stream)),
@@ -197,7 +197,7 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, asio::any_io_
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
+Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 {
    buffer_ = std::move(buffer);
    auto callbacks = super::setup_callbacks();
@@ -293,7 +293,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 // =================================================================================================
 
 template <typename Stream>
-ClientSession<Stream>::ClientSession(client::Client::Impl& parent, asio::any_io_executor executor,
+ClientSession<Stream>::ClientSession(client::Client::Impl& parent, Executor executor,
                                      Stream&& stream)
    : ClientReference(parent),
      super(anyhttp::log_prefix(Role::client, is_tls(stream) ? "h2" : "h2c", get_socket(stream)),
@@ -305,7 +305,7 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, asio::any_io_
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
+Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
    buffer_ = std::move(buffer);
    auto callbacks = super::setup_callbacks();

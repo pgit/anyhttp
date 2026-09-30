@@ -51,7 +51,7 @@ Response::Impl::~Impl() = default;
 
 // =================================================================================================
 
-Client::Impl::Impl(asio::any_io_executor executor, Config config)
+Client::Impl::Impl(Executor executor, Config config)
    : config_(std::move(config)), executor_(std::move(executor)), resolver_(executor_)
 {
    mlogi("ctor");
@@ -128,7 +128,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
             bind_executor(executor, bind_cancellation_slot(slot, std::move(completion))));
 }
 
-awaitable<Session> Client::Impl::async_connect()
+Task<Session> Client::Impl::async_connect()
 {
    //
    // Extract host and port from URL and resolve hostname.

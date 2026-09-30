@@ -109,8 +109,8 @@ public:
    ~Request();
 
 public:
-   using GetResponse = void(boost::system::error_code, Response);
-   using GetResponseHandler = asio::any_completion_handler<GetResponse>;
+   using GetResponse = void(error_code, Response);
+   using GetResponseHandler = Completion<GetResponse>;
 
    /**
     * Waits for the response to this request, until its header has been received.
@@ -145,19 +145,19 @@ private:
 
 // =================================================================================================
 
-using Connect = void(boost::system::error_code, Session);
-using ConnectHandler = asio::any_completion_handler<Connect>;
+using Connect = void(error_code, Session);
+using ConnectHandler = Completion<Connect>;
 
 class Client
 {
 public:
    class Impl;
-   Client(asio::any_io_executor executor, Config config);
+   Client(Executor executor, Config config);
    Client(Client&& other) noexcept;
    Client& operator=(Client&& other) noexcept;
    ~Client();
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
    executor_type get_executor() const noexcept;
 
    /**

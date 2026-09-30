@@ -52,13 +52,13 @@ class Http3Stream;
 class Http3Session : public Session::Impl
 {
 public:
-   explicit Http3Session(asio::any_io_executor executor);
+   explicit Http3Session(Executor executor);
    ~Http3Session() override;
 
    //
    // Session::Impl
    //
-   asio::any_io_executor get_executor() const noexcept override { return executor_; }
+   Executor get_executor() const noexcept override { return executor_; }
 
    ngtcp2_conn* conn() const noexcept { return conn_; }
    nghttp3_conn* h3() const noexcept { return h3_; }
@@ -236,7 +236,7 @@ protected:
                                     void* user_data);
 
 protected:
-   asio::any_io_executor executor_;
+   Executor executor_;
 
    ngtcp2_conn* conn_ = nullptr;
 #if ANYHTTP_H3_BORINGSSL

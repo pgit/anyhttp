@@ -15,8 +15,8 @@ namespace anyhttp
  * path below \p prefix is taken as the path relative to \p root; anything that would escape
  * \p root ("..", a symlink pointing outside) is rejected with 404.
  */
-awaitable<void> serve_file(server::Request request, server::Response response,
-                           std::filesystem::path root, std::string prefix);
+Task<void> serve_file(server::Request request, server::Response response,
+                      std::filesystem::path root, std::string prefix);
 
 // =================================================================================================
 

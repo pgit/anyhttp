@@ -297,7 +297,7 @@ public:
    //
    void async_submit(SubmitHandler&& handler, std::string_view, boost::urls::url,
                      const Fields&) override;
-   awaitable<void> do_session(Buffer&& data) override;
+   Task<void> do_session(Buffer&& data) override;
    void destroy() noexcept override;
 
    //
@@ -396,7 +396,7 @@ public:
    Server::Impl& parent() noexcept { return parent_; }
    const Config& config() const noexcept { return parent_.config(); }
    const RequestHandler& request_handler() const noexcept { return parent_.request_handler(); }
-   asio::any_io_executor get_executor() const noexcept { return parent_.get_executor(); }
+   Executor get_executor() const noexcept { return parent_.get_executor(); }
 
    //
    // The TLS context every QUIC connection is served from, created with this server rather than
@@ -416,7 +416,7 @@ public:
    void erase_quic_session(Http3ServerSession* session);
 
 private:
-   awaitable<void> udp_receive_loop();
+   Task<void> udp_receive_loop();
    int udp_on_read(Endpoint& ep);
    void process_quic_batch(const std::shared_ptr<Http3ServerSession>& session, QuicBatch&& batch);
 
@@ -567,7 +567,7 @@ void Http3ServerStream::submit_response(unsigned int status, const Fields& user_
 
 Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Address remote)
    : http3::Http3Session(server.config().use_strand
-                            ? asio::any_io_executor{asio::make_strand(server.get_executor())}
+                            ? Executor{asio::make_strand(server.get_executor())}
                             : server.get_executor()),
      server_(server), ep_(ep), remote_(remote), done_signal_(get_executor()),
      no_gso_(server.config().disable_gso)
@@ -618,9 +618,9 @@ void Http3ServerSession::async_submit(SubmitHandler&& handler, std::string_view,
                       client::Request{nullptr});
 }
 
-awaitable<void> Http3ServerSession::do_session(Buffer&&)
+Task<void> Http3ServerSession::do_session(Buffer&&)
 {
-   boost::system::error_code ec;
+   error_code ec;
    co_await done_signal_.async_wait(redirect_error(use_awaitable, ec));
    // ec is boost::asio::error::operation_aborted (from destroy()) or a spurious
    // wake-up; either way, this coroutine's job is done.
@@ -919,7 +919,7 @@ void Http3ServerSession::schedule_close_timer()
    auto delay = conn_ ? std::chrono::nanoseconds{ngtcp2_conn_get_pto(conn_) * 3}
                       : std::chrono::nanoseconds{std::chrono::milliseconds{100}};
    timer_.expires_after(delay);
-   timer_.async_wait([self = weak_from_this()](const boost::system::error_code& ec) {
+   timer_.async_wait([self = weak_from_this()](const error_code& ec) {
       if (ec)
          return;
       auto session = std::static_pointer_cast<Http3ServerSession>(self.lock());
@@ -959,7 +959,7 @@ Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endp
 
    if (is_v6)
    {
-      boost::system::error_code ec;
+      error_code ec;
       socket_->set_option(ip::v6_only(false), ec);
       socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVTCLASS>(1));
       socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_MTU_DISCOVER>(1));
@@ -1291,11 +1291,11 @@ void Http3ServerImpl::process_quic_batch(const std::shared_ptr<Http3ServerSessio
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> Http3ServerImpl::udp_receive_loop()
+Task<void> Http3ServerImpl::udp_receive_loop()
 {
    for (;;)
    {
-      boost::system::error_code ec;
+      error_code ec;
       co_await socket_->async_wait(boost::asio::socket_base::wait_read,
                                    redirect_error(use_awaitable, ec));
       if (ec)

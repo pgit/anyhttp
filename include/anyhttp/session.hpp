@@ -11,11 +11,11 @@ namespace anyhttp
 
 // =================================================================================================
 
-using Submit = void(boost::system::error_code, client::Request);
-using SubmitHandler = boost::asio::any_completion_handler<Submit>;
+using Submit = void(error_code, client::Request);
+using SubmitHandler = Completion<Submit>;
 
-using Get = void(boost::system::error_code, client::Message);
-using GetHandler = boost::asio::any_completion_handler<Get>;
+using Get = void(error_code, client::Message);
+using GetHandler = Completion<Get>;
 
 class Session
 {
@@ -115,7 +115,7 @@ public:
          token, std::move(url), headers);
    }
 
-   boost::asio::any_io_executor get_executor() const noexcept;
+   Executor get_executor() const noexcept;
 
 private:
    void async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers);

@@ -71,7 +71,7 @@ boost::tribool is_http2_client_preface(const ConstBufferSequence& buffers)
 // https://www.boost.org/doc/libs/1_84_0/doc/html/boost_asio/reference/experimental__co_composed.html
 //
 template <typename AsyncReadStream, typename DynamicBuffer,
-          typename CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
+          typename CompletionToken = asio::default_completion_token_t<Executor>>
 auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& buffer,
                                        CompletionToken&& token = CompletionToken())
 {
@@ -81,8 +81,8 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
                  "DynamicBuffer type requirements not met");
 
    using namespace boost::asio;
-   return async_initiate<CompletionToken, void(boost::system::error_code, size_t)>(
-      co_composed<void(boost::system::error_code, bool)>(
+   return async_initiate<CompletionToken, void(error_code, size_t)>(
+      co_composed<void(error_code, bool)>(
          [](auto state, DynamicBuffer& buffer, AsyncReadStream& stream) -> void {
             //
             // https://think-async.com/Asio/asio-1.26.0/doc/asio/reference/experimental__co_composed.html
@@ -103,7 +103,7 @@ auto async_detect_http2_client_preface(AsyncReadStream& stream, DynamicBuffer& b
             {
                boost::tribool result = detail::is_http2_client_preface(buffer.data());
                if (!boost::indeterminate(result))
-                  co_return std::make_tuple(boost::system::error_code{}, static_cast<bool>(result));
+                  co_return std::make_tuple(error_code{}, static_cast<bool>(result));
 
                auto prepared = buffer.prepare(1460);
                auto [ec, n] = co_await stream.async_read_some(prepared, as_tuple);

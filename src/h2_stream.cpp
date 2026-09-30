@@ -84,7 +84,7 @@ std::string NGHttp2Reader<Base>::log_prefix() const
 // -------------------------------------------------------------------------------------------------
 
 template <typename Base>
-asio::any_io_executor NGHttp2Reader<Base>::get_executor() const noexcept
+Executor NGHttp2Reader<Base>::get_executor() const noexcept
 {
    return executor;
 }
@@ -242,7 +242,7 @@ std::string NGHttp2Writer<Base>::log_prefix() const
 // -------------------------------------------------------------------------------------------------
 
 template <typename Base>
-asio::any_io_executor NGHttp2Writer<Base>::get_executor() const noexcept
+Executor NGHttp2Writer<Base>::get_executor() const noexcept
 {
    return executor;
 }
@@ -317,7 +317,7 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    nghttp2_submit_response2(stream->parent.session, stream->id, nva.data(), nva.size(), &prd);
    stream->parent.start_write();
 
-   std::move(handler)(boost::system::error_code{});
+   std::move(handler)(error_code{});
 }
 
 template <typename Base>
@@ -457,10 +457,10 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
       any_completion_executor ex =
          get_associated_immediate_executor(read_handler_, get_executor());
       ex.execute([handler = std::move(read_handler_), copied]() mutable { //
-         std::move(handler)(boost::system::error_code{}, copied);
+         std::move(handler)(error_code{}, copied);
       });
 #else
-      swap_and_invoke(read_handler_, boost::system::error_code{}, copied);
+      swap_and_invoke(read_handler_, error_code{}, copied);
 #endif
 
       if (read_handler_)
@@ -561,7 +561,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
 #else
    if (reading_finished())
    {
-      boost::system::error_code ec; //  = boost::asio::error::eof;
+      error_code ec; //  = boost::asio::error::eof;
       if (content_length && bytesRead < *content_length)
       {
          mlogw("read_callback: EOF after {} bytes total,"
@@ -577,7 +577,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
       assert(pending_read_buffers_.empty());
       // assert(!is_reading_finished);
       mlogw("call_handler_loop: read after close");
-      swap_and_invoke(read_handler_, boost::system::error_code{}, 0);
+      swap_and_invoke(read_handler_, error_code{}, 0);
       assert(!read_handler_); // FIXME -- but what if the user sets a new handler anyway?
    }
 #endif
@@ -833,7 +833,7 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
          }
 
          mlogd("write callback: running handler...");
-         swap_and_invoke(write_handler, boost::system::error_code{});
+         swap_and_invoke(write_handler, error_code{});
          if (write_handler)
             mlogd("write callback: running handler... done -- RESPAWNED");
          else
@@ -849,7 +849,7 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
       mlogd("write callback: EOF");
       eof_submitted = true;
       *data_flags |= NGHTTP2_DATA_FLAG_EOF;
-      swap_and_invoke(write_handler, boost::system::error_code{});
+      swap_and_invoke(write_handler, error_code{});
    }
 
    return copied;
@@ -903,7 +903,7 @@ void NGHttp2Stream::deliver_response()
    {
       response_delivered = true;
       auto impl = client::Response{std::make_unique<NGHttp2ResponseReader>(*this)};
-      swap_and_invoke(response_handler, boost::system::error_code{}, std::move(impl));
+      swap_and_invoke(response_handler, error_code{}, std::move(impl));
    }
 }
 
@@ -938,7 +938,7 @@ void NGHttp2Stream::on_request()
    }
 }
 
-asio::any_io_executor NGHttp2Stream::get_executor() const noexcept { return parent.get_executor(); }
+Executor NGHttp2Stream::get_executor() const noexcept { return parent.get_executor(); }
 
 // =================================================================================================
 

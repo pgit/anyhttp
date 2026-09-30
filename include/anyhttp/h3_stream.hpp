@@ -167,7 +167,7 @@ public:
    Writer::Impl* writer = nullptr; // the Http3Writer, while attached
    bool closed = false;
 
-   asio::any_io_executor get_executor() const noexcept;
+   Executor get_executor() const noexcept;
    const std::string& log_prefix() const noexcept { return log_prefix_; }
 
    //
@@ -204,7 +204,7 @@ public:
    // Called when the stream dies before its exchange completed, and from either the reader's or
    // the writer's destructor.
    //
-   void fail(boost::system::error_code ec);
+   void fail(error_code ec);
    void delete_reader();
    void delete_writer();
    void maybe_close();
@@ -218,7 +218,7 @@ protected:
    /// The incoming header block is complete: dispatch the request (server) / response (client).
    virtual void on_headers_complete() = 0;
    /// The stream failed or closed early; fail whatever else the role has pending.
-   virtual void on_failed(boost::system::error_code ec) { (void)ec; }
+   virtual void on_failed(error_code ec) { (void)ec; }
 
 public:
    /// Submit the outgoing response headers. A no-op on the client, whose request headers went out
@@ -253,7 +253,7 @@ public:
       }
    }
 
-   asio::any_io_executor get_executor() const noexcept override { return executor; }
+   Executor get_executor() const noexcept override { return executor; }
 
    std::optional<size_t> content_length() const noexcept override
    {
@@ -332,7 +332,7 @@ public:
    }
 
    Http3Stream* stream;
-   asio::any_io_executor executor; // kept as a copy so a detached reader can still complete
+   Executor executor; // kept as a copy so a detached reader can still complete
    std::string detached_log_prefix; // latched by detach()
 
    /// What a read past detach() reports: eof for a body read to its clean end, else truncation.
@@ -358,7 +358,7 @@ public:
       }
    }
 
-   asio::any_io_executor get_executor() const noexcept override { return executor; }
+   Executor get_executor() const noexcept override { return executor; }
 
    void content_length(std::optional<size_t> len) override
    {
@@ -404,7 +404,7 @@ public:
          return;
       }
       stream->submit_response(status_code, fields);
-      std::move(handler)(boost::system::error_code{});
+      std::move(handler)(error_code{});
    }
 
    void detach() override
@@ -423,7 +423,7 @@ public:
    }
 
    Http3Stream* stream;
-   asio::any_io_executor executor; // kept as a copy so a detached writer can still complete
+   Executor executor; // kept as a copy so a detached writer can still complete
    std::string detached_log_prefix; // latched by detach()
    bool detached_body_ended = false; // latched by detach(), see there
 };

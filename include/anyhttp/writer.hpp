@@ -33,7 +33,7 @@ public:
    /// be written to. Only code that implements or narrows one needs to see it.
    class Impl;
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
 
    explicit Writer(std::shared_ptr<Impl> impl) noexcept;
    Writer(Writer&&) noexcept;

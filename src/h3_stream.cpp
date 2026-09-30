@@ -48,7 +48,7 @@ Http3Stream::~Http3Stream()
    mlogd("\x1b[33mStream: dtor... done\x1b[0m");
 }
 
-asio::any_io_executor Http3Stream::get_executor() const noexcept { return session.get_executor(); }
+Executor Http3Stream::get_executor() const noexcept { return session.get_executor(); }
 
 // =================================================================================================
 // Incoming body
@@ -153,7 +153,7 @@ void Http3Stream::call_read_handler()
          }
 
          consumed += copied;
-         swap_and_invoke(read_handler, boost::system::error_code{}, copied);
+         swap_and_invoke(read_handler, error_code{}, copied);
          continue;
       }
 
@@ -603,7 +603,7 @@ void Http3Stream::finish_active_write()
    // assertion. Post instead -- one hop, on a path that is not latency critical.
    //
    asio::post(get_executor(), [self = shared_from_this(), handler = std::move(handler)]() mutable {
-      std::move(handler)(boost::system::error_code{});
+      std::move(handler)(error_code{});
    });
 }
 
@@ -720,7 +720,7 @@ bool Http3Stream::submit_headers(std::span<const nghttp3_nv> nva, bool is_reques
 // Lifecycle
 // =================================================================================================
 
-void Http3Stream::fail(boost::system::error_code ec)
+void Http3Stream::fail(error_code ec)
 {
    //
    // The handlers below may run synchronously and drop the last owning reference to this stream

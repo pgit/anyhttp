@@ -199,18 +199,18 @@ private:
 
 // =================================================================================================
 
-using RequestHandler = std::function<asio::awaitable<void>(Request, Response)>;
+using RequestHandler = std::function<Task<void>(Request, Response)>;
 
 class Server
 {
 public:
    class Impl;
-   Server(asio::any_io_executor executor, Config config);
+   Server(Executor executor, Config config);
    Server(Server&& other) noexcept;
    Server& operator=(Server&& other) noexcept;
    ~Server();
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
    executor_type get_executor() const noexcept;
 
    void on_request(RequestHandler&& handler);

@@ -51,13 +51,13 @@ public:
 class Client::Impl
 {
 public:
-   explicit Impl(asio::any_io_executor executor, Config config);
+   explicit Impl(Executor executor, Config config);
    ~Impl();
 
    /// For log lines that belong to no connection, see anyhttp::log_prefix().
    std::string log_prefix() const { return anyhttp::log_prefix(Role::client); }
 
-   boost::asio::any_io_executor get_executor() const noexcept { return executor_; }
+   Executor get_executor() const noexcept { return executor_; }
 
    void async_connect(ConnectHandler handler);
    const Config& config() const { return config_; }
@@ -92,11 +92,11 @@ public:
    std::optional<AlternativeService> alt_svc() const;
 
 private:
-   awaitable<Session> async_connect();
+   Task<Session> async_connect();
 
 private:
    Config config_;
-   asio::any_io_executor executor_;
+   Executor executor_;
    std::optional<asio::ip::tcp::resolver> resolver_;
 
    //

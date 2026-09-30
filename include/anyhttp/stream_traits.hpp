@@ -11,6 +11,7 @@
 //
 
 #include "anyhttp/detail/any_async_stream.hpp"
+#include "anyhttp/runtime.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/as_tuple.hpp>
@@ -94,9 +95,7 @@ struct stream_traits<any_async_stream>
 template <typename Stream>
 concept SocketStream = requires(Stream& stream) {
    { stream_traits<Stream>::get_socket(stream) } -> std::convertible_to<TcpSocketBase&>;
-   {
-      stream_traits<Stream>::get_executor(stream)
-   } -> std::convertible_to<boost::asio::any_io_executor>;
+   { stream_traits<Stream>::get_executor(stream) } -> std::convertible_to<Executor>;
    { stream_traits<Stream>::is_tls(stream) } -> std::convertible_to<bool>;
 };
 
@@ -129,7 +128,7 @@ bool is_tls(const Stream& stream) noexcept
  * session around for good, so the wait for it is bounded: the connection is going away either way.
  */
 template <SocketStream Stream>
-boost::asio::awaitable<boost::system::error_code> async_teardown(Stream& stream)
+Task<error_code> async_teardown(Stream& stream)
 {
    constexpr auto timeout = std::chrono::seconds(2);
 
@@ -140,7 +139,7 @@ boost::asio::awaitable<boost::system::error_code> async_teardown(Stream& stream)
       co_return ec;
    }
    else
-      co_return boost::system::error_code{};
+      co_return error_code{};
 }
 
 // -------------------------------------------------------------------------------------------------

@@ -61,7 +61,7 @@ class Http3Server;
 class Server::Impl : public std::enable_shared_from_this<Server::Impl>
 {
 public:
-   Impl(boost::asio::any_io_executor executor, Config config);
+   Impl(Executor executor, Config config);
    ~Impl();
 
    /// For log lines that belong to no connection, see anyhttp::log_prefix().
@@ -73,7 +73,7 @@ public:
    void listen_tcp();
 
    const Config& config() const { return config_; }
-   boost::asio::any_io_executor get_executor() const noexcept { return executor_; }
+   Executor get_executor() const noexcept { return executor_; }
 
    //
    // The TLS context used for every TCP connection, see make_tls_server_context().
@@ -87,8 +87,8 @@ public:
    //
    const std::string& alt_svc() const noexcept { return alt_svc_; }
 
-   asio::awaitable<void> tcp_accept_loop();
-   asio::awaitable<void> handle_connection(asio::ip::tcp::socket socket);
+   Task<void> tcp_accept_loop();
+   Task<void> handle_connection(asio::ip::tcp::socket socket);
 
    asio::ip::tcp::endpoint local_endpoint() const { return acceptor_.local_endpoint(); }
 
@@ -107,7 +107,7 @@ public:
 private:
    Config config_;
 
-   asio::any_io_executor executor_;
+   Executor executor_;
    asio::ssl::context tls_context_;
    asio::ip::tcp::acceptor acceptor_;
    std::string alt_svc_;

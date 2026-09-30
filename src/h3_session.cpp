@@ -28,7 +28,7 @@ namespace anyhttp::http3
 
 // =================================================================================================
 
-Http3Session::Http3Session(asio::any_io_executor executor)
+Http3Session::Http3Session(Executor executor)
    : executor_(std::move(executor)), timer_(executor_), tx_buf_(64_k)
 {
    ngtcp2_ccerr_default(&last_error_);
@@ -329,7 +329,7 @@ void Http3Session::arm_timer_from_ngtcp2()
       expiry <= now ? std::chrono::nanoseconds{1} : std::chrono::nanoseconds{expiry - now};
 
    timer_.expires_after(delay);
-   timer_.async_wait([self = weak_from_this()](const boost::system::error_code& ec) {
+   timer_.async_wait([self = weak_from_this()](const error_code& ec) {
       if (ec)
          return;
       if (auto session = std::static_pointer_cast<Http3Session>(self.lock()))
@@ -818,7 +818,7 @@ int Http3Session::h3_cb_stream_close(nghttp3_conn*, int64_t stream_id, uint64_t 
       // message.
       //
       auto ec = (app_error_code == NGHTTP3_H3_NO_ERROR)
-                   ? boost::system::error_code{}
+                   ? error_code{}
                    : boost::system::errc::make_error_code(boost::system::errc::connection_reset);
       s->fail(ec);
    }

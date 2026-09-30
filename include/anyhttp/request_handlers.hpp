@@ -24,12 +24,12 @@
 namespace anyhttp
 {
 template <typename T>
-using expected = std::expected<T, boost::system::error_code>;
+using expected = std::expected<T, error_code>;
 
 // =================================================================================================
 
 template <typename T>
-awaitable<void> sleep(T duration)
+Task<void> sleep(T duration)
 {
    using namespace asio;
 
@@ -60,24 +60,24 @@ awaitable<void> sleep(T duration)
 #endif
 }
 
-awaitable<void> yield(size_t count = 1);
-awaitable<void> not_found(server::Response response);
-awaitable<void> not_found(server::Request request, server::Response response);
+Task<void> yield(size_t count = 1);
+Task<void> not_found(server::Response response);
+Task<void> not_found(server::Request request, server::Response response);
 
 /// Responds with 431 (Request Header Fields Too Large), see server::Config::max_header_size.
-awaitable<void> header_fields_too_large(server::Request request, server::Response response);
-awaitable<void> dump(server::Request request, server::Response response);
-awaitable<void> echo(server::Request request, server::Response response);
-awaitable<void> eat_request(server::Request request, server::Response response);
+Task<void> header_fields_too_large(server::Request request, server::Response response);
+Task<void> dump(server::Request request, server::Response response);
+Task<void> echo(server::Request request, server::Response response);
+Task<void> eat_request(server::Request request, server::Response response);
 
-awaitable<void> delayed(server::Request request, server::Response response);
-awaitable<void> detach(server::Request request, server::Response response);
-awaitable<void> discard(server::Request request, server::Response response);
+Task<void> delayed(server::Request request, server::Response response);
+Task<void> detach(server::Request request, server::Response response);
+Task<void> discard(server::Request request, server::Response response);
 
 // =================================================================================================
 
-awaitable<void> generate(Writer& writer, size_t bytes);
-awaitable<std::string> read(Reader& reader);
+Task<void> generate(Writer& writer, size_t bytes);
+Task<std::string> read(Reader& reader);
 
 //
 // Reads and discards whatever is left of an incoming body, and returns how much that was.
@@ -86,13 +86,13 @@ awaitable<std::string> read(Reader& reader);
 // EOF, and let anything else -- a reset stream, a connection that went away mid-body -- come out
 // as an exception.
 //
-awaitable<size_t> drain(Reader& reader);
+Task<size_t> drain(Reader& reader);
 
-awaitable<std::tuple<size_t, error_code>> try_receive(Reader& reader);
-awaitable<size_t> try_receive(Reader& reader, boost::system::error_code& ec);
-awaitable<size_t> count_response(client::Request& request);
-awaitable<expected<size_t>> try_read_response(client::Request& request);
-awaitable<void> send_eof(Writer& writer);
+Task<std::tuple<size_t, error_code>> try_receive(Reader& reader);
+Task<size_t> try_receive(Reader& reader, error_code& ec);
+Task<size_t> count_response(client::Request& request);
+Task<expected<size_t>> try_read_response(client::Request& request);
+Task<void> send_eof(Writer& writer);
 
 // =================================================================================================
 
@@ -106,7 +106,7 @@ concept ByteRange =
 //
 template <ByteRange Range>
    requires std::ranges::contiguous_range<Range>
-awaitable<void> send(Writer& request, Range range)
+Task<void> send(Writer& request, Range range)
 {
    logd("send: (contiguous range)...");
    co_await request.async_write(asio::buffer(range.data(), range.size()));
@@ -118,7 +118,7 @@ awaitable<void> send(Writer& request, Range range)
 //
 template <ByteRange Range>
    requires(!std::ranges::contiguous_range<Range>)
-awaitable<void> send(Writer& request, Range range)
+Task<void> send(Writer& request, Range range)
 {
    logd("send:");
    size_t bytes = 0;
@@ -187,7 +187,7 @@ inline bool is_cancellation(const std::exception_ptr& ep)
 }
 
 template <ByteRange Range>
-awaitable<void> send_and_drop(client::Request request, Range range)
+Task<void> send_and_drop(client::Request request, Range range)
 {
    using namespace asio;
    auto ex = co_await this_coro::executor;
@@ -204,7 +204,7 @@ awaitable<void> send_and_drop(client::Request request, Range range)
 // -------------------------------------------------------------------------------------------------
 
 template <ByteRange Range>
-awaitable<void> send_and_force_eof(Writer& request, Range range)
+Task<void> send_and_force_eof(Writer& request, Range range)
 {
    using namespace asio;
    auto ex = co_await this_coro::executor;
@@ -225,7 +225,7 @@ awaitable<void> send_and_force_eof(Writer& request, Range range)
 // Generate a body of the requested length, e.g. "/generate?length=1000000". The payload is a
 // repeating 0..255 byte pattern.
 //
-inline awaitable<void> generate(server::Request request, server::Response response)
+inline Task<void> generate(server::Request request, server::Response response)
 {
    namespace rv = std::ranges::views;
 
@@ -244,7 +244,7 @@ inline awaitable<void> generate(server::Request request, server::Response respon
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> h2spec(server::Request request, server::Response response);
+Task<void> h2spec(server::Request request, server::Response response);
 
 // =================================================================================================
 

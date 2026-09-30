@@ -18,7 +18,6 @@ using namespace std::string_view_literals;
 using namespace boost::asio;
 using namespace anyhttp;
 using namespace anyhttp::server;
-using boost::system::error_code;
 namespace rv = std::ranges::views;
 
 // =================================================================================================
@@ -54,13 +53,13 @@ struct std::formatter<EscapedString> : std::formatter<std::string>
 namespace anyhttp
 {
 
-awaitable<void> yield(size_t count)
+Task<void> yield(size_t count)
 {
    for (size_t i = 0; i < count; ++i)
       co_await post(asio::deferred);
 }
 
-awaitable<void> dump(server::Request request, server::Response response)
+Task<void> dump(server::Request request, server::Response response)
 {
    auto url = request.url();
 
@@ -88,7 +87,7 @@ awaitable<void> dump(server::Request request, server::Response response)
    co_await response.async_write_eof(asio::buffer(body));
 }
 
-awaitable<void> echo(server::Request request, server::Response response)
+Task<void> echo(server::Request request, server::Response response)
 {
    if (request.content_length())
       response.content_length(request.content_length().value());
@@ -110,25 +109,25 @@ awaitable<void> echo(server::Request request, server::Response response)
    co_await response.async_write_eof();
 }
 
-awaitable<void> not_found(server::Response response)
+Task<void> not_found(server::Response response)
 {
    co_await response.async_submit(404, {});
    co_await response.async_write_eof();
 }
 
-awaitable<void> not_found(server::Request, server::Response response)
+Task<void> not_found(server::Request, server::Response response)
 {
    co_await response.async_submit(404, {});
    co_await response.async_write_eof();
 }
 
-awaitable<void> header_fields_too_large(server::Request, server::Response response)
+Task<void> header_fields_too_large(server::Request, server::Response response)
 {
    co_await response.async_submit(431, {});
    co_await response.async_write_eof();
 }
 
-awaitable<void> eat_request(server::Request request, server::Response response)
+Task<void> eat_request(server::Request request, server::Response response)
 {
    logd("eat_request: going to eat {} bytes", request.content_length().value_or(-1));
 
@@ -148,29 +147,29 @@ awaitable<void> eat_request(server::Request request, server::Response response)
    // co_await anyhttp::sleep(100ms);
 }
 
-awaitable<void> delayed(server::Request request, server::Response response)
+Task<void> delayed(server::Request request, server::Response response)
 {
    co_await sleep(100ms);
    co_await eat_request(std::move(request), std::move(response));
 }
 
-awaitable<void> detach(server::Request request, server::Response response)
+Task<void> detach(server::Request request, server::Response response)
 {
    co_await sleep(100ms);
    std::ignore = request;
    std::ignore = response;
 }
 
-awaitable<void> discard(server::Request request, server::Response response) { co_return; }
+Task<void> discard(server::Request request, server::Response response) { co_return; }
 
 // =================================================================================================
 
-awaitable<void> generate(Writer& writer, size_t bytes)
+Task<void> generate(Writer& writer, size_t bytes)
 {
    return send_and_force_eof(writer, rv::iota(uint8_t{0}) | rv::take(bytes));
 }
 
-awaitable<size_t> drain(Reader& reader)
+Task<size_t> drain(Reader& reader)
 {
    size_t bytes = 0;
    std::array<uint8_t, 16_k> buffer;
@@ -194,7 +193,7 @@ awaitable<size_t> drain(Reader& reader)
    }
 }
 
-awaitable<std::string> read(Reader& reader)
+Task<std::string> read(Reader& reader)
 {
    std::string body;
    std::array<char, 16_k> buffer;
@@ -219,7 +218,7 @@ awaitable<std::string> read(Reader& reader)
    }
 }
 
-awaitable<std::tuple<size_t, error_code>> try_receive(Reader& reader)
+Task<std::tuple<size_t, error_code>> try_receive(Reader& reader)
 {
    size_t bytes = 0;
    std::array<uint8_t, 16_k> buffer;
@@ -244,20 +243,20 @@ awaitable<std::tuple<size_t, error_code>> try_receive(Reader& reader)
    }
 }
 
-awaitable<size_t> try_receive(Reader& reader, error_code& ec)
+Task<size_t> try_receive(Reader& reader, error_code& ec)
 {
    size_t bytes;
    std::tie(bytes, ec) = co_await try_receive(reader);
    co_return bytes;
 }
 
-awaitable<size_t> count_response(client::Request& request)
+Task<size_t> count_response(client::Request& request)
 {
    auto response = co_await request.async_get_response();
    co_return co_await drain(response);
 }
 
-awaitable<expected<size_t>> try_read_response(client::Request& request)
+Task<expected<size_t>> try_read_response(client::Request& request)
 {
    try
    {
@@ -270,9 +269,9 @@ awaitable<expected<size_t>> try_read_response(client::Request& request)
    }
 }
 
-awaitable<void> send_eof(Writer& writer) { co_await writer.async_write_eof(); }
+Task<void> send_eof(Writer& writer) { co_await writer.async_write_eof(); }
 
-awaitable<void> h2spec(server::Request request, server::Response response)
+Task<void> h2spec(server::Request request, server::Response response)
 {
    co_await yield(10); // FIXME: without this, one more testcase fails
    std::array<uint8_t, 1024> buffer;
