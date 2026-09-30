@@ -1,5 +1,10 @@
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
+# none of the library has been ported to CAPY yet, see docs/capy-port-plan.md
+if (ANYHTTP_CAPY)
+    return()
+endif()
+
 # nice sample:
 # https://github.com/andrewmd5/libwtf/blob/main/CMakeLists.txt
 

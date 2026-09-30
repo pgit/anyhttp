@@ -11,6 +11,11 @@ benchmark with the latter, never with `build/`. Both use clang, which builds aga
 the libraries in `/opt/libc++` (`USE_LIBCXX`, `LIBCXX_ROOT`); `build-gcc/` is GCC with libstdc++
 and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.json`.
 
+`build-capy/` is the capy/corosio API style (`-DANYHTTP_API=CAPY -DTLS_LIBRARY=OpenSSL`, see
+[docs/capy-port-plan.md](docs/capy-port-plan.md)); capy and corosio are FetchContent'd at pinned
+SHAs. While the port is under way it builds only what has been ported: `test/CMakeLists.txt`
+lists its test files explicitly.
+
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --parallel

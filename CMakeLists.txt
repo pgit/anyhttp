@@ -120,6 +120,49 @@ endif()
 
 # --------------------------------------------------------------------------------------------------
 
+#
+# API style and I/O runtime, one per build tree: ASIO (completion tokens, on Boost.Asio) or CAPY
+# (coroutines only, on capy/corosio). The code tests ANYHTTP_CAPY. See docs/capy-port-plan.md.
+#
+set(ANYHTTP_API ASIO CACHE STRING "API style and I/O runtime: ASIO or CAPY")
+set_property(CACHE ANYHTTP_API PROPERTY STRINGS ASIO CAPY)
+if (ANYHTTP_API STREQUAL "ASIO")
+    set(ANYHTTP_CAPY 0)
+elseif (ANYHTTP_API STREQUAL "CAPY")
+    set(ANYHTTP_CAPY 1)
+
+    # corosio's openssl_stream uses the zero-copy BIO pair API (BIO_nwrite0), which AWS-LC lacks
+    if (NOT TLS_LIBRARY STREQUAL "OpenSSL")
+        message(FATAL_ERROR "ANYHTTP_API=CAPY needs TLS_LIBRARY=OpenSSL: "
+                            "corosio's openssl_stream does not build against AWS-LC")
+    endif()
+
+    #
+    # Pinned: both are pre-release and change their API on 'develop' without notice. Moving a pin
+    # is a commit of its own.
+    #
+    include(FetchContent)
+    foreach (option TESTS EXAMPLES BENCH)
+        set(BOOST_CAPY_BUILD_${option} OFF CACHE BOOL "" FORCE)
+        set(BOOST_COROSIO_BUILD_${option} OFF CACHE BOOL "" FORCE)
+    endforeach()
+    FetchContent_Declare(capy
+        GIT_REPOSITORY https://github.com/cppalliance/capy.git
+        GIT_TAG a372a6b054261f29497ac0d19c2a9533f9eaad40
+        EXCLUDE_FROM_ALL)
+    FetchContent_Declare(corosio
+        GIT_REPOSITORY https://github.com/cppalliance/corosio.git
+        GIT_TAG 6a3eed4656e84ad6a33e74d1c8f9273d38b876ca
+        EXCLUDE_FROM_ALL)
+    FetchContent_MakeAvailable(capy corosio)
+    message(STATUS "Using API style: CAPY (capy/corosio)")
+else()
+    message(FATAL_ERROR "ANYHTTP_API must be ASIO or CAPY, not '${ANYHTTP_API}'")
+endif()
+add_compile_definitions(ANYHTTP_CAPY=${ANYHTTP_CAPY})
+
+# --------------------------------------------------------------------------------------------------
+
 # FIXME: nghttp2 reader/writer needs this ATM
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-Wno-inconsistent-missing-override)
