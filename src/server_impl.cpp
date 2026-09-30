@@ -98,13 +98,12 @@ Server::Impl::Impl(Executor executor, Config config)
  */
 void Server::Impl::start()
 {
-   co_spawn(executor_, tcp_accept_loop(),
-            [self = shared_from_this()](const std::exception_ptr& ex) {
-               if (ex)
-                  logw("[{}] TCP accept loop: {}", self->log_prefix(), what(ex));
-               else
-                  logi("[{}] TCP accept loop: done", self->log_prefix());
-            });
+   launch(executor_, tcp_accept_loop(), [self = shared_from_this()](const std::exception_ptr& ex) {
+      if (ex)
+         logw("[{}] TCP accept loop: {}", self->log_prefix(), what(ex));
+      else
+         logi("[{}] TCP accept loop: done", self->log_prefix());
+   });
 
    if (http3_)
       http3_->start();
@@ -434,18 +433,18 @@ Task<void> Server::Impl::tcp_accept_loop()
       }
 
       auto connection_executor = socket.get_executor();
-      co_spawn(connection_executor, handle_connection(std::move(socket)),
-               [&, prefix](const std::exception_ptr& ex) mutable {
-                  auto lock = std::lock_guard(session_mutex_);
-                  --sessionCounter;
-                  std::ignore = sessionDone.try_send(error_code{});
-                  if (ex)
-                     logw("[{}] {}", prefix, what(ex));
-                  else if (sessionCounter)
-                     logd("[{}] session finished, {} sessions left", prefix, sessionCounter);
-                  else
-                     logi("[{}] all sessions finished", prefix);
-               });
+      launch(connection_executor, handle_connection(std::move(socket)),
+             [&, prefix](const std::exception_ptr& ex) mutable {
+                auto lock = std::lock_guard(session_mutex_);
+                --sessionCounter;
+                std::ignore = sessionDone.try_send(error_code{});
+                if (ex)
+                   logw("[{}] {}", prefix, what(ex));
+                else if (sessionCounter)
+                   logd("[{}] session finished, {} sessions left", prefix, sessionCounter);
+                else
+                   logi("[{}] all sessions finished", prefix);
+             });
    }
 
    //

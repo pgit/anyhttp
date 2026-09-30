@@ -120,7 +120,7 @@ void Http3Session::wake_write()
       return;
    write_posted_ = true;
 
-   asio::post(get_executor(), [self = weak_from_this()] {
+   run_later(get_executor(), [self = weak_from_this()] {
       auto session = std::static_pointer_cast<Http3Session>(self.lock());
       if (!session)
          return;
@@ -817,9 +817,8 @@ int Http3Session::h3_cb_stream_close(nghttp3_conn*, int64_t stream_id, uint64_t 
       // it again, and a stream that ended in an error has, by definition, not delivered its whole
       // message.
       //
-      auto ec = (app_error_code == NGHTTP3_H3_NO_ERROR)
-                   ? error_code{}
-                   : make_error_code(errc::connection_reset);
+      auto ec = (app_error_code == NGHTTP3_H3_NO_ERROR) ? error_code{}
+                                                        : make_error_code(errc::connection_reset);
       s->fail(ec);
    }
    if (ngtcp2_conn_is_server(self->conn_))

@@ -186,8 +186,7 @@ public:
    {
       if (!stream)
       {
-         std::move(handler)(make_error_code(errc::connection_aborted),
-                            client::Response{nullptr});
+         std::move(handler)(make_error_code(errc::connection_aborted), client::Response{nullptr});
          return;
       }
       static_cast<Http3ClientStream*>(stream)->async_get_response(std::move(handler));
@@ -371,28 +370,17 @@ void Http3ClientStream::async_get_response(client::Request::GetResponseHandler&&
 {
    if (response_delivered)
    {
-      asio::any_completion_executor ex =
-         asio::get_associated_immediate_executor(handler, get_executor());
-      ex.execute([handler = std::move(handler)]() mutable { //
-         std::move(handler)(errors::already_started, client::Response{nullptr});
-      });
+      complete_immediately(std::move(handler), get_executor(), errors::already_started,
+                           client::Response{nullptr});
       return;
    }
 
-   auto cs = handler.get_cancellation_slot();
-   if (cs.is_connected())
-   {
-      cs.assign([this](asio::cancellation_type_t ct) {
-         mlogd("async_get_response: cancelled ({})", ct);
-         if (response_handler)
-         {
-            asio::post(get_executor(), [handler = std::move(response_handler)]() mutable {
-               std::move(handler)(errors::canceled,
-                                  client::Response{nullptr});
-            });
-         }
-      });
-   }
+   on_cancel(handler, [this] {
+      mlogd("async_get_response: cancelled");
+      if (response_handler)
+         complete_later(std::move(response_handler), get_executor(), errors::canceled,
+                        client::Response{nullptr});
+   });
 
    //
    // Delivering the response resumes the caller, which may drop the last reference to this stream
@@ -726,10 +714,8 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, std::string_view 
    logd("[{}] async_submit: new stream ID: {}", stream->log_prefix_, stream_id);
    wake_write();
 
-   post(get_executor(), [handler = std::move(handler),
-                         writer = std::make_unique<Http3ClientWriter>(*stream)]() mutable { //
-      std::move(handler)(error_code{}, client::Request{std::move(writer)});
-   });
+   complete_later(std::move(handler), get_executor(), error_code{},
+                  client::Request{std::make_unique<Http3ClientWriter>(*stream)});
 }
 
 // =================================================================================================
@@ -749,14 +735,14 @@ Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor, std:
 
    std::shared_ptr<Session::Impl> impl = session;
 
-   co_spawn(executor, impl->do_session(Buffer{}),
-            [impl, prefix = session->log_prefix()](const std::exception_ptr& ex) mutable {
-               if (ex)
-                  logw("[{}] client run: {}", prefix, what(ex));
-               else
-                  logi("[{}] client run: done", prefix);
-               impl.reset();
-            });
+   launch(executor, impl->do_session(Buffer{}),
+          [impl, prefix = session->log_prefix()](const std::exception_ptr& ex) mutable {
+             if (ex)
+                logw("[{}] client run: {}", prefix, what(ex));
+             else
+                logi("[{}] client run: done", prefix);
+             impl.reset();
+          });
 
    //
    // Note: wait_ready() uses a sentinel steady_timer as a one-shot gate (see the comment on

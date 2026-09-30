@@ -290,19 +290,11 @@ public:
          return;
       }
 
-      auto cs = asio::get_associated_cancellation_slot(handler);
-      if (cs.is_connected() && !cs.has_handler())
-      {
-         cs.assign([this](asio::cancellation_type_t) {
-            if (stream && stream->read_handler)
-            {
-               asio::post(stream->get_executor(),
-                          [handler = std::move(stream->read_handler)]() mutable {
-                             std::move(handler)(errors::canceled, 0);
-                          });
-            }
-         });
-      }
+      on_cancel(handler, [this] {
+         if (stream && stream->read_handler)
+            complete_later(std::move(stream->read_handler), stream->get_executor(),
+                           errors::canceled, size_t{0});
+      });
 
       assert(!stream->read_handler);
       stream->read_handler = std::move(handler);

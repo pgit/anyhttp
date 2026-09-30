@@ -511,14 +511,13 @@ void Http3ServerStream::on_headers_complete()
    ss.count_request();
    auto& sv = ss.server();
    if (header_limit_exceeded)
-      co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
-               detached);
+      launch(get_executor(), header_fields_too_large(std::move(request), std::move(response)));
    else if (auto& handler = sv.request_handler())
-      co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
+      launch(get_executor(), handler(std::move(request), std::move(response)));
    else
    {
       mloge("no request handler set");
-      co_spawn(get_executor(), not_found(std::move(response)), detached);
+      launch(get_executor(), not_found(std::move(response)));
    }
 }
 
@@ -613,8 +612,7 @@ void Http3ServerSession::async_submit(SubmitHandler&& handler, std::string_view,
                                       const Fields&)
 {
    // A server does not initiate requests; see Http3ClientSession::async_submit().
-   std::move(handler)(make_error_code(errc::operation_not_supported),
-                      client::Request{nullptr});
+   std::move(handler)(make_error_code(errc::operation_not_supported), client::Request{nullptr});
 }
 
 Task<void> Http3ServerSession::do_session(Buffer&&)
@@ -983,13 +981,13 @@ Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endp
 void Http3ServerImpl::start()
 {
    // On the socket's strand, so that the loop and destroy()'s close() never race on the socket.
-   co_spawn(socket_->get_executor(), udp_receive_loop(),
-            [self = shared_from_this(), owner = owner()](const std::exception_ptr& ex) {
-               if (ex)
-                  logw("[{}] UDP receive loop: {}", self->log_prefix(), what(ex));
-               else
-                  logi("[{}] UDP receive loop: done", self->log_prefix());
-            });
+   launch(socket_->get_executor(), udp_receive_loop(),
+          [self = shared_from_this(), owner = owner()](const std::exception_ptr& ex) {
+             if (ex)
+                logw("[{}] UDP receive loop: {}", self->log_prefix(), what(ex));
+             else
+                logi("[{}] UDP receive loop: done", self->log_prefix());
+          });
 }
 
 void Http3ServerImpl::destroy()
@@ -1167,8 +1165,8 @@ int Http3ServerImpl::udp_on_read(Endpoint& ep)
    //
    for (auto& [session, batch] : batches)
    {
-      asio::post(session->get_executor(), [self = shared_from_this(), owner = owner(), session,
-                                           batch = std::move(batch)]() mutable { //
+      run_later(session->get_executor(), [self = shared_from_this(), owner = owner(), session,
+                                          batch = std::move(batch)]() mutable { //
          self->process_quic_batch(session, std::move(batch));
       });
    }
@@ -1223,12 +1221,12 @@ void Http3ServerImpl::process_quic_batch(const std::shared_ptr<Http3ServerSessio
          return;
       }
 
-      co_spawn(session->get_executor(), session->do_session({}),
-               [self = shared_from_this(), owner = owner(), session](const std::exception_ptr& ex) {
-                  if (ex)
-                     logw("[{}] {}", session->log_prefix(), what(ex));
-                  self->parent_.remove_session(session);
-               });
+      launch(session->get_executor(), session->do_session({}),
+             [self = shared_from_this(), owner = owner(), session](const std::exception_ptr& ex) {
+                if (ex)
+                   logw("[{}] {}", session->log_prefix(), what(ex));
+                self->parent_.remove_session(session);
+             });
    }
 
    for (; next < batch.datagrams.size(); ++next)

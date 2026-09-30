@@ -18,8 +18,13 @@
 #else
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/associated_cancellation_slot.hpp>
+#include <boost/asio/associated_immediate_executor.hpp>
 #include <boost/asio/awaitable.hpp>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
 #include <boost/asio/error.hpp>
+#include <boost/asio/post.hpp>
 #include <boost/system/errc.hpp>
 #include <boost/system/error_code.hpp>
 #endif
@@ -89,6 +94,89 @@ inline const error_code already_started = asio::error::already_started;
 /// A header section larger than Config::max_header_size.
 inline const error_code header_limit = boost::beast::http::error::header_limit;
 } // namespace errors
+
+// =================================================================================================
+
+//
+// Completing a parked operation. Invoking a Completion directly resumes its caller right there,
+// inside whatever called us, which is fine from a loop of our own, but not from an engine
+// callback or from inside the initiating function. The two functions below are for those cases.
+//
+
+/**
+ * Completes \p handler without doing any I/O, through its associated immediate executor (with
+ * \p fallback standing in when the handler has none). This is the one way an operation that has
+ * nothing asynchronous left to do may finish: invoking the handler straight from the initiating
+ * function would surprise callers that rely on the ASIO guarantee of not being re-entered.
+ *
+ * A handler that is empty (an \c any_completion_handler detached by cancellation) is quietly
+ * dropped -- there is nobody left to tell.
+ */
+template <typename Handler, typename... Args>
+inline void complete_immediately(Handler&& handler, const Executor& fallback, Args&&... args)
+{
+   if (!handler)
+      return;
+
+   asio::any_completion_executor ex = asio::get_associated_immediate_executor(handler, fallback);
+   ex.execute([handler = std::forward<Handler>(handler),
+               ... args = std::forward<Args>(args)]() mutable { //
+      std::move(handler)(std::move(args)...);
+   });
+}
+
+/**
+ * Completes \p handler from \p executor's queue, after whatever is running now has returned. This
+ * is how an engine callback (or a cancellation handler) completes an operation: resuming the
+ * application inside nghttp2 or ngtcp2 would let it call back into the engine from inside it.
+ */
+template <typename Handler, typename... Args>
+inline void complete_later(Handler&& handler, const Executor& executor, Args&&... args)
+{
+   asio::post(executor, [handler = std::forward<Handler>(handler),
+                         ... args = std::forward<Args>(args)]() mutable { //
+      std::move(handler)(std::move(args)...);
+   });
+}
+
+/**
+ * Calls \p on_cancel when the caller of the operation \p handler stands for cancels it. The
+ * callback runs on the caller's side, which may be another thread with a strand, so all it may do
+ * is take the parked handler back and complete it with \ref complete_later. Does nothing if the
+ * caller has no way of cancelling.
+ */
+template <typename Signature, typename F>
+inline void on_cancel(Completion<Signature>& handler, F&& on_cancel)
+{
+   auto slot = asio::get_associated_cancellation_slot(handler);
+   if (slot.is_connected() && !slot.has_handler())
+      slot.assign([on_cancel = std::forward<F>(on_cancel)](asio::cancellation_type_t) mutable { //
+         on_cancel();
+      });
+}
+
+// -------------------------------------------------------------------------------------------------
+
+/// Calls \p function from \p executor's queue, after whatever is running now has returned.
+template <typename F>
+inline void run_later(const Executor& executor, F&& function)
+{
+   asio::post(executor, std::forward<F>(function));
+}
+
+/// Starts \p task on \p executor, detached: nobody waits for it, and what it throws is dropped.
+inline void launch(const Executor& executor, Task<void> task)
+{
+   asio::co_spawn(executor, std::move(task), asio::detached);
+}
+
+/// Starts \p task on \p executor and calls \p on_done with what it threw, if anything, when it
+/// is done: <tt>void(const std::exception_ptr&)</tt>.
+template <typename F>
+inline void launch(const Executor& executor, Task<void> task, F&& on_done)
+{
+   asio::co_spawn(executor, std::move(task), std::forward<F>(on_done));
+}
 
 // =================================================================================================
 

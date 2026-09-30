@@ -9,8 +9,6 @@
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/cancellation_signal.hpp>
-#include <boost/asio/cancellation_type.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/beast/http/error.hpp>
 #include <boost/system/detail/errc.hpp>
@@ -209,76 +207,6 @@ public:
    boost::asio::mutable_buffer read_handler_buffer_;
    bool inside_call_read_handler_ = false;
    void call_read_handler(asio::const_buffer buffer = {});
-
-#if 0
-   //
-   // https://www.boost.org/doc/libs/1_82_0/doc/html/boost_asio/example/cpp20/operations/callback_wrapper.cpp
-   //
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken>
-   auto async_read_some(CompletionToken&& token)
-   {
-      //
-      // Define a function object that contains the code to launch the asynchronous
-      // operation. This is passed the concrete completion handler, followed by any
-      // additional arguments that were passed through the call to async_initiate.
-      //
-      auto init = [&](ReadSomeHandler handler)
-      {
-         assert(!read_handler_);
-         if (reading_finished())
-         {
-            mlogw("async_read_some: stream already finished");
-            handler(boost::asio::error::misc_errors::eof, std::vector<std::uint8_t>{});
-            return;
-         }
-#if 1
-         read_handler_ = std::move(handler);
-#else
-         // According to the rules for asynchronous operations, we need to track
-         // outstanding work against the handler's associated executor until the
-         // asynchronous operation is complete.
-         auto work = boost::asio::make_work_guard(handler);
-
-         // Launch the operation with a callback that will receive the result and
-         // pass it through to the asynchronous operation's completion handler.
-         read_handler_ = [handler = std::move(handler), work = std::move(work),
-                           log_prefix_ = log_prefix_](error_code ec,
-                                                  std::vector<std::uint8_t> result) mutable
-         {
-            // Get the handler's associated allocator. If the handler does not
-            // specify an allocator, use the recycling allocator as the default.
-            auto alloc = boost::asio::get_associated_allocator(
-               handler, boost::asio::recycling_allocator<void>());
-
-            // Dispatch the completion handler through the handler's associated
-            // executor, using the handler's associated allocator.
-            logd("[{}] async_read_some: dispatching...", log_prefix_);
-            boost::asio::dispatch(
-               work.get_executor(),
-               boost::asio::bind_allocator(alloc, [handler = std::move(handler), ec,
-                                                   result = std::move(result),
-                                                   log_prefix_ = log_prefix_]() mutable { //
-                  logd("[{}] async_read_some: running dispatched handler...", log_prefix_);
-                  std::move(handler)(ec, result);
-                  logd("[{}] async_read_some: running dispatched handler... done", log_prefix_);
-               }));
-            logd("[{}] async_read_some: dispatching... done", log_prefix_);
-         };
-         mlogd("async_read_some: read handler set");
-#endif
-         call_read_handler();
-      };
-
-      // The async_initiate function is used to transform the supplied completion
-      // token to the completion handler. When calling this function we explicitly
-      // specify the completion signature of the operation. We must also return the
-      // result of the call since the completion token may produce a return value,
-      // such as a future.
-      return boost::asio::async_initiate<CompletionToken, ReadSome>(
-         init, // First, pass the function object that launches the operation,
-         token); // then the completion token that will be transformed to a handler.
-   }
-#endif
 
    // ----------------------------------------------------------------------------------------------
 

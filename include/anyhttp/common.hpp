@@ -7,7 +7,6 @@
 
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/associated_immediate_executor.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/ip/address.hpp>
@@ -137,30 +136,6 @@ template <typename F, typename... Args>
 inline void swap_and_invoke(F&& function, Args&&... args)
 {
    std::exchange(function, nullptr)(std::forward<Args>(args)...);
-}
-
-// =================================================================================================
-
-/**
- * Completes \p handler without doing any I/O, through its associated immediate executor (with
- * \p fallback standing in when the handler has none). This is the one way an operation that has
- * nothing asynchronous left to do may finish: invoking the handler straight from the initiating
- * function would surprise callers that rely on the ASIO guarantee of not being re-entered.
- *
- * A handler that is empty (an \c any_completion_handler detached by cancellation) is quietly
- * dropped -- there is nobody left to tell.
- */
-template <typename Handler, typename... Args>
-inline void complete_immediately(Handler&& handler, const Executor& fallback, Args&&... args)
-{
-   if (!handler)
-      return;
-
-   asio::any_completion_executor ex = asio::get_associated_immediate_executor(handler, fallback);
-   ex.execute([handler = std::forward<Handler>(handler),
-               ... args = std::forward<Args>(args)]() mutable { //
-      std::move(handler)(std::move(args)...);
-   });
 }
 
 // =================================================================================================

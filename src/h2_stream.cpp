@@ -9,11 +9,9 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 
-#include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/associated_executor.hpp>
 #include <boost/asio/associated_immediate_executor.hpp>
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
@@ -33,7 +31,6 @@
 #include <utility>
 
 using namespace boost::asio::experimental::awaitable_operators;
-
 
 namespace anyhttp::nghttp2
 {
@@ -67,9 +64,7 @@ void NGHttp2Reader<Base>::detach()
    // else is a truncation.
    //
    assert(stream);
-   detached_ec = stream->reading_finished()
-                    ? errors::eof
-                    : errors::partial_message;
+   detached_ec = stream->reading_finished() ? errors::eof : errors::partial_message;
    detached_log_prefix = stream->log_prefix_;
    stream = nullptr;
 }
@@ -136,21 +131,11 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    }
 
 #if 1
-   auto cs = asio::get_associated_cancellation_slot(handler);
-   if (cs.is_connected() && !cs.has_handler())
-   {
-      cs.assign([this](asio::cancellation_type_t ct) {
-         logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m ({})", //
-              stream->log_prefix_, "cancelled", int(ct));
-
-         if (stream->read_handler_)
-         {
-            post(get_executor(), [handler = std::move(stream->read_handler_)] mutable { //
-               std::move(handler)(errors::canceled, 0);
-            });
-         }
-      });
-   }
+   on_cancel(handler, [this] {
+      logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m", stream->log_prefix_, "cancelled");
+      if (stream->read_handler_)
+         complete_later(std::move(stream->read_handler_), get_executor(), errors::canceled, 0);
+   });
 #endif
 
    assert(!stream->read_handler_);
@@ -354,8 +339,7 @@ void NGHttp2Writer<Base>::async_get_response(client::Request::GetResponseHandler
    if (!stream)
    {
       mlogw("async_get_response: stream already gone");
-      std::move(handler)(errors::connection_aborted,
-                         client::Response{nullptr});
+      std::move(handler)(errors::connection_aborted, client::Response{nullptr});
    }
    else
       stream->async_get_response(std::move(handler));
@@ -452,15 +436,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
       // allowing a new read handler to be set. This is what we call 'respawning' here, when a
       // new handler is set immediately.
       //
-#if 0
-      any_completion_executor ex =
-         get_associated_immediate_executor(read_handler_, get_executor());
-      ex.execute([handler = std::move(read_handler_), copied]() mutable { //
-         std::move(handler)(error_code{}, copied);
-      });
-#else
       swap_and_invoke(read_handler_, error_code{}, copied);
-#endif
 
       if (read_handler_)
          mlogd("read_callback: calling handler with {} bytes... done,"
@@ -626,8 +602,7 @@ NGHttp2Stream::~NGHttp2Stream()
    if (response_handler)
    {
       mlogw("Stream: dtor... cancelling async_get_response()");
-      swap_and_invoke(response_handler, errors::canceled,
-                      client::Response{nullptr});
+      swap_and_invoke(response_handler, errors::canceled, client::Response{nullptr});
    }
    if (read_handler_)
    {
@@ -688,8 +663,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
    if (closed)
    {
       mlogw("async_write: stream already closed");
-      complete_immediately(std::move(handler), get_executor(),
-                           errors::canceled);
+      complete_immediately(std::move(handler), get_executor(), errors::canceled);
       return;
    }
 
@@ -701,22 +675,12 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
    eof_requested |= eof;
    write_handler = std::move(handler);
 
-   auto slot = asio::get_associated_cancellation_slot(write_handler);
-   if (slot.is_connected() && !slot.has_handler())
-   {
-      slot.assign([this](asio::cancellation_type_t ct) {
-         mlogd("async_write: \x1b[1;31m{}\x1b[0m ({})", "cancelled", ct);
-         // delete_writer();
-
-         if (write_handler)
-         {
-            // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
-            post(get_executor(), [handler = std::move(write_handler), n = bytesWritten] mutable { //
-               std::move(handler)(errors::canceled);
-            });
-         }
-      });
-   }
+   on_cancel(write_handler, [this] {
+      mlogd("async_write: \x1b[1;31m{}\x1b[0m", "cancelled");
+      // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
+      if (write_handler)
+         complete_later(std::move(write_handler), get_executor(), errors::canceled);
+   });
 
    resume();
 }
@@ -750,30 +714,16 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
    {
       auto ec = errors::already_started;
       mlogw("async_get_response: \x1b[1;31m{}\x1b[0m", what(ec));
-      asio::any_completion_executor ex =
-         asio::get_associated_immediate_executor(handler, get_executor());
-      ex.execute([handler = std::move(handler), ec]() mutable { //
-         std::move(handler)(ec, client::Response{nullptr});
-      });
+      complete_immediately(std::move(handler), get_executor(), ec, client::Response{nullptr});
       return;
    }
 
-   auto cs = handler.get_cancellation_slot();
-   if (cs.is_connected())
-   {
-      cs.assign([this](asio::cancellation_type_t ct) {
-         mlogd("async_get_response: \x1b[1;31m{}\x1b[0m ({})", "cancelled", ct);
-
-         if (response_handler)
-         {
-            // auto executor = get_associated_executor(response_handler, get_executor());
-            post(get_executor(), [handler = std::move(response_handler)]() mutable {
-               std::move(handler)(errors::canceled,
-                                  client::Response{nullptr});
-            });
-         }
-      });
-   }
+   on_cancel(handler, [this] {
+      mlogd("async_get_response: \x1b[1;31m{}\x1b[0m", "cancelled");
+      if (response_handler)
+         complete_later(std::move(response_handler), get_executor(), errors::canceled,
+                        client::Response{nullptr});
+   });
 
    response_handler = std::move(handler);
    deliver_response();
@@ -924,16 +874,13 @@ void NGHttp2Stream::on_request()
 
    auto& server = dynamic_cast<ServerReference&>(parent).server();
    if (header_limit_exceeded)
-      asio::co_spawn(get_executor(),
-                     header_fields_too_large(std::move(request), std::move(response)),
-                     asio::detached);
+      launch(get_executor(), header_fields_too_large(std::move(request), std::move(response)));
    else if (auto& handler = server.request_handler())
-      asio::co_spawn(get_executor(), handler(std::move(request), std::move(response)),
-                     asio::detached);
+      launch(get_executor(), handler(std::move(request), std::move(response)));
    else
    {
       mloge("on_request: no request handler!");
-      asio::co_spawn(get_executor(), not_found(std::move(response)), asio::detached);
+      launch(get_executor(), not_found(std::move(response)));
    }
 }
 

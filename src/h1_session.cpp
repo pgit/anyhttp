@@ -375,16 +375,14 @@ public:
       if (!session)
       {
          mlogw("async_write: session already gone");
-         complete_immediately(std::move(handler), get_executor(),
-                              errors::connection_aborted);
+         complete_immediately(std::move(handler), get_executor(), errors::connection_aborted);
          return;
       }
 
       if (cancelled)
       {
          mloge("async_write: already canceled");
-         complete_immediately(std::move(handler), get_executor(),
-                              errors::canceled);
+         complete_immediately(std::move(handler), get_executor(), errors::canceled);
          return;
       }
 
@@ -698,8 +696,7 @@ public:
       if (!session)
       {
          mlogw("async_submit: session already gone");
-         complete_immediately(std::move(handler), get_executor(),
-                              errors::connection_aborted);
+         complete_immediately(std::move(handler), get_executor(), errors::connection_aborted);
          return;
       }
 
@@ -725,18 +722,14 @@ public:
       {
          auto ec = errors::already_started;
          mlogw("async_get_response: \x1b[1;31m{}\x1b[0m", what(ec));
-         any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
-         ex.execute([handler = std::move(handler), ec]() mutable { //
-            std::move(handler)(ec, client::Response{nullptr});
-         });
+         complete_immediately(std::move(handler), get_executor(), ec, client::Response{nullptr});
          return;
       }
 
       if (!session)
       {
          mlogw("async_get_response: session already gone");
-         complete_immediately(std::move(handler), get_executor(),
-                              errors::connection_aborted,
+         complete_immediately(std::move(handler), get_executor(), errors::connection_aborted,
                               client::Response{nullptr});
          return;
       }

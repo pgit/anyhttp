@@ -544,11 +544,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
 
    logd("[{}] submit: new stream ID: {}", stream->log_prefix_, id);
    streams_.emplace(id, stream);
-   post(get_executor(),
-        [handler = std::move(handler),
-         writer = std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)]() mutable {
-           std::move(handler)(error_code{}, client::Request{std::move(writer)}); //
-        });
+   complete_later(std::move(handler), get_executor(), error_code{},
+                  client::Request{std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)});
    start_write();
 }
 
@@ -681,7 +678,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
 
    // see NGHttp2Stream::call_read_handler() why this is needed
    if (stream)
-      post(get_executor(), [stream = std::move(stream)]() { /* deferred delete */ });
+      run_later(get_executor(), [stream = std::move(stream)]() { /* deferred delete */ });
 }
 
 void NGHttp2Session::start_write()

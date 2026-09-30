@@ -290,11 +290,7 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
    if (!handler)
       return;
 
-   auto cs = asio::get_associated_cancellation_slot(handler);
-   if (!cs.is_connected() || cs.has_handler())
-      return;
-
-   cs.assign([this, token](asio::cancellation_type_t ct) {
+   on_cancel(handler, [this, token] {
       //
       // Cancellation completes the write immediately, without waiting for what it would normally
       // complete on -- see below for what that costs in either write mode.
@@ -315,13 +311,11 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
          // exactly like any other data write below -- keeping it active would leave nghttp3 and
          // ngtcp2 pointing into freed memory.
          //
-         mlogd("async_write: \x1b[1;31mcancelled\x1b[0m ({}), FIN still pending", ct);
-         asio::post(get_executor(), [handler = std::move(write_handler)]() mutable { //
-            std::move(handler)(errors::canceled);
-         });
+         mlogd("async_write: \x1b[1;31mcancelled\x1b[0m, FIN still pending");
+         complete_later(std::move(write_handler), get_executor(), errors::canceled);
          return;
       }
-      mlogd("async_write: \x1b[1;31mcancelled\x1b[0m ({})", ct);
+      mlogd("async_write: \x1b[1;31mcancelled\x1b[0m");
 
       if (write_mode == WriteMode::ZeroCopy)
       {
@@ -376,9 +370,7 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
       write_active = false;
       write_source = {};
       // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
-      asio::post(get_executor(), [handler = std::move(write_handler)]() mutable { //
-         std::move(handler)(errors::canceled);
-      });
+      complete_later(std::move(write_handler), get_executor(), errors::canceled);
    });
 }
 
@@ -601,7 +593,7 @@ void Http3Stream::finish_active_write()
    // pass this is nested in and at worst trips ngtcp2's own "time must not go backwards"
    // assertion. Post instead -- one hop, on a path that is not latency critical.
    //
-   asio::post(get_executor(), [self = shared_from_this(), handler = std::move(handler)]() mutable {
+   run_later(get_executor(), [self = shared_from_this(), handler = std::move(handler)]() mutable {
       std::move(handler)(error_code{});
    });
 }

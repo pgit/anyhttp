@@ -238,14 +238,14 @@ Task<Session> Client::Impl::async_connect()
    //        of the user-facing "Session" object. So we should use only the "impl" internally.
    //
 #if 1
-   co_spawn(executor_, impl->do_session(Buffer{}),
-            [impl, prefix](const std::exception_ptr& ex) mutable {
-               if (ex)
-                  logw("[{}] client run: {}", prefix, what(ex));
-               else
-                  logi("[{}] client run: done", prefix);
-               impl.reset();
-            });
+   launch(executor_, impl->do_session(Buffer{}),
+          [impl, prefix](const std::exception_ptr& ex) mutable {
+             if (ex)
+                logw("[{}] client run: {}", prefix, what(ex));
+             else
+                logi("[{}] client run: done", prefix);
+             impl.reset();
+          });
 #endif
 
    //
