@@ -46,6 +46,7 @@
 #include <cassert>
 #include <chrono>
 #include <exception>
+#include <limits>
 #include <tuple>
 #include <utility>
 
@@ -115,6 +116,9 @@ inline const error_code already_started = asio::error::already_started;
 /// A header section larger than Config::max_header_size.
 inline const error_code header_limit = boost::beast::http::error::header_limit;
 } // namespace errors
+
+/// What the runtime throws an error_code as.
+using system_error = boost::system::system_error;
 
 /// Throws \p ec, for code that reports errors as exceptions, as the runtime's own does.
 [[noreturn]] inline void throw_error(const error_code& ec)
@@ -224,9 +228,9 @@ inline void launch(const Executor& executor, Task<void> task, F&& on_done)
  * This is how an operation that is a coroutine inside is offered with a completion token. The
  * other runtime has no tokens, and returns such a task's result directly.
  */
-template <typename T>
-inline void launch(const Executor& executor, Task<std::tuple<error_code, T>> task,
-                   Completion<void(error_code, T)>&& handler)
+template <typename... T>
+inline void launch(const Executor& executor, Task<std::tuple<error_code, T...>> task,
+                   Completion<void(error_code, T...)>&& handler)
 {
    auto slot = asio::get_associated_cancellation_slot(handler);
    auto handler_executor = asio::get_associated_executor(handler, executor);
@@ -235,17 +239,17 @@ inline void launch(const Executor& executor, Task<std::tuple<error_code, T>> tas
    // co_spawn() gives the task a cancellation slot of its own, so binding the caller's to it is
    // what makes cancelling the operation reach whatever the task is waiting for.
    //
-   asio::co_spawn(
-      executor, std::move(task),
-      asio::bind_cancellation_slot(
-         slot, asio::bind_executor(handler_executor, [handler = std::move(handler)](
-                                                        const std::exception_ptr& ep,
-                                                        std::tuple<error_code, T> result) mutable {
-            if (ep)
-               std::move(handler)(code(ep), T{});
-            else
-               std::apply(std::move(handler), std::move(result));
-         })));
+   asio::co_spawn(executor, std::move(task),
+                  asio::bind_cancellation_slot(
+                     slot, asio::bind_executor(
+                              handler_executor, [handler = std::move(handler)](
+                                                   const std::exception_ptr& ep,
+                                                   std::tuple<error_code, T...> result) mutable {
+                                 if (ep)
+                                    std::move(handler)(code(ep), T{}...);
+                                 else
+                                    std::apply(std::move(handler), std::move(result));
+                              })));
 }
 
 /**
@@ -425,7 +429,17 @@ auto wait_readable(Socket& socket)
 template <typename Stream, typename ConstBufferSequence>
 auto write(Stream& stream, const ConstBufferSequence& buffers)
 {
-   return asio::async_write(stream, buffers, asio::as_tuple);
+   //
+   // As few writes as the stream takes: async_write()'s default completion condition, transfer_all,
+   // would split them into 64 KiB each. A large HTTP/1.1 header then takes several round trips
+   // through the reactor, and a server that rejects it early catches the client in the middle.
+   //
+   return asio::async_write(
+      stream, buffers,
+      [](const error_code& ec, size_t) -> size_t {
+         return ec ? 0 : std::numeric_limits<size_t>::max();
+      },
+      asio::as_tuple);
 }
 
 } // namespace io

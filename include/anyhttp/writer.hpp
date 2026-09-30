@@ -106,14 +106,11 @@ public:
    //
 
    /// Writes \p buffer as part of the body: <tt>auto [ec] = co_await writer.write(buffer);</tt>
-   auto write(asio::const_buffer buffer) { return async_write(buffer, asio::as_tuple); }
+   Task<std::tuple<error_code>> write(asio::const_buffer buffer);
 
    /// Writes \p buffer, if any, and ends the body: <tt>auto [ec] = co_await
    /// writer.write_eof();</tt>
-   auto write_eof(asio::const_buffer buffer = {})
-   {
-      return async_write_eof(buffer, asio::as_tuple);
-   }
+   Task<std::tuple<error_code>> write_eof(asio::const_buffer buffer = {});
 
 protected:
    /// The implementation, for the derived handle to narrow to its own \c Impl. Never null.

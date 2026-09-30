@@ -12,6 +12,9 @@ namespace anyhttp::client
 
 // =================================================================================================
 
+/// An empty handle, as released by reset().
+Request::Request() : Writer(nullptr) {}
+
 Request::Request(std::unique_ptr<Request::Impl> impl) : Writer(std::move(impl))
 {
    if (*this)
@@ -36,6 +39,16 @@ Request::~Request() { reset(); }
 
 Request::Impl& Request::pimpl() const noexcept { return static_cast<Impl&>(Writer::pimpl()); }
 
+static Task<std::tuple<error_code, Response>> no_request()
+{
+   co_return std::tuple{errors::bad_descriptor, Response{}};
+}
+
+Task<std::tuple<error_code, Response>> Request::get_response()
+{
+   return *this ? pimpl().get_response() : no_request();
+}
+
 void Request::async_get_response_any(Request::GetResponseHandler&& handler)
 {
    if (*this)
@@ -45,6 +58,9 @@ void Request::async_get_response_any(Request::GetResponseHandler&& handler)
 }
 
 // =================================================================================================
+
+/// An empty handle, as released by reset().
+Response::Response() : Reader(nullptr) {}
 
 Response::Response(std::unique_ptr<Response::Impl> impl) : Reader(std::move(impl))
 {

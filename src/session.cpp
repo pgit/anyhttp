@@ -94,9 +94,7 @@ Task<std::tuple<error_code, client::Message>> get_message(std::shared_ptr<Sessio
    // The public Session::submit() is POST-only, but every backend can send whatever method it is
    // handed, see Session::Impl::async_submit().
    //
-   auto [ec, request] = co_await initiate<Submit>([&](SubmitHandler handler) {
-      session->async_submit(std::move(handler), "GET", std::move(url), headers);
-   });
+   auto [ec, request] = co_await session->submit("GET", std::move(url), std::move(headers));
    if (ec)
       co_return failed(ec);
 
@@ -130,6 +128,17 @@ Task<std::tuple<error_code, client::Message>> get_message(std::shared_ptr<Sessio
 }
 
 } // namespace
+
+Task<std::tuple<error_code, client::Request>> Session::submit(boost::urls::url target,
+                                                              Fields headers)
+{
+   return impl->submit("POST", std::move(target), std::move(headers));
+}
+
+Task<std::tuple<error_code, client::Message>> Session::get(boost::urls::url url, Fields headers)
+{
+   return get_message(impl, std::move(url), std::move(headers));
+}
 
 void Session::async_get_any(GetHandler&& handler, boost::urls::url url, const Fields& headers)
 {

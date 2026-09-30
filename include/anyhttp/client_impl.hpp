@@ -28,6 +28,13 @@ public:
    virtual void async_submit(StatusHandler&& handler, unsigned int status_code,
                              const Fields& headers) = 0;
    virtual void async_get_response(GetResponseHandler&& handler) = 0;
+
+   /// async_get_response() as a coroutine, see Reader::Impl::read_some().
+   virtual Task<std::tuple<error_code, Response>> get_response()
+   {
+      co_return co_await initiate<GetResponse>(
+         [this](GetResponseHandler handler) { async_get_response(std::move(handler)); });
+   }
 };
 
 // -------------------------------------------------------------------------------------------------

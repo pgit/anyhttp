@@ -102,6 +102,7 @@ class Request : public Writer
 {
 public:
    class Impl;
+   Request();
    explicit Request(std::unique_ptr<Impl> impl);
    Request(Request&& other) noexcept;
    Request& operator=(Request&& other) noexcept;
@@ -136,7 +137,7 @@ public:
 
    /// \c async_get_response() as a coroutine:
    /// <tt>auto [ec, response] = co_await request.get_response();</tt>
-   auto get_response() { return async_get_response(asio::as_tuple); }
+   Task<std::tuple<error_code, Response>> get_response();
 
 private:
    void async_get_response_any(GetResponseHandler&& handler);

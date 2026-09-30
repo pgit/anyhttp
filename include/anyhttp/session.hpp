@@ -122,16 +122,11 @@ public:
 
    /// \c async_submit() as a coroutine:
    /// <tt>auto [ec, request] = co_await session.submit(url, headers);</tt>
-   auto submit(boost::urls::url target, const Fields& headers = {})
-   {
-      return async_submit(std::move(target), headers, asio::as_tuple);
-   }
+   Task<std::tuple<error_code, client::Request>> submit(boost::urls::url target,
+                                                        Fields headers = {});
 
    /// \c async_get() as a coroutine: <tt>auto [ec, message] = co_await session.get(url);</tt>
-   auto get(boost::urls::url url, const Fields& headers = {})
-   {
-      return async_get(std::move(url), headers, asio::as_tuple);
-   }
+   Task<std::tuple<error_code, client::Message>> get(boost::urls::url url, Fields headers = {});
 
    Executor get_executor() const noexcept;
 

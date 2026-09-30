@@ -107,10 +107,20 @@ public:
    //
 
    /// Reads a part of the incoming body: <tt>auto [ec, n] = co_await reader.read_some(buffer);</tt>
-   template <typename MutableBufferSequence>
-   auto read_some(const MutableBufferSequence& buffers)
+   Task<std::tuple<error_code, size_t>> read_some(asio::mutable_buffer buffer);
+
+   /// \overload
+   ///
+   /// FIXME: As with async_read_some(), this fills only the first non-empty buffer.
+   template <typename Buffers>
+      requires(asio::is_mutable_buffer_sequence<Buffers>::value &&
+               !std::convertible_to<const Buffers&, asio::mutable_buffer>)
+   Task<std::tuple<error_code, size_t>> read_some(const Buffers& buffers)
    {
-      return async_read_some(buffers, asio::as_tuple);
+      for (auto& buffer : buffers)
+         if (buffer.size() > 0)
+            return read_some(asio::mutable_buffer(buffer));
+      return read_some(asio::mutable_buffer{});
    }
 
 protected:

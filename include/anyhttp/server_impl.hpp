@@ -48,6 +48,13 @@ public:
 
    virtual void async_submit(StatusHandler&& handler, unsigned int status_code,
                              const Fields& fields) = 0;
+
+   /// async_submit() as a coroutine, see Reader::Impl::read_some().
+   virtual Task<std::tuple<error_code>> submit(unsigned int status_code, Fields fields)
+   {
+      co_return co_await initiate<Status>(
+         [&](StatusHandler handler) { async_submit(std::move(handler), status_code, fields); });
+   }
 };
 
 // =================================================================================================
