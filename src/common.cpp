@@ -68,14 +68,12 @@ std::string log_prefix(Role role, std::string_view protocol, const asio::ip::add
 }
 
 std::string log_prefix(Role role, std::string_view protocol,
-                       const asio::basic_socket<asio::ip::tcp, Executor>& socket)
+                       const std::optional<asio::ip::tcp::endpoint>& remote)
 {
-   error_code ec;
-   auto remote = socket.remote_endpoint(ec);
-   if (ec)
+   if (!remote)
       return colored(role, protocol);
 
-   return log_prefix(role, protocol, remote.address(), remote.port());
+   return log_prefix(role, protocol, remote->address(), remote->port());
 }
 
 }; // namespace anyhttp

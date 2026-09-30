@@ -186,9 +186,9 @@ std::string log_prefix(Role role);
 std::string log_prefix(Role role, std::string_view protocol, const asio::ip::address& address,
                        unsigned short port);
 
-/// As above, for the peer of \p socket. Just \p protocol if the socket is not connected.
+/// As above, for the peer at \p remote. Just \p protocol without one (the socket is not connected).
 std::string log_prefix(Role role, std::string_view protocol,
-                       const asio::basic_socket<asio::ip::tcp, Executor>& socket);
+                       const std::optional<asio::ip::tcp::endpoint>& remote);
 
 }; // namespace anyhttp
 

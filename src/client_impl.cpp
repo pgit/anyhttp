@@ -178,8 +178,8 @@ Task<Session> Client::Impl::async_connect()
    mlogi("connected to {}", socket.remote_endpoint());
 
    // what the session is going to call itself, see make_client_session() below (no TLS yet)
-   const auto prefix =
-      anyhttp::log_prefix(Role::client, config().protocol == Protocol::h1 ? "h1" : "h2c", socket);
+   const auto prefix = anyhttp::log_prefix(
+      Role::client, config().protocol == Protocol::h1 ? "h1" : "h2c", io::remote_endpoint(socket));
 
    // HTTP/2 is very slow without this, and TLS handshake is faster as well.
    socket.set_option(ip::tcp::no_delay(true));

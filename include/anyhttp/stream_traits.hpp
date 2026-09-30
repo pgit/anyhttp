@@ -117,6 +117,69 @@ bool is_tls(const Stream& stream) noexcept
    return stream_traits<Stream>::is_tls(stream);
 }
 
+// -------------------------------------------------------------------------------------------------
+
+//
+// What the sessions do with the connection beneath their stream, apart from reading and writing.
+// None of these throws: a connection that is gone already is what the caller wanted anyway, more
+// often than not, so the caller decides what an error is worth.
+//
+namespace io
+{
+
+enum class Shutdown
+{
+   receive,
+   send,
+   both
+};
+
+/// Shuts down one or both directions of the connection beneath \p stream.
+template <SocketStream Stream>
+error_code shutdown(Stream& stream, Shutdown what) noexcept
+{
+   using socket_base = boost::asio::socket_base;
+   error_code ec;
+   get_socket(stream).shutdown(what == Shutdown::receive ? socket_base::shutdown_receive
+                               : what == Shutdown::send  ? socket_base::shutdown_send
+                                                         : socket_base::shutdown_both,
+                               ec);
+   return ec;
+}
+
+/// Cancels whatever operations are pending on the connection beneath \p stream.
+template <SocketStream Stream>
+error_code cancel(Stream& stream) noexcept
+{
+   error_code ec;
+   get_socket(stream).cancel(ec);
+   return ec;
+}
+
+/// Closes the connection beneath \p stream, which also cancels whatever is pending on it.
+template <SocketStream Stream>
+error_code close(Stream& stream) noexcept
+{
+   error_code ec;
+   get_socket(stream).close(ec);
+   return ec;
+}
+
+/// The peer of \p stream, if it is connected.
+template <SocketStream Stream>
+std::optional<boost::asio::ip::tcp::endpoint> remote_endpoint(Stream& stream) noexcept
+{
+   error_code ec;
+   auto endpoint = get_socket(stream).remote_endpoint(ec);
+   if (ec)
+      return std::nullopt;
+   return endpoint;
+}
+
+} // namespace io
+
+// -------------------------------------------------------------------------------------------------
+
 /**
  * Ends \p stream as far as the stream itself is concerned, which is something only TLS has: a
  * "close_notify", which tells the peer that the end of the data is the end of the data and not a

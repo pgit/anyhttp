@@ -34,8 +34,7 @@ template <typename Stream>
 void NGHttp2SessionImpl<Stream>::destroy() noexcept
 {
    // post(get_executor(), [this, self]() mutable {
-   error_code ec;
-   get_socket(stream_).shutdown(asio::socket_base::shutdown_both, ec);
+   auto ec = io::shutdown(stream_, io::Shutdown::both);
    // not_connected: the peer is gone already, which is what we wanted anyway
    logwd(ec && ec != errc::not_connected, //
          "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
@@ -86,7 +85,7 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
       if (nread < 0)
       {
          logw("send loop: closing stream and throwing");
-         get_socket(stream_).close(); // will also cancel the read loop
+         io::close(stream_); // will also cancel the read loop
          throw std::runtime_error("nghttp2_session_mem_send");
       }
 
@@ -156,8 +155,7 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
    // before the receive loop checked nghttp2_session_want_read() again. Now that the send loop is
    // woken by a posted Event, the receive loop gets there first.
    //
-   error_code ec;
-   get_socket(stream_).cancel(ec);
+   io::cancel(stream_);
 
    mylogd("send loop: destroying streams...");
    streams_.clear();
@@ -205,9 +203,9 @@ Task<void> NGHttp2SessionImpl<Stream>::recv_loop()
 template <typename Stream>
 ServerSession<Stream>::ServerSession(server::Server::Impl& parent, Executor executor,
                                      Stream&& stream)
-   : ServerReference(parent),
-     super(anyhttp::log_prefix(Role::server, is_tls(stream) ? "h2" : "h2c", get_socket(stream)),
-           executor, std::move(stream))
+   : ServerReference(parent), super(anyhttp::log_prefix(Role::server, is_tls(stream) ? "h2" : "h2c",
+                                                        io::remote_endpoint(stream)),
+                                    executor, std::move(stream))
 {
    max_header_size_ = parent.config().max_header_size;
    alt_svc_ = parent.alt_svc();
@@ -313,9 +311,9 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 template <typename Stream>
 ClientSession<Stream>::ClientSession(client::Client::Impl& parent, Executor executor,
                                      Stream&& stream)
-   : ClientReference(parent),
-     super(anyhttp::log_prefix(Role::client, is_tls(stream) ? "h2" : "h2c", get_socket(stream)),
-           executor, std::move(stream))
+   : ClientReference(parent), super(anyhttp::log_prefix(Role::client, is_tls(stream) ? "h2" : "h2c",
+                                                        io::remote_endpoint(stream)),
+                                    executor, std::move(stream))
 {
    max_header_size_ = parent.config().max_header_size;
 }

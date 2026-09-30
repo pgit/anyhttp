@@ -259,7 +259,7 @@ static asio::ssl::context make_tls_server_context(const Config& config)
 
 Task<void> Server::Impl::handle_connection(ip::tcp::socket socket)
 {
-   const auto prefix = anyhttp::log_prefix(Role::server, "tcp", socket);
+   const auto prefix = anyhttp::log_prefix(Role::server, "tcp", io::remote_endpoint(socket));
    logi("[{}] new connection", prefix);
 
    // HTTP/2 is very slow without this, and TLS handshake is faster as well.
@@ -420,7 +420,7 @@ Task<void> Server::Impl::tcp_accept_loop()
          break;
       }
 
-      auto prefix = anyhttp::log_prefix(Role::server, "tcp", socket);
+      auto prefix = anyhttp::log_prefix(Role::server, "tcp", io::remote_endpoint(socket));
 
       //
       // Without something like a "nursery" or "async_scope", spawning a task detaches it from

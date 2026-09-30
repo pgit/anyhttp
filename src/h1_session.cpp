@@ -104,9 +104,7 @@ public:
          // We could still try to send an error response here.
          // This breaks WHEN_server_discards_request_THEN_is_still_able_to_deliver_response.
          //
-         error_code ec;
-         // get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send, ec);
-         get_socket(stream).shutdown(boost::asio::socket_base::shutdown_receive, ec);
+         auto ec = io::shutdown(stream, io::Shutdown::receive);
          session->closed_ = true;
          logwd(ec != errc::not_connected, //
                "[{}] destroy: shutdown: {}", log_prefix(), what(ec));
@@ -421,8 +419,7 @@ public:
          if (session) // otherwise, the stream is gone already
          {
             mlogi("async_write: canceled, closing stream");
-            error_code ignored;
-            get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send, ignored);
+            io::shutdown(stream, io::Shutdown::send);
          }
       }
       else if (ec)
@@ -808,16 +805,18 @@ BeastSession<Stream>::~BeastSession()
 template <typename Stream>
 ServerSession<Stream>::ServerSession(server::Server::Impl& parent, Executor executor,
                                      Stream&& stream)
-   : ServerSessionBase(parent), super(anyhttp::log_prefix(Role::server, "h1", get_socket(stream)),
-                                      std::move(executor), std::move(stream))
+   : ServerSessionBase(parent),
+     super(anyhttp::log_prefix(Role::server, "h1", io::remote_endpoint(stream)),
+           std::move(executor), std::move(stream))
 {
 }
 
 template <typename Stream>
 ClientSession<Stream>::ClientSession(client::Client::Impl& parent, Executor executor,
                                      Stream&& stream)
-   : ClientSessionBase(parent), super(anyhttp::log_prefix(Role::client, "h1", get_socket(stream)),
-                                      std::move(executor), std::move(stream))
+   : ClientSessionBase(parent),
+     super(anyhttp::log_prefix(Role::client, "h1", io::remote_endpoint(stream)),
+           std::move(executor), std::move(stream))
 {
 }
 
@@ -832,8 +831,7 @@ void BeastSession<Stream>::destroy() noexcept
    //
 
    // post(get_executor(), [this, self]() mutable {
-   error_code ec;
-   get_socket(stream_).shutdown(socket_base::shutdown_both, ec);
+   auto ec = io::shutdown(stream_, io::Shutdown::both);
    // not_connected: the peer is gone already, which is what we wanted anyway
    logwd(ec && ec != errc::not_connected, //
          "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
@@ -957,9 +955,6 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    buffer_ = std::move(buffer);
 
    mlogd("do_server_session, {} bytes in buffer", buffer_.size());
-
-   bool close = false;
-   beast::error_code ec;
 
    size_t requestCounter = 0;
    while (!closed_)
@@ -1114,7 +1109,7 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          catch (const system_error& e)
          {
             mloge("exception in request handler: {}", e.code().message());
-            get_socket(stream_).shutdown(socket_base::shutdown_both);
+            io::shutdown(stream_, io::Shutdown::both);
             throw;
          }
       }
@@ -1162,10 +1157,10 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    // whatever has not been delivered yet -- which can be the very response that said the
    // connection was ending.
    //
-   get_socket(stream_).shutdown(asio::ip::tcp::socket::shutdown_send, ec);
-   if (ec && ec != errc::not_connected) // the peer may be gone already
+   if (auto ec = io::shutdown(stream_, io::Shutdown::send);
+       ec && ec != errc::not_connected) // the peer may be gone already
       mlogw("shutdown: {}", ec.message());
-   get_socket(stream_).close(ec);
+   io::close(stream_);
 
    mlogd("session done");
 }
