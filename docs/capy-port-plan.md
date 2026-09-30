@@ -122,7 +122,10 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
    - 2a: vocabulary (`Task`, `Executor`, errors, `Completion`, `spawn`). This is mechanical.
    - 2b: h2 loops and streams.
    - 2c: h3.
-   - 2d: `server_impl`, `client_impl`, `session`.
+   - 2d: `server_impl`, `client_impl`, `session`. *Done 2026-09-30 (`358855a`), except for the
+     socket plumbing in `server_impl`/`client_impl`, which moved to step 4.* The handles now have a
+     coroutine spelling shared by both runtimes (§5), and the library's handlers and `async_get()`
+     use it.
 
    *2a–2c done 2026-09-30* (`fa8b4d5`..`63d0894`). `runtime.hpp` has `Task`, `Executor`,
    `error_code`, `Completion`, `errc`/`errors`, `complete_immediately`/`complete_later`,
@@ -134,8 +137,10 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
      send loop now cancels the pending read when it ends.
 3. **HTTP/1.1 on Beast's parser and serializer**, in ASIO mode. This has the largest
    behavioural risk: h2c upgrade, chunked bodies, 431, the "max concurrent streams = 1" rules.
-4. **Detection and stream plumbing, portable.** Prefix sniffing, `PrefixedStream`, a TLS stream
-   alias. `any_async_stream` becomes ASIO-only or retires. Spike `openssl_stream` over
+4. **Sockets, streams and TLS, portable.** The acceptor and accept loop, the resolver and connect,
+   the UDP sockets and endpoints of h3, socket options, `stream_traits` (shutdown, cancel,
+   teardown), prefix sniffing, `PrefixedStream`, a TLS stream alias. `any_async_stream` becomes
+   ASIO-only or retires. Spike `openssl_stream` over
    `PrefixedStream` first, including full duplex (corosio#330/#331).
 5. **CAPY half of the runtime layer, plus the public front ends.** Bring it up one protocol at a
    time, each with its slice of tests in `build-capy`:
@@ -165,3 +170,8 @@ port that also changes behaviour cannot be verified against the old tests.
   per-mode helpers in the fixtures. Token and `cancel_after` tests stay ASIO-only; `stop_token`
   and `timeout` tests are CAPY-only. While the port is under way, `test/CMakeLists.txt` lists
   the files CAPY builds explicitly. That list grows until it equals the glob.
+- **Both runtimes share a coroutine spelling** (decided during 2d). The ASIO handles also have
+  `read_some`, `write`, `write_eof`, `submit`, `get_response`, `connect` and `get`, yielding
+  tuples and forwarding to `async_*(..., as_tuple)`. Shared code and shared tests use only these.
+  A library coroutine that returns `Task<std::tuple<error_code, T>>` is `capy::io_task<T>` in
+  CAPY.
