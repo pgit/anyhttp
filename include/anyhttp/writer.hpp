@@ -99,6 +99,22 @@ public:
       return async_write_eof(asio::const_buffer{}, std::forward<CompletionToken>(token));
    }
 
+   //
+   // The coroutine spelling of the operation(s) above, which both runtimes have: no completion
+   // token, the result as a tuple, and errors reported, never thrown. Code that has to compile
+   // with either runtime -- the library's own request handlers, the shared tests -- uses this.
+   //
+
+   /// Writes \p buffer as part of the body: <tt>auto [ec] = co_await writer.write(buffer);</tt>
+   auto write(asio::const_buffer buffer) { return async_write(buffer, asio::as_tuple); }
+
+   /// Writes \p buffer, if any, and ends the body: <tt>auto [ec] = co_await
+   /// writer.write_eof();</tt>
+   auto write_eof(asio::const_buffer buffer = {})
+   {
+      return async_write_eof(buffer, asio::as_tuple);
+   }
+
 protected:
    /// The implementation, for the derived handle to narrow to its own \c Impl. Never null.
    Impl& pimpl() const noexcept { return *impl_; }
@@ -113,7 +129,8 @@ private:
    // executor at all, so an empty one here is never used.
    //
    template <typename CompletionToken>
-   auto write_executor(const CompletionToken& token) const noexcept
+   asio::associated_executor_t<CompletionToken, executor_type>
+   write_executor(const CompletionToken& token) const noexcept
    {
       return asio::get_associated_executor(token, get_executor());
    }

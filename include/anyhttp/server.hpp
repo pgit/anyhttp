@@ -190,6 +190,12 @@ public:
          token, status_code, headers);
    }
 
+   /// \c async_submit() as a coroutine: <tt>auto [ec] = co_await response.submit(200, {});</tt>
+   auto submit(unsigned int status_code, const Fields& headers)
+   {
+      return async_submit(status_code, headers, asio::as_tuple);
+   }
+
 private:
    void async_submit_any(StatusHandler&& handler, unsigned int status_code, const Fields& headers);
 

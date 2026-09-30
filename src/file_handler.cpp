@@ -197,8 +197,8 @@ unsigned status_for(const error_code& ec)
 
 Task<void> respond(server::Response& response, unsigned status)
 {
-   co_await response.async_submit(status, fields({{"Content-Length", 0}}));
-   co_await response.async_write_eof();
+   if (auto [ec] = co_await response.submit(status, fields({{"Content-Length", 0}})); !ec)
+      co_await response.write_eof();
 }
 
 //
@@ -344,9 +344,12 @@ Task<void> serve_file(server::Request request, server::Response response, fs::pa
 
    const auto& file = (*entry)->file;
    logd("serve_file: {} ({} bytes)", (*entry)->resolved.native(), file.size());
-   co_await response.async_submit(200, fields({{"Content-Length", file.size()},
-                                               {"Content-Type", (*entry)->content_type},
-                                               {"Last-Modified", (*entry)->last_modified}}));
+   if (auto [ec] =
+          co_await response.submit(200, fields({{"Content-Length", file.size()},
+                                                {"Content-Type", (*entry)->content_type},
+                                                {"Last-Modified", (*entry)->last_modified}}));
+       ec)
+      co_return;
 
    //
    // The shared_ptr lives in the coroutine frame, so the mapping stays valid across the write no
@@ -359,7 +362,7 @@ Task<void> serve_file(server::Request request, server::Response response, fs::pa
    // last of them instead of costing a write of its own. An empty file, which cannot be mmap()ed
    // at all, is then simply an empty buffer and ends the same way.
    //
-   co_await response.async_write_eof(asio::buffer(file.bytes()));
+   co_await response.write_eof(asio::buffer(file.bytes()));
 }
 
 } // namespace anyhttp

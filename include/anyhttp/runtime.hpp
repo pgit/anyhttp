@@ -23,6 +23,8 @@
 #include <boost/asio/associated_immediate_executor.hpp>
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/awaitable.hpp>
+#include <boost/asio/bind_cancellation_slot.hpp>
+#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/detached.hpp>
@@ -36,14 +38,19 @@
 #include <boost/asio/write.hpp>
 #include <boost/system/errc.hpp>
 #include <boost/system/error_code.hpp>
+#include <boost/system/system_error.hpp>
 #endif
 
 #include <boost/beast/http/error.hpp>
 
 #include <cassert>
 #include <chrono>
+#include <exception>
 #include <tuple>
 #include <utility>
+
+/// The error code of what \p ptr holds, as thrown by the runtime (defined in common.cpp).
+boost::system::error_code code(const std::exception_ptr& ptr);
 
 namespace anyhttp
 {
@@ -108,6 +115,12 @@ inline const error_code already_started = asio::error::already_started;
 /// A header section larger than Config::max_header_size.
 inline const error_code header_limit = boost::beast::http::error::header_limit;
 } // namespace errors
+
+/// Throws \p ec, for code that reports errors as exceptions, as the runtime's own does.
+[[noreturn]] inline void throw_error(const error_code& ec)
+{
+   throw boost::system::system_error(ec);
+}
 
 // =================================================================================================
 
@@ -202,6 +215,73 @@ inline void launch(const Executor& executor, Task<void> task, F&& on_done)
 {
    asio::co_spawn(executor, std::move(task), std::forward<F>(on_done));
 }
+
+/**
+ * Runs \p task on \p executor as the operation \p handler stands for: the task's result
+ * completes that operation, and cancelling it cancels the task. A task that throws completes it
+ * with the error code of what it threw.
+ *
+ * This is how an operation that is a coroutine inside is offered with a completion token. The
+ * other runtime has no tokens, and returns such a task's result directly.
+ */
+template <typename T>
+inline void launch(const Executor& executor, Task<std::tuple<error_code, T>> task,
+                   Completion<void(error_code, T)>&& handler)
+{
+   auto slot = asio::get_associated_cancellation_slot(handler);
+   auto handler_executor = asio::get_associated_executor(handler, executor);
+
+   //
+   // co_spawn() gives the task a cancellation slot of its own, so binding the caller's to it is
+   // what makes cancelling the operation reach whatever the task is waiting for.
+   //
+   asio::co_spawn(
+      executor, std::move(task),
+      asio::bind_cancellation_slot(
+         slot, asio::bind_executor(handler_executor, [handler = std::move(handler)](
+                                                        const std::exception_ptr& ep,
+                                                        std::tuple<error_code, T> result) mutable {
+            if (ep)
+               std::move(handler)(code(ep), T{});
+            else
+               std::apply(std::move(handler), std::move(result));
+         })));
+}
+
+/**
+ * Starts an operation that completes a <tt>Completion<Signature></tt>, and waits for it, yielding
+ * the completion's arguments as a tuple:
+ *
+ * \code
+ * auto [ec, n] = co_await initiate<ReadSome>([&](Completion<ReadSome> handler) {
+ *    impl.async_read_some(buffer, std::move(handler));
+ * });
+ * \endcode
+ *
+ * The initiating function runs when the operation is awaited, so it may capture by reference.
+ */
+template <typename Signature, typename Init>
+auto initiate(Init&& init)
+{
+   return asio::async_initiate<const asio::as_tuple_t<asio::deferred_t>&, Signature>(
+      [init = std::forward<Init>(init)](Completion<Signature> handler) mutable {
+         init(std::move(handler));
+      },
+      asio::as_tuple(asio::deferred));
+}
+
+/// Waits for \p duration to pass. Cancelling the wait completes it early, with the error code
+/// the runtime's timers report for that.
+inline Task<error_code> delay(std::chrono::steady_clock::duration duration)
+{
+   asio::steady_timer timer(co_await asio::this_coro::executor);
+   timer.expires_after(duration);
+   auto [ec] = co_await timer.async_wait(asio::as_tuple);
+   co_return ec;
+}
+
+/// Lets whatever else is ready to run on the caller's executor run first.
+inline auto yield_now() { return asio::post(asio::deferred); }
 
 /// Runs \p a and \p b concurrently, until both are done. If one of them throws, the other is
 /// cancelled, and the exception is rethrown once both are done.

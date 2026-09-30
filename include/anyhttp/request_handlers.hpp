@@ -28,36 +28,17 @@ using expected = std::expected<T, error_code>;
 
 // =================================================================================================
 
+//
+// Sleeps for \p duration, or until cancelled -- which is logged and otherwise ignored: the caller
+// carries on as if the time had passed.
+//
 template <typename T>
 Task<void> sleep(T duration)
 {
-   using namespace asio;
-
-#if 0
-#if 1
-   as_tuple_t<deferred_t>::as_default_on_t<steady_timer> timer(co_await this_coro::executor);
-   timer.expires_after(duration);
-   auto [ec] = co_await timer.async_wait();
-#else
-   steady_timer timer(co_await this_coro::executor);
-   timer.expires_after(duration);
-   auto [ec] = co_await timer.async_wait(as_tuple);
-#endif
-   if (ec)
-      loge("sleep: {}", ec.what());
-#else
-   steady_timer timer(co_await this_coro::executor);
-   timer.expires_after(duration);
-   try
-   {
-      co_await timer.async_wait();
+   if (auto ec = co_await delay(duration))
+      loge("sleep: {}", ec.message());
+   else
       logi("sleep: done");
-   }
-   catch (const boost::system::system_error& ec)
-   {
-      loge("sleep: {}", ec.what());
-   }
-#endif
 }
 
 Task<void> yield(size_t count = 1);

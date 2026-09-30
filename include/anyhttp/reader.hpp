@@ -100,6 +100,19 @@ public:
       return async_read_some(asio::mutable_buffer{}, std::forward<CompletionToken>(token));
    }
 
+   //
+   // The coroutine spelling of the operation(s) above, which both runtimes have: no completion
+   // token, the result as a tuple, and errors reported, never thrown. Code that has to compile
+   // with either runtime -- the library's own request handlers, the shared tests -- uses this.
+   //
+
+   /// Reads a part of the incoming body: <tt>auto [ec, n] = co_await reader.read_some(buffer);</tt>
+   template <typename MutableBufferSequence>
+   auto read_some(const MutableBufferSequence& buffers)
+   {
+      return async_read_some(buffers, asio::as_tuple);
+   }
+
 protected:
    /// The implementation, for the derived handle to narrow to its own \c Impl. Never null.
    Impl& pimpl() const noexcept { return *impl_; }

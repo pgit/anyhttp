@@ -115,6 +115,24 @@ public:
          token, std::move(url), headers);
    }
 
+   //
+   // The coroutine spelling of the operations above, which both runtimes have: no completion
+   // token, the result as a tuple, and errors reported, never thrown.
+   //
+
+   /// \c async_submit() as a coroutine:
+   /// <tt>auto [ec, request] = co_await session.submit(url, headers);</tt>
+   auto submit(boost::urls::url target, const Fields& headers = {})
+   {
+      return async_submit(std::move(target), headers, asio::as_tuple);
+   }
+
+   /// \c async_get() as a coroutine: <tt>auto [ec, message] = co_await session.get(url);</tt>
+   auto get(boost::urls::url url, const Fields& headers = {})
+   {
+      return async_get(std::move(url), headers, asio::as_tuple);
+   }
+
    Executor get_executor() const noexcept;
 
 private:

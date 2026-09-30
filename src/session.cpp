@@ -2,10 +2,7 @@
 #include "anyhttp/literals.hpp"
 #include "anyhttp/session_impl.hpp"
 
-#include <boost/asio/as_tuple.hpp>
-#include <boost/asio/bind_cancellation_slot.hpp>
-#include <boost/asio/co_spawn.hpp>
-#include <boost/asio/error.hpp>
+#include <boost/asio/buffer.hpp>
 
 #include <array>
 
@@ -64,32 +61,26 @@ namespace
 {
 
 //
-// Submits a request with a method of its own. The public Session::async_submit() is POST-only,
-// but every backend can send whatever method it is handed, see Session::Impl::async_submit().
-//
-template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Submit) CompletionToken>
-auto async_submit(Session::Impl& impl, std::string_view method, boost::urls::url url,
-                  const Fields& headers, CompletionToken&& token)
-{
-   return asio::async_initiate<CompletionToken, Submit>(
-      [&impl](auto&& handler, std::string_view method, boost::urls::url url,
-              const Fields& headers) { //
-         impl.async_submit(std::move(handler), method, std::move(url), headers);
-      },
-      token, method, std::move(url), headers);
-}
-
-//
 // The whole of async_get(), as the coroutine it reads best as: submit, end the empty request
-// body, wait for the response, read all of it. Every step is left to throw, and the co_spawn()
-// below turns that back into the error code the caller gets.
+// body, wait for the response, read all of it. Its result is what Session::get() yields, so every
+// error is reported, not thrown.
 //
 // The implementation is held by shared_ptr: a Session released while the GET is still in flight
 // must not pull the ground out from under the operations still running on it.
 //
-Task<client::Message> get_message(std::shared_ptr<Session::Impl> session, boost::urls::url url,
-                                  Fields headers)
+Task<std::tuple<error_code, client::Message>> get_message(std::shared_ptr<Session::Impl> session,
+                                                          boost::urls::url url, Fields headers)
 {
+   //
+   // What an error leaves behind: an empty message that says status::unknown, rather than the 200
+   // a default-constructed Beast response would claim.
+   //
+   auto failed = [](error_code ec) {
+      client::Message message;
+      message.result(boost::beast::http::status::unknown);
+      return std::tuple{ec, std::move(message)};
+   };
+
    //
    // A GET has no body, and saying so with a "Content-Length: 0" keeps HTTP/1.1 from framing one
    // as chunked -- which would leave the request incomplete until the write_eof() below, and the
@@ -99,9 +90,22 @@ Task<client::Message> get_message(std::shared_ptr<Session::Impl> session, boost:
        !headers.count(boost::beast::http::field::transfer_encoding))
       headers.set(boost::beast::http::field::content_length, "0");
 
-   auto request = co_await async_submit(*session, "GET", std::move(url), headers, deferred);
-   co_await request.async_write_eof();
-   auto response = co_await request.async_get_response();
+   //
+   // The public Session::submit() is POST-only, but every backend can send whatever method it is
+   // handed, see Session::Impl::async_submit().
+   //
+   auto [ec, request] = co_await initiate<Submit>([&](SubmitHandler handler) {
+      session->async_submit(std::move(handler), "GET", std::move(url), headers);
+   });
+   if (ec)
+      co_return failed(ec);
+
+   if (auto [ec] = co_await request.write_eof(); ec)
+      co_return failed(ec);
+
+   auto [response_ec, response] = co_await request.get_response();
+   if (response_ec)
+      co_return failed(response_ec);
 
    client::Message message;
    message.result(static_cast<unsigned>(response.status_code()));
@@ -112,40 +116,24 @@ Task<client::Message> get_message(std::shared_ptr<Session::Impl> session, boost:
    std::array<char, 16_k> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
+      auto [ec, n] = co_await response.read_some(asio::buffer(buffer));
       body.append(buffer.data(), n);
 
       if (ec == errors::eof)
          break;
       else if (ec)
-         throw boost::system::system_error(ec);
+         co_return failed(ec);
    }
 
    logd("async_get: {} {}, {} bytes", message.result_int(), message.reason(), body.size());
-   co_return std::move(message);
+   co_return std::tuple{error_code{}, std::move(message)};
 }
 
 } // namespace
 
 void Session::async_get_any(GetHandler&& handler, boost::urls::url url, const Fields& headers)
 {
-   auto executor = get_associated_executor(handler, get_executor());
-   auto slot = get_associated_cancellation_slot(handler);
-
-   //
-   // co_spawn() gives the coroutine a cancellation slot of its own, so binding the caller's to it
-   // is what makes cancelling async_get() reach the operation it is currently waiting for.
-   //
-   co_spawn(get_executor(), get_message(impl, std::move(url), headers),
-            bind_cancellation_slot(
-               slot, bind_executor(executor, [handler = std::move(handler)](
-                                                const std::exception_ptr& ep,
-                                                client::Message message) mutable {
-                  auto ec = code(ep);
-                  if (ec)
-                     message.result(boost::beast::http::status::unknown); // not the Beast default
-                  std::move(handler)(ec, std::move(message));
-               })));
+   launch(get_executor(), get_message(impl, std::move(url), headers), std::move(handler));
 }
 
 // =================================================================================================

@@ -134,6 +134,10 @@ public:
          token);
    }
 
+   /// \c async_get_response() as a coroutine:
+   /// <tt>auto [ec, response] = co_await request.get_response();</tt>
+   auto get_response() { return async_get_response(asio::as_tuple); }
+
 private:
    void async_get_response_any(GetResponseHandler&& handler);
 
@@ -177,6 +181,9 @@ public:
          bind_executor(executor, [&](auto&& handler) { async_connect_any(std::move(handler)); }),
          token);
    }
+
+   /// \c async_connect() as a coroutine: <tt>auto [ec, session] = co_await client.connect();</tt>
+   auto connect() { return async_connect(asio::as_tuple); }
 
 private:
    void async_connect_any(ConnectHandler&& handler);
