@@ -408,7 +408,7 @@ Task<void> Server::Impl::tcp_accept_loop()
       // NOTE: This is slow. Consider multiple IO contexts instead,
       //       or explicit thread pools where really needed.
       //
-      ip::tcp::socket socket(config().use_strand ? boost::asio::make_strand(executor) : executor);
+      ip::tcp::socket socket(config().use_strand ? new_strand(executor) : executor);
       auto [ec] = co_await acceptor_.async_accept(socket, as_tuple);
       if (ec)
       {

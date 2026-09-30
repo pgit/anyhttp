@@ -43,10 +43,7 @@
 #include <boost/asio/detached.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/ip/v6_only.hpp>
-#include <boost/asio/redirect_error.hpp>
-#include <boost/asio/steady_timer.hpp>
 #include <boost/asio/strand.hpp>
-#include <boost/asio/use_awaitable.hpp>
 
 #include <boost/container/container_fwd.hpp>
 #include <boost/container/flat_map.hpp>
@@ -335,7 +332,7 @@ private:
    Address remote_;
    ngtcp2_cid scid_{};
 
-   asio::steady_timer done_signal_; // used to wake do_session() on connection close
+   Event done_; // wakes do_session() on connection close
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
    bool no_gso_ = false; // Config::disable_gso, or sendmsg() rejected UDP_SEGMENT
    size_t request_counter_ = 0;
@@ -564,11 +561,9 @@ void Http3ServerStream::submit_response(unsigned int status, const Fields& user_
 // =================================================================================================
 
 Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Address remote)
-   : http3::Http3Session(server.config().use_strand
-                            ? Executor{asio::make_strand(server.get_executor())}
-                            : server.get_executor()),
-     server_(server), ep_(ep), remote_(remote), done_signal_(get_executor()),
-     no_gso_(server.config().disable_gso)
+   : http3::Http3Session(server.config().use_strand ? new_strand(server.get_executor())
+                                                    : server.get_executor()),
+     server_(server), ep_(ep), remote_(remote), no_gso_(server.config().disable_gso)
 {
    max_header_size_ = server.config().max_header_size;
    log_prefix_ = http3::log_prefix(Role::server, "h3", &remote_.su.sa, remote_.len);
@@ -588,8 +583,6 @@ Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Add
    else
       mloge("dup: {}", strerror(errno));
 
-   // done_signal_ is armed at "never" until signal_done() moves it to the past.
-   done_signal_.expires_at(asio::steady_timer::time_point::max());
    mlogd("session created");
 }
 
@@ -599,7 +592,6 @@ Http3ServerSession::~Http3ServerSession()
    // Tear the streams down while this object is still whole: destroying a stream fires pending
    // handlers, which reach back into the session.
    //
-   done_signal_.cancel();
    clear_streams();
    if (owns_fd_)
       ::close(ep_.fd);
@@ -617,10 +609,8 @@ void Http3ServerSession::async_submit(SubmitHandler&& handler, std::string_view,
 
 Task<void> Http3ServerSession::do_session(Buffer&&)
 {
-   error_code ec;
-   co_await done_signal_.async_wait(redirect_error(use_awaitable, ec));
-   // ec is boost::asio::error::operation_aborted (from destroy()) or a spurious
-   // wake-up; either way, this coroutine's job is done.
+   // Set by signal_done(), or cancelled: either way, this coroutine's job is done.
+   auto [ec] = co_await done_.wait();
    co_return;
 }
 
@@ -633,7 +623,7 @@ void Http3ServerSession::destroy() noexcept
    // this session's executor first; with use_strand off and the caller already inside the
    // io_context, dispatch() degenerates to an inline call.
    //
-   asio::dispatch(get_executor(), [self = shared_from_this()] {
+   dispatch_to(get_executor(), [self = shared_from_this()] {
       static_cast<Http3ServerSession&>(*self).do_destroy();
    });
 }
@@ -676,11 +666,7 @@ void Http3ServerSession::do_destroy() noexcept
    signal_done();
 }
 
-void Http3ServerSession::signal_done()
-{
-   // Move the sentinel timer to the past so any waiter wakes up.
-   done_signal_.expires_at(asio::steady_timer::time_point::min());
-}
+void Http3ServerSession::signal_done() { done_.set(); }
 
 // -------------------------------------------------------------------------------------------------
 
@@ -915,10 +901,7 @@ void Http3ServerSession::schedule_close_timer()
 {
    auto delay = conn_ ? std::chrono::nanoseconds{ngtcp2_conn_get_pto(conn_) * 3}
                       : std::chrono::nanoseconds{std::chrono::milliseconds{100}};
-   timer_.expires_after(delay);
-   timer_.async_wait([self = weak_from_this()](const error_code& ec) {
-      if (ec)
-         return;
+   timer_.arm(delay, [self = weak_from_this()] {
       auto session = std::static_pointer_cast<Http3ServerSession>(self.lock());
       if (!session)
          return;
@@ -950,7 +933,7 @@ Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endp
 
    const bool is_v6 = endpoint.protocol() == ip::udp::v6();
 
-   socket_.emplace(config().use_strand ? asio::make_strand(parent_.get_executor())
+   socket_.emplace(config().use_strand ? new_strand(parent_.get_executor())
                                        : parent_.get_executor());
    socket_->open(is_v6 ? ip::udp::v6() : ip::udp::v4());
 
@@ -999,7 +982,7 @@ void Http3ServerImpl::destroy()
    // Server::Impl at this point, each sending its final CONNECTION_CLOSE through its own
    // dup()ed fd, so closing this socket doesn't race that.
    //
-   asio::dispatch(socket_->get_executor(), [self = shared_from_this(), owner = owner()] {
+   dispatch_to(socket_->get_executor(), [self = shared_from_this(), owner = owner()] {
       self->socket_->close();
    }); // breaks udp_receive_loop()
 }
@@ -1292,9 +1275,7 @@ Task<void> Http3ServerImpl::udp_receive_loop()
 {
    for (;;)
    {
-      error_code ec;
-      co_await socket_->async_wait(boost::asio::socket_base::wait_read,
-                                   redirect_error(use_awaitable, ec));
+      auto [ec] = co_await io::wait_readable(*socket_);
       if (ec)
       {
          if (ec == errc::operation_canceled)

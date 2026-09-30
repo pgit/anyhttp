@@ -26,9 +26,13 @@
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/deferred.hpp>
 #include <boost/asio/detached.hpp>
+#include <boost/asio/dispatch.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/post.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/asio/strand.hpp>
+#include <boost/asio/this_coro.hpp>
 #include <boost/asio/write.hpp>
 #include <boost/system/errc.hpp>
 #include <boost/system/error_code.hpp>
@@ -37,6 +41,8 @@
 #include <boost/beast/http/error.hpp>
 
 #include <cassert>
+#include <chrono>
+#include <tuple>
 #include <utility>
 
 namespace anyhttp
@@ -172,6 +178,17 @@ inline void run_later(const Executor& executor, F&& function)
    asio::post(executor, std::forward<F>(function));
 }
 
+/// Calls \p function on \p executor: right away if the caller runs on it already, later if not.
+template <typename F>
+inline void dispatch_to(const Executor& executor, F&& function)
+{
+   asio::dispatch(executor, std::forward<F>(function));
+}
+
+/// A new strand on \p executor, for a connection that has to be serialized against itself
+/// while the io_context runs on several threads (\c server::Config::use_strand).
+inline Executor new_strand(const Executor& executor) { return asio::make_strand(executor); }
+
 /// Starts \p task on \p executor, detached: nobody waits for it, and what it throws is dropped.
 inline void launch(const Executor& executor, Task<void> task)
 {
@@ -202,38 +219,90 @@ inline Task<void> when_both(Task<void> a, Task<void> b)
  * does not wait at all. A loop that waits for more work clears it at its top, before it looks for
  * work, so that nothing set while it was looking gets lost.
  *
- * Only one coroutine may wait at a time, and all calls come from the same strand. For ASIO,
- * \c set() resumes the waiting coroutine right there, inside \c set().
+ * \c set() never resumes the waiting coroutine itself, but posts that to the coroutine's
+ * executor: it is called from inside engine callbacks. Only one coroutine may wait at a time, and
+ * all calls come from the strand that coroutine runs on.
  */
 class Event
 {
 public:
+   Event() = default;
+   Event(const Event&) = delete;
+   Event& operator=(const Event&) = delete;
+   ~Event()
+   {
+      if (waiter_)
+         wake(errors::canceled);
+   }
+
    void set()
    {
       set_ = true;
       if (waiter_)
-         std::exchange(waiter_, nullptr)();
+         wake(error_code{});
    }
 
    void clear() noexcept { set_ = false; }
    bool is_set() const noexcept { return set_; }
 
-   Task<void> wait()
+   /**
+    * Waits for the event to be set: <tt>auto [ec] = co_await event.wait();</tt>. The wait can be
+    * cancelled, and then completes with \c errors::canceled.
+    */
+   Task<std::tuple<error_code>> wait()
    {
       if (set_)
-         co_return;
+         co_return error_code{};
 
-      co_await asio::async_initiate<const asio::deferred_t&, void()>(
-         [this](Completion<void()> waiter) {
+      executor_ = co_await asio::this_coro::executor;
+      co_return co_await asio::async_initiate<const asio::as_tuple_t<asio::deferred_t>&,
+                                              void(error_code)>(
+         [this](Completion<void(error_code)> waiter) {
             assert(!waiter_);
             waiter_ = std::move(waiter);
+            on_cancel(waiter_, [this] {
+               if (waiter_)
+                  wake(errors::canceled);
+            });
          },
-         asio::deferred);
+         asio::as_tuple(asio::deferred));
    }
 
 private:
+   void wake(error_code ec) { complete_later(std::move(waiter_), executor_, ec); }
+
    bool set_ = false;
-   Completion<void()> waiter_;
+   Completion<void(error_code)> waiter_;
+   Executor executor_; // of the coroutine waiting in waiter_
+};
+
+// -------------------------------------------------------------------------------------------------
+
+/**
+ * A timer that calls back when it expires, which is what an engine with timeouts of its own
+ * (ngtcp2) needs: it tells when, and wants to be called then. Arming the timer again replaces
+ * both the expiry and the callback, and a callback that has been replaced or cancelled is never
+ * called. Callbacks run on the timer's executor.
+ */
+class Timer
+{
+public:
+   explicit Timer(const Executor& executor) : timer_(executor) {}
+
+   template <typename Rep, typename Period, typename F>
+   void arm(std::chrono::duration<Rep, Period> delay, F&& on_expiry)
+   {
+      timer_.expires_after(delay);
+      timer_.async_wait([on_expiry = std::forward<F>(on_expiry)](const error_code& ec) mutable {
+         if (!ec)
+            on_expiry();
+      });
+   }
+
+   void cancel() { timer_.cancel(); }
+
+private:
+   asio::steady_timer timer_;
 };
 
 // =================================================================================================
@@ -254,6 +323,22 @@ template <typename Stream>
 auto read_some(Stream& stream, asio::mutable_buffer buffer)
 {
    return stream.async_read_some(buffer, asio::as_tuple);
+}
+
+/// Receives a datagram into \p buffer, on a connected datagram socket: <tt>(error_code,
+/// size_t)</tt>.
+template <typename Socket>
+auto receive(Socket& socket, asio::mutable_buffer buffer)
+{
+   return socket.async_receive(buffer, asio::as_tuple);
+}
+
+/// Waits until \p socket has something to read, for a caller that reads it by hand
+/// (<tt>recvmsg()</tt> on its native handle): <tt>(error_code)</tt>.
+template <typename Socket>
+auto wait_readable(Socket& socket)
+{
+   return socket.async_wait(Socket::wait_read, asio::as_tuple);
 }
 
 /// Writes all of \p buffers, unless an error comes first: <tt>(error_code, size_t)</tt>.

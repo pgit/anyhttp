@@ -3,7 +3,6 @@
 #include "anyhttp/session_impl.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/steady_timer.hpp>
 
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
@@ -250,7 +249,7 @@ protected:
    nghttp3_conn* h3_ = nullptr;
    size_t max_header_size_ = default_max_header_size; // set by the derived session's constructor
 
-   asio::steady_timer timer_; // ngtcp2 expiry (handshake / idle / PTO)
+   Timer timer_; // ngtcp2 expiry (handshake / idle / PTO)
    ngtcp2_ccerr last_error_{};
    bool closed_ = false;
 

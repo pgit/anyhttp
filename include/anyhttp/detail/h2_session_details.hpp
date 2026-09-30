@@ -140,10 +140,24 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
             break; // nghttp2 doesn't want to send or receive any more, so we are done
 
          mylogd("send loop: waiting...");
-         co_await send_ready_.wait();
+         if (auto [ec] = co_await send_ready_.wait(); ec)
+            break;
          mylogd("send loop: waiting... done");
       }
    }
+
+   //
+   // Nothing more goes out: nghttp2 wants neither to read nor to write any more, or the connection
+   // broke. Whatever the receive loop might still read would go unused, and the peer may well be
+   // waiting for us to close the connection, having received our GOAWAY (which, for an error,
+   // RFC 9113 section 5.4.1 requires). So end the read as well, which ends the session.
+   //
+   // Before, this happened by accident of timing: start_write() drained the GOAWAY into the socket
+   // before the receive loop checked nghttp2_session_want_read() again. Now that the send loop is
+   // woken by a posted Event, the receive loop gets there first.
+   //
+   error_code ec;
+   get_socket(stream_).cancel(ec);
 
    mylogd("send loop: destroying streams...");
    streams_.clear();

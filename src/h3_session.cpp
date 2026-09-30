@@ -325,13 +325,10 @@ void Http3Session::arm_timer_from_ngtcp2()
    }
 
    auto now = timestamp();
-   asio::steady_timer::duration delay =
+   auto delay =
       expiry <= now ? std::chrono::nanoseconds{1} : std::chrono::nanoseconds{expiry - now};
 
-   timer_.expires_after(delay);
-   timer_.async_wait([self = weak_from_this()](const error_code& ec) {
-      if (ec)
-         return;
+   timer_.arm(delay, [self = weak_from_this()] {
       if (auto session = std::static_pointer_cast<Http3Session>(self.lock()))
          session->handle_expiry();
    });

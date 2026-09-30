@@ -27,9 +27,6 @@
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/ip/udp.hpp>
-#include <boost/asio/redirect_error.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <boost/asio/use_awaitable.hpp>
 
 #include <boost/beast/http/error.hpp>
 #include <boost/beast/http/status.hpp>
@@ -222,12 +219,7 @@ public:
    // (see setup_http3()), or once the connection has failed/closed before getting that far -- in
    // which case `ready()` is still false and the caller should synthesize an error.
    //
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(void(error_code))
-                CompletionToken = DefaultCompletionToken>
-   auto wait_ready(CompletionToken&& token = CompletionToken())
-   {
-      return ready_signal_.async_wait(std::forward<CompletionToken>(token));
-   }
+   auto wait_ready() { return ready_.wait(); }
    bool ready() const noexcept { return h3() != nullptr; }
 
 protected:
@@ -244,7 +236,7 @@ private:
 
 private:
    asio::ip::udp::socket socket_;
-   asio::steady_timer ready_signal_; // sentinel timer, see wait_ready()
+   Event ready_; // see wait_ready()
 };
 
 // =================================================================================================
@@ -416,12 +408,9 @@ void Http3ClientStream::deliver_response()
 // =================================================================================================
 
 Http3ClientSession::Http3ClientSession(Executor executor, const Config& config)
-   : http3::Http3Session(std::move(executor)), socket_(get_executor()),
-     ready_signal_(get_executor())
+   : http3::Http3Session(std::move(executor)), socket_(get_executor())
 {
    max_header_size_ = config.max_header_size;
-   // Sentinel timers: expires_at(max) means "not yet"; a wait completes once moved to "min".
-   ready_signal_.expires_at(asio::steady_timer::time_point::max());
 }
 
 Http3ClientSession::~Http3ClientSession()
@@ -430,7 +419,6 @@ Http3ClientSession::~Http3ClientSession()
    // Tear the streams down while this object is still whole: destroying a stream fires pending
    // handlers, which reach back into the session.
    //
-   ready_signal_.cancel();
    clear_streams();
    mlogd("session deleted");
 }
@@ -541,9 +529,7 @@ Task<void> Http3ClientSession::do_session(Buffer&&)
    std::array<uint8_t, 64_k> buf;
    for (;;)
    {
-      error_code ec;
-      size_t n =
-         co_await socket_.async_receive(asio::buffer(buf), redirect_error(use_awaitable, ec));
+      auto [ec, n] = co_await io::receive(socket_, asio::buffer(buf));
       if (ec)
       {
          if (ec != errc::operation_canceled)
@@ -621,10 +607,7 @@ void Http3ClientSession::close()
    signal_ready();
 }
 
-void Http3ClientSession::signal_ready()
-{
-   ready_signal_.expires_at(asio::steady_timer::time_point::min());
-}
+void Http3ClientSession::signal_ready() { ready_.set(); }
 
 int Http3ClientSession::handle_error(int /*rv*/)
 {
@@ -745,14 +728,10 @@ Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor, std:
           });
 
    //
-   // Note: wait_ready() uses a sentinel steady_timer as a one-shot gate (see the comment on
-   // ready_signal_ / signal_ready()). Rearming a timer that already has a pending async_wait()
-   // cancels that wait with operation_aborted rather than completing it successfully -- so the
-   // *error code* here doesn't tell us anything; whether the handshake actually succeeded is
-   // reflected in ready() instead.
+   // The wait ends when the handshake has gotten far enough, when the connection has failed or
+   // closed before that, or when the caller cancels. Only ready() tells these apart.
    //
-   error_code ec;
-   co_await session->wait_ready(redirect_error(use_awaitable, ec));
+   auto [ec] = co_await session->wait_ready();
    if (!session->ready())
       throw boost::system::system_error(make_error_code(errc::connection_refused));
 
