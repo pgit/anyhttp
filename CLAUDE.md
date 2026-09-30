@@ -108,9 +108,13 @@ constructed, for TCP and QUIC alike, and keeps serving the old ones. curl then f
 `verify result: 20`; the HTTP/3 client (which reads its CA file on every connect) with "unable to
 get local issuer certificate".
 
-**One TLS library per process.** anyhttp links AWS-LC (statically, from `/opt/boringssl`, what
-`find_package(ssl CONFIG)` provides) together with `ngtcp2_crypto_boringssl`. Do not add `#ifdef`s
-to also support OpenSSL. After adding a dependency, check `ldd` shows no `libssl.so.3` /
+**One TLS library per process.** By default anyhttp links AWS-LC (statically, from
+`/opt/boringssl`, what `find_package(ssl CONFIG)` provides) together with
+`ngtcp2_crypto_boringssl`. `-DTLS_LIBRARY=OpenSSL` switches to the system OpenSSL (3.5+) and
+`ngtcp2_crypto_ossl`; `build-openssl/` is that tree. The code picks its variant from the TLS
+headers (`OPENSSL_IS_AWSLC` / `OPENSSL_IS_BORINGSSL`), and the `#if`s are confined to
+`Http3Session::configure_tls_context()` / `setup_tls()` and `tls.cpp` -- keep it that way.
+After adding a dependency, check `ldd` of an AWS-LC build shows no `libssl.so.3` /
 `libcrypto.so.3` -- a shared OpenSSL would interpose the executable's AWS-LC symbols. `curl`,
 `osslclient` and `osslserver` are OpenSSL builds and are useful for interop testing.
 

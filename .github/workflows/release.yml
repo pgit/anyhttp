@@ -61,6 +61,29 @@ jobs:
         run: |
           build/test/test_all
 
+  openssl:
+    name: OpenSSL
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/psedoc/anyhttp:0.30
+
+    steps:
+      - *checkout
+
+      - name: Configure CMake with OpenSSL
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTLS_LIBRARY=OpenSSL
+
+      - *build
+
+      - name: Check that OpenSSL is linked
+        run: |
+          ldd build/test/test_all | tee ldd.txt
+          grep -q 'libssl\.so\.3' ldd.txt && grep -q 'libngtcp2_crypto_ossl' ldd.txt
+
+      - name: Run tests (if available)
+        run: |
+          build/test/test_all
+
   asan:
     name: ASAN
     runs-on: ubuntu-latest

@@ -97,17 +97,33 @@ find_package(Boost 1.88 COMPONENTS thread atomic url filesystem process program_
 find_package(Threads)
 
 #
-# TLS: BoringSSL -- or rather AWS-LC, which is API compatible and what the devcontainer builds into
-# /opt/boringssl, deliberately away from the system OpenSSL. It only comes as static libraries.
+# TLS: AWS-LC (default) or OpenSSL, selected with TLS_LIBRARY.
+#
+# AWS-LC is API compatible with BoringSSL, which is what ngtcp2 calls it; the devcontainer builds it
+# into /opt/boringssl, deliberately away from the system OpenSSL. It only comes as static libraries.
+# OpenSSL needs to be 3.5 or later, for the QUIC TLS API that ngtcp2_crypto_ossl builds on.
 #
 # Everything in the process has to use the very same TLS library: Boost.Asio's SSL streams,
-# ngtcp2_crypto_boringssl and our own code. Linking the system OpenSSL on top would silently mix
-# up two libraries exporting the same symbols.
+# ngtcp2's crypto backend and our own code. Linking the other one on top would silently mix up two
+# libraries exporting the same symbols. The code selects its variant from the headers it sees.
 #
-set(BORINGSSL_ROOT /opt/boringssl CACHE PATH "Installation prefix of BoringSSL / AWS-LC")
-list(PREPEND CMAKE_PREFIX_PATH ${BORINGSSL_ROOT}) # ssl-config.cmake finds 'crypto' through it
-find_package(ssl CONFIG REQUIRED)
-message(STATUS "Using TLS library: ${ssl_DIR}")
+set(TLS_LIBRARY AWS-LC CACHE STRING "TLS library: AWS-LC or OpenSSL")
+set_property(CACHE TLS_LIBRARY PROPERTY STRINGS AWS-LC OpenSSL)
+if (TLS_LIBRARY STREQUAL "AWS-LC")
+    set(BORINGSSL_ROOT /opt/boringssl CACHE PATH "Installation prefix of BoringSSL / AWS-LC")
+    list(PREPEND CMAKE_PREFIX_PATH ${BORINGSSL_ROOT}) # ssl-config.cmake finds 'crypto' through it
+    find_package(ssl CONFIG REQUIRED)
+    set(TLS_TARGET AWS::ssl)
+    set(NGTCP2_CRYPTO_MODULE libngtcp2_crypto_boringssl)
+    message(STATUS "Using TLS library: AWS-LC (${ssl_DIR})")
+elseif (TLS_LIBRARY STREQUAL "OpenSSL")
+    find_package(OpenSSL 3.5 REQUIRED)
+    set(TLS_TARGET OpenSSL::SSL)
+    set(NGTCP2_CRYPTO_MODULE libngtcp2_crypto_ossl)
+    message(STATUS "Using TLS library: OpenSSL ${OPENSSL_VERSION} (${OPENSSL_SSL_LIBRARY})")
+else()
+    message(FATAL_ERROR "TLS_LIBRARY must be AWS-LC or OpenSSL, not '${TLS_LIBRARY}'")
+endif()
 
 #
 # nghttp2

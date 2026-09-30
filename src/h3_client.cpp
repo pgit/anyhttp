@@ -47,7 +47,6 @@
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
-#include <ngtcp2/ngtcp2_crypto_boringssl.h>
 
 #include <openssl/err.h>
 #include <openssl/rand.h>
@@ -83,7 +82,7 @@ namespace
 {
 
 //
-// The client-role BoringSSL SSL_CTX for one outgoing QUIC connection. It is built per connection
+// The client-role SSL_CTX for one outgoing QUIC connection. It is built per connection
 // because the trust store comes from the Config; SSL_new() takes a reference, so the context can
 // go once the session's SSL exists.
 //
@@ -95,8 +94,7 @@ struct TlsClientContext
       if (!ctx)
          throw std::runtime_error("SSL_CTX_new");
 
-      if (ngtcp2_crypto_boringssl_configure_client_context(ctx) != 0)
-         throw std::runtime_error("ngtcp2_crypto_boringssl_configure_client_context");
+      http3::Http3Session::configure_tls_context(ctx, false);
 
       static constexpr unsigned char alpn[] = "\x02h3";
       SSL_CTX_set_alpn_protos(ctx, alpn, sizeof(alpn) - 1);

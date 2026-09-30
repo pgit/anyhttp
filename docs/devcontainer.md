@@ -42,7 +42,7 @@ it is C, so a single build in `/usr/local` serves both standard libraries.
   shadow the system OpenSSL; see "One TLS library per process" in [CLAUDE.md](../CLAUDE.md).
 - **nghttp3** (lib only) in `/usr/local`.
 - **ngtcp2** in `/usr/local`, with both crypto backends: `ngtcp2_crypto_boringssl` (what anyhttp
-  links) and `ngtcp2_crypto_ossl`. Its OpenSSL example programs are installed as `osslclient`
+  links by default) and `ngtcp2_crypto_ossl` (with `-DTLS_LIBRARY=OpenSSL`). Its OpenSSL example programs are installed as `osslclient`
   and `osslserver` for interop tests.
 - **urlparse** (from ngtcp2's third-party tree).
 - **nghttp2** with HTTP/3 support, built against the OpenSSL variant: the library for the HTTP/2

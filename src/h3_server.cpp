@@ -68,7 +68,6 @@
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
-#include <ngtcp2/ngtcp2_crypto_boringssl.h>
 
 #include <openssl/err.h>
 #include <openssl/rand.h>
@@ -117,7 +116,7 @@ namespace
 {
 
 //
-// The BoringSSL SSL_CTX every QUIC connection of one server is served from. Owned by
+// The SSL_CTX every QUIC connection of one server is served from. Owned by
 // Http3ServerImpl, so it is built with the server and not on the first connection.
 //
 struct TlsServerContext
@@ -128,15 +127,7 @@ struct TlsServerContext
       if (!ctx)
          throw std::runtime_error("SSL_CTX_new");
 
-      if (ngtcp2_crypto_boringssl_configure_server_context(ctx) != 0)
-         throw std::runtime_error("ngtcp2_crypto_boringssl_configure_server_context");
-
-      //
-      // What OpenSSL needed SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS, SSL_OP_SINGLE_ECDH_USE and
-      // SSL_MODE_RELEASE_BUFFERS for is the default in BoringSSL. SSL_OP_NO_ANTI_REPLAY does not
-      // exist, but it would only matter for 0-RTT, which we don't enable.
-      //
-      SSL_CTX_set_options(ctx, SSL_OP_CIPHER_SERVER_PREFERENCE);
+      http3::Http3Session::configure_tls_context(ctx, true);
 
       SSL_CTX_set_alpn_select_cb(ctx, &TlsServerContext::alpn_select_cb, nullptr);
 
