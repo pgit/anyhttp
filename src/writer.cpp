@@ -43,7 +43,7 @@ void Writer::async_write_any(WriteHandler&& handler, asio::const_buffer buffer, 
    if (impl_)
       impl_->async_write(std::move(handler), buffer, eof);
    else
-      std::move(handler)(asio::error::bad_descriptor);
+      std::move(handler)(errors::bad_descriptor);
 }
 
 // =================================================================================================

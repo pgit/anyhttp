@@ -51,7 +51,6 @@ using namespace std::chrono_literals;
 using namespace boost::asio;
 namespace beast = boost::beast;
 namespace http = beast::http;
-namespace errc = boost::system::errc;
 
 namespace anyhttp::beast_impl
 {
@@ -115,7 +114,7 @@ public:
          // get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send, ec);
          get_socket(stream).shutdown(boost::asio::socket_base::shutdown_receive, ec);
          session->closed_ = true;
-         logwd(ec != asio::error::not_connected, //
+         logwd(ec != errc::not_connected, //
                "[{}] destroy: shutdown: {}", log_prefix(), what(ec));
       }
       finish();
@@ -170,9 +169,9 @@ public:
          if (body_buffer.size() == 0)
             ec = {};
          else if (parser.is_done())
-            ec = asio::error::eof;
+            ec = errors::eof;
          else
-            ec = boost::beast::http::error::partial_message;
+            ec = errors::partial_message;
 
          complete_immediately(std::move(handler), get_executor(), ec, size_t{0});
          return;
@@ -369,7 +368,7 @@ public:
          if (!empty)
             mloge("async_write: body has already been ended");
          complete_immediately(std::move(handler), get_executor(),
-                              empty ? error_code{} : errc::make_error_code(errc::broken_pipe));
+                              empty ? error_code{} : make_error_code(errc::broken_pipe));
          return;
       }
 
@@ -377,7 +376,7 @@ public:
       {
          mlogw("async_write: session already gone");
          complete_immediately(std::move(handler), get_executor(),
-                              make_error_code(asio::error::connection_aborted));
+                              errors::connection_aborted);
          return;
       }
 
@@ -385,7 +384,7 @@ public:
       {
          mloge("async_write: already canceled");
          complete_immediately(std::move(handler), get_executor(),
-                              errc::make_error_code(errc::operation_canceled));
+                              errors::canceled);
          return;
       }
 
@@ -471,7 +470,7 @@ public:
             else if (!ec && n < expected)
             {
                mlogw("async_write: wrote {} bytes which is less than expected ({})", n, expected);
-               ec = errc::make_error_code(errc::message_size);
+               ec = make_error_code(errc::message_size);
             }
             */
 
@@ -575,7 +574,7 @@ public:
       {
          mlogw("async_submit: session already gone");
          complete_immediately(std::move(handler), super::get_executor(),
-                              make_error_code(asio::error::connection_aborted));
+                              errors::connection_aborted);
          return;
       }
 
@@ -700,7 +699,7 @@ public:
       {
          mlogw("async_submit: session already gone");
          complete_immediately(std::move(handler), get_executor(),
-                              make_error_code(asio::error::connection_aborted));
+                              errors::connection_aborted);
          return;
       }
 
@@ -724,7 +723,7 @@ public:
 
       if (response_requested)
       {
-         auto ec = asio::error::basic_errors::already_started;
+         auto ec = errors::already_started;
          mlogw("async_get_response: \x1b[1;31m{}\x1b[0m", what(ec));
          any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
          ex.execute([handler = std::move(handler), ec]() mutable { //
@@ -737,7 +736,7 @@ public:
       {
          mlogw("async_get_response: session already gone");
          complete_immediately(std::move(handler), get_executor(),
-                              make_error_code(asio::error::connection_aborted),
+                              errors::connection_aborted,
                               client::Response{nullptr});
          return;
       }
@@ -750,9 +749,9 @@ public:
       auto& cs = client_session();
       error_code ec;
       if (cs.receive_failed_)
-         ec = asio::error::connection_aborted;
+         ec = errors::connection_aborted;
       else if (sequence != cs.responses_read_)
-         ec = asio::error::would_block;
+         ec = errors::would_block;
       if (ec)
       {
          mlogw("async_get_response: {} (request #{}, {} responses read)", what(ec), sequence,
@@ -874,7 +873,7 @@ void BeastSession<Stream>::destroy() noexcept
    error_code ec;
    get_socket(stream_).shutdown(socket_base::shutdown_both, ec);
    // not_connected: the peer is gone already, which is what we wanted anyway
-   logwd(ec && ec != asio::error::not_connected, //
+   logwd(ec && ec != errc::not_connected, //
          "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
    // });
 }
@@ -1025,7 +1024,7 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       // The rest of the request can not be told apart from whatever follows it on the connection,
       // so there is nothing left to do after telling the client why.
       //
-      if (ec == http::error::header_limit)
+      if (ec == errors::header_limit)
       {
          http::response<http::empty_body> res{http::status::request_header_fields_too_large, 11};
          res.set(http::field::server, "anyhttp");
@@ -1202,7 +1201,7 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    // connection was ending.
    //
    get_socket(stream_).shutdown(asio::ip::tcp::socket::shutdown_send, ec);
-   if (ec && ec != asio::error::not_connected) // the peer may be gone already
+   if (ec && ec != errc::not_connected) // the peer may be gone already
       mlogw("shutdown: {}", ec.message());
    get_socket(stream_).close(ec);
 
@@ -1277,9 +1276,9 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
    //
    error_code ec;
    if (send_failed_)
-      ec = asio::error::connection_aborted;
+      ec = errors::connection_aborted;
    else if (sending_)
-      ec = asio::error::would_block;
+      ec = errors::would_block;
    if (ec)
    {
       mlogw("async_submit: {} ({})", what(ec),

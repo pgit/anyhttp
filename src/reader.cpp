@@ -43,7 +43,7 @@ void Reader::async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& 
    if (impl_)
       impl_->async_read_some(buffer, std::move(handler));
    else
-      std::move(handler)(asio::error::bad_descriptor, 0);
+      std::move(handler)(errors::bad_descriptor, 0);
 }
 
 // =================================================================================================

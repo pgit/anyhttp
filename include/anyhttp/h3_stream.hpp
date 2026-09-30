@@ -298,9 +298,7 @@ public:
             {
                asio::post(stream->get_executor(),
                           [handler = std::move(stream->read_handler)]() mutable {
-                             std::move(handler)(boost::system::errc::make_error_code(
-                                                   boost::system::errc::operation_canceled),
-                                                0);
+                             std::move(handler)(errors::canceled, 0);
                           });
             }
          });
@@ -319,9 +317,7 @@ public:
       // the body stood, so that reads issued from now on keep answering per the Reader contract.
       //
       assert(stream);
-      detached_ec = stream->reading_finished()
-                       ? error_code{asio::error::eof}
-                       : error_code{boost::beast::http::error::partial_message};
+      detached_ec = stream->reading_finished() ? errors::eof : errors::partial_message;
       detached_log_prefix = stream->log_prefix();
       stream = nullptr;
    }
@@ -336,7 +332,7 @@ public:
    std::string detached_log_prefix; // latched by detach()
 
    /// What a read past detach() reports: eof for a body read to its clean end, else truncation.
-   error_code detached_ec{boost::beast::http::error::partial_message};
+   error_code detached_ec{errors::partial_message};
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -388,10 +384,9 @@ public:
       if (empty && !eof)
          ec = {};
       else if (detached_body_ended)
-         ec = empty ? error_code{}
-                    : boost::system::errc::make_error_code(boost::system::errc::broken_pipe);
+         ec = empty ? error_code{} : make_error_code(errc::broken_pipe);
       else
-         ec = boost::system::errc::make_error_code(boost::system::errc::connection_reset);
+         ec = make_error_code(errc::connection_reset);
       complete_immediately(std::move(handler), executor, ec);
    }
 
@@ -399,8 +394,7 @@ public:
    {
       if (!stream || stream->closed)
       {
-         std::move(handler)(
-            boost::system::errc::make_error_code(boost::system::errc::connection_reset));
+         std::move(handler)(make_error_code(errc::connection_reset));
          return;
       }
       stream->submit_response(status_code, fields);

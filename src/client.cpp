@@ -41,7 +41,7 @@ void Request::async_get_response_any(Request::GetResponseHandler&& handler)
    if (*this)
       pimpl().async_get_response(std::move(handler));
    else
-      std::move(handler)(boost::asio::error::bad_descriptor, Response{nullptr});
+      std::move(handler)(errors::bad_descriptor, Response{nullptr});
 }
 
 // =================================================================================================

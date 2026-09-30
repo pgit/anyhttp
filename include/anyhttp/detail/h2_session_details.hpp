@@ -38,7 +38,7 @@ void NGHttp2SessionImpl<Stream>::destroy() noexcept
    error_code ec;
    get_socket(stream_).shutdown(asio::socket_base::shutdown_both, ec);
    // not_connected: the peer is gone already, which is what we wanted anyway
-   logwd(ec && ec != asio::error::not_connected, //
+   logwd(ec && ec != errc::not_connected, //
          "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
    // });
 }
@@ -109,7 +109,7 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
          if (ec)
          {
             // a peer that hung up is not our error
-            if (ec == asio::error::broken_pipe || ec == asio::error::connection_reset)
+            if (ec == errc::broken_pipe || ec == errc::connection_reset)
                mlogi("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
             else
                mloge("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());

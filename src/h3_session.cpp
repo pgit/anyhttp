@@ -819,7 +819,7 @@ int Http3Session::h3_cb_stream_close(nghttp3_conn*, int64_t stream_id, uint64_t 
       //
       auto ec = (app_error_code == NGHTTP3_H3_NO_ERROR)
                    ? error_code{}
-                   : boost::system::errc::make_error_code(boost::system::errc::connection_reset);
+                   : make_error_code(errc::connection_reset);
       s->fail(ec);
    }
    if (ngtcp2_conn_is_server(self->conn_))

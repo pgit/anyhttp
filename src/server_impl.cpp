@@ -414,7 +414,7 @@ Task<void> Server::Impl::tcp_accept_loop()
       if (ec)
       {
          // bad_descriptor: the acceptor was closed before async_accept() got to it
-         if (ec == boost::system::errc::operation_canceled || ec == asio::error::bad_descriptor)
+         if (ec == errc::operation_canceled || ec == errc::bad_file_descriptor)
             mlogi("TCP accept: {}", ec.message());
          else
             mlogw("TCP accept: {}", ec.message());

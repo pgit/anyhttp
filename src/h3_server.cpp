@@ -86,7 +86,6 @@
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
-namespace errc = boost::system::errc;
 
 using anyhttp::http3::Address;
 using anyhttp::http3::format_hex;
@@ -614,7 +613,7 @@ void Http3ServerSession::async_submit(SubmitHandler&& handler, std::string_view,
                                       const Fields&)
 {
    // A server does not initiate requests; see Http3ClientSession::async_submit().
-   std::move(handler)(errc::make_error_code(errc::operation_not_supported),
+   std::move(handler)(make_error_code(errc::operation_not_supported),
                       client::Request{nullptr});
 }
 
@@ -1300,7 +1299,7 @@ Task<void> Http3ServerImpl::udp_receive_loop()
                                    redirect_error(use_awaitable, ec));
       if (ec)
       {
-         if (ec == boost::asio::error::operation_aborted)
+         if (ec == errc::operation_canceled)
             mlogi("UDP receive: {}", ec.message());
          else
             mlogw("UDP receive: {}", ec.message());

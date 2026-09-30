@@ -98,7 +98,7 @@ Task<void> echo(server::Request request, server::Response response)
    for (;;)
    {
       auto [ec, n] = co_await request.async_read_some(asio::buffer(buffer), as_tuple);
-      if (ec == asio::error::eof)
+      if (ec == errors::eof)
          break;
       if (ec)
          throw boost::system::system_error(ec);
@@ -179,7 +179,7 @@ Task<size_t> drain(Reader& reader)
       bytes += n;
 
       // the regular end of the body is not something to report as an error
-      if (ec == asio::error::eof)
+      if (ec == errors::eof)
       {
          logd("drain: EOF after reading {} bytes", bytes);
          co_return bytes;
@@ -201,7 +201,7 @@ Task<std::string> read(Reader& reader)
    {
       auto [ec, n] = co_await reader.async_read_some(asio::buffer(buffer), as_tuple);
       body += std::string_view(buffer.data(), n);
-      if (ec == asio::error::eof)
+      if (ec == errors::eof)
       {
          logd("read: EOF after reading {} bytes", body.size());
          co_return std::move(body);
@@ -228,7 +228,7 @@ Task<std::tuple<size_t, error_code>> try_receive(Reader& reader)
       bytes += n;
 
       // the regular end of the body is not something to report as an error
-      if (ec == asio::error::eof)
+      if (ec == errors::eof)
       {
          logd("receive: EOF after reading {} bytes", bytes);
          co_return std::make_tuple(bytes, error_code{});

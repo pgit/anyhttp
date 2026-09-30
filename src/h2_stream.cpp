@@ -34,7 +34,6 @@
 
 using namespace boost::asio::experimental::awaitable_operators;
 
-namespace errc = boost::system::errc;
 
 namespace anyhttp::nghttp2
 {
@@ -69,8 +68,8 @@ void NGHttp2Reader<Base>::detach()
    //
    assert(stream);
    detached_ec = stream->reading_finished()
-                    ? error_code{asio::error::eof}
-                    : error_code{boost::beast::http::error::partial_message};
+                    ? errors::eof
+                    : errors::partial_message;
    detached_log_prefix = stream->log_prefix_;
    stream = nullptr;
 }
@@ -128,7 +127,7 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    if (!stream)
    {
       // Reading on after a cleanly finished body is part of the contract, not worth a warning.
-      if (detached_ec == asio::error::eof)
+      if (detached_ec == errors::eof)
          mlogd("async_read_some: stream already gone ({})", detached_ec.message());
       else
          mlogw("async_read_some: stream already gone ({})", detached_ec.message());
@@ -147,7 +146,7 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
          if (stream->read_handler_)
          {
             post(get_executor(), [handler = std::move(stream->read_handler_)] mutable { //
-               std::move(handler)(errc::make_error_code(errc::operation_canceled), 0);
+               std::move(handler)(errors::canceled, 0);
             });
          }
       });
@@ -260,7 +259,7 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    if (!stream)
    {
       mlogw("async_submit: stream already gone");
-      std::move(handler)(boost::asio::error::basic_errors::connection_aborted);
+      std::move(handler)(errors::connection_aborted);
       return;
    }
 
@@ -340,11 +339,11 @@ void NGHttp2Writer<Base>::async_write(WriteHandler&& handler, asio::const_buffer
    if (empty && !eof)
       ec = {};
    else if (detached_eof_submitted)
-      ec = empty ? error_code{} : errc::make_error_code(errc::broken_pipe);
+      ec = empty ? error_code{} : make_error_code(errc::broken_pipe);
    else
    {
       mlogw("async_write: stream already gone");
-      ec = boost::asio::error::basic_errors::connection_aborted;
+      ec = errors::connection_aborted;
    }
    complete_immediately(std::move(handler), executor, ec);
 }
@@ -355,7 +354,7 @@ void NGHttp2Writer<Base>::async_get_response(client::Request::GetResponseHandler
    if (!stream)
    {
       mlogw("async_get_response: stream already gone");
-      std::move(handler)(boost::asio::error::basic_errors::connection_aborted,
+      std::move(handler)(errors::connection_aborted,
                          client::Response{nullptr});
    }
    else
@@ -534,7 +533,7 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
       while (read_handler_)
       {
          mlogd("read_callback: delivering EOF...");
-         swap_and_invoke(read_handler_, error_code{asio::error::eof}, 0);
+         swap_and_invoke(read_handler_, errors::eof, 0);
          //
          // At this point, in testcases like "IgnoreRequest", the stream may already have been
          // deleted. This is because invoking the read handler eventually continues a coroutine,
@@ -557,17 +556,17 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
 
 #if 1
    if (reading_finished() || closed)
-      swap_and_invoke(read_handler_, boost::beast::http::error::partial_message, 0);
+      swap_and_invoke(read_handler_, errors::partial_message, 0);
 #else
    if (reading_finished())
    {
-      error_code ec; //  = boost::asio::error::eof;
+      error_code ec; //  = errors::eof;
       if (content_length && bytesRead < *content_length)
       {
          mlogw("read_callback: EOF after {} bytes total,"
                " which less than advertised content length of {}",
                bytesRead, *content_length);
-         ec = boost::beast::http::error::partial_message;
+         ec = errors::partial_message;
       }
 
       swap_and_invoke(read_handler_, ec, 0);
@@ -627,18 +626,18 @@ NGHttp2Stream::~NGHttp2Stream()
    if (response_handler)
    {
       mlogw("Stream: dtor... cancelling async_get_response()");
-      swap_and_invoke(response_handler, errc::make_error_code(errc::operation_canceled),
+      swap_and_invoke(response_handler, errors::canceled,
                       client::Response{nullptr});
    }
    if (read_handler_)
    {
       mlogw("Stream: dtor... cancelling async_read_some()");
-      swap_and_invoke(read_handler_, boost::beast::http::error::partial_message, bytesRead);
+      swap_and_invoke(read_handler_, errors::partial_message, bytesRead);
    }
    if (write_handler)
    {
       mlogw("Stream: dtor... cancelling async_write()");
-      swap_and_invoke(write_handler, errc::make_error_code(errc::operation_canceled));
+      swap_and_invoke(write_handler, errors::canceled);
    }
 
    mlogd("\x1b[33mStream: dtor... done\x1b[0m");
@@ -668,7 +667,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
       {
          mloge("async_write: body has already been ended");
          complete_immediately(std::move(handler), get_executor(),
-                              errc::make_error_code(errc::broken_pipe));
+                              make_error_code(errc::broken_pipe));
          return;
       }
 
@@ -690,7 +689,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
    {
       mlogw("async_write: stream already closed");
       complete_immediately(std::move(handler), get_executor(),
-                           errc::make_error_code(errc::operation_canceled));
+                           errors::canceled);
       return;
    }
 
@@ -713,7 +712,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
          {
             // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
             post(get_executor(), [handler = std::move(write_handler), n = bytesWritten] mutable { //
-               std::move(handler)(errc::make_error_code(errc::operation_canceled));
+               std::move(handler)(errors::canceled);
             });
          }
       });
@@ -749,7 +748,7 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
    assert(!response_handler);
    if (response_delivered)
    {
-      auto ec = asio::error::basic_errors::already_started;
+      auto ec = errors::already_started;
       mlogw("async_get_response: \x1b[1;31m{}\x1b[0m", what(ec));
       asio::any_completion_executor ex =
          asio::get_associated_immediate_executor(handler, get_executor());
@@ -769,7 +768,7 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
          {
             // auto executor = get_associated_executor(response_handler, get_executor());
             post(get_executor(), [handler = std::move(response_handler)]() mutable {
-               std::move(handler)(errc::make_error_code(errc::operation_canceled),
+               std::move(handler)(errors::canceled,
                                   client::Response{nullptr});
             });
          }
@@ -870,7 +869,7 @@ void NGHttp2Stream::on_response()
    //
    if (header_limit_exceeded)
    {
-      response_error = boost::beast::http::error::header_limit;
+      response_error = errors::header_limit;
       nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_CANCEL);
    }
    else

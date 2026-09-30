@@ -115,7 +115,7 @@ Task<client::Message> get_message(std::shared_ptr<Session::Impl> session, boost:
       auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
       body.append(buffer.data(), n);
 
-      if (ec == asio::error::eof)
+      if (ec == errors::eof)
          break;
       else if (ec)
          throw boost::system::system_error(ec);

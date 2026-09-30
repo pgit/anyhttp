@@ -35,7 +35,6 @@
 
 using namespace boost::asio::experimental::awaitable_operators;
 
-namespace errc = boost::system::errc;
 namespace http = boost::beast::http;
 
 // =================================================================================================
@@ -467,13 +466,13 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    if (!session)
    {
       mloge("submit: session already gone!");
-      std::move(handler)(errc::make_error_code(errc::operation_canceled), client::Request{nullptr});
+      std::move(handler)(errors::canceled, client::Request{nullptr});
       return;
    }
    if (!nghttp2_session_check_request_allowed(session))
    {
       mloge("submit: request not allowed!");
-      std::move(handler)(errc::make_error_code(errc::operation_canceled), client::Request{nullptr});
+      std::move(handler)(errors::canceled, client::Request{nullptr});
       return;
    }
 
@@ -536,7 +535,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    {
       mloge("submit: nghttp2_submit_request: ERROR: {}", id);
       using namespace boost::system;
-      std::move(handler)(errc::make_error_code(errc::invalid_argument), client::Request{nullptr});
+      std::move(handler)(make_error_code(errc::invalid_argument), client::Request{nullptr});
    }
 
    stream->id = id;
@@ -615,7 +614,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    if (stream->write_handler)
    {
       // Use the same error code as reported by the underlying TCP connection used in HTTP/1.1.
-      swap_and_invoke(stream->write_handler, asio::error::basic_errors::connection_reset);
+      swap_and_invoke(stream->write_handler, make_error_code(errc::connection_reset));
    }
 
    //
@@ -654,7 +653,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    if (stream->read_handler_)
    {
       logd("[{}] stream closed while reading, raising 'partial_message'", log_prefix(stream_id));
-      swap_and_invoke(stream->read_handler_, boost::beast::http::error::partial_message, 0);
+      swap_and_invoke(stream->read_handler_, errors::partial_message, 0);
    }
 
    if (stream->response_handler)

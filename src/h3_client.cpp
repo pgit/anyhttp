@@ -65,7 +65,6 @@
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
-namespace errc = boost::system::errc;
 
 using anyhttp::http3::format_hex;
 using anyhttp::http3::log_headers;
@@ -187,7 +186,7 @@ public:
    {
       if (!stream)
       {
-         std::move(handler)(errc::make_error_code(errc::connection_aborted),
+         std::move(handler)(make_error_code(errc::connection_aborted),
                             client::Response{nullptr});
          return;
       }
@@ -280,7 +279,7 @@ Http3ClientStream::Http3ClientStream(Http3ClientSession& s, int64_t stream_id)
 Http3ClientStream::~Http3ClientStream()
 {
    if (!response_delivered && response_handler)
-      swap_and_invoke(response_handler, errc::make_error_code(errc::connection_reset),
+      swap_and_invoke(response_handler, make_error_code(errc::connection_reset),
                       client::Response{nullptr});
 }
 
@@ -303,7 +302,7 @@ void Http3ClientStream::on_headers_complete()
    if (header_limit_exceeded)
    {
       headers_received = false; // there is no response to deliver, see deliver_failure()
-      failure_ec = boost::beast::http::error::header_limit;
+      failure_ec = errors::header_limit;
       session.reset_stream(id, NGHTTP3_H3_REQUEST_CANCELLED);
       deliver_failure();
       return;
@@ -375,7 +374,7 @@ void Http3ClientStream::async_get_response(client::Request::GetResponseHandler&&
       asio::any_completion_executor ex =
          asio::get_associated_immediate_executor(handler, get_executor());
       ex.execute([handler = std::move(handler)]() mutable { //
-         std::move(handler)(asio::error::basic_errors::already_started, client::Response{nullptr});
+         std::move(handler)(errors::already_started, client::Response{nullptr});
       });
       return;
    }
@@ -388,7 +387,7 @@ void Http3ClientStream::async_get_response(client::Request::GetResponseHandler&&
          if (response_handler)
          {
             asio::post(get_executor(), [handler = std::move(response_handler)]() mutable {
-               std::move(handler)(errc::make_error_code(errc::operation_canceled),
+               std::move(handler)(errors::canceled,
                                   client::Response{nullptr});
             });
          }
@@ -559,7 +558,7 @@ Task<void> Http3ClientSession::do_session(Buffer&&)
          co_await socket_.async_receive(asio::buffer(buf), redirect_error(use_awaitable, ec));
       if (ec)
       {
-         if (ec != asio::error::operation_aborted)
+         if (ec != errc::operation_canceled)
             mlogw("receive: {}", ec.message());
          break;
       }
@@ -609,7 +608,7 @@ void Http3ClientSession::close()
    for (auto& [id, stream] : streams_)
       streams.push_back(stream);
    for (auto& stream : streams)
-      stream->fail(errc::make_error_code(errc::connection_reset));
+      stream->fail(make_error_code(errc::connection_reset));
 
    //
    // An idle-timed-out (or dropped) connection is discarded silently: RFC 9000 has no
@@ -672,7 +671,7 @@ int Http3ClientSession::send_datagrams(const ngtcp2_path& /*path*/, std::span<co
       auto len = std::min(gso_size, data.size());
       error_code ec;
       socket_.send(asio::buffer(data.data(), len), 0, ec);
-      if (ec && ec != asio::error::would_block && ec != asio::error::try_again)
+      if (ec && ec != errc::operation_would_block && ec != errc::resource_unavailable_try_again)
       {
          mlogw("send: {}", ec.message());
          return 0; // best-effort; ngtcp2 will retransmit
@@ -704,7 +703,7 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, std::string_view 
    if (closed() || !h3())
    {
       mloge("async_submit: session not ready");
-      std::move(handler)(errc::make_error_code(errc::operation_canceled), client::Request{nullptr});
+      std::move(handler)(errors::canceled, client::Request{nullptr});
       return;
    }
 
@@ -712,7 +711,7 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, std::string_view 
    if (auto rv = ngtcp2_conn_open_bidi_stream(conn_, &stream_id, nullptr); rv != 0)
    {
       mloge("async_submit: ngtcp2_conn_open_bidi_stream: {}", ngtcp2_strerror(rv));
-      std::move(handler)(errc::make_error_code(errc::invalid_argument), client::Request{nullptr});
+      std::move(handler)(make_error_code(errc::invalid_argument), client::Request{nullptr});
       return;
    }
 
@@ -720,7 +719,7 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, std::string_view 
    if (!stream->submit_request(method, url, headers))
    {
       erase_stream(stream_id);
-      std::move(handler)(errc::make_error_code(errc::invalid_argument), client::Request{nullptr});
+      std::move(handler)(make_error_code(errc::invalid_argument), client::Request{nullptr});
       return;
    }
 
@@ -746,7 +745,7 @@ Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor, std:
 
    auto session = std::make_shared<Http3ClientSession>(executor, config);
    if (session->init(results.begin()->endpoint(), config) != 0)
-      throw boost::system::system_error(errc::make_error_code(errc::connection_refused));
+      throw boost::system::system_error(make_error_code(errc::connection_refused));
 
    std::shared_ptr<Session::Impl> impl = session;
 
@@ -769,7 +768,7 @@ Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor, std:
    error_code ec;
    co_await session->wait_ready(redirect_error(use_awaitable, ec));
    if (!session->ready())
-      throw boost::system::system_error(errc::make_error_code(errc::connection_refused));
+      throw boost::system::system_error(make_error_code(errc::connection_refused));
 
    co_return session;
 }

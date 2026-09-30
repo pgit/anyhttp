@@ -19,8 +19,12 @@
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/awaitable.hpp>
+#include <boost/asio/error.hpp>
+#include <boost/system/errc.hpp>
 #include <boost/system/error_code.hpp>
 #endif
+
+#include <boost/beast/http/error.hpp>
 
 namespace anyhttp
 {
@@ -44,6 +48,47 @@ using boost::system::error_code;
  */
 template <typename Signature>
 using Completion = asio::any_completion_handler<Signature>;
+
+// =================================================================================================
+
+/**
+ * Portable error conditions. `ec == errc::broken_pipe` compares by condition, so it matches
+ * whatever category the runtime reported the error in. `make_error_code(errc::broken_pipe)`,
+ * called unqualified and found through ADL, makes a code of the generic category.
+ */
+namespace errc = boost::system::errc;
+
+/**
+ * The error codes anyhttp reports where the two runtimes spell them differently. Most of them
+ * are part of the API contract (README.md, "The End of a Body" and "Concurrent Requests"). Every
+ * other error is made with `make_error_code(errc::...)`.
+ */
+namespace errors
+{
+/// The end of an incoming body.
+inline const error_code eof = asio::error::eof;
+
+/// An incoming body that ended before it was complete: a reset stream, a lost connection.
+inline const error_code partial_message = boost::beast::http::error::partial_message;
+
+/// An operation that was cancelled before it completed.
+inline const error_code canceled = make_error_code(errc::operation_canceled);
+
+/// HTTP/1.1: a request or response that has to wait for an earlier one, see Session.
+inline const error_code would_block = asio::error::would_block;
+
+/// A connection that can not carry any more requests or responses.
+inline const error_code connection_aborted = asio::error::connection_aborted;
+
+/// An operation on a Reader or Writer after its implementation has been released.
+inline const error_code bad_descriptor = asio::error::bad_descriptor;
+
+/// An operation that may be in progress only once at a time.
+inline const error_code already_started = asio::error::already_started;
+
+/// A header section larger than Config::max_header_size.
+inline const error_code header_limit = boost::beast::http::error::header_limit;
+} // namespace errors
 
 // =================================================================================================
 

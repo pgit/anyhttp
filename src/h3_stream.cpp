@@ -15,7 +15,6 @@
 #include <charconv>
 
 using namespace boost::asio;
-namespace errc = boost::system::errc;
 
 namespace anyhttp::http3
 {
@@ -42,9 +41,9 @@ Http3Stream::~Http3Stream()
    if (writer)
       writer->detach();
    if (read_handler)
-      swap_and_invoke(read_handler, errc::make_error_code(errc::connection_reset), 0);
+      swap_and_invoke(read_handler, make_error_code(errc::connection_reset), 0);
    if (write_active && write_handler)
-      swap_and_invoke(write_handler, errc::make_error_code(errc::connection_reset));
+      swap_and_invoke(write_handler, make_error_code(errc::connection_reset));
    mlogd("\x1b[33mStream: dtor... done\x1b[0m");
 }
 
@@ -160,7 +159,7 @@ void Http3Stream::call_read_handler()
       if (eof_received)
       {
          // the end of the body, reported the way ASIO reports it everywhere else
-         swap_and_invoke(read_handler, error_code{asio::error::eof}, 0);
+         swap_and_invoke(read_handler, errors::eof, 0);
          continue;
       }
 
@@ -171,7 +170,7 @@ void Http3Stream::call_read_handler()
          // there is nothing left that could ever complete it, so report the truncation now rather
          // than leaving it pending forever.
          //
-         swap_and_invoke(read_handler, boost::beast::http::error::partial_message, 0);
+         swap_and_invoke(read_handler, errors::partial_message, 0);
          continue;
       }
 
@@ -224,7 +223,7 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer,
       if (n > 0)
       {
          mloge("start_write: body has already been ended");
-         complete_immediately(errc::make_error_code(errc::broken_pipe));
+         complete_immediately(make_error_code(errc::broken_pipe));
          return;
       }
 
@@ -244,7 +243,7 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer,
          return;
       }
 
-      complete_immediately(closed && !fin_offered ? errc::make_error_code(errc::connection_reset)
+      complete_immediately(closed && !fin_offered ? make_error_code(errc::connection_reset)
                                                   : error_code{});
       return;
    }
@@ -252,7 +251,7 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer,
    if (closed)
    {
       mlogw("start_write: stream already closed");
-      complete_immediately(errc::make_error_code(errc::connection_reset));
+      complete_immediately(make_error_code(errc::connection_reset));
       return;
    }
 
@@ -318,7 +317,7 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
          //
          mlogd("async_write: \x1b[1;31mcancelled\x1b[0m ({}), FIN still pending", ct);
          asio::post(get_executor(), [handler = std::move(write_handler)]() mutable { //
-            std::move(handler)(errc::make_error_code(errc::operation_canceled));
+            std::move(handler)(errors::canceled);
          });
          return;
       }
@@ -378,7 +377,7 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
       write_source = {};
       // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
       asio::post(get_executor(), [handler = std::move(write_handler)]() mutable { //
-         std::move(handler)(errc::make_error_code(errc::operation_canceled));
+         std::move(handler)(errors::canceled);
       });
    });
 }
@@ -737,7 +736,7 @@ void Http3Stream::fail(error_code ec)
       // never see the rest of it, not which QUIC error code carried that news -- report the
       // truncation, matching what the HTTP/2 side delivers for a stream closing early.
       //
-      auto read_ec = (ec && !eof_received) ? boost::beast::http::error::partial_message : ec;
+      auto read_ec = (ec && !eof_received) ? errors::partial_message : ec;
       swap_and_invoke(read_handler, read_ec, 0);
    }
 
@@ -757,7 +756,7 @@ void Http3Stream::fail(error_code ec)
       write_active = false;
       write_source = {};
       if (write_handler)
-         swap_and_invoke(write_handler, ec ? ec : errc::make_error_code(errc::connection_reset));
+         swap_and_invoke(write_handler, ec ? ec : make_error_code(errc::connection_reset));
    }
 
    maybe_close();
@@ -839,7 +838,7 @@ void Http3Stream::delete_writer()
       //
       mlogw("delete_writer: body never ended, resetting stream");
       session.reset_stream(id, NGHTTP3_H3_REQUEST_CANCELLED);
-      fail(boost::beast::http::error::partial_message);
+      fail(errors::partial_message);
    }
 
    maybe_close();
