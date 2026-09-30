@@ -10,12 +10,19 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The image has both GCC and clang, and 'c++' is GCC. Coverage needs clang, and the other jobs
+# should build what the devcontainer's build/ builds -- except 'gcc', which overrides this to
+# build with GCC and libstdc++, like the devcontainer's build-gcc/.
+env:
+  CC: clang
+  CXX: clang++
+
 jobs:
   release:
     name: RelWithDebInfo
     runs-on: ubuntu-latest
     container:
-      image: docker.io/psedoc/anyhttp:0.28
+      image: docker.io/psedoc/anyhttp:0.30
     
     steps:
     - &checkout
@@ -33,11 +40,55 @@ jobs:
       run: |
         build/test/test_all
 
+  gcc:
+    name: GCC
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/psedoc/anyhttp:0.30
+    env:
+      CC: gcc
+      CXX: g++
+
+    steps:
+      - *checkout
+
+      - name: Configure CMake with GCC
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - *build
+
+      - name: Run tests (if available)
+        run: |
+          build/test/test_all
+
+  openssl:
+    name: OpenSSL
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/psedoc/anyhttp:0.30
+
+    steps:
+      - *checkout
+
+      - name: Configure CMake with OpenSSL
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTLS_LIBRARY=OpenSSL
+
+      - *build
+
+      - name: Check that OpenSSL is linked
+        run: |
+          ldd build/test/test_all | tee ldd.txt
+          grep -q 'libssl\.so\.3' ldd.txt && grep -q 'libngtcp2_crypto_ossl' ldd.txt
+
+      - name: Run tests (if available)
+        run: |
+          build/test/test_all
+
   asan:
     name: ASAN
     runs-on: ubuntu-latest
     container:
-      image: docker.io/psedoc/anyhttp:0.28
+      image: docker.io/psedoc/anyhttp:0.30
 
     steps:
       - *checkout
@@ -50,13 +101,13 @@ jobs:
 
       - name: Run tests (if available)
         run: |
-          ASAN_OPTIONS=detect_leaks=1:detect_container_overflow=0 build/test/test_all
+          ASAN_OPTIONS=detect_leaks=1 build/test/test_all
 
   tsan:
     name: TSAN
     runs-on: ubuntu-latest
     container:
-      image: docker.io/psedoc/anyhttp:0.28
+      image: docker.io/psedoc/anyhttp:0.30
 
     steps:
       - *checkout
@@ -75,7 +126,7 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     container:
-      image: docker.io/psedoc/anyhttp:0.28
+      image: docker.io/psedoc/anyhttp:0.30
     permissions:
       contents: read
       pages: write

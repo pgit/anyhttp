@@ -197,7 +197,7 @@ protected:
    {
       Server::SetUp();
       url.set_port_number(server->local_endpoint().port());
-      client::Config config{.url = url, .protocol = GetParam()};
+      client::Config config{.url = url, .protocol = GetParam(), .tls_ca_file = "pki/out/root.pem"};
       configure_client(config);
 #if defined(MULTITHREADED)
       client.emplace(make_strand(context.get_executor()), config);
@@ -224,13 +224,14 @@ public:
       return [this](const std::exception_ptr& ep) {
          auto ec = code(ep);
          if (ec)
-            logw("client completed with \x1b[1;31m{}\x1b[0m", what(ec));
+            logw("[{}] completed with \x1b[1;31m{}\x1b[0m", anyhttp::log_prefix(Role::client),
+                 what(ec));
          else
-            logi("client completed successfully");
+            logi("[{}] completed successfully", anyhttp::log_prefix(Role::client));
 
          on_complete(ec);
 
-         logd("stopping server");
+         logd("[{}] stopping", anyhttp::log_prefix(Role::server));
          server.reset();
          work.reset();
       };

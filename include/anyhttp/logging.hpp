@@ -4,12 +4,12 @@
 
 // =================================================================================================
 
-#define logwi(ec, ...)                                                                             \
+#define logwd(ec, ...)                                                                             \
    do                                                                                              \
    {                                                                                               \
-      if (ec && spdlog::default_logger_raw()->should_log(spdlog::level::warn))                     \
+      if ((ec) && spdlog::default_logger_raw()->should_log(spdlog::level::warn))                   \
          spdlog::default_logger_raw()->warn(__VA_ARGS__);                                          \
-      else if (spdlog::default_logger_raw()->should_log(spdlog::level::info))                      \
+      else if (spdlog::default_logger_raw()->should_log(spdlog::level::debug))                     \
          spdlog::default_logger_raw()->info(__VA_ARGS__);                                          \
    } while (false)
 

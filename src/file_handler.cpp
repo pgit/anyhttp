@@ -150,7 +150,7 @@ expected<fs::path> resolve(std::string_view path, std::string_view prefix, const
    if (ec)
       return std::unexpected(from_errno(ec.value()));
 
-   const auto file = fs::weakly_canonical(base / fs::path(path), ec);
+   auto file = fs::weakly_canonical(base / fs::path(path), ec);
    if (ec)
       return std::unexpected(from_errno(ec.value()));
 
@@ -337,7 +337,8 @@ awaitable<void> serve_file(server::Request request, server::Response response, f
    const auto entry = g_cache.get(path, prefix, root);
    if (!entry)
    {
-      logw("serve_file: {}: {}", path, entry.error().message());
+      // answered with a 4xx, which is the client's problem rather than ours
+      logi("[{}] serve_file: {}: {}", request.log_prefix(), path, entry.error().message());
       co_await respond(response, status_for(entry.error()));
       co_return;
    }

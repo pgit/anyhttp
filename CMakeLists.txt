@@ -11,6 +11,8 @@ if (DEFINED ENV{GITHUB_ACTIONS})
     add_compile_definitions(GITHUB_ACTIONS)
 endif()
 
+# --------------------------------------------------------------------------------------------------
+
 if (CMAKE_BUILD_TYPE MATCHES Debug)
     # https://www.boost.org/doc/libs/1_89_0/doc/html/boost_asio/overview/core/buffers.html#boost_asio.overview.core.buffers.buffer_debugging
     # add_compile_definitions(BOOST_ASIO_ENABLE_BUFFER_DEBUGGING)
@@ -28,16 +30,41 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
 endif()
 
 if (ENABLE_COVERAGE)
-    if (NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        message(FATAL_ERROR "ENABLE_COVERAGE is supported only with GNU or Clang compilers")
+    # source-based coverage (-fprofile-instr-generate, llvm-cov) exists in clang only
+    if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "ENABLE_COVERAGE is supported only with Clang")
     endif()
     set(COVERAGE_RAW_DIR "${CMAKE_BINARY_DIR}/coverage_raw")
     add_compile_options(-O0 -g -fprofile-instr-generate=${COVERAGE_RAW_DIR}/%p.profraw -fcoverage-mapping)
     add_link_options(-fprofile-instr-generate=${COVERAGE_RAW_DIR}/%p.profraw)
 endif()
 
-add_compile_options(-stdlib=libc++)
-add_link_options(-stdlib=libc++ -lstdc++fs)
+#
+# Standard library: libc++ with clang, libstdc++ with GCC. The C++ libraries we link (Boost, fmt,
+# spdlog) have to be built against the same one: the devcontainer has them for libstdc++ in
+# /usr/local and for libc++ in /opt/libc++. GTest is built from source (see test/CMakeLists.txt).
+#
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(USE_LIBCXX_DEFAULT ON)
+else()
+    set(USE_LIBCXX_DEFAULT OFF)
+endif()
+option(USE_LIBCXX "Build against libc++ instead of libstdc++" ${USE_LIBCXX_DEFAULT})
+
+if (USE_LIBCXX)
+    add_compile_options(-stdlib=libc++)
+    add_link_options(-stdlib=libc++)
+    set(LIBCXX_ROOT /opt/libc++ CACHE PATH "Installation prefix of C++ libraries built against libc++")
+    list(PREPEND CMAKE_PREFIX_PATH ${LIBCXX_ROOT})
+    # Statically: the shared libraries share their names with the libstdc++ ones in /usr/local/lib,
+    # so an LD_LIBRARY_PATH pointing there would take precedence over our RUNPATH.
+    set(Boost_USE_STATIC_LIBS ON)
+    message(STATUS "Using C++ standard library: libc++ (libraries from ${LIBCXX_ROOT})")
+else()
+    message(STATUS "Using C++ standard library: libstdc++")
+endif()
+
+# --------------------------------------------------------------------------------------------------
 
 # use std::filesystem instead of boost::filesystem
 add_compile_definitions(BOOST_PROCESS_USE_STD_FS)
@@ -50,39 +77,53 @@ add_compile_definitions(BOOST_PROCESS_USE_STD_FS)
 # exec, so it has no use for the notification in the first place.
 add_compile_definitions(BOOST_PROCESS_V2_DISABLE_NOTIFY_FORK)
 
-# we don't use fmtlib any more
-add_compile_definitions(SPDLOG_USE_STD_FORMAT)
-
 # don't allow use of deprecated ASIO interfaces
 add_compile_definitions(BOOST_ASIO_NO_DEPRECATED)
-
-# needed for ranges/v3 starting with clang 19
-add_compile_options(-Wno-deprecated-declarations)
-
-# FIXME: nghttp2 reader/writer needs this ATM
-add_compile_options(-Wno-inconsistent-missing-override)
-
-# --------------------------------------------------------------------------------------------------
 
 #
 # find boost
 # https://github.com/madmongo1/blog-december-2020/blob/master/CMakeLists.txt
 #
-find_package(Boost 1.88 COMPONENTS thread atomic url filesystem process program_options OPTIONAL_COMPONENTS system REQUIRED)
+find_package(Boost 1.88 COMPONENTS thread atomic url filesystem process program_options REQUIRED)
 find_package(Threads)
 
+# --------------------------------------------------------------------------------------------------
+
 #
-# TLS: BoringSSL -- or rather AWS-LC, which is API compatible and what the devcontainer builds into
-# /opt/boringssl, deliberately away from the system OpenSSL. It only comes as static libraries.
+# TLS: AWS-LC (default) or OpenSSL, selected with TLS_LIBRARY.
+#
+# AWS-LC is API compatible with BoringSSL, which is what ngtcp2 calls it; the devcontainer builds it
+# into /opt/boringssl, deliberately away from the system OpenSSL. It only comes as static libraries.
+# OpenSSL needs to be 3.5 or later, for the QUIC TLS API that ngtcp2_crypto_ossl builds on.
 #
 # Everything in the process has to use the very same TLS library: Boost.Asio's SSL streams,
-# ngtcp2_crypto_boringssl and our own code. Linking the system OpenSSL on top would silently mix
-# up two libraries exporting the same symbols.
+# ngtcp2's crypto backend and our own code. Linking the other one on top would silently mix up two
+# libraries exporting the same symbols. The code selects its variant from the headers it sees.
 #
-set(BORINGSSL_ROOT /opt/boringssl CACHE PATH "Installation prefix of BoringSSL / AWS-LC")
-list(PREPEND CMAKE_PREFIX_PATH ${BORINGSSL_ROOT}) # ssl-config.cmake finds 'crypto' through it
-find_package(ssl CONFIG REQUIRED)
-message(STATUS "Using TLS library: ${ssl_DIR}")
+set(TLS_LIBRARY AWS-LC CACHE STRING "TLS library: AWS-LC or OpenSSL")
+set_property(CACHE TLS_LIBRARY PROPERTY STRINGS AWS-LC OpenSSL)
+if (TLS_LIBRARY STREQUAL "AWS-LC")
+    set(BORINGSSL_ROOT /opt/boringssl CACHE PATH "Installation prefix of BoringSSL / AWS-LC")
+    list(PREPEND CMAKE_PREFIX_PATH ${BORINGSSL_ROOT}) # ssl-config.cmake finds 'crypto' through it
+    find_package(ssl CONFIG REQUIRED)
+    set(TLS_TARGET AWS::ssl)
+    set(NGTCP2_CRYPTO_MODULE libngtcp2_crypto_boringssl)
+    message(STATUS "Using TLS library: AWS-LC (${ssl_DIR})")
+elseif (TLS_LIBRARY STREQUAL "OpenSSL")
+    find_package(OpenSSL 3.5 REQUIRED)
+    set(TLS_TARGET OpenSSL::SSL)
+    set(NGTCP2_CRYPTO_MODULE libngtcp2_crypto_ossl)
+    message(STATUS "Using TLS library: OpenSSL ${OPENSSL_VERSION} (${OPENSSL_SSL_LIBRARY})")
+else()
+    message(FATAL_ERROR "TLS_LIBRARY must be AWS-LC or OpenSSL, not '${TLS_LIBRARY}'")
+endif()
+
+# --------------------------------------------------------------------------------------------------
+
+# FIXME: nghttp2 reader/writer needs this ATM
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(-Wno-inconsistent-missing-override)
+endif()
 
 #
 # nghttp2
@@ -96,11 +137,22 @@ message(STATUS "Using TLS library: ${ssl_DIR}")
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2)
 
+# --------------------------------------------------------------------------------------------------
+
+# needed for ranges/v3 starting with clang 19
+add_compile_options(-Wno-deprecated-declarations)
+
+
 #
 # range-v3 -- FIXME: needed only for views:chunked(),
 #                    as the libc++ version doesn't seem to be available, yet
 #
 include_directories(/usr/local/include/range-v3)
+
+# --------------------------------------------------------------------------------------------------
+
+# we don't use fmtlib any more
+add_compile_definitions(SPDLOG_USE_STD_FORMAT)
 
 #
 # spdlog
@@ -153,3 +205,5 @@ if (ENABLE_COVERAGE)
     )
     add_dependencies(coverage test_all)
 endif()
+
+# --------------------------------------------------------------------------------------------------

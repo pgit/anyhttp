@@ -10,7 +10,7 @@ std::string to_string(Protocol protocol)
 {
    switch (protocol)
    {
-   case Protocol::http11:
+   case Protocol::h1:
       return "HTTP11";
    case Protocol::h2:
       return "HTTP2";
@@ -42,6 +42,40 @@ asio::ip::address normalize(asio::ip::address addr)
 asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint)
 {
    return {normalize(endpoint.address()), endpoint.port()};
+}
+
+static std::string colored(Role role, std::string_view text)
+{
+   const auto* color = role == Role::server ? "\x1b[1;31m" : "\x1b[1;32m";
+   return std::format("{}{}\x1b[0m", color, text);
+}
+
+std::string log_prefix(Role role)
+{
+   return colored(role, role == Role::server ? "server" : "client");
+}
+
+std::string log_prefix(Role role, std::string_view protocol, const asio::ip::address& address,
+                       unsigned short port)
+{
+   const auto addr = normalize(address);
+   if (addr.is_v4())
+      return std::format("{}:\x1b[35m{}\x1b[0m:{}", colored(role, protocol), addr.to_string(),
+                         port);
+   else
+      return std::format("{}:[\x1b[34m{}\x1b[0m]:{}", colored(role, protocol), addr.to_string(),
+                         port);
+}
+
+std::string log_prefix(Role role, std::string_view protocol,
+                       const asio::basic_socket<asio::ip::tcp, asio::any_io_executor>& socket)
+{
+   boost::system::error_code ec;
+   auto remote = socket.remote_endpoint(ec);
+   if (ec)
+      return colored(role, protocol);
+
+   return log_prefix(role, protocol, remote.address(), remote.port());
 }
 
 }; // namespace anyhttp

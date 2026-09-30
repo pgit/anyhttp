@@ -8,7 +8,7 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 #
 pkg_check_modules(NGTCP2              REQUIRED IMPORTED_TARGET libngtcp2)
 pkg_check_modules(NGHTTP3             REQUIRED IMPORTED_TARGET libnghttp3)
-pkg_check_modules(NGTCP2_CRYPTO_BORINGSSL REQUIRED IMPORTED_TARGET libngtcp2_crypto_boringssl)
+pkg_check_modules(NGTCP2_CRYPTO          REQUIRED IMPORTED_TARGET ${NGTCP2_CRYPTO_MODULE})
 
 #
 # lib -- the protocol backends are the h1_*, h2_* and h3_* sources; only the h2_* ones use
@@ -26,12 +26,13 @@ target_link_libraries(anyhttp PRIVATE Threads::Threads)
 target_link_libraries(anyhttp PRIVATE Boost::thread Boost::atomic Boost::url Boost::filesystem)
 target_link_libraries(anyhttp PRIVATE spdlog::spdlog_header_only)
 target_link_libraries(anyhttp PRIVATE PkgConfig::NGHTTP2)
-target_link_libraries(anyhttp PRIVATE PkgConfig::NGTCP2_CRYPTO_BORINGSSL PkgConfig::NGTCP2 PkgConfig::NGHTTP3)
+target_link_libraries(anyhttp PRIVATE PkgConfig::NGTCP2_CRYPTO PkgConfig::NGTCP2 PkgConfig::NGHTTP3)
 
 # PUBLIC, because the backend headers include Boost.Asio's SSL streams: whoever includes them must
-# see the BoringSSL headers, not the system OpenSSL ones in /usr/include. Static libraries, so this
-# comes after ngtcp2_crypto_boringssl, which needs it.
-target_link_libraries(anyhttp PUBLIC AWS::ssl)
+# see the headers of the selected TLS library -- with AWS-LC, not the system OpenSSL ones in
+# /usr/include. AWS-LC comes as static libraries, so this comes after ngtcp2's crypto backend,
+# which needs it.
+target_link_libraries(anyhttp PUBLIC ${TLS_TARGET})
 
 #
 # server

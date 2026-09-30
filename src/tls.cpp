@@ -15,7 +15,7 @@ namespace
 
 /**
  * Key exchange group of the handshake, like the "Server Temp Key" line of h2load, e.g.
- * "X25519 (253 bits)" or "P-256 (256 bits)".
+ * "X25519 (253 bits)" or "P-256 (256 bits)" -- or "prime256v1 (256 bits)" with OpenSSL.
  */
 std::string key_exchange(SSL* ssl)
 {
@@ -23,7 +23,11 @@ std::string key_exchange(SSL* ssl)
    // The negotiated group is known even for groups that have no EVP_PKEY, like the post-quantum
    // hybrids ("X25519MLKEM768").
    //
+#if defined(OPENSSL_IS_BORINGSSL) || defined(OPENSSL_IS_AWSLC)
    const char* group = SSL_get_group_name(SSL_get_group_id(ssl));
+#else
+   const char* group = SSL_get0_group_name(ssl);
+#endif
    std::string name = group ? group : "unknown";
 
    //

@@ -16,7 +16,7 @@ class ClientAsyncCancellation : public ClientAsync
 };
 
 INSTANTIATE_TEST_SUITE_P(ClientAsyncCancellation, ClientAsyncCancellation,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2,
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
                                 anyhttp::Protocol::h3),
                          NameGenerator);
 
@@ -128,7 +128,7 @@ TEST_P(ClientAsyncCancellation, Cancellation)
 
          // HTTP/1.1 needs to reconnect here
          // HTTP/2 can handle this without reconnect -- only the stream is cancelled
-         if (GetParam() == anyhttp::Protocol::http11)
+         if (GetParam() == anyhttp::Protocol::h1)
          {
             session.reset();
             session = co_await client->async_connect();
@@ -179,7 +179,7 @@ TEST_P(ClientAsyncCancellation, PerOperationCancellation)
 
       asio::cancellation_signal cancel;
       asio::steady_timer timer(co_await asio::this_coro::executor, 110ms);
-      timer.async_wait([&cancel](const boost::system::error_code& ec) { //
+      timer.async_wait([&cancel](const boost::system::error_code&) { //
          cancel.emit(asio::cancellation_type::terminal);
       });
 
@@ -210,6 +210,87 @@ TEST_P(ClientAsyncCancellation, CancelAfter)
    };
 }
 
+//
+// cancel_after on async_read_some(): the client reads from an echo that has nothing to echo yet, so
+// the read can only end by the timer. Nothing about Reader provides an executor for that timer
+// other than what the token asks of the initiation.
+//
+TEST_P(ClientAsyncCancellation, WHEN_client_read_some_with_cancel_after_THEN_cancelled)
+{
+   clientSession = [this](Session session) -> awaitable<void> {
+      auto request = co_await session.async_submit(url.set_path("echo"), {});
+      auto response = co_await request.async_get_response();
+
+      std::array<uint8_t, 1024> buffer;
+      auto [ec, n] =
+         co_await response.async_read_some(asio::buffer(buffer), cancel_after(100ms, as_tuple));
+      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+      EXPECT_EQ(n, 0u);
+   };
+}
+
+//
+// Same on the server side: the client never sends a body, so the request read hangs until the
+// timer cancels it.
+//
+TEST_P(ClientAsyncCancellation, WHEN_server_read_some_with_cancel_after_THEN_cancelled)
+{
+   requestHandler = [](server::Request request, server::Response response) -> awaitable<void> {
+      std::array<uint8_t, 1024> buffer;
+      auto [ec, n] =
+         co_await request.async_read_some(asio::buffer(buffer), cancel_after(100ms, as_tuple));
+      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+      EXPECT_EQ(n, 0u);
+      co_await response.async_submit(200, {});
+      co_await response.async_write_eof();
+   };
+   clientSession = [this](Session session) -> awaitable<void> {
+      auto request = co_await session.async_submit(url, {});
+      auto response = co_await request.async_get_response();
+      co_await drain(response);
+   };
+}
+
+//
+// A read that completes before its deadline is not affected by cancel_after: the timer is
+// cancelled with it and nothing fires later on.
+//
+TEST_P(ClientAsyncCancellation, WHEN_read_some_completes_before_cancel_after_THEN_ok)
+{
+   clientSession = [this](Session session) -> awaitable<void> {
+      auto request = co_await session.async_submit(url.set_path("echo"), {});
+      auto response = co_await request.async_get_response();
+
+      constexpr auto msg = "Hello, Server!"sv;
+      co_await request.async_write_eof(asio::buffer(msg));
+
+      std::array<char, 1024> buffer;
+      auto [ec, n] =
+         co_await response.async_read_some(asio::buffer(buffer), cancel_after(10s, as_tuple));
+      EXPECT_FALSE(ec);
+      EXPECT_EQ(std::string_view(buffer.data(), n), msg.substr(0, n));
+      EXPECT_GT(n, 0u);
+
+      co_await drain(response);
+   };
+}
+
+//
+// cancel_after on async_write(): far more than the send window, with nobody reading the echo, so
+// the write cannot complete before the timer fires.
+//
+TEST_P(ClientAsyncCancellation, WHEN_client_write_with_cancel_after_THEN_cancelled)
+{
+   clientSession = [this](Session session) -> awaitable<void> {
+      auto request = co_await session.async_submit(url.set_path("echo"), {});
+      auto response = co_await request.async_get_response();
+
+      const std::vector<uint8_t> body(8_m, 'x');
+      auto [ec] = co_await request.async_write(asio::buffer(body), cancel_after(100ms, as_tuple));
+      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+   };
+}
+
 TEST_P(ClientAsyncCancellation, WHEN_send_more_than_content_length_THEN_connection_is_reset)
 {
    clientSession = [this](Session session) -> awaitable<void> {
@@ -220,7 +301,7 @@ TEST_P(ClientAsyncCancellation, WHEN_send_more_than_content_length_THEN_connecti
       co_await drain(response);
 
       auto ex = co_await this_coro::executor;
-      auto [ep] = co_await co_spawn(ex, send(request, rv::iota(uint8_t(0))), as_tuple);
+      auto [ep] = co_await co_spawn(ex, send(request, rv::iota(uint8_t{0})), as_tuple);
 
       //
       // Which of the two the write reports is a matter of how far the kernel has gotten with the
@@ -286,7 +367,7 @@ TEST_P(ClientAsyncCancellation, ResetServerDuringRequest)
 
 TEST_P(ClientAsyncCancellation, DISABLED_SpawnAndForget)
 {
-   if (GetParam() == anyhttp::Protocol::http11)
+   if (GetParam() == anyhttp::Protocol::h1)
       GTEST_SKIP(); // FIXME: ASAN errors
 
    clientSession = [this](Session session) -> awaitable<void> {

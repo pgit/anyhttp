@@ -17,6 +17,8 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <format> // IWYU pragma: keep
+#include <stdexcept>
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
@@ -45,6 +47,10 @@ Http3Session::~Http3Session()
       SSL_set_app_data(ssl_, nullptr);
       SSL_free(ssl_);
    }
+#if !ANYHTTP_H3_BORINGSSL
+   if (ossl_ctx_)
+      ngtcp2_crypto_ossl_ctx_del(ossl_ctx_);
+#endif
 }
 
 void Http3Session::clear_streams() { streams_.clear(); }
@@ -447,9 +453,44 @@ void Http3Session::fill_settings(ngtcp2_settings& settings, ngtcp2_transport_par
    params.max_idle_timeout = static_cast<uint64_t>(idle_timeout.count());
 }
 
+void Http3Session::configure_tls_context(SSL_CTX* ctx, bool is_server)
+{
+#if ANYHTTP_H3_BORINGSSL
+   auto configure = is_server ? &ngtcp2_crypto_boringssl_configure_server_context
+                              : &ngtcp2_crypto_boringssl_configure_client_context;
+   if (configure(ctx) != 0)
+      throw std::runtime_error(std::format("ngtcp2_crypto_boringssl_configure_{}_context failed",
+                                           is_server ? "server" : "client"));
+
+   //
+   // What OpenSSL needs SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS, SSL_OP_SINGLE_ECDH_USE and
+   // SSL_MODE_RELEASE_BUFFERS for is the default in BoringSSL. SSL_OP_NO_ANTI_REPLAY does not
+   // exist, but it would only matter for 0-RTT, which we don't enable.
+   //
+   if (is_server)
+      SSL_CTX_set_options(ctx, SSL_OP_CIPHER_SERVER_PREFERENCE);
+#else
+   //
+   // Optional, but ngtcp2 recommends it: fetches the ciphers once instead of on every use.
+   //
+   static const int init_rv = ngtcp2_crypto_ossl_init();
+   if (init_rv != 0)
+      throw std::runtime_error("ngtcp2_crypto_ossl_init failed");
+
+   if (is_server)
+   {
+      SSL_CTX_set_options(ctx, (SSL_OP_ALL & ~SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS) |
+                                  SSL_OP_SINGLE_ECDH_USE | SSL_OP_CIPHER_SERVER_PREFERENCE |
+                                  SSL_OP_NO_ANTI_REPLAY);
+      SSL_CTX_set_mode(ctx, SSL_MODE_RELEASE_BUFFERS);
+   }
+#endif
+}
+
 //
-// The QUIC specifics were configured on the SSL_CTX already (see the roles' TlsServerContext and
-// TlsClientContext), so with BoringSSL, the session is a plain SSL whose app data leads back to us.
+// With BoringSSL, the QUIC specifics were configured on the SSL_CTX already (see
+// configure_tls_context()), so the session is a plain SSL whose app data leads back to us. With
+// OpenSSL, ngtcp2 configures each SSL and wraps it into an ngtcp2_crypto_ossl_ctx.
 //
 int Http3Session::setup_tls(SSL_CTX* ssl_ctx, bool is_server)
 {
@@ -469,7 +510,25 @@ int Http3Session::setup_tls(SSL_CTX* ssl_ctx, bool is_server)
    else
       SSL_set_connect_state(ssl_);
 
+#if ANYHTTP_H3_BORINGSSL
    ngtcp2_conn_set_tls_native_handle(conn_, ssl_);
+#else
+   auto configure = is_server ? &ngtcp2_crypto_ossl_configure_server_session
+                              : &ngtcp2_crypto_ossl_configure_client_session;
+   if (configure(ssl_) != 0)
+   {
+      mloge("ngtcp2_crypto_ossl_configure_{}_session failed", is_server ? "server" : "client");
+      return -1;
+   }
+
+   if (ngtcp2_crypto_ossl_ctx_new(&ossl_ctx_, ssl_) != 0)
+   {
+      mloge("ngtcp2_crypto_ossl_ctx_new failed");
+      return -1;
+   }
+
+   ngtcp2_conn_set_tls_native_handle(conn_, ossl_ctx_);
+#endif
    return 0;
 }
 
@@ -562,7 +621,7 @@ int Http3Session::setup_http3()
 int Http3Session::cb_handshake_completed(ngtcp2_conn*, void* user)
 {
    auto self = static_cast<Http3Session*>(user);
-   logi("[{}] TLS handshake completed: {}", self->log_prefix_, tls_handshake_info(self->ssl_));
+   logi("[{}] {}", self->log_prefix_, tls_handshake_info(self->ssl_));
    if (self->setup_http3() != 0)
       return NGTCP2_ERR_CALLBACK_FAILURE;
    return 0;

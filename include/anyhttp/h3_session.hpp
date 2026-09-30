@@ -11,6 +11,18 @@
 
 #include <openssl/ssl.h>
 
+//
+// ngtcp2 has one crypto backend for BoringSSL and AWS-LC, and another one for OpenSSL (3.5+).
+// Which one we build against follows from the TLS headers (see TLS_LIBRARY in CMakeLists.txt).
+//
+#if defined(OPENSSL_IS_BORINGSSL) || defined(OPENSSL_IS_AWSLC)
+#define ANYHTTP_H3_BORINGSSL 1
+#include <ngtcp2/ngtcp2_crypto_boringssl.h>
+#else
+#define ANYHTTP_H3_BORINGSSL 0
+#include <ngtcp2/ngtcp2_crypto_ossl.h>
+#endif
+
 #include <chrono>
 #include <memory>
 #include <span>
@@ -114,7 +126,13 @@ public:
    int handle_expiry();
 
    //
-   // ngtcp2 <-> ngtcp2_crypto_boringssl bridge, reached through SSL_get_app_data().
+   // Prepares a role's SSL_CTX for QUIC. With BoringSSL, that is where ngtcp2 hooks in; with
+   // OpenSSL, it happens per SSL, in setup_tls().
+   //
+   static void configure_tls_context(SSL_CTX* ctx, bool is_server);
+
+   //
+   // ngtcp2 <-> ngtcp2 crypto backend bridge, reached through SSL_get_app_data().
    //
    static ngtcp2_conn* get_conn(ngtcp2_crypto_conn_ref* ref)
    {
@@ -221,7 +239,12 @@ protected:
    asio::any_io_executor executor_;
 
    ngtcp2_conn* conn_ = nullptr;
+#if ANYHTTP_H3_BORINGSSL
    SSL* ssl_ = nullptr; // also ngtcp2's TLS native handle
+#else
+   SSL* ssl_ = nullptr;
+   ngtcp2_crypto_ossl_ctx* ossl_ctx_ = nullptr; // ngtcp2's TLS native handle, wrapping ssl_
+#endif
    ngtcp2_crypto_conn_ref conn_ref_{};
 
    nghttp3_conn* h3_ = nullptr;

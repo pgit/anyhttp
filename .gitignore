@@ -3,6 +3,7 @@
 pki/out/*
 docs/_build
 gtest-parallel-logs
+experiments
 report.xml
 build
 build-*
@@ -17,4 +18,3 @@ cmake_test_discovery_*.json
 googletest_discovery_*.json
 keylog.log
 alt-svc.log
-

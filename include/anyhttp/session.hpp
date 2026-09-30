@@ -28,7 +28,7 @@ public:
    void reset() noexcept;
    ~Session();
 
-   constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
+   explicit constexpr operator bool() const noexcept { return static_cast<bool>(impl); }
 
 public:
    /**

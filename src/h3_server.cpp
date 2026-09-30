@@ -21,7 +21,7 @@
 // strand (process_quic_batch()), where all ngtcp2/nghttp3 work, the timers and the request
 // handlers run. The CID demux table is the only cross-connection state and is guarded by
 // Http3ServerImpl::mutex_. Sends go straight out via a per-session dup() of the UDP fd --
-// sendto()/sendmsg() are atomic per datagram, so they need no serialization.
+// sendmsg() is atomic per datagram, so they need no serialization.
 //
 // Not yet implemented: retry tokens, version negotiation, stateless reset, connection
 // migration, ECN.
@@ -68,7 +68,6 @@
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
-#include <ngtcp2/ngtcp2_crypto_boringssl.h>
 
 #include <openssl/err.h>
 #include <openssl/rand.h>
@@ -77,6 +76,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <format>
 #include <memory>
 #include <random>
 #include <span>
@@ -96,18 +96,22 @@ using anyhttp::http3::msghdr_get_local_addr;
 using anyhttp::http3::QUIC_SCIDLEN;
 using anyhttp::http3::set_port;
 using anyhttp::http3::sockaddr_union;
-using anyhttp::http3::straddr;
 
 namespace anyhttp::server
 {
 
 // =================================================================================================
 
+namespace
+{
+
 struct Endpoint
 {
    Address addr;
    int fd;
 };
+
+} // namespace
 
 // =================================================================================================
 // Free-standing helpers
@@ -117,36 +121,30 @@ namespace
 {
 
 //
-// The BoringSSL SSL_CTX every QUIC connection of one server is served from. Owned by
+// The SSL_CTX every QUIC connection of one server is served from. Owned by
 // Http3ServerImpl, so it is built with the server and not on the first connection.
 //
 struct TlsServerContext
 {
-   TlsServerContext()
+   explicit TlsServerContext(const Config& config)
    {
       ctx = SSL_CTX_new(TLS_server_method());
       if (!ctx)
          throw std::runtime_error("SSL_CTX_new");
 
-      if (ngtcp2_crypto_boringssl_configure_server_context(ctx) != 0)
-         throw std::runtime_error("ngtcp2_crypto_boringssl_configure_server_context");
-
-      //
-      // What OpenSSL needed SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS, SSL_OP_SINGLE_ECDH_USE and
-      // SSL_MODE_RELEASE_BUFFERS for is the default in BoringSSL. SSL_OP_NO_ANTI_REPLAY does not
-      // exist, but it would only matter for 0-RTT, which we don't enable.
-      //
-      SSL_CTX_set_options(ctx, SSL_OP_CIPHER_SERVER_PREFERENCE);
+      http3::Http3Session::configure_tls_context(ctx, true);
 
       SSL_CTX_set_alpn_select_cb(ctx, &TlsServerContext::alpn_select_cb, nullptr);
 
-      if (SSL_CTX_use_PrivateKey_file(ctx, "pki/out/server-key.pem", SSL_FILETYPE_PEM) != 1)
-         throw std::runtime_error(std::string{"SSL_CTX_use_PrivateKey_file: "} +
-                                  ERR_error_string(ERR_get_error(), nullptr));
+      if (SSL_CTX_use_PrivateKey_file(ctx, config.tls_private_key.c_str(), SSL_FILETYPE_PEM) != 1)
+         throw std::runtime_error(std::format("SSL_CTX_use_PrivateKey_file: {}: {}",
+                                              config.tls_private_key,
+                                              ERR_error_string(ERR_get_error(), nullptr)));
 
-      if (SSL_CTX_use_certificate_chain_file(ctx, "pki/out/server-chain.pem") != 1)
-         throw std::runtime_error(std::string{"SSL_CTX_use_certificate_chain_file: "} +
-                                  ERR_error_string(ERR_get_error(), nullptr));
+      if (SSL_CTX_use_certificate_chain_file(ctx, config.tls_certificate_chain.c_str()) != 1)
+         throw std::runtime_error(std::format("SSL_CTX_use_certificate_chain_file: {}: {}",
+                                              config.tls_certificate_chain,
+                                              ERR_error_string(ERR_get_error(), nullptr)));
 
       if (SSL_CTX_check_private_key(ctx) != 1)
          throw std::runtime_error("SSL_CTX_check_private_key");
@@ -208,6 +206,39 @@ bool drop_packet(double rate)
 
 // -------------------------------------------------------------------------------------------------
 
+//
+// Fills in `cm` with the control message that makes a datagram go out from `local`, the address
+// its connection was reached on, and returns the space it takes up. Without it, a socket bound
+// to a wildcard address sends from whatever address the kernel picks for the route back -- on a
+// host with more than one, not necessarily the one the client sent to, and a client with a
+// connected socket drops the reply. A dual-stack socket takes IPV6_PKTINFO with a v4-mapped
+// address for an IPv4 peer, which is what IPV6_RECVPKTINFO reported for one.
+//
+size_t set_source_address(cmsghdr* cm, const Address& local)
+{
+   if (local.su.storage.ss_family == AF_INET6)
+   {
+      in6_pktinfo pktinfo{.ipi6_addr = local.su.in6.sin6_addr,
+                          .ipi6_ifindex =
+                             static_cast<decltype(in6_pktinfo::ipi6_ifindex)>(local.ifindex)};
+      cm->cmsg_level = IPPROTO_IPV6;
+      cm->cmsg_type = IPV6_PKTINFO;
+      cm->cmsg_len = CMSG_LEN(sizeof(pktinfo));
+      std::memcpy(CMSG_DATA(cm), &pktinfo, sizeof(pktinfo));
+      return CMSG_SPACE(sizeof(pktinfo));
+   }
+
+   in_pktinfo pktinfo{.ipi_ifindex = static_cast<decltype(in_pktinfo::ipi_ifindex)>(local.ifindex),
+                      .ipi_spec_dst = local.su.in.sin_addr};
+   cm->cmsg_level = IPPROTO_IP;
+   cm->cmsg_type = IP_PKTINFO;
+   cm->cmsg_len = CMSG_LEN(sizeof(pktinfo));
+   std::memcpy(CMSG_DATA(cm), &pktinfo, sizeof(pktinfo));
+   return CMSG_SPACE(sizeof(pktinfo));
+}
+
+// -------------------------------------------------------------------------------------------------
+
 std::optional<Address> to_address(const sockaddr_storage& src, socklen_t len)
 {
    Address addr{};
@@ -227,6 +258,9 @@ std::optional<Address> to_address(const sockaddr_storage& src, socklen_t len)
 class Http3ServerImpl;
 class Http3ServerSession;
 
+namespace
+{
+
 class Http3ServerStream : public http3::Http3Stream
 {
 public:
@@ -241,6 +275,8 @@ public:
    void on_headers_complete() override;
    void submit_response(unsigned int status_code, const Fields& fields) override;
 };
+
+} // namespace
 
 // -------------------------------------------------------------------------------------------------
 
@@ -277,6 +313,7 @@ public:
 
    const ngtcp2_cid& scid() const noexcept { return scid_; }
    Http3ServerImpl& server() noexcept { return server_; }
+   void count_request() noexcept { ++request_counter_; }
 
 protected:
    int handle_error(int rv) override;
@@ -302,7 +339,11 @@ private:
    asio::steady_timer done_signal_; // used to wake do_session() on connection close
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
    bool no_gso_ = false; // Config::disable_gso, or sendmsg() rejected UDP_SEGMENT
+   size_t request_counter_ = 0;
 };
+
+namespace
+{
 
 //
 // What one pass of udp_on_read() hands a session: every datagram of the receive batch that was
@@ -324,6 +365,8 @@ struct QuicBatch
    boost::container::small_vector<Datagram, 8> datagrams;
 };
 
+} // namespace
+
 // -------------------------------------------------------------------------------------------------
 
 //
@@ -336,6 +379,9 @@ class Http3ServerImpl : public Http3Server, public std::enable_shared_from_this<
 {
 public:
    Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endpoint& endpoint);
+
+   /// For log lines that belong to no connection, see anyhttp::log_prefix().
+   std::string log_prefix() const { return anyhttp::log_prefix(Role::server); }
 
    //
    // Http3Server
@@ -396,6 +442,9 @@ private:
 // Http3ServerStream implementation
 // =================================================================================================
 
+namespace
+{
+
 //
 // The reading half of a server request: what http3::Http3Reader has for both roles, plus the
 // request line, which only this role has. Its counterpart on the client is Http3ResponseReader.
@@ -417,6 +466,8 @@ public:
       return stream->url;
    }
 };
+
+} // namespace
 
 // -------------------------------------------------------------------------------------------------
 
@@ -448,7 +499,7 @@ void Http3ServerStream::on_pseudo_header(std::string_view name, std::string_view
 
 void Http3ServerStream::on_headers_complete()
 {
-   logd("[{}] {} {}", log_prefix_, method, url.buffer());
+   mlogd("{} {}", method, url.buffer());
    log_headers(log_prefix_, std::exchange(received_headers, {}));
 
    //
@@ -457,7 +508,9 @@ void Http3ServerStream::on_headers_complete()
    server::Request request(std::make_unique<Http3RequestReader>(*this));
    server::Response response(std::make_unique<http3::Http3Writer<server::Response::Impl>>(*this));
 
-   auto& sv = static_cast<Http3ServerSession&>(session).server();
+   auto& ss = static_cast<Http3ServerSession&>(session);
+   ss.count_request();
+   auto& sv = ss.server();
    if (header_limit_exceeded)
       co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
                detached);
@@ -465,7 +518,7 @@ void Http3ServerStream::on_headers_complete()
       co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
    else
    {
-      loge("[{}] no request handler set", log_prefix_);
+      mloge("no request handler set");
       co_spawn(get_executor(), not_found(std::move(response)), detached);
    }
 }
@@ -495,15 +548,14 @@ void Http3ServerStream::submit_response(unsigned int status, const Fields& user_
    {
       if (item.name_string().starts_with(':'))
       {
-         logw("[{}] submit_response: dropping pseudo-header '{}'", log_prefix_, item.name_string());
+         mlogw("submit_response: dropping pseudo-header '{}'", item.name_string());
          continue;
       }
       nva.push_back(make_nv(item.name_string(), item.value()));
    }
 
    using namespace boost::beast::http;
-   logd("[{}] {} {}", log_prefix_, response_status,
-        obsolete_reason(int_to_status(response_status)));
+   mlogd("{} {}", response_status, obsolete_reason(int_to_status(response_status)));
 
    if (submit_headers(nva, false /* response */))
       session.wake_write();
@@ -521,11 +573,11 @@ Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Add
      no_gso_(server.config().disable_gso)
 {
    max_header_size_ = server.config().max_header_size;
-   log_prefix_ = std::format("h3:{}", straddr(&remote_.su.sa, remote_.len));
+   log_prefix_ = http3::log_prefix(Role::server, "h3", &remote_.su.sa, remote_.len);
 
    //
    // Own a dup() of the shared UDP fd rather than borrowing the server's. Sends happen from this
-   // session's strand, concurrently with everything else -- sendto()/sendmsg() on a shared
+   // session's strand, concurrently with everything else -- sendmsg() on a shared
    // datagram fd is fine, each call is atomic -- but at shutdown the server closes its socket
    // right after posting destroy() to every session, and the final CONNECTION_CLOSE would
    // otherwise race that close (and, worse, a recycled fd number).
@@ -536,7 +588,7 @@ Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Add
       owns_fd_ = true;
    }
    else
-      loge("[{}] dup: {}", log_prefix_, strerror(errno));
+      mloge("dup: {}", strerror(errno));
 
    // done_signal_ is armed at "never" until signal_done() moves it to the past.
    done_signal_.expires_at(asio::steady_timer::time_point::max());
@@ -553,7 +605,7 @@ Http3ServerSession::~Http3ServerSession()
    clear_streams();
    if (owns_fd_)
       ::close(ep_.fd);
-   mlogi("session destroyed");
+   mlogi("session destroyed, served {} requests", request_counter_);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -650,7 +702,7 @@ void Http3ServerSession::on_remove_cid(const ngtcp2_cid& cid) { server_.dissocia
 //
 // Sends a run of same-sized packets (as produced by ngtcp2_conn_write_aggregate_pkt2(), all but
 // the last exactly `gso_size` bytes) with a single sendmsg() using UDP_SEGMENT (GSO), so N QUIC
-// packets cost one syscall instead of N. Falls back to one sendto() per segment -- and remembers
+// packets cost one syscall instead of N. Falls back to one sendmsg() per segment -- and remembers
 // to do so from then on -- if the kernel/NIC doesn't support UDP_SEGMENT here.
 //
 int Http3ServerSession::send_datagrams(const ngtcp2_path& path, std::span<const uint8_t> data,
@@ -670,7 +722,8 @@ int Http3ServerSession::send_datagrams(const ngtcp2_path& path, std::span<const 
    }
 
    iovec msg_iov{const_cast<uint8_t*>(data.data()), data.size()};
-   uint8_t msg_ctrl[CMSG_SPACE(sizeof(uint16_t))];
+   alignas(cmsghdr)
+      uint8_t msg_ctrl[CMSG_SPACE(sizeof(uint16_t)) + CMSG_SPACE(sizeof(in6_pktinfo))]{};
    msghdr msg{};
    msg.msg_name = path.remote.addr;
    msg.msg_namelen = path.remote.addrlen;
@@ -685,6 +738,8 @@ int Http3ServerSession::send_datagrams(const ngtcp2_path& path, std::span<const 
    cm->cmsg_len = CMSG_LEN(sizeof(uint16_t));
    auto seg = static_cast<uint16_t>(gso_size);
    memcpy(CMSG_DATA(cm), &seg, sizeof(seg));
+   msg.msg_controllen =
+      CMSG_SPACE(sizeof(uint16_t)) + set_source_address(CMSG_NXTHDR(&msg, cm), ep_.addr);
 
    for (;;)
    {
@@ -702,7 +757,7 @@ int Http3ServerSession::send_datagrams(const ngtcp2_path& path, std::span<const 
             no_gso_ = true;
             return send_datagrams(path, data, gso_size);
          }
-         loge("[{}] sendmsg (GSO): {}", log_prefix_, strerror(errno));
+         mloge("sendmsg (GSO): {}", strerror(errno));
          return -1;
       }
       return 0;
@@ -721,16 +776,27 @@ int Http3ServerSession::send_udp(const ngtcp2_addr& remote, std::span<const uint
       return 0; // pretend it went out; ngtcp2 will retransmit
    }
 
+   iovec msg_iov{const_cast<uint8_t*>(packet.data()), packet.size()};
+   alignas(cmsghdr) uint8_t msg_ctrl[CMSG_SPACE(sizeof(in6_pktinfo))]{};
+   msghdr msg{};
+   msg.msg_name = remote.addr;
+   msg.msg_namelen = remote.addrlen;
+   msg.msg_iov = &msg_iov;
+   msg.msg_iovlen = 1;
+   msg.msg_control = msg_ctrl;
+   msg.msg_controllen = sizeof(msg_ctrl);
+   msg.msg_controllen = set_source_address(CMSG_FIRSTHDR(&msg), ep_.addr);
+
    for (;;)
    {
-      auto n = ::sendto(ep_.fd, packet.data(), packet.size(), 0, remote.addr, remote.addrlen);
+      auto n = ::sendmsg(ep_.fd, &msg, 0);
       if (n == -1)
       {
          if (errno == EINTR)
             continue;
          if (errno == EAGAIN || errno == EWOULDBLOCK)
             return 0; // best-effort; ngtcp2 will retransmit
-         loge("[{}] sendto: {}", log_prefix_, strerror(errno));
+         mloge("sendmsg: {}", strerror(errno));
          return -1;
       }
       return 0;
@@ -745,7 +811,7 @@ int Http3ServerSession::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uin
    scid_.datalen = QUIC_SCIDLEN;
    if (RAND_bytes(scid_.data, static_cast<int>(scid_.datalen)) != 1)
    {
-      loge("[{}] init: RAND_bytes for SCID failed", log_prefix_);
+      mloge("init: RAND_bytes for SCID failed");
       return -1;
    }
 
@@ -760,8 +826,8 @@ int Http3ServerSession::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uin
    params.original_dcid_present = 1;
 
    ngtcp2_path path{
-      {const_cast<sockaddr*>(&ep_.addr.su.sa), ep_.addr.len},
-      {const_cast<sockaddr*>(&remote_.su.sa), remote_.len},
+      {&ep_.addr.su.sa, ep_.addr.len},
+      {&remote_.su.sa, remote_.len},
       &ep_,
    };
 
@@ -769,15 +835,14 @@ int Http3ServerSession::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uin
                                         &settings, &params, nullptr, this);
        rv != 0)
    {
-      loge("[{}] ngtcp2_conn_server_new: {}", log_prefix_, ngtcp2_strerror(rv));
+      mloge("ngtcp2_conn_server_new: {}", ngtcp2_strerror(rv));
       return -1;
    }
 
    if (setup_tls(server_.tls_context(), true /* server */) != 0)
       return -1;
 
-   logi("[{}] new connection, scid={} version=0x{:x}", log_prefix_,
-        format_hex(scid_.data, scid_.datalen), version);
+   mlogi("new connection, scid={} version=0x{:x}", format_hex(scid_.data, scid_.datalen), version);
 
    return on_read(pi, data, remote_);
 }
@@ -788,7 +853,7 @@ int Http3ServerSession::on_read(const ngtcp2_pkt_info& pi, std::span<const uint8
                                 const Address& remote)
 {
    ngtcp2_path path{
-      {const_cast<sockaddr*>(&ep_.addr.su.sa), ep_.addr.len},
+      {&ep_.addr.su.sa, ep_.addr.len},
       {const_cast<sockaddr*>(&remote.su.sa), remote.len},
       &ep_,
    };
@@ -832,7 +897,7 @@ int Http3ServerSession::handle_error(int /*rv*/)
       if (!packet.empty())
       {
          conn_closebuf_.resize(packet.size());
-         logi("[{}] sending CONNECTION_CLOSE", log_prefix_);
+         mlogi("sending CONNECTION_CLOSE");
          send_udp(ps.path.remote, conn_closebuf_);
       }
       else
@@ -873,7 +938,7 @@ void Http3ServerSession::resend_conn_close()
    auto* path = ngtcp2_conn_get_path(conn_);
    if (!path)
       return;
-   logd("[{}] resending CONNECTION_CLOSE", log_prefix_);
+   mlogd("resending CONNECTION_CLOSE");
    send_udp(path->remote, conn_closebuf_);
 }
 
@@ -882,7 +947,7 @@ void Http3ServerSession::resend_conn_close()
 // =================================================================================================
 
 Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endpoint& endpoint)
-   : parent_(parent)
+   : parent_(parent), tls_(parent.config())
 {
    namespace socket_option = boost::asio::detail::socket_option;
 
@@ -910,8 +975,8 @@ Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endp
    socket_->non_blocking(true);
 
    socket_->bind(endpoint);
-   logi("Server: UDP listening on {} (GRO {}, GSO {})", endpoint,
-        config().disable_gro ? "off" : "on", config().disable_gso ? "off" : "on");
+   mlogi("UDP listening on {} (GRO {}, GSO {})", endpoint, config().disable_gro ? "off" : "on",
+         config().disable_gso ? "off" : "on");
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -922,9 +987,9 @@ void Http3ServerImpl::start()
    co_spawn(socket_->get_executor(), udp_receive_loop(),
             [self = shared_from_this(), owner = owner()](const std::exception_ptr& ex) {
                if (ex)
-                  logw("UDP receive loop: {}", what(ex));
+                  logw("[{}] UDP receive loop: {}", self->log_prefix(), what(ex));
                else
-                  logi("UDP receive loop: done");
+                  logi("[{}] UDP receive loop: done", self->log_prefix());
             });
 }
 
@@ -1236,9 +1301,9 @@ awaitable<void> Http3ServerImpl::udp_receive_loop()
       if (ec)
       {
          if (ec == boost::asio::error::operation_aborted)
-            logi("UDP receive: {}", ec.message());
+            mlogi("UDP receive: {}", ec.message());
          else
-            logw("UDP receive: {}", ec.message());
+            mlogw("UDP receive: {}", ec.message());
          co_return;
       }
 

@@ -147,7 +147,7 @@ protected:
 
    //
    // Like spawn(CURL_PATH, args), but for Protocol::h3: QUIC handshakes can hang in ways
-   // http11/h2 curl invocations don't, so wrap in a hard `timeout 5` safety net.
+   // h1/h2 curl invocations don't, so wrap in a hard `timeout 5` safety net.
    //
    std::future<std::string> spawn_curl(std::vector<std::string> args)
    {
@@ -171,7 +171,7 @@ using Args = std::vector<std::string>;
 
 // plain-text only, so no HTTP/3
 INSTANTIATE_TEST_SUITE_P(External, External,
-                         ::testing::Values(anyhttp::Protocol::http11, // HTTP/1.1
+                         ::testing::Values(anyhttp::Protocol::h1, // HTTP/1.1
                                            anyhttp::Protocol::h2), // HTTP/2
                          NameGenerator);
 
@@ -214,13 +214,14 @@ protected:
    {
       switch (GetParam())
       {
-      case anyhttp::Protocol::http11:
+      case anyhttp::Protocol::h1:
          return "--http1.1";
       case anyhttp::Protocol::h2:
          return "--http2";
       case anyhttp::Protocol::h3:
          return "--http3-only";
       }
+      std::unreachable();
    }
 
    //
@@ -235,7 +236,7 @@ protected:
 
       switch (GetParam())
       {
-      case anyhttp::Protocol::http11:
+      case anyhttp::Protocol::h1:
          args.insert(args.begin(), "--h1");
          break;
       case anyhttp::Protocol::h3:
@@ -263,7 +264,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(ExternalTLS, ExternalTLS,
-                         ::testing::Values(anyhttp::Protocol::http11, // HTTP/1.1
+                         ::testing::Values(anyhttp::Protocol::h1, // HTTP/1.1
                                            anyhttp::Protocol::h2, // HTTP/2
                                            anyhttp::Protocol::h3), // HTTP/3 (QUIC)
                          NameGenerator);
@@ -344,7 +345,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(ExternalTLSThreaded, ExternalTLSThreaded,
-                         ::testing::Values(anyhttp::Protocol::http11, // HTTP/1.1
+                         ::testing::Values(anyhttp::Protocol::h1, // HTTP/1.1
                                            anyhttp::Protocol::h2, // HTTP/2
                                            anyhttp::Protocol::h3), // HTTP/3 (QUIC)
                          NameGenerator);

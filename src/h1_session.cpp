@@ -67,7 +67,7 @@ using socket = asio::ip::tcp::socket;
  * already has under that name, like a default set before, but repeated fields are all kept.
  */
 template <bool isRequest, typename Body>
-void add_fields(http::message<isRequest, Body>& message, const Fields& headers)
+static void add_fields(http::message<isRequest, Body>& message, const Fields& headers)
 {
    for (auto&& header : headers)
       message.erase(header.name_string());
@@ -76,7 +76,7 @@ void add_fields(http::message<isRequest, Body>& message, const Fields& headers)
 }
 
 /// Converts Config::max_header_size into what a Beast parser takes as its header limit.
-inline std::uint32_t header_limit(size_t max_header_size)
+static std::uint32_t header_limit(size_t max_header_size)
 {
    return static_cast<std::uint32_t>(
       std::min<size_t>(max_header_size, std::numeric_limits<std::uint32_t>::max()));
@@ -84,13 +84,17 @@ inline std::uint32_t header_limit(size_t max_header_size)
 
 // =================================================================================================
 
+namespace
+{
+
 template <typename Interface, typename Stream, typename Buffer, typename Parser>
 class BeastReader : public Interface
 {
 public:
-   inline BeastReader(BeastSession<Stream>& session_, Stream& stream_, Buffer& buffer_)
+   BeastReader(BeastSession<Stream>& session_, Stream& stream_, Buffer& buffer_)
       : session(&session_), stream(stream_), buffer(buffer_),
-        executor_(session_.get_executor()) // survives detach(), see get_executor()
+        executor_(session_.get_executor()), // survives detach(), see get_executor()
+        log_prefix_(session_.log_prefix())
    {
       // parser.header_limit(std::numeric_limits<uint32_t>::max());
       parser.body_limit(std::numeric_limits<uint64_t>::max());
@@ -99,10 +103,10 @@ public:
 
    void destroy() noexcept override
    {
-      logd("destroy: reader destroyed, is_done={}", parser.is_done());
+      mlogd("destroy: reader destroyed, is_done={}", parser.is_done());
       if (!parser.is_done() && session)
       {
-         logw("destroy: reader destroyed, but parser not done yet... closing socket");
+         mlogw("destroy: reader destroyed, but parser not done yet... closing socket");
          //
          // We could still try to send an error response here.
          // This breaks WHEN_server_discards_request_THEN_is_still_able_to_deliver_response.
@@ -111,8 +115,8 @@ public:
          // get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send, ec);
          get_socket(stream).shutdown(boost::asio::socket_base::shutdown_receive, ec);
          session->closed_ = true;
-         if (ec)
-            logw("destroy: shutdown: {}", what(ec));
+         logwd(ec != asio::error::not_connected, //
+               "[{}] destroy: shutdown: {}", log_prefix(), what(ec));
       }
       finish();
    }
@@ -136,7 +140,7 @@ public:
    }
    void detach() override
    {
-      mlogw("detach");
+      mlogd("detach");
       session = nullptr;
    }
 
@@ -184,7 +188,7 @@ public:
 
       auto ex = get_associated_executor(handler, get_executor());
       auto cs = get_associated_cancellation_slot(handler);
-      auto cb = [this, self = Interface::shared_from_this(), body_buffer = std::move(body_buffer),
+      auto cb = [this, self = Interface::shared_from_this(), body_buffer,
                  handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable {
          reading = false;
 
@@ -221,14 +225,15 @@ public:
          stream, buffer, parser, bind_executor(ex, bind_cancellation_slot(cs, std::move(cb))));
    }
 
-   asio::any_io_executor get_executor() const noexcept { return executor_; }
-   inline auto log_prefix() const { return session ? session->log_prefix() : "DETACHED"; }
+   asio::any_io_executor get_executor() const noexcept override { return executor_; }
+   std::string log_prefix() const override { return log_prefix_; }
 
    BeastSession<Stream>* session;
    Stream& stream;
    Buffer& buffer;
    Parser parser;
    asio::any_io_executor executor_; // kept as a copy so a detached reader can still complete
+   std::string log_prefix_; // likewise, for logging
    bool reading = false;
    bool finished = false; // see finish()
 };
@@ -315,9 +320,10 @@ template <typename Parent, typename Stream, typename Serializer,
 class WriterBase : public Parent
 {
 public:
-   inline WriterBase(BeastSession<Stream>& session_, Stream& stream_)
+   WriterBase(BeastSession<Stream>& session_, Stream& stream_)
       : session(&session_), stream(stream_),
-        executor_(session_.get_executor()) // survives detach(), see get_executor()
+        executor_(session_.get_executor()), // survives detach(), see get_executor()
+        log_prefix_(session_.log_prefix())
    {
       session_.attach(*this);
    }
@@ -329,7 +335,7 @@ public:
          session->release(*this);
    }
 
-   inline auto log_prefix() const { return session ? session->log_prefix() : "DETACHED"; }
+   std::string log_prefix() const override { return log_prefix_; }
 
    // ----------------------------------------------------------------------------------------------
 
@@ -337,7 +343,7 @@ public:
 
    void detach() override
    {
-      mlogw("detach");
+      mlogd("detach");
       session = nullptr;
    }
 
@@ -449,11 +455,11 @@ public:
                // TODO: We could try to support partial cancellation, but that would only work
                //       at chunk boundaries.
                //
-               mlogw("async_write: canceled after writing {} of {} bytes", n, expected);
+               mlogi("async_write: canceled after writing {} of {} bytes", n, expected);
                cancelled = true;
                if (session) // otherwise, the stream is gone already
                {
-                  mlogw("async_write: canceled, closing stream");
+                  mlogi("async_write: canceled, closing stream");
                   get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send);
                }
             }
@@ -527,6 +533,7 @@ public:
    Message message;
    Serializer serializer{message};
    asio::any_io_executor executor_; // kept as a copy so a detached writer can still complete
+   std::string log_prefix_; // likewise, for logging
    bool writing = false;
    bool cancelled = false;
    bool response_requested = false;
@@ -551,9 +558,7 @@ public:
    using super::submit_headers;
 
 public:
-   inline ResponseWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_)
-   {
-   }
+   ResponseWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_) {}
 
    void content_length(std::optional<size_t> content_length) override
    {
@@ -603,6 +608,8 @@ public:
    }
 };
 
+} // namespace
+
 template <typename Stream>
 class RequestWriter
    : public WriterBase<client::Request::Impl, Stream, http::request_serializer<http::buffer_body>>
@@ -622,9 +629,7 @@ public:
    using super::submit_headers;
 
 public:
-   inline RequestWriter(ClientSession<Stream>& session_, Stream& stream_) : super(session_, stream_)
-   {
-   }
+   RequestWriter(ClientSession<Stream>& session_, Stream& stream_) : super(session_, stream_) {}
 
    ~RequestWriter() override
    {
@@ -715,14 +720,14 @@ public:
 
    void async_get_response(client::Request::GetResponseHandler&& handler) override
    {
-      logd("async_get_response:");
+      mlogd("async_get_response:");
 
       if (response_requested)
       {
          auto ec = asio::error::basic_errors::already_started;
-         logw("async_get_response: \x1b[1;31m{}\x1b[0m", what(ec));
+         mlogw("async_get_response: \x1b[1;31m{}\x1b[0m", what(ec));
          any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
-         ex.execute([handler = std::move(handler), ec = std::move(ec)]() mutable { //
+         ex.execute([handler = std::move(handler), ec]() mutable { //
             std::move(handler)(ec, client::Response{nullptr});
          });
          return;
@@ -833,31 +838,33 @@ BeastSession<Stream>::~BeastSession()
 {
    mlogd("session deleted");
    if (!writers_.empty())
-      mlogw("dtor: detaching {} writer(s)", writers_.size());
+      mlogi("dtor: detaching {} writer(s)", writers_.size());
    detach_writers();
    if (!readers_.empty())
-      mlogw("dtor: detaching {} reader(s)", readers_.size());
+      mlogi("dtor: detaching {} reader(s)", readers_.size());
    detach_readers();
 }
 
 template <typename Stream>
 ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_executor executor,
                                      Stream&& stream)
-   : ServerSessionBase(parent), super("\x1b[1;31mserver\x1b[0m", executor, std::move(stream))
+   : ServerSessionBase(parent), super(anyhttp::log_prefix(Role::server, "h1", get_socket(stream)),
+                                      std::move(executor), std::move(stream))
 {
 }
 
 template <typename Stream>
 ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_executor executor,
                                      Stream&& stream)
-   : ClientSessionBase(parent), super("\x1b[1;32mclient\x1b[0m", executor, std::move(stream))
+   : ClientSessionBase(parent), super(anyhttp::log_prefix(Role::client, "h1", get_socket(stream)),
+                                      std::move(executor), std::move(stream))
 {
 }
 
 template <typename Stream>
 void BeastSession<Stream>::destroy() noexcept
 {
-   logw("destroy: closing stream");
+   mlogd("destroy: closing stream");
    //
    // FIXME: ClientAsync.Cancellation runs into a heap-use-after-free here, when the session is
    //        deleted. This is because the request and response may outlive the session and are
@@ -867,7 +874,9 @@ void BeastSession<Stream>::destroy() noexcept
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
    get_socket(stream_).shutdown(socket_base::shutdown_both, ec);
-   logwi(ec, "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
+   // not_connected: the peer is gone already, which is what we wanted anyway
+   logwd(ec && ec != asio::error::not_connected, //
+         "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
    // });
 }
 
@@ -891,7 +900,8 @@ void ServerSession<Stream>::destroy() noexcept
  * be read in HTTP/1.1 first, before switching protocols. Cleartext only, as h2 over TLS is
  * negotiated by ALPN instead.
  */
-static std::optional<nghttp2::Upgrade> h2c_upgrade(const http::request<http::buffer_body>& request,
+static std::optional<nghttp2::Upgrade> h2c_upgrade(std::string_view log_prefix,
+                                                   const http::request<http::buffer_body>& request,
                                                    const boost::urls::url& url, bool complete)
 {
    const auto has_token = [](std::string_view list, std::string_view token) {
@@ -907,20 +917,22 @@ static std::optional<nghttp2::Upgrade> h2c_upgrade(const http::request<http::buf
    if (!has_token(request[http::field::connection], "upgrade") ||
        !has_token(request[http::field::connection], "http2-settings"))
    {
-      logw("upgrade: ignoring h2c upgrade, 'Connection' misses 'Upgrade' or 'HTTP2-Settings'");
+      logw("[{}] upgrade: ignoring h2c upgrade, 'Connection' misses 'Upgrade' or 'HTTP2-Settings'",
+           log_prefix);
       return std::nullopt;
    }
 
    // exactly one HTTP2-Settings header, containing base64url without padding
    if (request.count("HTTP2-Settings") != 1)
    {
-      logw("upgrade: ignoring h2c upgrade, need exactly one 'HTTP2-Settings' header");
+      logw("[{}] upgrade: ignoring h2c upgrade, need exactly one 'HTTP2-Settings' header",
+           log_prefix);
       return std::nullopt;
    }
 
    if (!complete)
    {
-      logw("upgrade: ignoring h2c upgrade for request with body");
+      logw("[{}] upgrade: ignoring h2c upgrade for request with body", log_prefix);
       return std::nullopt;
    }
 
@@ -937,7 +949,7 @@ static std::optional<nghttp2::Upgrade> h2c_upgrade(const http::request<http::buf
    // a SETTINGS payload is a sequence of 6-byte entries
    if (read != encoded.size() || upgrade.settings.size() % 6 != 0)
    {
-      logw("upgrade: ignoring h2c upgrade, invalid 'HTTP2-Settings' header");
+      logw("[{}] upgrade: ignoring h2c upgrade, invalid 'HTTP2-Settings' header", log_prefix);
       return std::nullopt;
    }
 
@@ -1070,7 +1082,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       // stream to an HTTP/2 session, which continues this request as stream 1. Anything that
       // follows in the buffer (the client preface) is already HTTP/2.
       //
-      if (auto upgrade = h2c_upgrade(request, reader->url_, parser.is_done()))
+      if (auto upgrade = h2c_upgrade(log_prefix(), request, reader->url_, parser.is_done()))
       {
          http::response<http::empty_body> res{http::status::switching_protocols, request.version()};
          res.set(http::field::connection, "Upgrade");
@@ -1248,6 +1260,10 @@ template <typename Stream>
 void ServerSession<Stream>::async_submit(SubmitHandler&& handler, std::string_view method,
                                          boost::urls::url url, const Fields& headers)
 {
+   std::ignore = handler;
+   std::ignore = method;
+   std::ignore = url;
+   std::ignore = headers;
    assert(false);
 }
 

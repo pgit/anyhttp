@@ -31,6 +31,8 @@ Writer::executor_type Writer::get_executor() const noexcept
    return impl_ ? impl_->get_executor() : executor_type{};
 }
 
+std::string Writer::log_prefix() const { return impl_ ? impl_->log_prefix() : std::string{}; }
+
 void Writer::content_length(std::optional<size_t> content_length)
 {
    return impl_ ? impl_->content_length(content_length) : void{};

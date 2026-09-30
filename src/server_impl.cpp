@@ -17,9 +17,9 @@
 #include <boost/asio/ip/address_v6.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ip/v6_only.hpp>
-#include <boost/asio/strand.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/stream.hpp>
+#include <boost/asio/strand.hpp>
 
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/ssl/ssl_stream.hpp>
@@ -60,13 +60,13 @@ Response::Impl::~Impl() = default;
 //
 // Defined further down, together with the ALPN callbacks it installs.
 //
-static asio::ssl::context make_tls_server_context();
+static asio::ssl::context make_tls_server_context(const Config& config);
 
 Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    : config_(std::move(config)), executor_(std::move(executor)),
-     tls_context_(make_tls_server_context()), acceptor_(executor_)
+     tls_context_(make_tls_server_context(config_)), acceptor_(executor_)
 {
-   logi("Server: ctor");
+   mlogi("ctor");
    listen_tcp();
 
    //
@@ -84,7 +84,7 @@ Server::Impl::Impl(boost::asio::any_io_executor executor, Config config)
    if (http3_ && config_.alt_svc_max_age > 0s)
    {
       alt_svc_ = std::format("h3=\":{}\"; ma={}", tcp_ep.port(), config_.alt_svc_max_age.count());
-      logi("Server: advertising '{}'", alt_svc_);
+      mlogi("advertising '{}'", alt_svc_);
    }
 }
 
@@ -101,9 +101,9 @@ void Server::Impl::start()
    co_spawn(executor_, tcp_accept_loop(),
             [self = shared_from_this()](const std::exception_ptr& ex) {
                if (ex)
-                  logw("TCP accept loop: {}", what(ex));
+                  logw("[{}] TCP accept loop: {}", self->log_prefix(), what(ex));
                else
-                  logi("TCP accept loop: done");
+                  logi("[{}] TCP accept loop: done", self->log_prefix());
             });
 
    if (http3_)
@@ -114,7 +114,7 @@ void Server::Impl::start()
 
 void Server::Impl::destroy()
 {
-   logi("Server: destroy");
+   mlogi("destroy");
 
    acceptor_.close(); // breaks listen_loop()
 
@@ -141,7 +141,7 @@ void Server::Impl::destroy()
 
 Server::Impl::~Impl()
 {
-   logi("Server: dtor");
+   mlogi("dtor");
    assert(destroyed_);
 }
 
@@ -169,7 +169,7 @@ void Server::Impl::listen_tcp()
    boost::system::error_code ec;
    auto address = ip::make_address(config().listen_address, ec);
    if (ec)
-      logw("Server: error resolving '{}': {}", config().listen_address, ec.what());
+      mlogw("error resolving '{}': {}", config().listen_address, ec.what());
 
    ip::tcp::endpoint ep(address, config().port);
    acceptor_.open(ep.protocol());
@@ -184,14 +184,14 @@ void Server::Impl::listen_tcp()
    {
       acceptor_.set_option(ip::v6_only(false), ec);
       if (ec)
-         logw("Server: error enabling dual-stack on {}: {}", ep, ec.what());
+         mlogw("error enabling dual-stack on {}: {}", ep, ec.what());
    }
 
    acceptor_.bind(ep);
    acceptor_.listen();
 
    ep = acceptor_.local_endpoint();
-   logi("Server: TCP listening on {}", ep);
+   mlogi("TCP listening on {}", ep);
 }
 
 // =================================================================================================
@@ -204,11 +204,11 @@ void Server::Impl::listen_tcp()
 //
 static unsigned char next_proto_list[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
 
-unsigned int next_proto_list_len = sizeof(next_proto_list);
+static unsigned int next_proto_list_len = sizeof(next_proto_list);
 static int next_proto_cb(SSL* s, const unsigned char** data, unsigned int* len, void* arg)
 {
    *data = next_proto_list;
-   *len = (unsigned int)next_proto_list_len;
+   *len = next_proto_list_len;
    return SSL_TLSEXT_ERR_OK;
 }
 
@@ -244,18 +244,14 @@ static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned ch
 // server -- unlike HTTP/3, which holds its context for the lifetime of the server. That
 // difference made a regenerated test PKI fail over HTTP/3 while HTTP/2 silently kept working.
 //
-static asio::ssl::context make_tls_server_context()
+static asio::ssl::context make_tls_server_context(const Config& config)
 {
    asio::ssl::context ctx{asio::ssl::context::tlsv13};
-   SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, NULL);
-   SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, NULL);
+   SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, nullptr);
+   SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, nullptr);
 
-   //
-   // This is a testing key only. It is not in the repository, but generated at build time
-   // by the 'pki' target (see cmake/pki.cmake).
-   //
-   ctx.use_certificate_chain_file("pki/out/server-chain.pem");
-   ctx.use_private_key_file("pki/out/server-key.pem", asio::ssl::context::pem);
+   ctx.use_certificate_chain_file(config.tls_certificate_chain);
+   ctx.use_private_key_file(config.tls_private_key, asio::ssl::context::pem);
 
    return ctx;
 }
@@ -264,7 +260,7 @@ static asio::ssl::context make_tls_server_context()
 
 awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
 {
-   const auto prefix = normalize(socket.remote_endpoint());
+   const auto prefix = anyhttp::log_prefix(Role::server, "tcp", socket);
    logi("[{}] new connection", prefix);
 
    // HTTP/2 is very slow without this, and TLS handshake is faster as well.
@@ -311,8 +307,7 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
             alpn = std::string_view(reinterpret_cast<const char*>(data), len);
       }
 
-      logi("[{}] TLS handshake completed: {}", prefix,
-           tls_handshake_info(ssl_stream->native_handle()));
+      logi("[{}] {}", prefix, tls_handshake_info(ssl_stream->native_handle()));
 
       //
       // Everything that is not "h2" is served as HTTP/1.1, including the empty ALPN of a client
@@ -365,7 +360,7 @@ awaitable<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    co_await session->do_session(std::move(buffer));
    remove_session(session);
 
-   logi("[{}] session finished", prefix);
+   logd("[{}] session finished", prefix);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -418,14 +413,15 @@ awaitable<void> Server::Impl::tcp_accept_loop()
       auto [ec] = co_await acceptor_.async_accept(socket, as_tuple);
       if (ec)
       {
-         if (ec == boost::system::errc::operation_canceled)
-            logi("TCP accept: {}", ec.message());
+         // bad_descriptor: the acceptor was closed before async_accept() got to it
+         if (ec == boost::system::errc::operation_canceled || ec == asio::error::bad_descriptor)
+            mlogi("TCP accept: {}", ec.message());
          else
-            logw("TCP accept: {}", ec.message());
+            mlogw("TCP accept: {}", ec.message());
          break;
       }
 
-      auto ep = normalize(socket.remote_endpoint());
+      auto prefix = anyhttp::log_prefix(Role::server, "tcp", socket);
 
       //
       // Without something like a "nursery" or "async_scope", spawning a task detaches it from
@@ -439,14 +435,16 @@ awaitable<void> Server::Impl::tcp_accept_loop()
 
       auto connection_executor = socket.get_executor();
       co_spawn(connection_executor, handle_connection(std::move(socket)),
-               [&, ep](const std::exception_ptr& ex) mutable {
+               [&, prefix](const std::exception_ptr& ex) mutable {
                   auto lock = std::lock_guard(session_mutex_);
                   --sessionCounter;
                   std::ignore = sessionDone.try_send(boost::system::error_code{});
                   if (ex)
-                     logw("[{}] {}", ep, what(ex));
+                     logw("[{}] {}", prefix, what(ex));
+                  else if (sessionCounter)
+                     logd("[{}] session finished, {} sessions left", prefix, sessionCounter);
                   else
-                     logi("[{}] session finished, {} sessions left", ep, sessionCounter);
+                     logi("[{}] all sessions finished", prefix);
                });
    }
 
@@ -457,7 +455,7 @@ awaitable<void> Server::Impl::tcp_accept_loop()
    //
    auto lock = std::unique_lock(session_mutex_);
    const auto waitingFor = sessionCounter;
-   logi("accept terminated, waiting for {} sessions...", waitingFor);
+   mlogi("accept terminated, waiting for {} sessions...", waitingFor);
 
    size_t i = 0;
    for (; sessionCounter; ++i)
@@ -471,7 +469,7 @@ awaitable<void> Server::Impl::tcp_accept_loop()
       lock.lock();
    }
 
-   logi("accept terminated, waiting for {} sessions... done, {} iterations", waitingFor, i);
+   mlogi("accept terminated, waiting for {} sessions... done, {} iterations", waitingFor, i);
 }
 
 // =================================================================================================

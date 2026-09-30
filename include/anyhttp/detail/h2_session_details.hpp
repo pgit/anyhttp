@@ -37,7 +37,9 @@ void NGHttp2SessionImpl<Stream>::destroy() noexcept
    // post(get_executor(), [this, self]() mutable {
    boost::system::error_code ec;
    get_socket(stream_).shutdown(asio::socket_base::shutdown_both, ec);
-   logwi(ec, "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
+   // not_connected: the peer is gone already, which is what we wanted anyway
+   logwd(ec && ec != asio::error::not_connected, //
+         "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
    // });
 }
 
@@ -106,7 +108,11 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
          auto [ec, written] = co_await asio::async_write(stream_, seq, asio::as_tuple);
          if (ec)
          {
-            mloge("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
+            // a peer that hung up is not our error
+            if (ec == asio::error::broken_pipe || ec == asio::error::connection_reset)
+               mlogi("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
+            else
+               mloge("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
             break;
          }
          mylogd("send loop: writing {} bytes... done, wrote {}", bytes_to_write, written);
@@ -180,7 +186,9 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
 template <typename Stream>
 ServerSession<Stream>::ServerSession(server::Server::Impl& parent, asio::any_io_executor executor,
                                      Stream&& stream)
-   : ServerReference(parent), super("\x1b[1;31mserver\x1b[0m", executor, std::move(stream))
+   : ServerReference(parent),
+     super(anyhttp::log_prefix(Role::server, is_tls(stream) ? "h2" : "h2c", get_socket(stream)),
+           executor, std::move(stream))
 {
    max_header_size_ = parent.config().max_header_size;
    alt_svc_ = parent.alt_svc();
@@ -287,7 +295,9 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 template <typename Stream>
 ClientSession<Stream>::ClientSession(client::Client::Impl& parent, asio::any_io_executor executor,
                                      Stream&& stream)
-   : ClientReference(parent), super("\x1b[1;32mclient\x1b[0m", executor, std::move(stream))
+   : ClientReference(parent),
+     super(anyhttp::log_prefix(Role::client, is_tls(stream) ? "h2" : "h2c", get_socket(stream)),
+           executor, std::move(stream))
 {
    max_header_size_ = parent.config().max_header_size;
 }

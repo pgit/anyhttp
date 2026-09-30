@@ -322,11 +322,18 @@ public:
       detached_ec = stream->reading_finished()
                        ? error_code{asio::error::eof}
                        : error_code{boost::beast::http::error::partial_message};
+      detached_log_prefix = stream->log_prefix();
       stream = nullptr;
+   }
+
+   std::string log_prefix() const override
+   {
+      return stream ? stream->log_prefix() : detached_log_prefix;
    }
 
    Http3Stream* stream;
    asio::any_io_executor executor; // kept as a copy so a detached reader can still complete
+   std::string detached_log_prefix; // latched by detach()
 
    /// What a read past detach() reports: eof for a body read to its clean end, else truncation.
    error_code detached_ec{boost::beast::http::error::partial_message};
@@ -406,11 +413,18 @@ public:
       // nghttp3 -- so writes issued after this still answer per the Writer contract
       assert(stream);
       detached_body_ended = stream->eof_submitted && stream->fin_offered;
+      detached_log_prefix = stream->log_prefix();
       stream = nullptr;
+   }
+
+   std::string log_prefix() const override
+   {
+      return stream ? stream->log_prefix() : detached_log_prefix;
    }
 
    Http3Stream* stream;
    asio::any_io_executor executor; // kept as a copy so a detached writer can still complete
+   std::string detached_log_prefix; // latched by detach()
    bool detached_body_ended = false; // latched by detach(), see there
 };
 

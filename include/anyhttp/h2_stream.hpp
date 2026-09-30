@@ -42,11 +42,13 @@ public:
    std::optional<size_t> content_length() const noexcept override;
    void async_read_some(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler) override;
    void detach() override;
+   std::string log_prefix() const override;
 
    const Fields& fields() const override;
 
    NGHttp2Stream* stream;
    asio::any_io_executor executor; // kept as a copy so a detached reader can still complete
+   std::string detached_log_prefix; // latched by detach()
 
    /// What a read past detach() reports, latched by detach(): the stream may be gone, but a body
    /// that was read to its clean end keeps ending in \c eof, a truncated one in partial_message.
@@ -66,12 +68,14 @@ public:
    void content_length(std::optional<size_t> content_length) override;
    void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) override;
    void detach() override;
+   std::string log_prefix() const override;
 
    void async_submit(StatusHandler&& handler, unsigned int status_code, const Fields& headers);
    void async_get_response(client::Request::GetResponseHandler&& handler);
 
    NGHttp2Stream* stream;
    asio::any_io_executor executor; // kept as a copy so a detached writer can still complete
+   std::string detached_log_prefix; // latched by detach()
    bool detached_eof_submitted = false; // latched by detach(): the body was cleanly ended
    std::optional<size_t> content_length_;
 };
@@ -169,6 +173,7 @@ public:
    boost::system::error_code response_error;
 
    std::string log_prefix_;
+   const std::string& log_prefix() const noexcept { return log_prefix_; }
    std::string method;
    boost::urls::url url;
 
@@ -222,7 +227,7 @@ public:
          assert(!read_handler_);
          if (reading_finished())
          {
-            logw("[{}] async_read_some: stream already finished", log_prefix_);
+            mlogw("async_read_some: stream already finished");
             handler(boost::asio::error::misc_errors::eof, std::vector<std::uint8_t>{});
             return;
          }
@@ -259,7 +264,7 @@ public:
                }));
             logd("[{}] async_read_some: dispatching... done", log_prefix_);
          };
-         logd("[{}] async_read_some: read handler set", log_prefix_);
+         mlogd("async_read_some: read handler set");
 #endif
          call_read_handler();
       };

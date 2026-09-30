@@ -147,7 +147,7 @@ protected:
 // Only HTTP/1.1 and HTTP/2 have anywhere to go: a client that already speaks HTTP/3 is there.
 //
 INSTANTIATE_TEST_SUITE_P(AltSvcUpgrade, AltSvcUpgrade,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2), NameGenerator);
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2), NameGenerator);
 
 TEST_P(AltSvcUpgrade, WHEN_the_server_advertises_h3_THEN_the_next_connection_uses_it)
 {
@@ -208,7 +208,7 @@ class AltSvcIgnored : public ClientAsync
 };
 
 INSTANTIATE_TEST_SUITE_P(AltSvcIgnored, AltSvcIgnored,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2), NameGenerator);
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2), NameGenerator);
 
 TEST_P(AltSvcIgnored, WHEN_the_client_does_not_follow_alt_svc_THEN_it_keeps_its_protocol)
 {
@@ -237,7 +237,7 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(AltSvcDisabled, AltSvcDisabled,
-                         Values(anyhttp::Protocol::http11, anyhttp::Protocol::h2), NameGenerator);
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2), NameGenerator);
 
 TEST_P(AltSvcDisabled, WHEN_the_server_advertises_nothing_THEN_the_client_stays_where_it_is)
 {
@@ -356,8 +356,10 @@ TEST_P(AltSvcFrame, WHEN_an_altsvc_frame_arrives_THEN_the_next_connection_uses_i
 
    boost::urls::url target{"http://127.0.0.2/echo"};
    target.set_port_number(acceptor.local_endpoint().port());
-   client::Client client(context.get_executor(),
-                         {.url = target, .protocol = Protocol::h2, .follow_alt_svc = true});
+   client::Client client(context.get_executor(), {.url = target,
+                                                  .protocol = Protocol::h2,
+                                                  .follow_alt_svc = true,
+                                                  .tls_ca_file = "pki/out/root.pem"});
 
    co_spawn(
       context,

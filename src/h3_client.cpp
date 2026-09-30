@@ -47,15 +47,16 @@
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
-#include <ngtcp2/ngtcp2_crypto_boringssl.h>
 
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
+#include <openssl/x509.h>
 
 #include <array>
 #include <charconv>
 #include <cstring>
+#include <format>
 #include <memory>
 #include <span>
 #include <string>
@@ -69,7 +70,6 @@ namespace errc = boost::system::errc;
 using anyhttp::http3::format_hex;
 using anyhttp::http3::log_headers;
 using anyhttp::http3::make_nv;
-using anyhttp::http3::straddr;
 
 namespace anyhttp::client
 {
@@ -82,27 +82,35 @@ namespace
 {
 
 //
-// The process-wide client-role BoringSSL SSL_CTX used for every outgoing QUIC connection.
+// The client-role SSL_CTX for one outgoing QUIC connection. It is built per connection
+// because the trust store comes from the Config; SSL_new() takes a reference, so the context can
+// go once the session's SSL exists.
 //
 struct TlsClientContext
 {
-   TlsClientContext()
+   explicit TlsClientContext(const Config& config)
    {
       ctx = SSL_CTX_new(TLS_client_method());
       if (!ctx)
          throw std::runtime_error("SSL_CTX_new");
 
-      if (ngtcp2_crypto_boringssl_configure_client_context(ctx) != 0)
-         throw std::runtime_error("ngtcp2_crypto_boringssl_configure_client_context");
+      http3::Http3Session::configure_tls_context(ctx, false);
 
       static constexpr unsigned char alpn[] = "\x02h3";
       SSL_CTX_set_alpn_protos(ctx, alpn, sizeof(alpn) - 1);
 
-      //
-      // TODO: verify the server certificate (e.g. against pki/out/root.pem) instead of accepting
-      // anything.
-      //
-      SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+      if (config.tls_ca_file.empty())
+      {
+         if (SSL_CTX_set_default_verify_paths(ctx) != 1)
+            throw std::runtime_error(std::format("SSL_CTX_set_default_verify_paths: {}",
+                                                 ERR_error_string(ERR_get_error(), nullptr)));
+      }
+      else if (SSL_CTX_load_verify_locations(ctx, config.tls_ca_file.c_str(), nullptr) != 1)
+         throw std::runtime_error(std::format("SSL_CTX_load_verify_locations: {}: {}",
+                                              config.tls_ca_file,
+                                              ERR_error_string(ERR_get_error(), nullptr)));
+
+      SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
    }
 
    ~TlsClientContext()
@@ -117,12 +125,6 @@ struct TlsClientContext
    SSL_CTX* ctx = nullptr;
 };
 
-TlsClientContext& tls_context()
-{
-   static TlsClientContext instance;
-   return instance;
-}
-
 } // namespace
 
 // =================================================================================================
@@ -130,6 +132,9 @@ TlsClientContext& tls_context()
 // =================================================================================================
 
 class Http3ClientSession;
+
+namespace
+{
 
 class Http3ClientStream : public http3::Http3Stream
 {
@@ -190,6 +195,8 @@ public:
    }
 };
 
+} // namespace
+
 // -------------------------------------------------------------------------------------------------
 
 class Http3ClientSession : public http3::Http3Session
@@ -209,7 +216,7 @@ public:
    //
    // Connect-time setup. Returns 0 on success.
    //
-   int init(asio::ip::udp::endpoint remote);
+   int init(asio::ip::udp::endpoint remote, const Config& config);
 
    //
    // Awaited by client::Client::Impl::async_connect() before handing the Session back to the
@@ -246,6 +253,9 @@ private:
 // Http3ClientStream implementation
 // =================================================================================================
 
+namespace
+{
+
 //
 // The reading half of a client response: what http3::Http3Reader has for both roles, plus the
 // status code, which only this role has. Its counterpart on the server is Http3RequestReader.
@@ -257,6 +267,8 @@ public:
 
    unsigned int status_code() const noexcept override { return stream ? stream->status_code : 0; }
 };
+
+} // namespace
 
 // -------------------------------------------------------------------------------------------------
 
@@ -298,7 +310,7 @@ void Http3ClientStream::on_headers_complete()
    }
 
    using namespace boost::beast::http;
-   logd("[{}] {} {}", log_prefix_, status_code, obsolete_reason(int_to_status(status_code)));
+   mlogd("{} {}", status_code, obsolete_reason(int_to_status(status_code)));
    log_headers(log_prefix_, std::exchange(received_headers, {}));
    deliver_response();
 }
@@ -346,13 +358,13 @@ bool Http3ClientStream::submit_request(std::string_view method, const boost::url
    for (auto&& item : headers)
    {
       if (item.name_string().starts_with(':'))
-         logw("[{}] async_submit: invalid header '{}': setting pseudo headers is not allowed",
-              log_prefix_, item.name_string());
+         mlogw("async_submit: invalid header '{}': setting pseudo headers is not allowed",
+               item.name_string());
 
       nva.push_back(make_nv(item.name_string(), item.value()));
    }
 
-   logd("[{}] {} {}", log_prefix_, method_str, request_url.buffer());
+   mlogd("{} {}", method_str, request_url.buffer());
    return submit_headers(nva, true /* request */);
 }
 
@@ -372,7 +384,7 @@ void Http3ClientStream::async_get_response(client::Request::GetResponseHandler&&
    if (cs.is_connected())
    {
       cs.assign([this](asio::cancellation_type_t ct) {
-         logd("[{}] async_get_response: cancelled ({})", log_prefix_, ct);
+         mlogd("async_get_response: cancelled ({})", ct);
          if (response_handler)
          {
             asio::post(get_executor(), [handler = std::move(response_handler)]() mutable {
@@ -417,12 +429,12 @@ void Http3ClientStream::deliver_response()
 // =================================================================================================
 
 Http3ClientSession::Http3ClientSession(asio::any_io_executor executor, const Config& config)
-   : http3::Http3Session(executor), socket_(get_executor()), ready_signal_(get_executor())
+   : http3::Http3Session(std::move(executor)), socket_(get_executor()),
+     ready_signal_(get_executor())
 {
    max_header_size_ = config.max_header_size;
    // Sentinel timers: expires_at(max) means "not yet"; a wait completes once moved to "min".
    ready_signal_.expires_at(asio::steady_timer::time_point::max());
-   logi("Http3ClientSession: ctor");
 }
 
 Http3ClientSession::~Http3ClientSession()
@@ -433,13 +445,15 @@ Http3ClientSession::~Http3ClientSession()
    //
    ready_signal_.cancel();
    clear_streams();
-   logi("Http3ClientSession: dtor");
+   mlogd("session deleted");
 }
 
 // -------------------------------------------------------------------------------------------------
 
-int Http3ClientSession::init(asio::ip::udp::endpoint remote)
+int Http3ClientSession::init(asio::ip::udp::endpoint remote, const Config& config)
 {
+   TlsClientContext tls{config}; // may throw
+
    boost::system::error_code ec;
    socket_.open(remote.protocol(), ec);
    if (ec)
@@ -462,20 +476,21 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote)
       return -1;
    }
 
-   log_prefix_ = std::format("h3:{}", straddr(remote.data(), remote.size()));
+   log_prefix_ = http3::log_prefix(Role::client, "h3", remote.data(), remote.size());
+   mlogd("session created");
 
    ngtcp2_cid scid{};
    scid.datalen = 17;
    if (RAND_bytes(scid.data, static_cast<int>(scid.datalen)) != 1)
    {
-      loge("[{}] init: RAND_bytes for SCID failed", log_prefix_);
+      mloge("init: RAND_bytes for SCID failed");
       return -1;
    }
    ngtcp2_cid dcid{};
    dcid.datalen = http3::QUIC_SCIDLEN;
    if (RAND_bytes(dcid.data, static_cast<int>(dcid.datalen)) != 1)
    {
-      loge("[{}] init: RAND_bytes for DCID failed", log_prefix_);
+      mloge("init: RAND_bytes for DCID failed");
       return -1;
    }
 
@@ -498,14 +513,31 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote)
                                         &callbacks, &settings, &params, nullptr, this);
        rv != 0)
    {
-      loge("[{}] ngtcp2_conn_client_new: {}", log_prefix_, ngtcp2_strerror(rv));
+      mloge("ngtcp2_conn_client_new: {}", ngtcp2_strerror(rv));
       return -1;
    }
 
-   if (setup_tls(tls_context().ctx, false /* client */) != 0)
+   if (setup_tls(tls.ctx, false /* client */) != 0)
       return -1;
 
-   logi("[{}] connecting, scid={}", log_prefix_, format_hex(scid.data, scid.datalen));
+   //
+   // The certificate has to be valid for the origin, the host of the URL -- also when `remote` is
+   // an alternative service it advertised (RFC 7838, section 2.1). An IP address is matched
+   // against the certificate's IP SANs and not sent as SNI, which is for host names only.
+   //
+   const std::string host = config.url.host_address();
+   auto* param = SSL_get0_param(ssl_);
+   boost::system::error_code not_an_ip;
+   asio::ip::make_address(host, not_an_ip);
+   if (!not_an_ip ? X509_VERIFY_PARAM_set1_ip_asc(param, host.c_str()) != 1
+                  : X509_VERIFY_PARAM_set1_host(param, host.data(), host.size()) != 1 ||
+                       SSL_set_tlsext_host_name(ssl_, host.c_str()) != 1)
+   {
+      mloge("init: can't verify certificates for '{}'", host);
+      return -1;
+   }
+
+   mlogi("connecting, scid={}", format_hex(scid.data, scid.datalen));
    return 0;
 }
 
@@ -528,7 +560,7 @@ awaitable<void> Http3ClientSession::do_session(Buffer&&)
       if (ec)
       {
          if (ec != asio::error::operation_aborted)
-            logw("[{}] receive: {}", log_prefix_, ec.message());
+            mlogw("receive: {}", ec.message());
          break;
       }
 
@@ -609,6 +641,12 @@ void Http3ClientSession::signal_ready()
 
 int Http3ClientSession::handle_error(int /*rv*/)
 {
+   // X509_V_ERR_INVALID_CALL: the handshake never got as far as verifying anything
+   if (ssl_)
+      if (auto result = SSL_get_verify_result(ssl_);
+          result != X509_V_OK && result != X509_V_ERR_INVALID_CALL)
+         mlogw("server certificate: {}", X509_verify_cert_error_string(result));
+
    close();
    return -1;
 }
@@ -636,7 +674,7 @@ int Http3ClientSession::send_datagrams(const ngtcp2_path& /*path*/, std::span<co
       socket_.send(asio::buffer(data.data(), len), 0, ec);
       if (ec && ec != asio::error::would_block && ec != asio::error::try_again)
       {
-         logw("[{}] send: {}", log_prefix_, ec.message());
+         mlogw("send: {}", ec.message());
          return 0; // best-effort; ngtcp2 will retransmit
       }
       data = data.subspan(len);
@@ -665,7 +703,7 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, std::string_view 
 {
    if (closed() || !h3())
    {
-      loge("[{}] async_submit: session not ready", log_prefix_);
+      mloge("async_submit: session not ready");
       std::move(handler)(errc::make_error_code(errc::operation_canceled), client::Request{nullptr});
       return;
    }
@@ -673,7 +711,7 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, std::string_view 
    int64_t stream_id = -1;
    if (auto rv = ngtcp2_conn_open_bidi_stream(conn_, &stream_id, nullptr); rv != 0)
    {
-      loge("[{}] async_submit: ngtcp2_conn_open_bidi_stream: {}", log_prefix_, ngtcp2_strerror(rv));
+      mloge("async_submit: ngtcp2_conn_open_bidi_stream: {}", ngtcp2_strerror(rv));
       std::move(handler)(errc::make_error_code(errc::invalid_argument), client::Request{nullptr});
       return;
    }
@@ -708,18 +746,19 @@ awaitable<std::shared_ptr<Session::Impl>> async_connect_http3(asio::any_io_execu
    auto results = co_await resolver.async_resolve(host, port, flags); // may throw
 
    auto session = std::make_shared<Http3ClientSession>(executor, config);
-   if (session->init(results.begin()->endpoint()) != 0)
+   if (session->init(results.begin()->endpoint(), config) != 0)
       throw boost::system::system_error(errc::make_error_code(errc::connection_refused));
 
    std::shared_ptr<Session::Impl> impl = session;
 
-   co_spawn(executor, impl->do_session(Buffer{}), [impl](const std::exception_ptr& ex) mutable {
-      if (ex)
-         logw("client run: {}", what(ex));
-      else
-         logi("client run: done");
-      impl.reset();
-   });
+   co_spawn(executor, impl->do_session(Buffer{}),
+            [impl, prefix = session->log_prefix()](const std::exception_ptr& ex) mutable {
+               if (ex)
+                  logw("[{}] client run: {}", prefix, what(ex));
+               else
+                  logi("[{}] client run: done", prefix);
+               impl.reset();
+            });
 
    //
    // Note: wait_ready() uses a sentinel steady_timer as a one-shot gate (see the comment on

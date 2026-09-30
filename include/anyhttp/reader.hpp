@@ -3,12 +3,15 @@
 #include "common.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/associated_executor.hpp>
 #include <boost/asio/async_result.hpp>
+#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/buffer.hpp>
 
 #include <concepts>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace anyhttp
 {
@@ -44,10 +47,14 @@ public:
    /// Releases the implementation, as the destructor does. Reading afterwards fails.
    void reset() noexcept;
 
-   constexpr operator bool() const noexcept { return static_cast<bool>(impl_); }
+   explicit constexpr operator bool() const noexcept { return static_cast<bool>(impl_); }
 
    /// The executor of the session this message belongs to, or an empty one after \c reset().
    executor_type get_executor() const noexcept;
+
+   /// The \c [proto:address:port.stream] tag the library's log lines carry for this message,
+   /// without the brackets, or an empty string after \c reset().
+   std::string log_prefix() const;
 
    /// What the incoming message announced as its body length, if it announced one.
    std::optional<size_t> content_length() const noexcept;
@@ -62,10 +69,15 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
    auto async_read_some(asio::mutable_buffer buffer, CompletionToken&& token = CompletionToken())
    {
+      //
+      // Binding an executor to the initiating function lets tokens that need one -- the timer
+      // behind cancel_after -- find it here, see Writer.
+      //
       return asio::async_initiate<CompletionToken, ReadSome>(
-         [&](ReadSomeHandler handler, asio::mutable_buffer buffer) { //
-            async_read_some_any(buffer, std::move(handler));
-         },
+         asio::bind_executor(asio::get_associated_executor(token, get_executor()),
+                             [this](ReadSomeHandler handler, asio::mutable_buffer buffer) { //
+                                async_read_some_any(buffer, std::move(handler));
+                             }),
          token, buffer);
    }
 

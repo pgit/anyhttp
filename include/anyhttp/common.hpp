@@ -39,7 +39,7 @@ using error_code = boost::system::error_code;
 
 enum class Protocol
 {
-   http11,
+   h1,
    h2,
    h3
 };
@@ -197,6 +197,28 @@ Defer<F, T...> defer(F&& f, T&&... t)
 
 asio::ip::address normalize(asio::ip::address addr);
 asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint);
+
+/// Which end of a connection a session is, for the colour of its log prefix.
+enum class Role
+{
+   server,
+   client
+};
+
+/// The prefix of log lines that belong to no connection: "server" in red, "client" in green.
+std::string log_prefix(Role role);
+
+/**
+ * The prefix a session puts in front of its log lines: "<protocol>:<address>:<port>" of the peer.
+ * The protocol is red for a server and green for a client, the address coloured as by "ip -c"
+ * (IPv4 magenta, IPv6 blue and in square brackets).
+ */
+std::string log_prefix(Role role, std::string_view protocol, const asio::ip::address& address,
+                       unsigned short port);
+
+/// As above, for the peer of \p socket. Just \p protocol if the socket is not connected.
+std::string log_prefix(Role role, std::string_view protocol,
+                       const asio::basic_socket<asio::ip::tcp, asio::any_io_executor>& socket);
 
 }; // namespace anyhttp
 

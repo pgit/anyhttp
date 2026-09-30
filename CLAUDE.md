@@ -7,7 +7,9 @@ anything about request/response semantics. This file is about *how to work in th
 ## Build and test
 
 Out-of-source trees, one per configuration. `build/` is Debug, `build-release/` is Release;
-benchmark with the latter, never with `build/`.
+benchmark with the latter, never with `build/`. Both use clang, which builds against libc++ and
+the libraries in `/opt/libc++` (`USE_LIBCXX`, `LIBCXX_ROOT`); `build-gcc/` is GCC with libstdc++
+and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.json`.
 
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -16,10 +18,10 @@ build/test/test_all
 ```
 
 **Run the tests from the repo root**, never from inside a build tree: the servers load their TLS
-material through relative paths (`pki/out/server-key.pem`, see `server_impl.cpp` and
-`h3_server.cpp`). From the wrong working directory the HTTP/3 server throws in its UDP receive
-loop and every HTTP/3 test hangs for a 30s idle timeout before failing with "Connection refused"
--- which looks exactly like a protocol bug.
+material and the clients their CA through relative paths (the defaults of
+`server::Config::tls_certificate_chain` / `tls_private_key`, and `pki/out/root.pem`, which the
+test fixtures set as `client::Config::tls_ca_file`). From the wrong working directory every test
+fails in `SetUp()` with "use_certificate_chain_file: No such file or directory".
 
 The full suite takes about 50s serially (h2spec and the HTTP/3 timing tests dominate). Anything
 running much longer means a test is hanging; kill it and run that test alone.
@@ -27,8 +29,7 @@ running much longer means a test is hanging; kill it and run that test alone.
 For routine runs use `gtest-parallel build/test/test_all` (same working-directory rule): about 7s.
 Every server binds an ephemeral port, so parallel processes do not collide. It prints only
 failing tests and does not report skips, and since each test gets its own process it cannot
-catch interference through process-wide state (e.g. `h3_server.cpp`'s static `tls_context()`) --
-do a serial run before committing changes to shared or global state.
+catch interference through process-wide state (statics, the logger) -- do a serial run before committing changes to shared or global state.
 
 Parametrized tests are suffixed `/HTTP11`, `/HTTP2`, `/HTTP3` -- not h2/h3. `--gtest_filter` knows
 only `*` and `?`, and a filter that matches nothing exits 0 with no output, which reads like a
@@ -41,20 +42,20 @@ purpose, so configure a new tree instead of editing them:
 
 ```
 cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
-  -DCMAKE_CXX_FLAGS="-stdlib=libc++ -fsanitize=address -fno-omit-frame-pointer -g" \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
   -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
-ASAN_OPTIONS=detect_container_overflow=0 build-asan/test/test_all
+build-asan/test/test_all
 ```
 
-`detect_container_overflow=0` is required: the prebuilt GTest is not instrumented, so libc++'s
-container annotations get out of sync and the binary aborts during static test registration,
-before `main`, as a `heap-buffer-overflow` under `testing::TestSuite::AddTestInfo`. False
-positive. The `Recursion` test skips itself under ASAN, so expect 3 extra skips.
+GTest is built from source with the tree's own flags (`test/CMakeLists.txt`), so it is
+instrumented too and needs no `ASAN_OPTIONS`. The `Recursion` test skips itself under ASAN, so
+expect 3 extra skips.
 
-TSAN is the same recipe with `-fsanitize=thread`. AWS-LC is uninstrumented as well, so suppress
-`called_from_lib:libcrypto*` / `called_from_lib:libssl*`; a report whose *both* stacks are inside
-the TLS library is noise, one with an anyhttp frame near the racing access is real.
+TSAN is the same recipe with `-fsanitize=thread` and runs clean without suppressions. AWS-LC is
+uninstrumented, but linked statically into the executable, so `called_from_lib:` cannot match it:
+should a report ever show *both* stacks inside the TLS library, suppress it with `race:` on the
+AWS-LC function instead. One with an anyhttp frame near the racing access is real.
 
 Anything touching lifetimes on the HTTP/3 write path belongs under ASAN before it is committed --
 completions there run on acknowledgement, and the Release build hides the use-after-frees.
@@ -102,14 +103,18 @@ compiles that would follow, which is indistinguishable from "nothing to do". Run
 or query the stored dep database with `ninja -C build -t deps <object>`.
 
 **Restart the server after regenerating the PKI.** Any build that touches `pki/*.json` wipes
-`pki/out` including the root CA. The TCP path builds its `asio::ssl::context` per connection and
-picks the new chain up transparently; `h3_server.cpp`'s `tls_context()` is a function-local
-`static` and keeps serving the old one. The symptom is curl reporting `verify result: 20` twice
-and then silently falling back to TCP+h2, so the request still looks fine.
+`pki/out` including the root CA. A Server reads its certificate chain and key once, when it is
+constructed, for TCP and QUIC alike, and keeps serving the old ones. curl then fails with
+`verify result: 20`; the HTTP/3 client (which reads its CA file on every connect) with "unable to
+get local issuer certificate".
 
-**One TLS library per process.** anyhttp links AWS-LC (statically, from `/opt/boringssl`, what
-`find_package(ssl CONFIG)` provides) together with `ngtcp2_crypto_boringssl`. Do not add `#ifdef`s
-to also support OpenSSL. After adding a dependency, check `ldd` shows no `libssl.so.3` /
+**One TLS library per process.** By default anyhttp links AWS-LC (statically, from
+`/opt/boringssl`, what `find_package(ssl CONFIG)` provides) together with
+`ngtcp2_crypto_boringssl`. `-DTLS_LIBRARY=OpenSSL` switches to the system OpenSSL (3.5+) and
+`ngtcp2_crypto_ossl`; `build-openssl/` is that tree. The code picks its variant from the TLS
+headers (`OPENSSL_IS_AWSLC` / `OPENSSL_IS_BORINGSSL`), and the `#if`s are confined to
+`Http3Session::configure_tls_context()` / `setup_tls()` and `tls.cpp` -- keep it that way.
+After adding a dependency, check `ldd` of an AWS-LC build shows no `libssl.so.3` /
 `libcrypto.so.3` -- a shared OpenSSL would interpose the executable's AWS-LC symbols. `curl`,
 `osslclient` and `osslserver` are OpenSSL builds and are useful for interop testing.
 

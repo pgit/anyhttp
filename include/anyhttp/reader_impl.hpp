@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace anyhttp
 {
@@ -24,6 +25,9 @@ class Reader::Impl : public std::enable_shared_from_this<Reader::Impl>
 public:
    virtual ~Impl() = default;
    virtual asio::any_io_executor get_executor() const noexcept = 0;
+
+   /// The log prefix of the stream this belongs to, still valid after detach().
+   virtual std::string log_prefix() const = 0;
    virtual std::optional<size_t> content_length() const noexcept = 0;
 
    //
@@ -39,7 +43,7 @@ public:
    //
    virtual void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) = 0;
    virtual void detach() = 0;
-   
+
    /// Called by the implementation from its destructor.
    virtual void destroy() {};
 };

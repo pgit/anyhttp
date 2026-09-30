@@ -21,14 +21,14 @@ using namespace std::chrono_literals;
 
 using namespace boost::asio::experimental::awaitable_operators;
 
-awaitable<void> send(Request& request, std::string_view hello)
+static awaitable<void> send(Request& request, std::string_view hello)
 {
    logd("send: sending string of {} bytes...", hello.size());
    co_await request.async_write_eof(asio::buffer(hello));
    logd("send: sending string of {} bytes... done", hello.size());
 }
 
-awaitable<void> do_request(Session& session, boost::urls::url url)
+static awaitable<void> do_request(Session& session, boost::urls::url url)
 {
    const std::string hello = "Hello, World!\r\n";
 #if 0
@@ -48,13 +48,13 @@ awaitable<void> do_request(Session& session, boost::urls::url url)
 #endif
 }
 
-awaitable<void> do_requests(any_io_executor executor, Session session, boost::urls::url url)
+static awaitable<void> do_requests(any_io_executor executor, Session session, boost::urls::url url)
 {
    for (size_t i = 0; i < 833; ++i)
       co_await do_request(session, url);
 }
 
-awaitable<void> do_session(Client& client, boost::urls::url url)
+static awaitable<void> do_session(Client& client, boost::urls::url url)
 {
    auto session = co_await client.async_connect();
 

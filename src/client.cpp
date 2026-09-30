@@ -15,7 +15,7 @@ namespace anyhttp::client
 Request::Request(std::unique_ptr<Request::Impl> impl) : Writer(std::move(impl))
 {
    if (*this)
-      logd("\x1b[1;34mClient::Request: ctor\x1b[0m");
+      logd("[{}] \x1b[1;34mClient::Request: ctor\x1b[0m", pimpl().log_prefix());
 }
 
 Request::Request(Request&&) noexcept = default;
@@ -25,7 +25,7 @@ void Request::reset() noexcept
 {
    if (*this)
    {
-      logd("\x1b[34mClient::Request: dtor\x1b[0m");
+      logd("[{}] \x1b[34mClient::Request: dtor\x1b[0m", pimpl().log_prefix());
       Writer::reset();
    }
 }
@@ -49,7 +49,7 @@ void Request::async_get_response_any(Request::GetResponseHandler&& handler)
 Response::Response(std::unique_ptr<Response::Impl> impl) : Reader(std::move(impl))
 {
    if (*this)
-      logd("\x1b[1;34mClient::Response: ctor\x1b[0m");
+      logd("[{}] \x1b[1;34mClient::Response: ctor\x1b[0m", pimpl().log_prefix());
 }
 
 Response::Response(Response&&) noexcept = default;
@@ -59,7 +59,7 @@ void Response::reset() noexcept
 {
    if (*this)
    {
-      logd("\x1b[34mClient::Response: dtor\x1b[0m");
+      logd("[{}] \x1b[34mClient::Response: dtor\x1b[0m", pimpl().log_prefix());
       Reader::reset();
    }
 }

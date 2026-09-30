@@ -1,11 +1,21 @@
-find_package(GTest REQUIRED)
-target_link_libraries(GTest::GTest INTERFACE gtest_main)
+#
+# GTest is built from source, with the same compiler and standard library as the tree: a prebuilt
+# one is tied to one of libc++ / libstdc++ (and is not instrumented for the sanitizers).
+#
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/releases/download/v1.18.0/googletest-1.18.0.tar.gz
+  URL_HASH SHA256=6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5
+)
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
 
 link_libraries(Boost::atomic Boost::url Boost::filesystem Boost::process)
 
 file(GLOB SRC_FILES test_*.cpp)
 add_executable(test_all ${SRC_FILES})
-target_link_libraries(test_all PRIVATE GTest::GTest GTest::gmock anyhttp)
+target_link_libraries(test_all PRIVATE GTest::gtest_main GTest::gmock anyhttp)
 target_link_libraries(test_all PRIVATE spdlog::spdlog_header_only)
 
 # the h2c upgrade tests drive an HTTP/2 client session by hand
@@ -13,15 +23,6 @@ target_link_libraries(test_all PRIVATE PkgConfig::NGHTTP2)
 
 # the tests connect over TLS and pass pki/out/root.pem to curl, so the PKI must exist first
 add_dependencies(test_all pki)
-
-# include(CTest)
-# Fetch Google Test
-# include(FetchContent)
-# FetchContent_Declare(
-#   googletest
-#   URL https://github.com/google/googletest/releases/download/v1.15.2/googletest-1.15.2.tar.gz
-# )
-# FetchContent_MakeAvailable(googletest)
 
 # Register the tests with CTest
 include(GoogleTest)
