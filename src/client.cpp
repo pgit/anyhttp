@@ -1,6 +1,7 @@
 
 #include "anyhttp/client.hpp"
 #include "anyhttp/client_impl.hpp"
+#include "anyhttp/session.hpp"
 
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/error.hpp>
@@ -49,6 +50,7 @@ Task<std::tuple<error_code, Response>> Request::get_response()
    return *this ? pimpl().get_response() : no_request();
 }
 
+#if !ANYHTTP_CAPY
 void Request::async_get_response_any(Request::GetResponseHandler&& handler)
 {
    if (*this)
@@ -56,6 +58,7 @@ void Request::async_get_response_any(Request::GetResponseHandler&& handler)
    else
       std::move(handler)(errors::bad_descriptor, Response{nullptr});
 }
+#endif
 
 // =================================================================================================
 
@@ -103,10 +106,24 @@ Client::~Client() = default;
 
 // -------------------------------------------------------------------------------------------------
 
+Task<std::tuple<error_code, Session>> Client::connect()
+{
+   try
+   {
+      co_return std::tuple{error_code{}, co_await impl->async_connect()};
+   }
+   catch (const system_error& ex)
+   {
+      co_return std::tuple{ex.code(), Session{}};
+   }
+}
+
+#if !ANYHTTP_CAPY
 void Client::async_connect_any(ConnectHandler&& handler)
 {
    impl->async_connect(std::move(handler));
 }
+#endif
 
 Executor Client::get_executor() const noexcept { return impl->get_executor(); }
 

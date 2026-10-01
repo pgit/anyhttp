@@ -66,7 +66,13 @@ public:
 
    Executor get_executor() const noexcept { return executor_; }
 
+#if !ANYHTTP_CAPY
    void async_connect(ConnectHandler handler);
+#endif
+
+   /// Connects and returns the session, see Client::connect(). Throws what goes wrong.
+   Task<Session> async_connect();
+
    const Config& config() const { return config_; }
 
    // ----------------------------------------------------------------------------------------------
@@ -97,9 +103,6 @@ public:
 
    /// The advertised HTTP/3 endpoint, as long as its "ma" has not run out.
    std::optional<AlternativeService> alt_svc() const;
-
-private:
-   Task<Session> async_connect();
 
 private:
    Config config_;

@@ -68,11 +68,13 @@ Task<std::tuple<error_code>> Response::submit(unsigned int status_code, Fields h
    return pimpl().submit(status_code, std::move(headers));
 }
 
+#if !ANYHTTP_CAPY
 void Response::async_submit_any(StatusHandler&& handler, unsigned int status_code,
                                 const Fields& headers)
 {
    pimpl().async_submit(std::move(handler), status_code, headers);
 }
+#endif
 
 // =================================================================================================
 

@@ -5,10 +5,6 @@
 #include <anyhttp/logging.hpp>
 #include <anyhttp/runtime.hpp>
 
-#include <boost/asio/any_completion_handler.hpp>
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/awaitable.hpp>
-#include <boost/asio/deferred.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
@@ -121,7 +117,9 @@ using WriteHandler = Completion<Write>;
 using Status = void(error_code);
 using StatusHandler = Completion<Status>;
 
+#if !ANYHTTP_CAPY
 using DefaultCompletionToken = asio::default_completion_token_t<Executor>;
+#endif
 
 // =================================================================================================
 

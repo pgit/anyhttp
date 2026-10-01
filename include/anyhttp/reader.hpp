@@ -2,11 +2,16 @@
 
 #include "common.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/buffer.hpp>
+
+#if ANYHTTP_CAPY
+#include <boost/capy/concept/mutable_buffer_sequence.hpp>
+#include <boost/capy/concept/read_stream.hpp>
+#else
 #include <boost/asio/associated_executor.hpp>
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/bind_executor.hpp>
-#include <boost/asio/buffer.hpp>
+#endif
 
 #include <concepts>
 #include <memory>
@@ -59,6 +64,7 @@ public:
    /// What the incoming message announced as its body length, if it announced one.
    std::optional<size_t> content_length() const noexcept;
 
+#if !ANYHTTP_CAPY
    /**
     * Reads a part of the incoming body.
     *
@@ -99,6 +105,7 @@ public:
 
       return async_read_some(asio::mutable_buffer{}, std::forward<CompletionToken>(token));
    }
+#endif
 
    //
    // The coroutine spelling of the operation(s) above, which both runtimes have: no completion
@@ -123,17 +130,37 @@ public:
       return read_some(asio::mutable_buffer{});
    }
 
+#if ANYHTTP_CAPY
+   /// \overload
+   ///
+   /// For capy's buffer sequences, which is what makes a Reader a \c capy::ReadStream.
+   template <capy::MutableBufferSequence Buffers>
+   Task<std::tuple<error_code, size_t>> read_some(Buffers buffers)
+   {
+      for (auto it = capy::begin(buffers); it != capy::end(buffers); ++it)
+         if (capy::mutable_buffer buffer = *it; buffer.size() > 0)
+            return read_some(asio::mutable_buffer(buffer.data(), buffer.size()));
+      return read_some(asio::mutable_buffer{});
+   }
+#endif
+
 protected:
    /// The implementation, for the derived handle to narrow to its own \c Impl. Never null.
    Impl& pimpl() const noexcept { return *impl_; }
 
 private:
+#if !ANYHTTP_CAPY
    void async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler);
+#endif
 
    std::shared_ptr<Impl> impl_;
 };
 
+#if ANYHTTP_CAPY
+static_assert(capy::ReadStream<Reader>);
+#else
 static_assert(AsyncReadStream<Reader>);
+#endif
 
 // =================================================================================================
 

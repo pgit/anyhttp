@@ -108,6 +108,7 @@ std::optional<Client::Impl::AlternativeService> Client::Impl::alt_svc() const
 
 //
 //
+#if !ANYHTTP_CAPY
 void Client::Impl::async_connect(ConnectHandler handler)
 {
    //
@@ -127,6 +128,7 @@ void Client::Impl::async_connect(ConnectHandler handler)
    co_spawn(get_executor(), async_connect(),
             bind_executor(executor, bind_cancellation_slot(slot, std::move(completion))));
 }
+#endif
 
 Task<Session> Client::Impl::async_connect()
 {

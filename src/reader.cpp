@@ -48,6 +48,7 @@ Task<std::tuple<error_code, size_t>> Reader::read_some(asio::mutable_buffer buff
    return impl_ ? impl_->read_some(buffer) : no_reader();
 }
 
+#if !ANYHTTP_CAPY
 void Reader::async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler)
 {
    if (impl_)
@@ -55,6 +56,7 @@ void Reader::async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& 
    else
       std::move(handler)(errors::bad_descriptor, 0);
 }
+#endif
 
 // =================================================================================================
 

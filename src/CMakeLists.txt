@@ -1,10 +1,5 @@
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
-# none of the library has been ported to CAPY yet, see docs/capy-port-plan.md
-if (ANYHTTP_CAPY)
-    return()
-endif()
-
 # nice sample:
 # https://github.com/andrewmd5/libwtf/blob/main/CMakeLists.txt
 
@@ -20,9 +15,15 @@ pkg_check_modules(NGTCP2_CRYPTO          REQUIRED IMPORTED_TARGET ${NGTCP2_CRYPT
 # nghttp2 and only the h3_* ones ngtcp2/nghttp3, everything else is protocol-agnostic.
 #
 add_library(anyhttp)
-file(GLOB anyhttp_sources CONFIGURE_DEPENDS *.cpp)
-list(FILTER anyhttp_sources EXCLUDE REGEX "_main\.cpp$")
-list(FILTER anyhttp_sources EXCLUDE REGEX "_issue_[0-9]+\.cpp$")
+if (ANYHTTP_CAPY)
+    # The sources ported to CAPY so far, see docs/capy-port-plan.md; the list grows until it
+    # equals the glob below.
+    set(anyhttp_sources reader.cpp writer.cpp common.cpp alt_svc.cpp)
+else()
+    file(GLOB anyhttp_sources CONFIGURE_DEPENDS *.cpp)
+    list(FILTER anyhttp_sources EXCLUDE REGEX "_main\.cpp$")
+    list(FILTER anyhttp_sources EXCLUDE REGEX "_issue_[0-9]+\.cpp$")
+endif()
 target_sources(anyhttp PRIVATE ${anyhttp_sources})
 target_include_directories(anyhttp PUBLIC ../include)
 
@@ -38,6 +39,13 @@ target_link_libraries(anyhttp PRIVATE PkgConfig::NGTCP2_CRYPTO PkgConfig::NGTCP2
 # /usr/include. AWS-LC comes as static libraries, so this comes after ngtcp2's crypto backend,
 # which needs it.
 target_link_libraries(anyhttp PUBLIC ${TLS_TARGET})
+
+if (ANYHTTP_CAPY)
+    target_link_libraries(anyhttp PUBLIC Boost::corosio Boost::corosio_openssl)
+
+    # the programs come with the rest of the port
+    return()
+endif()
 
 #
 # server
