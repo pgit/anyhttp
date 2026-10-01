@@ -169,7 +169,7 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
       throw std::system_error(ec, "use_certificate_chain_file");
    if (auto ec = ctx.use_private_key_file(private_key, corosio::tls_file_format::pem))
       throw std::system_error(ec, "use_private_key_file");
-   ctx.set_alpn({"h2", "http/1.1"});
+   std::ignore = ctx.set_alpn({"h2", "http/1.1"});
    return ctx;
 }
 

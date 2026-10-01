@@ -1020,9 +1020,10 @@ int Http3ServerImpl::udp_on_read(Endpoint& ep)
    msg.msg_iov = &msg_iov;
    msg.msg_iovlen = 1;
 
-   uint8_t
-      msg_ctrl[CMSG_SPACE(sizeof(int)) + CMSG_SPACE(sizeof(in6_pktinfo)) + CMSG_SPACE(sizeof(int))];
-   msg.msg_control = msg_ctrl;
+   std::array<uint8_t,
+              CMSG_SPACE(sizeof(int)) + CMSG_SPACE(sizeof(in6_pktinfo)) + CMSG_SPACE(sizeof(int))>
+      msg_ctrl;
+   msg.msg_control = msg_ctrl.data();
 
    //
    // Datagrams collected per session over the whole batch. Each session gets its accumulated
