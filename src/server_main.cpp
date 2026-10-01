@@ -45,6 +45,9 @@ struct Config
    size_t verbose = 0;
    size_t threads = 1;
    server::Config server{.port = 8080};
+#if ANYHTTP_CAPY
+   boost::corosio::io_context_options context;
+#endif
 };
 
 } // namespace
@@ -88,6 +91,13 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
    opts("alt-svc-max-age", po::value(&alt_svc_max_age)->default_value(alt_svc_max_age),
         "how long clients may remember the HTTP/3 endpoint advertised as 'Alt-Svc' over HTTP/1.1 "
         "and HTTP/2, in seconds (0 advertises nothing)");
+#if ANYHTTP_CAPY
+   opts(
+      "inline-budget",
+      po::value(&config.context.inline_budget_max)->default_value(config.context.inline_budget_max),
+      "ceiling of corosio's adaptive inline budget: how many I/O operations that are ready at "
+      "once complete without a post before one is posted (0 posts all)");
+#endif
 
    po::variables_map vm;
    try
@@ -170,7 +180,11 @@ int main(int argc, char* argv[])
    else
       spdlog::set_level(spdlog::level::info);
 
+#if ANYHTTP_CAPY
+   IoContext context(config->context, config->threads);
+#else
    IoContext context(config->threads);
+#endif
    auto executor = context.get_executor();
    config->server.use_strand = config->threads > 1;
    auto server = std::make_optional<server::Server>(executor, config->server);
