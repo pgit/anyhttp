@@ -63,6 +63,7 @@ public:
    nghttp3_conn* h3() const noexcept { return h3_; }
    bool closed() const noexcept { return closed_; }
    const std::string& log_prefix() const noexcept { return log_prefix_; }
+   const ngtcp2_cid& scid() const noexcept { return scid_; }
 
    /// The largest header section accepted from the peer, see Config::max_header_size.
    size_t max_header_size() const noexcept { return max_header_size_; }
@@ -238,6 +239,7 @@ protected:
    Executor executor_;
 
    ngtcp2_conn* conn_ = nullptr;
+   ngtcp2_cid scid_{}; // the connection ID this end chose for itself when creating conn_
 #if ANYHTTP_H3_BORINGSSL
    SSL* ssl_ = nullptr; // also ngtcp2's TLS native handle
 #else

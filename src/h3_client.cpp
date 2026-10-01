@@ -445,9 +445,8 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote, const Config& confi
    log_prefix_ = http3::log_prefix(Role::client, "h3", remote.data(), remote.size());
    mlogd("session created");
 
-   ngtcp2_cid scid{};
-   scid.datalen = 17;
-   if (RAND_bytes(scid.data, static_cast<int>(scid.datalen)) != 1)
+   scid_.datalen = 17;
+   if (RAND_bytes(scid_.data, static_cast<int>(scid_.datalen)) != 1)
    {
       mloge("init: RAND_bytes for SCID failed");
       return -1;
@@ -475,7 +474,7 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote, const Config& confi
       nullptr,
    };
 
-   if (auto rv = ngtcp2_conn_client_new(&conn_, &dcid, &scid, &path, NGTCP2_PROTO_VER_V1,
+   if (auto rv = ngtcp2_conn_client_new(&conn_, &dcid, &scid_, &path, NGTCP2_PROTO_VER_V1,
                                         &callbacks, &settings, &params, nullptr, this);
        rv != 0)
    {
@@ -503,7 +502,7 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote, const Config& confi
       return -1;
    }
 
-   mlogi("connecting, scid={}", format_hex(scid.data, scid.datalen));
+   mlogd("connecting, scid={}", format_hex(scid_.data, scid_.datalen));
    return 0;
 }
 

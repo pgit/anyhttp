@@ -301,7 +301,6 @@ public:
    /// closing period.
    void resend_conn_close();
 
-   const ngtcp2_cid& scid() const noexcept { return scid_; }
    Http3ServerImpl& server() noexcept { return server_; }
    void count_request() noexcept { ++request_counter_; }
 
@@ -324,7 +323,6 @@ private:
    Endpoint ep_;
    bool owns_fd_ = false; // ep_.fd was dup()ed in the ctor, close it in the dtor
    Address remote_;
-   ngtcp2_cid scid_{};
 
    Event done_; // wakes do_session() on connection close
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
@@ -822,7 +820,7 @@ int Http3ServerSession::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uin
    if (setup_tls(server_.tls_context(), true /* server */) != 0)
       return -1;
 
-   mlogi("new connection, scid={} version=0x{:x}", format_hex(scid_.data, scid_.datalen), version);
+   mlogd("accepted, scid={} version=0x{:x}", format_hex(scid_.data, scid_.datalen), version);
 
    return on_read(pi, data, remote_);
 }

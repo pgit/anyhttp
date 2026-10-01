@@ -604,7 +604,7 @@ int Http3Session::setup_http3()
       return -1;
    }
 
-   mlogi("HTTP/3 ready (ctrl={} qpack_enc={} qpack_dec={})", ctrl_stream_id, qpack_enc_stream_id,
+   mlogd("HTTP/3 ready (ctrl={} qpack_enc={} qpack_dec={})", ctrl_stream_id, qpack_enc_stream_id,
          qpack_dec_stream_id);
 
    on_http3_ready();
@@ -615,10 +615,18 @@ int Http3Session::setup_http3()
 // ngtcp2 callback implementations
 // =================================================================================================
 
-int Http3Session::cb_handshake_completed(ngtcp2_conn*, void* user)
+//
+// The one line per connection, like the TCP server's "new connection" (see handle_connection()):
+// logged once the handshake has told what it negotiated. A connection that fails before is logged
+// by whatever ends it instead.
+//
+int Http3Session::cb_handshake_completed(ngtcp2_conn* conn, void* user)
 {
    auto self = static_cast<Http3Session*>(user);
-   logi("[{}] {}", self->log_prefix_, tls_handshake_info(self->ssl_));
+   logi("[{}] {}, h3 over QUIC (version=0x{:x}, scid={}, {})", self->log_prefix_,
+        ngtcp2_conn_is_server(conn) ? "new connection" : "connected",
+        ngtcp2_conn_get_negotiated_version(conn), format_hex(self->scid_.data, self->scid_.datalen),
+        tls_handshake_info(self->ssl_));
    if (self->setup_http3() != 0)
       return NGTCP2_ERR_CALLBACK_FAILURE;
    return 0;
