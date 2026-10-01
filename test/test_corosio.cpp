@@ -169,6 +169,17 @@ TEST(Corosio, ErrorCodeInterop)
    const std::error_code eof = boost::system::error_code{boost::asio::error::eof};
    EXPECT_NE(eof, capy::cond::eof);
    EXPECT_EQ(std::error_code{capy::error::eof}, capy::cond::eof);
+
+   //
+   // What the parser itself reports: Beast attaches the source location of the error.
+   //
+   http::request_parser<http::string_body> parser;
+   parser.header_limit(16);
+   boost::system::error_code limit;
+   std::string_view request = "GET / HTTP/1.1\r\nX-Field: a value well over sixteen bytes\r\n";
+   parser.put(boost::asio::buffer(request), limit);
+   ASSERT_EQ(limit, http::error::header_limit) << limit.message();
+   EXPECT_EQ(std::error_code(limit), anyhttp::errors::header_limit) << limit.what();
 }
 
 // =================================================================================================

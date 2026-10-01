@@ -20,10 +20,7 @@ protected:
    void round_trip(Fields sent);
 };
 
-INSTANTIATE_TEST_SUITE_P(Headers, Headers,
-                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
-                                anyhttp::Protocol::h3),
-                         NameGenerator);
+INSTANTIATE_TEST_SUITE_P(Headers, Headers, ValuesIn(protocols()), NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
 
@@ -83,17 +80,17 @@ static size_t wire_size(const Fields& fields)
 //
 void Headers::round_trip(Fields sent)
 {
-   requestHandler = [sent](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [sent](server::Request request, server::Response response) -> Task<void> {
       expect_contains(request.fields(), sent);
       co_await drain(request);
       auto fields = sent;
       fields.set("Content-Length", "0");
-      co_await response.async_submit(200, fields);
-      co_await response.async_write_eof();
+      check(co_await response.submit(200, fields));
+      check(co_await response.write_eof());
    };
 
-   clientSession = [this, sent](Session session) -> awaitable<void> {
-      auto message = co_await session.async_get(url, sent);
+   clientSession = [this, sent](Session session) -> Task<void> {
+      auto message = check(co_await session.get(url, sent));
       EXPECT_EQ(message.result_int(), 200);
       expect_contains(message, sent);
       EXPECT_THAT(message.body(), IsEmpty());
@@ -118,17 +115,17 @@ TEST_P(Headers, WHEN_header_name_repeats_THEN_all_values_arrive_in_order)
       sent.insert("x-repeated", values.emplace_back(std::format("value-{}", i)));
 
    requestHandler = [sent, values](server::Request request,
-                                   server::Response response) -> awaitable<void> {
+                                   server::Response response) -> Task<void> {
       EXPECT_THAT(values_of(request.fields(), "x-repeated"), ElementsAreArray(values));
       co_await drain(request);
       auto fields = sent;
       fields.set("Content-Length", "0");
-      co_await response.async_submit(200, fields);
-      co_await response.async_write_eof();
+      check(co_await response.submit(200, fields));
+      check(co_await response.write_eof());
    };
 
-   clientSession = [this, sent, values](Session session) -> awaitable<void> {
-      auto message = co_await session.async_get(url, sent);
+   clientSession = [this, sent, values](Session session) -> Task<void> {
+      auto message = check(co_await session.get(url, sent));
       EXPECT_THAT(values_of(message, "x-repeated"), ElementsAreArray(values));
    };
 }
@@ -154,14 +151,14 @@ TEST_P(Headers, WHEN_request_headers_exceed_default_limit_THEN_server_responds_4
    auto sent = make_fields(3, 30_k);
    ASSERT_GT(wire_size(sent), default_max_header_size);
 
-   requestHandler = [](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [](server::Request request, server::Response response) -> Task<void> {
       ADD_FAILURE() << "request handler called for oversized request headers";
-      co_await response.async_submit(200, {});
-      co_await response.async_write_eof();
+      check(co_await response.submit(200, {}));
+      check(co_await response.write_eof());
    };
 
-   clientSession = [this, sent](Session session) -> awaitable<void> {
-      auto message = co_await session.async_get(url, sent);
+   clientSession = [this, sent](Session session) -> Task<void> {
+      auto message = check(co_await session.get(url, sent));
       EXPECT_EQ(message.result_int(), 431);
    };
 }
@@ -176,18 +173,18 @@ TEST_P(Headers, WHEN_complex_url_is_submitted_THEN_is_provided_to_request_handle
    url.set_password("password");
    url.set_query("x=y&white= space ");
 
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       std::println("URL: {}", request.url().buffer());
       EXPECT_EQ(url.query(), request.url().query());
       EXPECT_EQ(url.host(), request.url().host());
       // EXPECT_EQ(url.port(), request.url().port());
-      co_await response.async_submit(200, {});
-      co_await response.async_write_eof();
+      check(co_await response.submit(200, {}));
+      check(co_await response.write_eof());
    };
 
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       std::println("URL: {}", url.buffer());
-      auto message = co_await session.async_get(url, {});
+      auto message = check(co_await session.get(url, {}));
       EXPECT_EQ(message.result_int(), 200);
    };
 }
@@ -213,29 +210,28 @@ protected:
    /// Request handler: responds with the headers of size \p response_size given as query parameter.
    void respond_with_headers()
    {
-      requestHandler = [this](server::Request request,
-                              server::Response response) -> awaitable<void> {
+      requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
          ++handled;
          auto size = request.get_param_as<size_t>("response_size").value_or(0);
          co_await drain(request);
          auto fields = make_fields(1, size);
          fields.set("Content-Length", "0");
-         auto [ec] = co_await response.async_submit(200, fields, as_tuple);
+         auto [ec] = co_await response.submit(200, fields);
          if (!ec)
-            std::tie(ec) = co_await response.async_write_eof(as_tuple);
+            std::tie(ec) = co_await response.write_eof();
          logi("server: {}", what(ec));
       };
    }
 
    /// Sends a request with \p sent headers, returns the response status code or error.
-   awaitable<std::expected<unsigned int, error_code>> request(Session& session, const Fields& sent,
-                                                              size_t response_size = 0)
+   Task<std::expected<unsigned int, error_code>> request(Session& session, const Fields& sent,
+                                                         size_t response_size = 0)
    {
       auto target = url;
       if (response_size)
          target.params().set("response_size", std::to_string(response_size));
 
-      auto [ec, message] = co_await session.async_get(target, sent, as_tuple);
+      auto [ec, message] = co_await session.get(target, sent);
       if (ec)
          co_return std::unexpected(ec);
       co_return message.result_int();
@@ -244,17 +240,14 @@ protected:
    size_t handled = 0;
 };
 
-INSTANTIATE_TEST_SUITE_P(HeaderLimits, HeaderLimits,
-                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
-                                anyhttp::Protocol::h3),
-                         NameGenerator);
+INSTANTIATE_TEST_SUITE_P(HeaderLimits, HeaderLimits, ValuesIn(protocols()), NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
 
 TEST_P(HeaderLimits, WHEN_request_headers_are_within_limit_THEN_request_is_handled)
 {
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       EXPECT_EQ(co_await request(session, make_fields(1, limit / 2), limit / 2), 200);
       EXPECT_EQ(handled, 1);
    };
@@ -263,7 +256,7 @@ TEST_P(HeaderLimits, WHEN_request_headers_are_within_limit_THEN_request_is_handl
 TEST_P(HeaderLimits, WHEN_request_headers_exceed_limit_THEN_server_responds_431)
 {
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       EXPECT_EQ(co_await request(session, make_fields(1, limit)), 431);
       EXPECT_EQ(handled, 0);
    };
@@ -276,7 +269,7 @@ TEST_P(HeaderLimits, WHEN_request_headers_exceed_limit_THEN_server_responds_431)
 TEST_P(HeaderLimits, WHEN_many_small_fields_exceed_limit_THEN_server_responds_431)
 {
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto sent = make_fields(200, 1);
       EXPECT_EQ(co_await request(session, sent), 431);
       EXPECT_EQ(handled, 0);
@@ -295,7 +288,7 @@ TEST_P(HeaderLimits, WHEN_request_headers_far_exceed_limit_THEN_request_is_rejec
    ASSERT_GT(wire_size(sent), limit * 200);
 
    respond_with_headers();
-   clientSession = [this, sent](Session session) -> awaitable<void> {
+   clientSession = [this, sent](Session session) -> Task<void> {
       auto result = co_await request(session, sent);
       if (GetParam() == anyhttp::Protocol::h2)
          EXPECT_FALSE(result.has_value()) << "status " << result.value_or(0);
@@ -311,7 +304,7 @@ TEST_P(HeaderLimits, WHEN_request_is_rejected_THEN_session_serves_next_request)
       GTEST_SKIP() << "HTTP/1.1 closes the connection after 431";
 
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       EXPECT_EQ(co_await request(session, make_fields(1, limit)), 431);
       EXPECT_EQ(co_await request(session, make_fields(1, 100)), 200);
       EXPECT_EQ(handled, 1);
@@ -323,9 +316,9 @@ TEST_P(HeaderLimits, WHEN_request_is_rejected_THEN_session_serves_next_request)
 TEST_P(HeaderLimits, WHEN_response_headers_exceed_limit_THEN_get_response_fails)
 {
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto result = co_await request(session, {}, limit);
-      EXPECT_EQ(result, std::unexpected(error_code(boost::beast::http::error::header_limit)));
+      EXPECT_EQ(result, std::unexpected(errors::header_limit));
    };
 }
 
@@ -335,14 +328,14 @@ TEST_P(HeaderLimits, WHEN_response_headers_exceed_limit_THEN_get_response_fails)
 TEST_P(HeaderLimits, WHEN_response_headers_exceed_limit_before_get_response_THEN_it_fails)
 {
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto target = url;
       target.params().set("response_size", std::to_string(limit));
-      auto request = co_await session.async_submit(target, {});
-      co_await request.async_write_eof();
+      auto request = check(co_await session.submit(target, {}));
+      check(co_await request.write_eof());
       co_await sleep(100ms);
-      auto [ec, response] = co_await request.async_get_response(as_tuple);
-      EXPECT_EQ(ec, boost::beast::http::error::header_limit) << what(ec);
+      auto [ec, response] = co_await request.get_response();
+      EXPECT_EQ(ec, errors::header_limit) << what(ec);
    };
 }
 
@@ -352,9 +345,9 @@ TEST_P(HeaderLimits, WHEN_response_is_rejected_THEN_session_serves_next_request)
       GTEST_SKIP() << "HTTP/1.1 can not skip the rest of a response";
 
    respond_with_headers();
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto result = co_await request(session, {}, limit);
-      EXPECT_EQ(result, std::unexpected(error_code(boost::beast::http::error::header_limit)));
+      EXPECT_EQ(result, std::unexpected(errors::header_limit));
       EXPECT_EQ(co_await request(session, {}, 100), 200);
       EXPECT_EQ(handled, 2);
    };

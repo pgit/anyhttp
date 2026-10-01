@@ -11,6 +11,8 @@
 #include "anyhttp/session.hpp"
 #include "anyhttp/utils.hpp"
 
+#include <boost/capy/ex/run.hpp>
+#include <boost/capy/ex/this_coro.hpp>
 #include <boost/corosio/io_context.hpp>
 
 #include <boost/beast/http/error.hpp>
@@ -25,6 +27,7 @@
 #include <functional>
 #include <optional>
 #include <ranges>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -61,6 +64,19 @@ static void setup_logging()
 #else
    spdlog::set_level(spdlog::level::debug);
 #endif
+}
+
+/**
+ * CAPY's spelling of ASIO's cancel_after(): awaits \p task, which is requested to stop after
+ * \p timeout. The request reaches only the task, not the coroutine that awaits it.
+ */
+template <typename T, typename Rep, typename Period>
+Task<T> stop_after(std::chrono::duration<Rep, Period> timeout, Task<T> task)
+{
+   std::stop_source stop;
+   Timer timer(co_await boost::capy::this_coro::executor);
+   timer.arm(timeout, [&stop] { stop.request_stop(); });
+   co_return co_await boost::capy::run(stop.get_token())(std::move(task));
 }
 
 // =================================================================================================

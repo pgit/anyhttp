@@ -19,6 +19,7 @@
 #include <boost/beast/http/basic_parser.hpp>
 #include <boost/beast/http/error.hpp>
 #include <boost/beast/http/message.hpp>
+#include <boost/beast/http/parser.hpp>
 #include <boost/beast/http/serializer.hpp>
 
 #include <boost/container/small_vector.hpp>
@@ -103,6 +104,37 @@ Task<std::tuple<error_code, size_t>> read_header(Stream& stream, DynamicBuffer& 
       parsed += n;
    }
    co_return std::tuple{error_code{}, parsed};
+}
+
+/// Reads until the parser has the whole message, as Beast's \c http::async_read() with a parser.
+template <typename Stream, typename DynamicBuffer, bool isRequest>
+Task<std::tuple<error_code, size_t>> read(Stream& stream, DynamicBuffer& buffer,
+                                          http::basic_parser<isRequest>& parser)
+{
+   size_t parsed = 0;
+   while (!parser.is_done())
+   {
+      auto [ec, n] = co_await h1::read_some(stream, buffer, parser);
+      if (ec)
+         co_return std::tuple{ec, parsed};
+      parsed += n;
+   }
+   co_return std::tuple{error_code{}, parsed};
+}
+
+/// Reads a whole message into \p message, as Beast's \c http::async_read() with a message.
+template <typename Stream, typename DynamicBuffer, bool isRequest, typename Body,
+          typename Allocator>
+Task<std::tuple<error_code, size_t>>
+read_message(Stream& stream, DynamicBuffer& buffer,
+             http::message<isRequest, Body, http::basic_fields<Allocator>>& message)
+{
+   http::parser<isRequest, Body, Allocator> parser;
+   parser.eager(true);
+   auto [ec, n] = co_await h1::read(stream, buffer, parser);
+   if (!ec)
+      message = parser.release();
+   co_return std::tuple{ec, n};
 }
 
 // -------------------------------------------------------------------------------------------------

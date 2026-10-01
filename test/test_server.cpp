@@ -87,7 +87,13 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
    // The server has to keep running while the client is frozen, so it gets a thread of its own.
    //
    std::jthread server_thread([this] { context.run(); });
-   boost::scope::scope_exit stop_server([this] { context.stop(); });
+
+   //
+   // On the way out, the server is shut down on its own thread, and the thread is joined once that
+   // is done: a stopped context would leave the server's coroutines suspended for good.
+   //
+   boost::scope::scope_exit stop_server(
+      [this] { run_later(context.get_executor(), [this] { server.reset(); }); });
 
    //
    // The client runs on its own io_context, which is what makes freezing it possible: stopping
@@ -137,8 +143,14 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
 
    //
    // Only now, on the way out, is the frozen client allowed to unwind: doing so earlier would
-   // have sent the CONNECTION_CLOSE that this test is all about not sending.
+   // have sent the CONNECTION_CLOSE that this test is all about not sending. It is run to its end
+   // rather than destroyed along with its context, which only ASIO could unwind: capy has no way
+   // of destroying a coroutine that is suspended on an operation of a context that goes away.
    //
+   response.reset();
+   request.reset();
+   session.reset();
+   client_context.run();
 }
 
 // =================================================================================================
