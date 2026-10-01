@@ -225,6 +225,54 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
 }
 
 //
+// The head of a request has arrived in full before the handler sees it, so it stays readable
+// after the session is gone. A handler may first look at it only then: under load, a server
+// shutting down can tear down a session before the handlers of its last requests have run.
+//
+TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_request_head_is_still_there)
+{
+   auto clientGone = std::make_shared<Signal>(context.get_executor());
+   auto inspected = std::make_shared<Signal>(context.get_executor());
+
+   requestHandler = [this, clientGone, inspected](server::Request request,
+                                                  server::Response response) -> Task<void> {
+      //
+      // Keep the request beyond the request handler, until the client has closed the connection
+      // and the server session has ended. The response, too, so the exchange is still open then.
+      //
+      auto inspect = [](std::shared_ptr<Signal> clientGone, std::shared_ptr<Signal> inspected,
+                        server::Request request, server::Response) -> Task<void> {
+         const std::string method(request.method());
+         const std::string url(request.url().buffer());
+
+         std::ignore = co_await clientGone->wait();
+         co_await sleep(100ms); // see WHEN_server_session_is_gone_THEN_response_reports_error
+
+         EXPECT_EQ(request.method(), method);
+         EXPECT_EQ(request.url().buffer(), url);
+         EXPECT_EQ(request.url().path(), "/custom/head");
+         EXPECT_EQ(request.fields()["X-Test"], "42");
+
+         inspected->notify();
+      };
+      launch(context.get_executor(),
+             inspect(clientGone, inspected, std::move(request), std::move(response)));
+      co_return;
+   };
+   clientSession = [this, clientGone, inspected](Session session) -> Task<void> {
+      Fields fields;
+      fields.set("X-Test", "42");
+      auto request = check(co_await session.submit(url.set_path("custom/head"), fields));
+      check(co_await request.write_eof());
+      request.reset();
+      session.reset();
+
+      clientGone->notify();
+      std::ignore = co_await inspected->wait();
+   };
+}
+
+//
 // With HTTP/1.1 pipelining, a session has more than one request at a time. Releasing the earlier
 // one must not make the session forget about the later one, which has to learn about the session
 // going away all the same.

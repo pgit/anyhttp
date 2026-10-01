@@ -439,6 +439,8 @@ namespace
 //
 // The reading half of a server request: what http3::Http3Reader has for both roles, plus the
 // request line, which only this role has. Its counterpart on the client is Http3ResponseReader.
+// Like the fields, the request line is moved out of the stream on detach(): a handler may well
+// look at it only after the session is gone, e.g. when it first runs during shutdown.
 //
 class Http3RequestReader final : public http3::Http3Reader<server::Request::Impl>
 {
@@ -447,15 +449,22 @@ public:
 
    std::string_view method() const noexcept override
    {
-      assert(stream);
-      return stream->method;
+      return stream ? stream->method : detached_method;
    }
 
-   boost::url_view url() const override
+   boost::url_view url() const override { return stream ? stream->url : detached_url; }
+
+   void detach() override
    {
       assert(stream);
-      return stream->url;
+      detached_method = std::move(stream->method);
+      detached_url = std::move(stream->url);
+      Http3Reader::detach();
    }
+
+private:
+   std::string detached_method;
+   boost::urls::url detached_url;
 };
 
 } // namespace

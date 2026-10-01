@@ -66,6 +66,7 @@ void NGHttp2Reader<Base>::detach()
    assert(stream);
    detached_ec = stream->reading_finished() ? errors::eof : errors::partial_message;
    detached_log_prefix = stream->log_prefix_;
+   detached_fields = std::move(stream->fields); // the stream is being destroyed
    stream = nullptr;
 }
 
@@ -86,8 +87,7 @@ Executor NGHttp2Reader<Base>::get_executor() const noexcept
 template <typename Base>
 const Fields& NGHttp2Reader<Base>::fields() const
 {
-   assert(stream);
-   return stream->fields;
+   return stream ? stream->fields : detached_fields;
 }
 
 template <typename Base>
@@ -153,6 +153,8 @@ namespace
 //
 // The two roles a reader can be in. Everything above is the same for both; what they add is the
 // half of the incoming message that only their role has -- a request line, or a status code.
+// Like the fields, it is moved out of the stream on detach(): a handler may well look at the
+// request line only after the session is gone, e.g. when it first runs during shutdown.
 //
 
 class NGHttp2RequestReader final : public NGHttp2Reader<server::Request::Impl>
@@ -162,15 +164,22 @@ public:
 
    std::string_view method() const noexcept override
    {
-      assert(stream);
-      return stream->method;
+      return stream ? stream->method : detached_method;
    }
 
-   boost::url_view url() const override
+   boost::url_view url() const override { return stream ? stream->url : detached_url; }
+
+   void detach() override
    {
       assert(stream);
-      return {stream->url};
+      detached_method = std::move(stream->method);
+      detached_url = std::move(stream->url);
+      NGHttp2Reader::detach();
    }
+
+private:
+   std::string detached_method;
+   boost::urls::url detached_url;
 };
 
 class NGHttp2ResponseReader final : public NGHttp2Reader<client::Response::Impl>
@@ -180,9 +189,18 @@ public:
 
    unsigned int status_code() const noexcept override
    {
-      assert(stream);
-      return stream->status_code.value_or(0);
+      return stream ? stream->status_code.value_or(0) : detached_status_code;
    }
+
+   void detach() override
+   {
+      assert(stream);
+      detached_status_code = stream->status_code.value_or(0);
+      NGHttp2Reader::detach();
+   }
+
+private:
+   unsigned int detached_status_code = 0;
 };
 
 } // namespace

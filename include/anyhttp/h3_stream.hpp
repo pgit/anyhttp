@@ -260,11 +260,7 @@ public:
       return stream ? stream->content_length : std::nullopt;
    }
 
-   const Fields& fields() const override
-   {
-      assert(stream);
-      return stream->fields;
-   }
+   const Fields& fields() const override { return stream ? stream->fields : detached_fields; }
 
    void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) override
    {
@@ -311,6 +307,7 @@ public:
       assert(stream);
       detached_ec = stream->reading_finished() ? errors::eof : errors::partial_message;
       detached_log_prefix = stream->log_prefix();
+      detached_fields = std::move(stream->fields); // the stream is being destroyed
       stream = nullptr;
    }
 
@@ -325,6 +322,7 @@ public:
 
    /// What a read past detach() reports: eof for a body read to its clean end, else truncation.
    error_code detached_ec{errors::partial_message};
+   Fields detached_fields; // moved out of the stream by detach(), so fields() outlives it
 };
 
 // -------------------------------------------------------------------------------------------------

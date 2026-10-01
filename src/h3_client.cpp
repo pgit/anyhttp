@@ -255,7 +255,20 @@ class Http3ResponseReader final : public http3::Http3Reader<client::Response::Im
 public:
    using Http3Reader<client::Response::Impl>::Http3Reader;
 
-   unsigned int status_code() const noexcept override { return stream ? stream->status_code : 0; }
+   unsigned int status_code() const noexcept override
+   {
+      return stream ? stream->status_code : detached_status_code;
+   }
+
+   void detach() override
+   {
+      assert(stream);
+      detached_status_code = stream->status_code;
+      Http3Reader::detach();
+   }
+
+private:
+   unsigned int detached_status_code = 0;
 };
 
 } // namespace

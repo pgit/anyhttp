@@ -51,6 +51,7 @@ public:
    /// What a read past detach() reports, latched by detach(): the stream may be gone, but a body
    /// that was read to its clean end keeps ending in \c eof, a truncated one in partial_message.
    error_code detached_ec{errors::partial_message};
+   Fields detached_fields; // moved out of the stream by detach(), so fields() outlives it
 };
 
 // -------------------------------------------------------------------------------------------------
