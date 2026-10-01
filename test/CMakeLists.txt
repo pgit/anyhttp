@@ -18,7 +18,7 @@ link_libraries(Boost::atomic Boost::url Boost::filesystem Boost::process)
 # under way, CAPY builds the files listed here; the list grows until it equals the glob.
 #
 if (ANYHTTP_CAPY)
-    set(SRC_FILES test_corosio.cpp test_coroutine_api.cpp)
+    set(SRC_FILES test_corosio.cpp test_coroutine_api.cpp test_external.cpp)
 else()
     file(GLOB SRC_FILES test_*.cpp)
 endif()
