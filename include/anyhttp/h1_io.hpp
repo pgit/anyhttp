@@ -9,7 +9,8 @@
 // Beast's parser and serializer say what they need through error codes of their own. need_more
 // (more input) is handled in here. need_buffer (the body buffer is full, or used up) is what these
 // are called to get to, so it comes out as success. Any other error comes out as the runtime's
-// error_code, Beast's own ones (end_of_stream, partial_message, header_limit, ...) included.
+// error_code, Beast's own ones (end_of_stream, header_limit, ...) included -- except for
+// partial_message, which is errors::partial_message, see to_error_code().
 //
 
 #include "anyhttp/common.hpp"
@@ -32,8 +33,16 @@ namespace anyhttp::beast_impl::h1
 
 namespace http = boost::beast::http;
 
-/// A Beast error as the runtime's error code.
-inline error_code to_error_code(const boost::system::error_code& ec) { return ec; }
+/**
+ * A Beast error as the runtime's error code. A body that ended before it was complete is
+ * \c errors::partial_message, as the API has it, which is Beast's own code only with ASIO.
+ */
+inline error_code to_error_code(const boost::system::error_code& ec)
+{
+   if (ec == http::error::partial_message)
+      return errors::partial_message;
+   return ec;
+}
 
 // =================================================================================================
 
