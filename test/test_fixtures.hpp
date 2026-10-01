@@ -3,6 +3,9 @@
 //
 // Fixtures and helpers shared by the test_*.cpp files.
 //
+#if ANYHTTP_CAPY
+#include "test_fixtures_capy.hpp"
+#else
 #include "anyhttp/client.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/request_handlers.hpp"
@@ -74,6 +77,12 @@ using namespace anyhttp;
 static std::string NameGenerator(const testing::TestParamInfo<anyhttp::Protocol>& info)
 {
    return to_string(info.param);
+}
+
+/// The protocols the parametrized shared tests run with.
+inline std::vector<anyhttp::Protocol> protocols()
+{
+   return {anyhttp::Protocol::h1, anyhttp::Protocol::h2, anyhttp::Protocol::h3};
 }
 
 static void setup_logging()
@@ -271,3 +280,5 @@ public:
 };
 
 // =================================================================================================
+
+#endif // ANYHTTP_CAPY

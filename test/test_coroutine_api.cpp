@@ -18,16 +18,13 @@ class CoroutineApi : public ClientAsync
 {
 };
 
-INSTANTIATE_TEST_SUITE_P(CoroutineApi, CoroutineApi,
-                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
-                                anyhttp::Protocol::h3),
-                         NameGenerator);
+INSTANTIATE_TEST_SUITE_P(CoroutineApi, CoroutineApi, ValuesIn(protocols()), NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
 
 TEST_P(CoroutineApi, WHEN_exchanging_a_body_THEN_both_sides_see_all_of_it)
 {
-   requestHandler = [](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [](server::Request request, server::Response response) -> Task<void> {
       std::string body;
       std::array<char, 1024> buffer;
       for (;;)
@@ -53,7 +50,7 @@ TEST_P(CoroutineApi, WHEN_exchanging_a_body_THEN_both_sides_see_all_of_it)
       std::ignore = co_await response.write_eof(asio::buffer("!", 1));
    };
 
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto [ec, request] = co_await session.submit(url);
       EXPECT_FALSE(ec) << ec.message();
 
@@ -84,13 +81,13 @@ TEST_P(CoroutineApi, WHEN_exchanging_a_body_THEN_both_sides_see_all_of_it)
 
 TEST_P(CoroutineApi, WHEN_writing_after_the_end_THEN_error_is_reported_not_thrown)
 {
-   requestHandler = [](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [](server::Request request, server::Response response) -> Task<void> {
       co_await drain(request);
       std::ignore = co_await response.submit(200, {});
       std::ignore = co_await response.write_eof();
    };
 
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto [ec, request] = co_await session.submit(url);
       EXPECT_FALSE(ec) << ec.message();
       EXPECT_FALSE(std::get<0>(co_await request.write_eof()));
@@ -106,13 +103,13 @@ TEST_P(CoroutineApi, WHEN_writing_after_the_end_THEN_error_is_reported_not_throw
 
 TEST_P(CoroutineApi, WHEN_connecting_and_getting_THEN_message_arrives)
 {
-   requestHandler = [](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [](server::Request request, server::Response response) -> Task<void> {
       co_await drain(request);
       std::ignore = co_await response.submit(200, fields({{"Content-Length", 2}}));
       std::ignore = co_await response.write_eof(asio::buffer("ok", 2));
    };
 
-   clientSession = [this](Session) -> awaitable<void> {
+   clientSession = [this](Session) -> Task<void> {
       auto [ec, session] = co_await client->connect();
       EXPECT_FALSE(ec) << ec.message();
 

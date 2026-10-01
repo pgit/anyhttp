@@ -18,7 +18,7 @@ link_libraries(Boost::atomic Boost::url Boost::filesystem Boost::process)
 # under way, CAPY builds the files listed here; the list grows until it equals the glob.
 #
 if (ANYHTTP_CAPY)
-    set(SRC_FILES test_corosio.cpp)
+    set(SRC_FILES test_corosio.cpp test_coroutine_api.cpp)
 else()
     file(GLOB SRC_FILES test_*.cpp)
 endif()
@@ -27,18 +27,13 @@ add_executable(test_all ${SRC_FILES})
 target_link_libraries(test_all PRIVATE GTest::gtest_main GTest::gmock)
 target_link_libraries(test_all PRIVATE spdlog::spdlog_header_only)
 
-if (ANYHTTP_CAPY)
-    target_link_libraries(test_all PRIVATE Boost::corosio Boost::corosio_openssl)
-    target_include_directories(test_all PRIVATE ${CMAKE_SOURCE_DIR}/include)
-else()
-    target_link_libraries(test_all PRIVATE anyhttp)
+target_link_libraries(test_all PRIVATE anyhttp)
 
-    # the h2c upgrade tests drive an HTTP/2 client session by hand
-    target_link_libraries(test_all PRIVATE PkgConfig::NGHTTP2)
+# the h2c upgrade tests drive an HTTP/2 client session by hand
+target_link_libraries(test_all PRIVATE PkgConfig::NGHTTP2)
 
-    # the tests connect over TLS and pass pki/out/root.pem to curl, so the PKI must exist first
-    add_dependencies(test_all pki)
-endif()
+# the tests connect over TLS and pass pki/out/root.pem to curl, so the PKI must exist first
+add_dependencies(test_all pki)
 
 # Register the tests with CTest
 include(GoogleTest)
