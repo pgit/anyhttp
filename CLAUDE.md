@@ -16,7 +16,7 @@ and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.jso
 SHAs. Both styles build the same library sources and test files; what belongs to one style only
 is guarded with `ANYHTTP_CAPY`. So is the `server` program (single-threaded with CAPY); the
 `client` program is ASIO-only so far.
-`build-capy-asan/` is its ASAN tree.
+`build-capy-asan/` is its ASAN tree, `build-capy-release/` its Release tree (benchmark CAPY with it).
 
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
