@@ -47,13 +47,6 @@ target_link_libraries(server PRIVATE anyhttp)
 target_link_libraries(server PRIVATE Boost::program_options)
 
 if (ANYHTTP_CAPY)
-    #
-    # corosio_issue_run_one
-    #
-    add_executable(corosio_issue_run_one)
-    target_sources(corosio_issue_run_one PRIVATE "corosio_issue_run_one.cpp")
-    target_link_libraries(corosio_issue_run_one PRIVATE Boost::corosio)
-
     # the client program comes with the rest of the port
     return()
 endif()
