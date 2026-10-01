@@ -36,9 +36,13 @@
 #include <boost/url/parse.hpp>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
+#include <chrono>
 #include <optional>
 #include <string_view>
+
+#include <sys/socket.h>
 
 using namespace std::chrono_literals;
 
@@ -65,6 +69,37 @@ static void add_fields(http::message<isRequest, Body>& message, const Fields& he
       message.erase(header.name_string());
    for (auto&& header : headers)
       message.insert(header.name_string(), header.value());
+}
+
+/**
+ * Reads and drops what the socket under \p stream still receives, until the peer has ended its
+ * side of the connection, or \p timeout has passed. Yields the number of bytes dropped. The data
+ * is of no interest, not even decrypted: this reads the socket itself, by hand, as that is what
+ * every stream type has in common.
+ */
+template <SocketStream Stream>
+static Task<size_t> drain(Stream& stream, const Executor& executor,
+                          std::chrono::steady_clock::duration timeout)
+{
+   Timer timer(executor);
+   timer.arm(timeout, [&stream] { io::cancel(stream); });
+
+   auto& socket = get_socket(stream);
+   std::array<char, 16 * 1024> buffer;
+   size_t drained = 0;
+   for (;;)
+   {
+      if (auto [ec] = co_await io::wait_readable(socket); ec)
+         break;
+      auto n = ::recv(socket.native_handle(), buffer.data(), buffer.size(), MSG_DONTWAIT);
+      if (n == 0)
+         break; // the peer has ended its side
+      if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+         break;
+      drained += std::max<ssize_t>(n, 0);
+   }
+   timer.cancel();
+   co_return drained;
 }
 
 /// Converts Config::max_header_size into what a Beast parser takes as its header limit.
@@ -1150,13 +1185,19 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       mlogw("teardown: {}", teardown_ec.message());
 
    //
-   // Send a FIN next, and let go of the socket only after that: closing one that still has
-   // unread data in its receive queue answers the peer with an RST instead, and an RST discards
-   // whatever has not been delivered yet -- which can be the very response that said the
-   // connection was ending.
+   // Send a FIN next, and let go of the socket only once the peer has ended its side as well
+   // (RFC 9112, section 9.6): closing a socket that still has unread data in its receive queue
+   // answers the peer with an RST instead, and an RST may cost the peer what it has not read yet
+   // -- which can be the very response that said the connection was ending. So what still comes
+   // in is read and dropped, for two seconds at most. A peer that ended the connection itself has
+   // nothing left to send, and this costs one read.
    //
-   if (auto ec = io::shutdown(stream_, io::Shutdown::send);
-       ec && ec != errc::not_connected) // the peer may be gone already
+   if (auto ec = io::shutdown(stream_, io::Shutdown::send); !ec)
+   {
+      if (auto drained = co_await drain(stream_, super::get_executor(), 2s))
+         mlogd("dropped {} bytes the peer sent after the last request", drained);
+   }
+   else if (ec != errc::not_connected) // the peer may be gone already
       mlogw("shutdown: {}", ec.message());
    io::close(stream_);
 
