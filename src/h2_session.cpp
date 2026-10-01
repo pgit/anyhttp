@@ -632,6 +632,19 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    }
 
    //
+   // A body that ended cleanly may not have been read to its end yet: the reader has not come back
+   // for the rest, which the stream holds. Keep the stream until it has, see
+   // NGHttp2Stream::finish_deferred_close(). (A reader that is resumed inline from within the read
+   // callback usually keeps up, so this is what posting the completion makes common.)
+   //
+   if (stream->reader && stream->eof_received && !stream->reading_finished())
+   {
+      logd("[{}] close_stream: body not read to its end yet", log_prefix(stream_id));
+      stream->close_deferred = true;
+      return; // keep stream for now
+   }
+
+   //
    // Finally, erase stream from map.
    //
    streams_.erase(it);

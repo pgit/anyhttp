@@ -101,6 +101,35 @@ TEST_P(CoroutineApi, WHEN_writing_after_the_end_THEN_error_is_reported_not_throw
    };
 }
 
+//
+// A body may end, and its stream close, before the reader comes back for the rest of it -- which
+// has to be there when it does. (HTTP/2 used to drop the stream with the data it held: with ASIO,
+// a reader that is resumed inline usually kept up; CAPY, which resumes it later, always lost it.)
+//
+constexpr size_t small_body = 16 * 1024; // well within the flow control window
+
+TEST_P(CoroutineApi, WHEN_reader_comes_back_after_the_body_has_ended_THEN_all_of_it_is_there)
+{
+   requestHandler = [](server::Request request, server::Response response) -> Task<void> {
+      co_await drain(request);
+      std::string body(small_body, 'x');
+      std::ignore = co_await response.submit(200, fields({{"Content-Length", small_body}}));
+      std::ignore = co_await response.write_eof(asio::buffer(body));
+   };
+
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url));
+      check(co_await request.write_eof());
+      auto response = check(co_await request.get_response());
+
+      std::array<char, 1024> buffer;
+      auto n = check(co_await response.read_some(asio::buffer(buffer)));
+
+      co_await sleep(100ms); // meanwhile, the rest of the body arrives, and the stream closes
+      EXPECT_EQ(n + co_await drain(response), small_body);
+   };
+}
+
 TEST_P(CoroutineApi, WHEN_connecting_and_getting_THEN_message_arrives)
 {
    requestHandler = [](server::Request request, server::Response response) -> Task<void> {

@@ -365,6 +365,8 @@ size_t NGHttp2Stream::read_buffers_size() const
 
 void NGHttp2Stream::call_read_handler(asio::const_buffer view)
 {
+   Defer finish_close([this] { finish_deferred_close(); });
+
    //
    // If there is no pending read handler we can invoke now, we have to buffer the data until there
    // is. The amount of data that is buffered is limitted by the window size. If that is exceeded
@@ -921,6 +923,7 @@ void NGHttp2Stream::delete_reader()
 
    reader = nullptr;
    maybe_close_stream();
+   finish_deferred_close();
 }
 
 void NGHttp2Stream::delete_writer()
@@ -957,6 +960,20 @@ void NGHttp2Stream::delete_writer()
 
    writer = nullptr;
    maybe_close_stream();
+}
+
+/**
+ * Finishes what close_stream() put off once the reader has taken the rest of the body, or is gone.
+ * Not while a read is pending -- call_read_handler() still has the end of the body to deliver to
+ * it -- and not from a nested call_read_handler(), which leaves that to the outer one.
+ */
+void NGHttp2Stream::finish_deferred_close()
+{
+   if (close_deferred && reading_finished() && !read_handler_ && !inside_call_read_handler_)
+   {
+      close_deferred = false;
+      parent.close_stream(id);
+   }
 }
 
 void NGHttp2Stream::maybe_close_stream()

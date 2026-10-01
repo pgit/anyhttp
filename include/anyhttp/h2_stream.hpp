@@ -191,6 +191,9 @@ public:
 
    bool closed = false; // set to true after on_stream_close_callback
 
+   /// close_stream() was put off until the reader has taken the rest of the body, see there.
+   bool close_deferred = false;
+
 public:
    NGHttp2Stream(NGHttp2Session& parent, int id);
    ~NGHttp2Stream();
@@ -233,6 +236,7 @@ public:
    void delete_reader();
    void delete_writer();
    void maybe_close_stream();
+   void finish_deferred_close();
 
    Executor get_executor() const noexcept;
 
