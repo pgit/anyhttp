@@ -662,10 +662,16 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
       }
    }
 
+   //
+   // The same code as a write that was parked when the stream closed, see close_stream(): which
+   // of the two a writer gets is only a matter of whether it was resumed before the RST_STREAM
+   // was read.
+   //
    if (closed)
    {
       mlogw("async_write: stream already closed");
-      complete_immediately(std::move(handler), get_executor(), errors::canceled);
+      complete_immediately(std::move(handler), get_executor(),
+                           make_error_code(errc::connection_reset));
       return;
    }
 
