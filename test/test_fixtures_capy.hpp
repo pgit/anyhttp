@@ -111,6 +111,8 @@ protected:
             co_await h2spec(std::move(request), std::move(response));
          else if (request.url().path() == "/dump")
             co_await dump(std::move(request), std::move(response));
+         else if (request.url().path() == "/dump space")
+            co_await dump(std::move(request), std::move(response));
          else if (request.url().path() == "/detach")
             co_await detach(std::move(request), std::move(response));
          else if (request.url().path().starts_with("/custom"))
