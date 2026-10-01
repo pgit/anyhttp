@@ -1,5 +1,9 @@
 #include "test_fixtures.hpp"
 
+#if ANYHTTP_CAPY
+#include <boost/capy/ex/run.hpp>
+#endif
+
 #include <array>
 #include <print>
 #include <ranges>
@@ -15,20 +19,18 @@ class ClientAsyncCancellation : public ClientAsync
 {
 };
 
-INSTANTIATE_TEST_SUITE_P(ClientAsyncCancellation, ClientAsyncCancellation,
-                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
-                                anyhttp::Protocol::h3),
+INSTANTIATE_TEST_SUITE_P(ClientAsyncCancellation, ClientAsyncCancellation, ValuesIn(protocols()),
                          NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
 
 TEST_P(ClientAsyncCancellation, Backpressure)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      auto response = check(co_await request.get_response());
       auto sender = send(request, rv::iota(uint8_t(0)));
-      co_await (std::move(sender) || sleep(2s));
+      co_await when_either(std::move(sender), sleep(2s));
       // FIXME: count bytes sent, just like asio::async_write() does
       // FIXME: or even use asio::async_write() on top of a async_write_some() implementation
 
@@ -37,15 +39,15 @@ TEST_P(ClientAsyncCancellation, Backpressure)
       // QUIC, where whether the FIN slips out without credit depends on flow control timing, so
       // only assert that for the stream protocols.
       //
-      auto rc = co_await (send_eof(request) || sleep(100ms));
+      auto rc = co_await when_either(send_eof(request), sleep(100ms));
       if (GetParam() != anyhttp::Protocol::h3)
          EXPECT_EQ(rc.index(), 1);
 
       // So instead, we start doing this in background, to be resumed as soon as the window reopens.
-      co_spawn(co_await this_coro::executor, send_eof(request), detached); // FIXME: join
+      launch(context.get_executor(), send_eof(request)); // FIXME: join
 
       std::println("receiving....");
-      boost::system::error_code ec;
+      error_code ec;
       auto received = co_await try_receive(response, ec);
       std::println("receiving... done, got {} bytes ({})", received, ec.message());
       EXPECT_GT(received, 0);
@@ -65,18 +67,18 @@ TEST_P(ClientAsyncCancellation, Backpressure)
 //
 TEST_P(ClientAsyncCancellation, CancellationContentLength)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       const size_t length = 50_m;
       const std::vector<char> buffer(length);
       for (size_t i = 0; i <= 20; ++i)
       {
          if (!session)
-            session = co_await client->async_connect();
+            session = check(co_await client->connect());
 
          Fields fields;
          fields.set("content-length", std::to_string(length));
-         auto request = co_await session.async_submit(url.set_path("echo"), fields);
-         auto response = co_await request.async_get_response();
+         auto request = check(co_await session.submit(url.set_path("echo"), fields));
+         auto response = check(co_await request.get_response());
 
          //
          // This is a single large buffer and will be serialized as a single chunk. When writing
@@ -84,12 +86,13 @@ TEST_P(ClientAsyncCancellation, CancellationContentLength)
          //
          auto sender = send_and_force_eof(request, std::string_view(buffer));
 
-         boost::system::error_code ec;
-         auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
+         error_code ec;
+         auto received =
+            co_await when_both(when_either(std::move(sender), yield(i)), try_receive(response, ec));
          std::println("received {} bytes (\x1b[1;31m{}\x1b[0m, yielded {})", std::get<1>(received),
                       ec.message(), i);
          EXPECT_LT(std::get<1>(received), length);
-         EXPECT_EQ(ec, boost::beast::http::error::partial_message);
+         EXPECT_EQ(ec, errors::partial_message);
 
          session.reset();
       }
@@ -111,27 +114,28 @@ TEST_P(ClientAsyncCancellation, CancellationContentLength)
 //
 TEST_P(ClientAsyncCancellation, Cancellation)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       const size_t length = 50_m;
       const std::vector<char> buffer(length, 'a');
       for (size_t i = 0; i <= 20; ++i)
       {
-         auto request = co_await session.async_submit(url.set_path("echo"), {});
-         auto response = co_await request.async_get_response();
+         auto request = check(co_await session.submit(url.set_path("echo"), {}));
+         auto response = check(co_await request.get_response());
          auto sender = send_and_drop(std::move(request), std::string_view(buffer));
 
-         boost::system::error_code ec;
-         auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
+         error_code ec;
+         auto received =
+            co_await when_both(when_either(std::move(sender), yield(i)), try_receive(response, ec));
          std::println("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
          EXPECT_LT(std::get<1>(received), length);
-         EXPECT_EQ(ec, boost::beast::http::error::partial_message);
+         EXPECT_EQ(ec, errors::partial_message);
 
          // HTTP/1.1 needs to reconnect here
          // HTTP/2 can handle this without reconnect -- only the stream is cancelled
          if (GetParam() == anyhttp::Protocol::h1)
          {
             session.reset();
-            session = co_await client->async_connect();
+            session = check(co_await client->connect());
          }
       }
    };
@@ -153,59 +157,77 @@ TEST_P(ClientAsyncCancellation, Cancellation)
 //
 TEST_P(ClientAsyncCancellation, CancellationRange)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       for (size_t i = 6; i <= 6; ++i)
       {
          co_await yield();
-         auto request = co_await session.async_submit(url.set_path("echo"), {});
-         auto response = co_await request.async_get_response();
+         auto request = check(co_await session.submit(url.set_path("echo"), {}));
+         auto response = check(co_await request.get_response());
          // auto sender = send_and_force_eof(request, rv::iota(uint8_t(0)));
          auto sender = send_and_drop(std::move(request), rv::iota(uint8_t(0)));
 
-         boost::system::error_code ec;
-         auto received = co_await ((std::move(sender) || yield(i)) && try_receive(response, ec));
+         error_code ec;
+         auto received =
+            co_await when_both(when_either(std::move(sender), yield(i)), try_receive(response, ec));
          std::println("received {} bytes ({}, yield {})", std::get<1>(received), ec.message(), i);
-         EXPECT_EQ(ec, boost::beast::http::error::partial_message);
-         co_await client->async_connect();
+         EXPECT_EQ(ec, errors::partial_message);
+         check(co_await client->connect());
       }
    };
 }
 
 TEST_P(ClientAsyncCancellation, PerOperationCancellation)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      auto response = check(co_await request.get_response());
 
+      std::array<uint8_t, 1024> buffer;
+#if ANYHTTP_CAPY
+      // a stop request, which is all that capy has
+      std::stop_source stop;
+      Timer timer(context.get_executor());
+      timer.arm(110ms, [&stop] { stop.request_stop(); });
+      auto [ec, n] =
+         co_await boost::capy::run(stop.get_token())(response.read_some(asio::buffer(buffer)));
+#else
       asio::cancellation_signal cancel;
       asio::steady_timer timer(co_await asio::this_coro::executor, 110ms);
       timer.async_wait([&cancel](const boost::system::error_code&) { //
          cancel.emit(asio::cancellation_type::terminal);
       });
 
-      std::array<uint8_t, 1024> buffer;
       auto token = asio::bind_cancellation_slot(cancel.slot(), as_tuple);
       auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), std::move(token));
-      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+#endif
+      EXPECT_EQ(ec, errc::operation_canceled);
    };
 }
 
 TEST_P(ClientAsyncCancellation, CancelAfter)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto request =
-         co_await session.async_submit(url.set_path("echo").set_params({{"delay", "1000"}}), {});
+         check(co_await session.submit(url.set_path("echo").set_params({{"delay", "1000"}}), {}));
+#if ANYHTTP_CAPY
+      auto [ec, response] = co_await stop_after(250ms, request.get_response());
+#else
       auto [ec, response] = co_await request.async_get_response(cancel_after(250ms, as_tuple));
-      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+#endif
+      EXPECT_EQ(ec, errc::operation_canceled);
 
+#if ANYHTTP_CAPY
+      std::tie(ec, response) = co_await stop_after(0ms, request.get_response());
+#else
       std::tie(ec, response) = co_await request.async_get_response(cancel_after(0ms, as_tuple));
-      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+#endif
+      EXPECT_EQ(ec, errc::operation_canceled);
 
-      std::tie(ec, response) = co_await request.async_get_response(as_tuple);
+      std::tie(ec, response) = co_await request.get_response();
       EXPECT_FALSE(ec);
 
       constexpr auto msg = "Hello, Client!"sv;
-      co_await request.async_write_eof(asio::buffer(msg));
+      check(co_await request.write_eof(asio::buffer(msg)));
       EXPECT_EQ(co_await read(response), msg);
    };
 }
@@ -217,14 +239,18 @@ TEST_P(ClientAsyncCancellation, CancelAfter)
 //
 TEST_P(ClientAsyncCancellation, WHEN_client_read_some_with_cancel_after_THEN_cancelled)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      auto response = check(co_await request.get_response());
 
       std::array<uint8_t, 1024> buffer;
+#if ANYHTTP_CAPY
+      auto [ec, n] = co_await stop_after(100ms, response.read_some(asio::buffer(buffer)));
+#else
       auto [ec, n] =
          co_await response.async_read_some(asio::buffer(buffer), cancel_after(100ms, as_tuple));
-      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+#endif
+      EXPECT_EQ(ec, errc::operation_canceled);
       EXPECT_EQ(n, 0u);
    };
 }
@@ -235,18 +261,22 @@ TEST_P(ClientAsyncCancellation, WHEN_client_read_some_with_cancel_after_THEN_can
 //
 TEST_P(ClientAsyncCancellation, WHEN_server_read_some_with_cancel_after_THEN_cancelled)
 {
-   requestHandler = [](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [](server::Request request, server::Response response) -> Task<void> {
       std::array<uint8_t, 1024> buffer;
+#if ANYHTTP_CAPY
+      auto [ec, n] = co_await stop_after(100ms, request.read_some(asio::buffer(buffer)));
+#else
       auto [ec, n] =
          co_await request.async_read_some(asio::buffer(buffer), cancel_after(100ms, as_tuple));
-      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+#endif
+      EXPECT_EQ(ec, errc::operation_canceled);
       EXPECT_EQ(n, 0u);
-      co_await response.async_submit(200, {});
-      co_await response.async_write_eof();
+      check(co_await response.submit(200, {}));
+      check(co_await response.write_eof());
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url, {});
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url, {}));
+      auto response = check(co_await request.get_response());
       co_await drain(response);
    };
 }
@@ -257,16 +287,20 @@ TEST_P(ClientAsyncCancellation, WHEN_server_read_some_with_cancel_after_THEN_can
 //
 TEST_P(ClientAsyncCancellation, WHEN_read_some_completes_before_cancel_after_THEN_ok)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      auto response = check(co_await request.get_response());
 
       constexpr auto msg = "Hello, Server!"sv;
-      co_await request.async_write_eof(asio::buffer(msg));
+      check(co_await request.write_eof(asio::buffer(msg)));
 
       std::array<char, 1024> buffer;
+#if ANYHTTP_CAPY
+      auto [ec, n] = co_await stop_after(10s, response.read_some(asio::buffer(buffer)));
+#else
       auto [ec, n] =
          co_await response.async_read_some(asio::buffer(buffer), cancel_after(10s, as_tuple));
+#endif
       EXPECT_FALSE(ec);
       EXPECT_EQ(std::string_view(buffer.data(), n), msg.substr(0, n));
       EXPECT_GT(n, 0u);
@@ -281,27 +315,30 @@ TEST_P(ClientAsyncCancellation, WHEN_read_some_completes_before_cancel_after_THE
 //
 TEST_P(ClientAsyncCancellation, WHEN_client_write_with_cancel_after_THEN_cancelled)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      auto response = check(co_await request.get_response());
 
       const std::vector<uint8_t> body(8_m, 'x');
+#if ANYHTTP_CAPY
+      auto [ec] = co_await stop_after(100ms, request.write(asio::buffer(body)));
+#else
       auto [ec] = co_await request.async_write(asio::buffer(body), cancel_after(100ms, as_tuple));
-      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+#endif
+      EXPECT_EQ(ec, errc::operation_canceled);
    };
 }
 
 TEST_P(ClientAsyncCancellation, WHEN_send_more_than_content_length_THEN_connection_is_reset)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       Fields fields;
       fields.set("content-length", "1024");
-      auto request = co_await session.async_submit(url.set_path("eat_request"), fields);
-      auto response = co_await request.async_get_response();
+      auto request = check(co_await session.submit(url.set_path("eat_request"), fields));
+      auto response = check(co_await request.get_response());
       co_await drain(response);
 
-      auto ex = co_await this_coro::executor;
-      auto [ep] = co_await co_spawn(ex, send(request, rv::iota(uint8_t{0})), as_tuple);
+      auto ep = co_await caught(send(request, rv::iota(uint8_t{0})));
 
       //
       // Which of the two the write reports is a matter of how far the kernel has gotten with the
@@ -309,8 +346,7 @@ TEST_P(ClientAsyncCancellation, WHEN_send_more_than_content_length_THEN_connecti
       // ECONNRESET, any later one with EPIPE. Single-threaded we reliably hit the former, with
       // more than one thread the latter; both mean the same thing here.
       //
-      EXPECT_THAT(code(ep),
-                  AnyOf(boost::system::errc::connection_reset, boost::system::errc::broken_pipe));
+      EXPECT_THAT(code(ep), AnyOf(errc::connection_reset, errc::broken_pipe));
    };
 }
 
@@ -318,9 +354,9 @@ TEST_P(ClientAsyncCancellation, WHEN_send_more_than_content_length_THEN_connecti
 
 TEST_P(ClientAsyncCancellation, ClientDropRequest)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      auto response = check(co_await request.get_response());
    };
 }
 
@@ -328,38 +364,38 @@ TEST_P(ClientAsyncCancellation, ClientDropRequest)
 
 TEST_P(ClientAsyncCancellation, ResetServerDuringRequest)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      auto response = check(co_await request.get_response());
 
       //
-      // Deliberately NOT use_future(): with more than one thread the client lives on a strand,
-      // and blocking that strand in future.get() below would keep the very handlers that
-      // complete this send from ever running. asio::experimental::promise starts the coroutine
-      // right away, just like use_future, but is awaited instead of waited on.
+      // The upload goes on while the server is reset under it. It is caught(), so that its failure
+      // does not cancel the reset, which is what when_both() does with a task that throws.
       //
-      auto promise = co_spawn(request.get_executor(), send(request, rv::iota(uint8_t(0))),
-                              asio::experimental::use_promise);
+      auto reset_server = [this]() -> Task<void> {
+         std::println(
+            "=============================================================================");
+         for (size_t i = 0; i < 10; ++i)
+         {
+            std::println("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -",
+                         i);
+            co_await yield();
+         }
 
-      std::println("=============================================================================");
-      for (size_t i = 0; i < 10; ++i)
-      {
-         std::println("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", i);
-         co_await yield();
-      }
+         std::println(
+            "=============================================================================");
+         server.reset();
 
-      std::println("=============================================================================");
-      server.reset();
+         for (size_t i = 0; i < 10; ++i)
+         {
+            std::println("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -",
+                         i);
+            co_await yield();
+         }
+      };
+      std::ignore = co_await when_both(caught(send(request, rv::iota(uint8_t(0)))), reset_server());
 
-      for (size_t i = 0; i < 10; ++i)
-      {
-         std::println("- - {} - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", i);
-         co_await yield();
-      }
-
-      auto exception_ptr = co_await std::move(promise)(as_tuple(use_awaitable));
-
-      boost::system::error_code ec;
+      error_code ec;
       auto received = co_await try_receive(response, ec);
       loge("received: {} ({} bytes)", ec.message(), received);
    };
@@ -370,21 +406,18 @@ TEST_P(ClientAsyncCancellation, DISABLED_SpawnAndForget)
    if (GetParam() == anyhttp::Protocol::h1)
       GTEST_SKIP(); // FIXME: ASAN errors
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      auto response = check(co_await request.get_response());
       co_await yield();
 
       std::println("- - spawning - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ");
-      co_spawn(
-         context,
-         [request = std::move(request)]() mutable -> awaitable<void> { //
-            std::println("- - SPAWNED - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
-            co_await yield(5);
-            std::println("- - SPAWNED, sending  - - - - - - - - - - - - - - - - - - - - - - - - -");
-            co_await send(request, rv::iota(uint8_t(0)));
-         },
-         detached);
+      launch(context.get_executor(), [](client::Request request) -> Task<void> { //
+         std::println("- - SPAWNED - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -");
+         co_await yield(5);
+         std::println("- - SPAWNED, sending  - - - - - - - - - - - - - - - - - - - - - - - - -");
+         co_await send(request, rv::iota(uint8_t(0)));
+      }(std::move(request)));
    };
 }
 

@@ -1,3 +1,11 @@
+//
+// The type-erased stream is what ASIO serves cleartext over, see detail/net_asio.hpp. CAPY has no
+// use for it.
+//
+#include "anyhttp/runtime.hpp"
+
+#if !ANYHTTP_CAPY
+
 #include "anyhttp/detail/any_async_stream_impl.hpp"
 
 namespace anyhttp
@@ -52,3 +60,5 @@ template any_async_stream make_any_async_stream<SslStream>(SslStream&&);
 // =================================================================================================
 
 } // namespace anyhttp
+
+#endif // !ANYHTTP_CAPY

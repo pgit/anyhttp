@@ -14,17 +14,10 @@ FetchContent_MakeAvailable(googletest)
 link_libraries(Boost::atomic Boost::url Boost::filesystem Boost::process)
 
 #
-# A test file that belongs to one API style only guards itself with ANYHTTP_CAPY. While the port is
-# under way, CAPY builds the files listed here; the list grows until it equals the glob.
+# Both API styles build every test file: one that belongs to a single style, or has parts that do,
+# guards them with ANYHTTP_CAPY.
 #
-if (ANYHTTP_CAPY)
-    set(SRC_FILES test_corosio.cpp test_coroutine_api.cpp test_external.cpp test_formatter.cpp
-                  test_ipv6.cpp test_client_connect.cpp test_server.cpp test_file_handler.cpp
-                  test_get.cpp test_headers.cpp test_alt_svc.cpp test_connection_close.cpp
-                  test_h2c_upgrade.cpp test_client_async.cpp)
-else()
-    file(GLOB SRC_FILES test_*.cpp)
-endif()
+file(GLOB SRC_FILES test_*.cpp)
 
 add_executable(test_all ${SRC_FILES})
 target_link_libraries(test_all PRIVATE GTest::gtest_main GTest::gmock)

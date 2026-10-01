@@ -15,18 +15,9 @@ pkg_check_modules(NGTCP2_CRYPTO          REQUIRED IMPORTED_TARGET ${NGTCP2_CRYPT
 # nghttp2 and only the h3_* ones ngtcp2/nghttp3, everything else is protocol-agnostic.
 #
 add_library(anyhttp)
-if (ANYHTTP_CAPY)
-    # The sources ported to CAPY so far, see docs/capy-port-plan.md; the list grows until it
-    # equals the glob below.
-    set(anyhttp_sources reader.cpp writer.cpp common.cpp alt_svc.cpp net.cpp tls.cpp
-                        session.cpp client.cpp server.cpp h1_session.cpp h2_session.cpp h2_stream.cpp
-                        h3_session.cpp h3_stream.cpp h3_common.cpp h3_server.cpp h3_client.cpp
-                        server_impl.cpp client_impl.cpp request_handlers.cpp file_handler.cpp utils.cpp)
-else()
-    file(GLOB anyhttp_sources CONFIGURE_DEPENDS *.cpp)
-    list(FILTER anyhttp_sources EXCLUDE REGEX "_main\.cpp$")
-    list(FILTER anyhttp_sources EXCLUDE REGEX "_issue_[0-9]+\.cpp$")
-endif()
+file(GLOB anyhttp_sources CONFIGURE_DEPENDS *.cpp)
+list(FILTER anyhttp_sources EXCLUDE REGEX "_main\.cpp$")
+list(FILTER anyhttp_sources EXCLUDE REGEX "_issue_[0-9]+\.cpp$")
 target_sources(anyhttp PRIVATE ${anyhttp_sources})
 target_include_directories(anyhttp PUBLIC ../include)
 
