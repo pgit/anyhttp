@@ -157,7 +157,17 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
    *Done for HTTP/1.1 and HTTP/2 over cleartext, 2026-10-01 (`54b1873`..`8c54877`).*
    `runtime_capy.hpp` and `net_capy.hpp` exist, the whole library except HTTP/3 builds in
    `build-capy` (`h3_unported.cpp` stands in), and the shared `test_coroutine_api.cpp` passes over
-   corosio. Still open: TLS over TCP tested with a real peer (5c), HTTP/3 (5d). Bring it up one protocol at a
+   corosio.
+   *5c done 2026-10-01 (`325c5ad`):* the External tests (curl, h2load, nghttp, h2spec; cleartext
+   and TLS with ALPN) pass in CAPY and under ASAN, with child processes on an ASIO context of their
+   own. Next is 5d, HTTP/3. Its timers and signals are on the runtime layer already. What remains is
+   the UDP socket. Plan: add `UdpSocket`, `io::make_udp_socket(executor, endpoint)` (open + non-
+   blocking), `io::close/cancel(UdpSocket&)` and a CAPY `io::receive()` (wait + `::recv`) to the
+   network layer. Do bind, connect, getsockname, the client's send and the socket options with
+   POSIX calls on the native handle, identically for both runtimes. Cache the server's local
+   address after bind. Keep the server socket's executor in a member instead of asking the
+   socket. The client resolves through `io::resolve()`. Then drop `h3_unported.cpp`, return h3
+   to `protocols()`, and un-skip `curl_alt_svc`. Bring it up one protocol at a
    time, each with its slice of tests in `build-capy`:
    - 5a: h2c with prior knowledge
    - 5b: HTTP/1.1 and h2c upgrade
