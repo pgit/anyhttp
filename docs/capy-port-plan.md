@@ -146,9 +146,18 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
 4. **Sockets, streams and TLS, portable.** The acceptor and accept loop, the resolver and connect,
    the UDP sockets and endpoints of h3, socket options, `stream_traits` (shutdown, cancel,
    teardown), prefix sniffing, `PrefixedStream`, a TLS stream alias. `any_async_stream` becomes
-   ASIO-only or retires. Spike `openssl_stream` over
+   ASIO-only or retires.
+   *Done 2026-10-01 (`53e8274`..`5b4f632`).* `net.hpp` is the network half of the runtime layer.
+   `PrefixedStream` turned out to be unnecessary: TLS is told from a *peeked* first byte, so the
+   TLS stream reads the ClientHello from the socket itself. `any_async_stream` stays and is what
+   ASIO serves cleartext over; the backends instantiate for the stream types of the
+   `ANYHTTP_SERVER_STREAMS`/`ANYHTTP_CLIENT_STREAMS` X-macros. Spike `openssl_stream` over
    `PrefixedStream` first, including full duplex (corosio#330/#331).
-5. **CAPY half of the runtime layer, plus the public front ends.** Bring it up one protocol at a
+5. **CAPY half of the runtime layer, plus the public front ends.**
+   *Done for HTTP/1.1 and HTTP/2 over cleartext, 2026-10-01 (`54b1873`..`8c54877`).*
+   `runtime_capy.hpp` and `net_capy.hpp` exist, the whole library except HTTP/3 builds in
+   `build-capy` (`h3_unported.cpp` stands in), and the shared `test_coroutine_api.cpp` passes over
+   corosio. Still open: TLS over TCP tested with a real peer (5c), HTTP/3 (5d). Bring it up one protocol at a
    time, each with its slice of tests in `build-capy`:
    - 5a: h2c with prior knowledge
    - 5b: HTTP/1.1 and h2c upgrade
