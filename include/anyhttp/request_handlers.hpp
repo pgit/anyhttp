@@ -176,7 +176,7 @@ Task<void> send_and_force_eof(Writer& request, Range range)
          logw("[{}] send_and_force_eof: {}", request.log_prefix(), what(ep));
       co_await reset_cancellation();
    }
-   std::ignore = co_await request.write_eof();
+   std::ignore = co_await shielded(request.write_eof()); // also when sending was cancelled
 }
 
 // -------------------------------------------------------------------------------------------------

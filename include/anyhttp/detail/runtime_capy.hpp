@@ -17,12 +17,14 @@
 #include <boost/capy/ex/any_executor.hpp>
 #include <boost/capy/ex/async_event.hpp>
 #include <boost/capy/ex/io_env.hpp>
+#include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/this_coro.hpp>
 #include <boost/capy/io_result.hpp>
 #include <boost/capy/io_task.hpp>
 #include <boost/capy/task.hpp>
 #include <boost/capy/when_all.hpp>
+#include <boost/capy/when_any.hpp>
 #include <boost/capy/write.hpp>
 #include <boost/corosio/delay.hpp>
 #include <boost/corosio/wait_type.hpp>
@@ -44,6 +46,7 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include <sys/socket.h>
 
@@ -396,17 +399,24 @@ template <typename A, typename B>
 using both_t = std::conditional_t<std::is_void_v<A>, B,
                                   std::conditional_t<std::is_void_v<B>, A, std::tuple<A, B>>>;
 
-/// \p task as what capy::when_all() takes, an operation with an io_result, keeping its value.
+/// What a task returns, with \c std::monostate for nothing.
 template <typename T>
-capy::io_task<> as_io(Task<T> task, std::optional<T>& result)
-{
-   result.emplace(co_await std::move(task));
-   co_return capy::io_result<>{};
-}
+using value_t = std::conditional_t<std::is_void_v<T>, std::monostate, T>;
 
-inline capy::io_task<> as_io(Task<void> task)
+/**
+ * \p task as what capy::when_all() and capy::when_any() take, an operation with an io_result,
+ * keeping its value. What it throws passes through.
+ */
+template <typename T>
+capy::io_task<> as_io(Task<T> task, std::optional<value_t<T>>& result)
 {
-   co_await std::move(task);
+   if constexpr (std::is_void_v<T>)
+   {
+      co_await std::move(task);
+      result.emplace();
+   }
+   else
+      result.emplace(co_await std::move(task));
    co_return capy::io_result<>{};
 }
 } // namespace detail
@@ -415,35 +425,53 @@ inline capy::io_task<> as_io(Task<void> task)
 template <typename A, typename B>
 Task<detail::both_t<A, B>> when_both(Task<A> a, Task<B> b)
 {
+   std::optional<detail::value_t<A>> ra;
+   std::optional<detail::value_t<B>> rb;
+   std::ignore =
+      co_await capy::when_all(detail::as_io(std::move(a), ra), detail::as_io(std::move(b), rb));
    if constexpr (std::is_void_v<A> && std::is_void_v<B>)
-      std::ignore =
-         co_await capy::when_all(detail::as_io(std::move(a)), detail::as_io(std::move(b)));
+      co_return;
    else if constexpr (std::is_void_v<A>)
-   {
-      std::optional<B> rb;
-      std::ignore =
-         co_await capy::when_all(detail::as_io(std::move(a)), detail::as_io(std::move(b), rb));
       co_return std::move(*rb);
-   }
    else if constexpr (std::is_void_v<B>)
-   {
-      std::optional<A> ra;
-      std::ignore =
-         co_await capy::when_all(detail::as_io(std::move(a), ra), detail::as_io(std::move(b)));
       co_return std::move(*ra);
-   }
    else
-   {
-      std::optional<A> ra;
-      std::optional<B> rb;
-      std::ignore =
-         co_await capy::when_all(detail::as_io(std::move(a), ra), detail::as_io(std::move(b), rb));
       co_return std::tuple{std::move(*ra), std::move(*rb)};
+}
+
+/**
+ * Runs \p a and \p b concurrently, until one of them succeeds, see detail/runtime_asio.hpp. That
+ * is what capy::when_any() does: a child that throws does not win, and when none has won, it
+ * rethrows what one of them threw.
+ */
+template <typename A, typename B>
+Task<std::variant<detail::value_t<A>, detail::value_t<B>>> when_either(Task<A> a, Task<B> b)
+{
+   std::optional<detail::value_t<A>> ra;
+   std::optional<detail::value_t<B>> rb;
+   auto winner =
+      co_await capy::when_any(detail::as_io(std::move(a), ra), detail::as_io(std::move(b), rb));
+   using result = std::variant<detail::value_t<A>, detail::value_t<B>>;
+   switch (winner.index())
+   {
+   case 1:
+      co_return result{std::in_place_index<0>, std::move(*ra)};
+   case 2:
+      co_return result{std::in_place_index<1>, std::move(*rb)};
+   default:
+      throw_error(std::get<0>(winner)); // as_io() never reports an error code
    }
 }
 
 /// A stop request can not be taken back: nothing to reset, see detail/runtime_asio.hpp.
 inline Task<void> reset_cancellation() { co_return; }
+
+/// Awaits \p task with a stop token of its own, see detail/runtime_asio.hpp.
+template <typename T>
+Task<T> shielded(Task<T> task)
+{
+   co_return co_await capy::run(std::stop_token{})(std::move(task));
+}
 
 // =================================================================================================
 

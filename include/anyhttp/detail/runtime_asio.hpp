@@ -313,11 +313,36 @@ auto when_both(Task<A> a, Task<B> b)
 }
 
 /**
- * Lets a coroutine that has handled a cancellation go on awaiting: ASIO would throw from every
- * operation it awaits after the cancellation otherwise. In CAPY, cancellation is a stop request,
- * which stays.
+ * Runs \p a and \p b concurrently, until one of them succeeds, which cancels the other, and yields
+ * what it returned as a variant, with \c std::monostate for nothing. One that throws does not
+ * succeed: only when both have thrown is one of the exceptions rethrown (wrapped in ASIO's
+ * multiple_exceptions). Waits for the other one to finish all the same.
+ */
+template <typename A, typename B>
+auto when_either(Task<A> a, Task<B> b)
+{
+   using namespace asio::experimental::awaitable_operators;
+   return std::move(a) || std::move(b);
+}
+
+/**
+ * Lets a coroutine that has been cancelled go on awaiting, to clean up after the cancellation:
+ * ASIO throws from everything it awaits after that otherwise -- a nested coroutine included, which
+ * is why this has to be awaited in the cancelled coroutine itself. In CAPY, there is nothing to
+ * reset, see shielded().
  */
 inline auto reset_cancellation() { return asio::this_coro::reset_cancellation_state(); }
+
+/**
+ * Awaits \p task although the caller has been cancelled already, once reset_cancellation() has
+ * been awaited. With ASIO, that is all it takes. A stop request in CAPY can not be taken back,
+ * and there, the task runs with a stop token of its own instead.
+ */
+template <typename T>
+Task<T> shielded(Task<T> task)
+{
+   return task;
+}
 
 // =================================================================================================
 

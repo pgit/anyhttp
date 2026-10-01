@@ -14,8 +14,8 @@
 //    last_error()                                              -- errno, as an error_code
 //    complete_immediately(), complete_later(), on_cancel()     -- parked operations
 //    initiate<Signature>(), launch()                           -- the two directions between them
-//    run_later(), dispatch_to(), new_strand(), delay(), yield_now(), when_both()
-//    reset_cancellation()
+//    run_later(), dispatch_to(), new_strand(), delay(), yield_now(), when_both(), when_either()
+//    reset_cancellation(), shielded()
 //    Event, Timer
 //    io::read_some(), io::write(), io::peek(), io::receive(), io::wait_readable()
 //
