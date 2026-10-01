@@ -18,10 +18,10 @@ add_library(anyhttp)
 if (ANYHTTP_CAPY)
     # The sources ported to CAPY so far, see docs/capy-port-plan.md; the list grows until it
     # equals the glob below.
-    set(anyhttp_sources reader.cpp writer.cpp common.cpp alt_svc.cpp net.cpp
+    set(anyhttp_sources reader.cpp writer.cpp common.cpp alt_svc.cpp net.cpp tls.cpp
                         session.cpp client.cpp server.cpp h1_session.cpp h2_session.cpp h2_stream.cpp
-                        server_impl.cpp client_impl.cpp request_handlers.cpp file_handler.cpp
-                        h3_unported.cpp)
+                        h3_session.cpp h3_stream.cpp h3_common.cpp h3_server.cpp h3_client.cpp
+                        server_impl.cpp client_impl.cpp request_handlers.cpp file_handler.cpp)
 else()
     file(GLOB anyhttp_sources CONFIGURE_DEPENDS *.cpp)
     list(FILTER anyhttp_sources EXCLUDE REGEX "_main\.cpp$")

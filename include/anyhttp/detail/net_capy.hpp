@@ -18,9 +18,11 @@
 #include <boost/corosio/tcp_socket.hpp>
 #include <boost/corosio/timeout.hpp>
 #include <boost/corosio/tls_context.hpp>
+#include <boost/corosio/udp_socket.hpp>
 
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ip/udp.hpp>
 
 #include <chrono>
 #include <concepts>
@@ -40,6 +42,7 @@ namespace anyhttp
 using TcpSocket = corosio::tcp_socket;
 using TcpAcceptor = corosio::tcp_acceptor;
 using TlsContext = corosio::tls_context;
+using UdpSocket = corosio::udp_socket;
 
 /**
  * TLS over a TCP socket. corosio's TLS stream erases the type of what it runs on, so it can not
@@ -259,6 +262,17 @@ inline std::string_view alpn(TlsStream& stream) { return stream.tls().alpn_proto
 
 /// corosio exposes no SSL*, so there is less to tell than with ASIO.
 std::string tls_info(TlsStream& stream);
+
+inline UdpSocket make_udp_socket(const Executor& executor) { return UdpSocket(executor.context()); }
+
+/// corosio opens every socket non-blocking.
+inline error_code open(UdpSocket& socket, const asio::ip::udp::endpoint& endpoint) noexcept
+{
+   return socket.open(endpoint.address().is_v6() ? corosio::family::v6 : corosio::family::v4);
+}
+
+inline void cancel(UdpSocket& socket) noexcept { socket.cancel(); }
+inline void close(UdpSocket& socket) noexcept { socket.close(); }
 
 } // namespace io
 

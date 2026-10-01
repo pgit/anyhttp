@@ -88,6 +88,8 @@ inline const error_code header_limit =
 
 [[noreturn]] inline void throw_error(const error_code& ec) { throw std::system_error(ec); }
 
+inline error_code last_error() noexcept { return {errno, std::system_category()}; }
+
 // =================================================================================================
 
 namespace detail
@@ -473,6 +475,17 @@ auto write(Stream& stream, const ConstBufferSequence& buffers)
    return capy::write(stream, capy::from_asio(buffers));
 }
 
+/// Receives a datagram into \p buffer, on a connected datagram socket. A coroutine, unlike
+/// read_some(): corosio's datagram operations do not copy their buffer sequence, as its stream
+/// operations do, but point to it, so it has to outlive the operation.
+template <typename Socket>
+Task<std::tuple<error_code, size_t>> receive(Socket& socket, asio::mutable_buffer buffer)
+{
+   const capy::mutable_buffer buffers(buffer.data(), buffer.size());
+   auto [ec, n] = co_await socket.recv(buffers);
+   co_return std::tuple{ec, n};
+}
+
 /// Waits until \p socket has something to read, for a caller that reads it by hand.
 template <typename Socket>
 auto wait_readable(Socket& socket)
@@ -496,7 +509,7 @@ Task<std::tuple<error_code, size_t>> peek(Socket& socket, asio::mutable_buffer b
       if (n == 0)
          co_return std::tuple{errors::eof, size_t{0}};
       if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
-         co_return std::tuple{error_code(errno, std::system_category()), size_t{0}};
+         co_return std::tuple{last_error(), size_t{0}};
    }
 }
 

@@ -21,6 +21,7 @@
 #include <boost/asio/cancel_after.hpp>
 #include <boost/asio/experimental/concurrent_channel.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ip/udp.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
@@ -228,6 +229,7 @@ using TcpSocket = asio::ip::tcp::socket;
 using TcpAcceptor = asio::ip::tcp::acceptor;
 using TlsContext = asio::ssl::context;
 using TlsStream = asio::ssl::stream<TcpSocket>;
+using UdpSocket = asio::ip::udp::socket;
 
 /// What the server serves cleartext HTTP/1.1 and h2c over: for ASIO, the type-erased stream,
 /// which keeps it exercised.
@@ -322,6 +324,39 @@ std::string_view alpn(TlsStream& stream);
 
 /// The one-line summary of the handshake, see tls_handshake_info().
 std::string tls_info(TlsStream& stream);
+
+//
+// UDP, for HTTP/3. The backend sends and receives on the native handle, with sendmsg() and
+// recvmsg(), and waits for the socket with io::wait_readable() or receives with io::receive().
+// What both runtimes do the same way, on the native handle, is in anyhttp/net.hpp.
+//
+
+/// A UDP socket, not open yet.
+inline UdpSocket make_udp_socket(const Executor& executor) { return UdpSocket(executor); }
+
+/// Opens \p socket for the address family of \p endpoint, non-blocking.
+inline error_code open(UdpSocket& socket, const asio::ip::udp::endpoint& endpoint) noexcept
+{
+   error_code ec;
+   socket.open(endpoint.protocol(), ec);
+   if (!ec)
+      socket.non_blocking(true, ec);
+   return ec;
+}
+
+/// Cancels the wait or receive on \p socket: it completes with errc::operation_canceled.
+inline void cancel(UdpSocket& socket) noexcept
+{
+   error_code ec;
+   socket.cancel(ec);
+}
+
+/// Closes \p socket: a wait or receive on it completes with an error.
+inline void close(UdpSocket& socket) noexcept
+{
+   error_code ec;
+   socket.close(ec);
+}
 
 } // namespace io
 

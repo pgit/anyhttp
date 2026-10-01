@@ -22,10 +22,10 @@
 #include "anyhttp/h3_session.hpp"
 #include "anyhttp/h3_stream.hpp"
 #include "anyhttp/literals.hpp"
+#include "anyhttp/net.hpp"
 #include "anyhttp/session_impl.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/error.hpp>
+#include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/udp.hpp>
 
 #include <boost/beast/http/error.hpp>
@@ -235,7 +235,7 @@ private:
    void signal_ready();
 
 private:
-   asio::ip::udp::socket socket_;
+   UdpSocket socket_;
    Event ready_; // see wait_ready()
 };
 
@@ -312,7 +312,8 @@ void Http3ClientStream::on_failed(error_code ec)
    // ever arrived if headers were never received -- never report success with a null Response.
    //
    if (!failure_ec) // the first reason is the one to report, see on_headers_complete()
-      failure_ec = ec ? ec : boost::beast::http::error::end_of_stream;
+      failure_ec =
+         ec ? ec : error_code(boost::system::error_code(boost::beast::http::error::end_of_stream));
    deliver_failure();
 }
 
@@ -408,7 +409,7 @@ void Http3ClientStream::deliver_response()
 // =================================================================================================
 
 Http3ClientSession::Http3ClientSession(Executor executor, const Config& config)
-   : http3::Http3Session(std::move(executor)), socket_(get_executor())
+   : http3::Http3Session(std::move(executor)), socket_(io::make_udp_socket(get_executor()))
 {
    max_header_size_ = config.max_header_size;
 }
@@ -429,27 +430,17 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote, const Config& confi
 {
    TlsClientContext tls{config}; // may throw
 
-   error_code ec;
-   socket_.open(remote.protocol(), ec);
-   if (ec)
+   if (auto ec = io::open(socket_, remote))
    {
       loge("Http3ClientSession::init: open: {}", ec.message());
       return -1;
    }
-   socket_.connect(remote, ec);
-   if (ec)
+   if (auto ec = io::connect(socket_, remote))
    {
       loge("Http3ClientSession::init: connect: {}", ec.message());
       return -1;
    }
-   socket_.non_blocking(true, ec);
-
-   auto local = socket_.local_endpoint(ec);
-   if (ec)
-   {
-      loge("Http3ClientSession::init: local_endpoint: {}", ec.message());
-      return -1;
-   }
+   auto local = io::local_endpoint(socket_); // may throw
 
    log_prefix_ = http3::log_prefix(Role::client, "h3", remote.data(), remote.size());
    mlogd("session created");
@@ -502,7 +493,7 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote, const Config& confi
    //
    const std::string host = config.url.host_address();
    auto* param = SSL_get0_param(ssl_);
-   error_code not_an_ip;
+   boost::system::error_code not_an_ip;
    asio::ip::make_address(host, not_an_ip);
    if (!not_an_ip ? X509_VERIFY_PARAM_set1_ip_asc(param, host.c_str()) != 1
                   : X509_VERIFY_PARAM_set1_host(param, host.data(), host.size()) != 1 ||
@@ -601,8 +592,7 @@ void Http3ClientSession::close()
          send_datagrams(ps.path, packet, packet.size());
    }
 
-   error_code ec;
-   socket_.cancel(ec);
+   io::cancel(socket_);
    timer_.cancel();
    signal_ready();
 }
@@ -640,8 +630,7 @@ int Http3ClientSession::send_datagrams(const ngtcp2_path& /*path*/, std::span<co
    while (!data.empty())
    {
       auto len = std::min(gso_size, data.size());
-      error_code ec;
-      socket_.send(asio::buffer(data.data(), len), 0, ec);
+      auto ec = io::send(socket_, asio::buffer(data.data(), len));
       if (ec && ec != errc::operation_would_block && ec != errc::resource_unavailable_try_again)
       {
          mlogw("send: {}", ec.message());
@@ -708,13 +697,16 @@ void Http3ClientSession::async_submit(SubmitHandler&& handler, std::string_view 
 Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor, std::string host,
                                                          std::string port, const Config& config)
 {
-   boost::asio::ip::udp::resolver resolver(executor);
-   auto flags = boost::asio::ip::udp::resolver::numeric_service;
-   auto results = co_await resolver.async_resolve(host, port, flags); // may throw
+   auto [resolved, endpoints] = co_await io::resolve(executor, host, port);
+   if (resolved)
+      throw_error(resolved);
+   if (endpoints.empty())
+      throw_error(make_error_code(errc::host_unreachable));
+   const asio::ip::udp::endpoint remote{endpoints.front().address(), endpoints.front().port()};
 
    auto session = std::make_shared<Http3ClientSession>(executor, config);
-   if (session->init(results.begin()->endpoint(), config) != 0)
-      throw boost::system::system_error(make_error_code(errc::connection_refused));
+   if (session->init(remote, config) != 0)
+      throw_error(make_error_code(errc::connection_refused));
 
    std::shared_ptr<Session::Impl> impl = session;
 
@@ -733,7 +725,7 @@ Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor, std:
    //
    auto [ec] = co_await session->wait_ready();
    if (!session->ready())
-      throw boost::system::system_error(make_error_code(errc::connection_refused));
+      throw_error(make_error_code(errc::connection_refused));
 
    co_return session;
 }

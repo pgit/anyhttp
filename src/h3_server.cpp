@@ -34,16 +34,10 @@
 #include "anyhttp/h3_session.hpp"
 #include "anyhttp/h3_stream.hpp"
 #include "anyhttp/literals.hpp"
+#include "anyhttp/net.hpp"
 #include "anyhttp/request_handlers.hpp" // IWYU pragma: keep
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
-
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/co_spawn.hpp>
-#include <boost/asio/detached.hpp>
-#include <boost/asio/error.hpp>
-#include <boost/asio/ip/v6_only.hpp>
-#include <boost/asio/strand.hpp>
 
 #include <boost/container/container_fwd.hpp>
 #include <boost/container/flat_map.hpp>
@@ -426,9 +420,12 @@ private:
 
    //
    // The socket gets its own strand: udp_receive_loop() runs on it, and destroy() dispatches the
-   // shutdown close() through it, so the two never touch the socket concurrently.
+   // shutdown close() through it, so the two never touch the socket concurrently. Its address is
+   // kept from when it was bound: every datagram it receives is addressed to it.
    //
-   std::optional<asio::ip::udp::socket> socket_;
+   Executor executor_;
+   UdpSocket socket_;
+   asio::ip::udp::endpoint local_endpoint_;
 
    std::mutex mutex_;
    std::unordered_map<std::string, std::shared_ptr<Http3ServerSession>> sessions_;
@@ -927,34 +924,35 @@ void Http3ServerSession::resend_conn_close()
 // =================================================================================================
 
 Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endpoint& endpoint)
-   : parent_(parent), tls_(parent.config())
+   : parent_(parent), tls_(parent.config()),
+     executor_(config().use_strand ? new_strand(parent.get_executor()) : parent.get_executor()),
+     socket_(io::make_udp_socket(executor_))
 {
-   namespace socket_option = boost::asio::detail::socket_option;
+   if (auto ec = io::open(socket_, endpoint))
+      throw_error(ec);
 
-   const bool is_v6 = endpoint.protocol() == ip::udp::v6();
-
-   socket_.emplace(config().use_strand ? new_strand(parent_.get_executor())
-                                       : parent_.get_executor());
-   socket_->open(is_v6 ? ip::udp::v6() : ip::udp::v4());
-
-   if (is_v6)
+   auto enable = [this](int level, int name) {
+      if (auto ec = io::set_option(socket_, level, name, 1))
+         throw_error(ec);
+   };
+   if (endpoint.address().is_v6())
    {
-      error_code ec;
-      socket_->set_option(ip::v6_only(false), ec);
-      socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVTCLASS>(1));
-      socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_MTU_DISCOVER>(1));
-      socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVPKTINFO>(1));
+      std::ignore = io::set_option(socket_, IPPROTO_IPV6, IPV6_V6ONLY, 0); // if the system lets us
+      enable(IPPROTO_IPV6, IPV6_RECVTCLASS);
+      enable(IPPROTO_IPV6, IPV6_MTU_DISCOVER);
+      enable(IPPROTO_IPV6, IPV6_RECVPKTINFO);
    }
    else
    {
-      socket_->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
-      socket_->set_option(socket_option::integer<IPPROTO_IP, IP_PKTINFO>(1));
+      enable(IPPROTO_IP, IP_RECVTOS);
+      enable(IPPROTO_IP, IP_PKTINFO);
    }
    if (!config().disable_gro)
-      socket_->set_option(socket_option::integer<IPPROTO_UDP, UDP_GRO>(1));
-   socket_->non_blocking(true);
+      enable(IPPROTO_UDP, UDP_GRO);
 
-   socket_->bind(endpoint);
+   if (auto ec = io::bind(socket_, endpoint))
+      throw_error(ec);
+   local_endpoint_ = io::local_endpoint(socket_);
    mlogi("UDP listening on {} (GRO {}, GSO {})", endpoint, config().disable_gro ? "off" : "on",
          config().disable_gso ? "off" : "on");
 }
@@ -964,7 +962,7 @@ Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endp
 void Http3ServerImpl::start()
 {
    // On the socket's strand, so that the loop and destroy()'s close() never race on the socket.
-   launch(socket_->get_executor(), udp_receive_loop(),
+   launch(executor_, udp_receive_loop(),
           [self = shared_from_this(), owner = owner()](const std::exception_ptr& ex) {
              if (ex)
                 logw("[{}] UDP receive loop: {}", self->log_prefix(), what(ex));
@@ -982,8 +980,8 @@ void Http3ServerImpl::destroy()
    // Server::Impl at this point, each sending its final CONNECTION_CLOSE through its own
    // dup()ed fd, so closing this socket doesn't race that.
    //
-   dispatch_to(socket_->get_executor(), [self = shared_from_this(), owner = owner()] {
-      self->socket_->close();
+   dispatch_to(executor_, [self = shared_from_this(), owner = owner()] {
+      io::close(self->socket_);
    }); // breaks udp_receive_loop()
 }
 
@@ -1275,7 +1273,7 @@ Task<void> Http3ServerImpl::udp_receive_loop()
 {
    for (;;)
    {
-      auto [ec] = co_await io::wait_readable(*socket_);
+      auto [ec] = co_await io::wait_readable(socket_);
       if (ec)
       {
          if (ec == errc::operation_canceled)
@@ -1286,11 +1284,9 @@ Task<void> Http3ServerImpl::udp_receive_loop()
       }
 
       Endpoint ep{};
-      ep.fd = socket_->native_handle();
-      auto local = socket_->local_endpoint();
-      auto data = local.data();
-      std::memcpy(&ep.addr.su, data, local.size());
-      ep.addr.len = local.size();
+      ep.fd = socket_.native_handle();
+      std::memcpy(&ep.addr.su, local_endpoint_.data(), local_endpoint_.size());
+      ep.addr.len = local_endpoint_.size();
 
       udp_on_read(ep);
    }

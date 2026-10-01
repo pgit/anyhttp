@@ -14,13 +14,14 @@
 #include <span>
 #include <string_view>
 
+#include <netinet/in.h>
+#include <sys/socket.h>
+
 #if ANYHTTP_CAPY
 #include <boost/corosio/resolver.hpp>
 #include <boost/corosio/socket_option.hpp>
 
-#include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <sys/socket.h>
 #else
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/v6_only.hpp>
@@ -258,6 +259,53 @@ std::string tls_info(TlsStream& stream)
 } // namespace io
 
 #endif // ANYHTTP_CAPY
+
+// =================================================================================================
+// UDP, the same in both runtimes, see anyhttp/net.hpp.
+// =================================================================================================
+
+namespace io
+{
+
+error_code bind(UdpSocket& socket, const asio::ip::udp::endpoint& endpoint) noexcept
+{
+   if (::bind(socket.native_handle(), endpoint.data(), static_cast<socklen_t>(endpoint.size())))
+      return last_error();
+   return {};
+}
+
+error_code connect(UdpSocket& socket, const asio::ip::udp::endpoint& endpoint) noexcept
+{
+   if (::connect(socket.native_handle(), endpoint.data(), static_cast<socklen_t>(endpoint.size())))
+      return last_error();
+   return {};
+}
+
+asio::ip::udp::endpoint local_endpoint(UdpSocket& socket)
+{
+   asio::ip::udp::endpoint endpoint;
+   auto size = static_cast<socklen_t>(endpoint.capacity());
+   if (::getsockname(socket.native_handle(), endpoint.data(), &size))
+      throw_error(last_error());
+   endpoint.resize(size);
+   return endpoint;
+}
+
+error_code set_option(UdpSocket& socket, int level, int name, int value) noexcept
+{
+   if (::setsockopt(socket.native_handle(), level, name, &value, sizeof(value)))
+      return last_error();
+   return {};
+}
+
+error_code send(UdpSocket& socket, asio::const_buffer buffer) noexcept
+{
+   if (::send(socket.native_handle(), buffer.data(), buffer.size(), 0) < 0)
+      return last_error();
+   return {};
+}
+
+} // namespace io
 
 // =================================================================================================
 

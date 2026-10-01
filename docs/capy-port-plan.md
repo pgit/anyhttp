@@ -70,7 +70,8 @@ Not problems, checked:
 
 - The engines themselves: nghttp2, ngtcp2 and nghttp3 are sans-I/O.
 - The UDP path: corosio's `udp_socket::wait(wait_type::read)` plus `native_handle()` is exactly
-  how h3 already does GSO/GRO by hand.
+  how h3 already does GSO/GRO by hand. corosio's reactor is edge-triggered, but `wait()` polls
+  first, so a receive pass that leaves datagrams queued is woken up again.
 - Resolving: `corosio::resolver`.
 - Logging, formatters, `alt_svc`, the file handler.
 - The h2/h3 include boundary, which carries over unchanged. Add one rule next to it: only the
@@ -153,26 +154,27 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
    ASIO serves cleartext over; the backends instantiate for the stream types of the
    `ANYHTTP_SERVER_STREAMS`/`ANYHTTP_CLIENT_STREAMS` X-macros. Spike `openssl_stream` over
    `PrefixedStream` first, including full duplex (corosio#330/#331).
-5. **CAPY half of the runtime layer, plus the public front ends.**
-   *Done for HTTP/1.1 and HTTP/2 over cleartext, 2026-10-01 (`54b1873`..`8c54877`).*
-   `runtime_capy.hpp` and `net_capy.hpp` exist, the whole library except HTTP/3 builds in
-   `build-capy` (`h3_unported.cpp` stands in), and the shared `test_coroutine_api.cpp` passes over
-   corosio.
-   *5c done 2026-10-01 (`325c5ad`):* the External tests (curl, h2load, nghttp, h2spec; cleartext
-   and TLS with ALPN) pass in CAPY and under ASAN, with child processes on an ASIO context of their
-   own. Next is 5d, HTTP/3. Its timers and signals are on the runtime layer already. What remains is
-   the UDP socket. Plan: add `UdpSocket`, `io::make_udp_socket(executor, endpoint)` (open + non-
-   blocking), `io::close/cancel(UdpSocket&)` and a CAPY `io::receive()` (wait + `::recv`) to the
-   network layer. Do bind, connect, getsockname, the client's send and the socket options with
-   POSIX calls on the native handle, identically for both runtimes. Cache the server's local
-   address after bind. Keep the server socket's executor in a member instead of asking the
-   socket. The client resolves through `io::resolve()`. Then drop `h3_unported.cpp`, return h3
-   to `protocols()`, and un-skip `curl_alt_svc`. Bring it up one protocol at a
+5. **CAPY half of the runtime layer, plus the public front ends.** Bring it up one protocol at a
    time, each with its slice of tests in `build-capy`:
    - 5a: h2c with prior knowledge
    - 5b: HTTP/1.1 and h2c upgrade
    - 5c: TLS with ALPN
    - 5d: HTTP/3
+
+   *5a and 5b done 2026-10-01 (`54b1873`..`8c54877`).* `runtime_capy.hpp` and `net_capy.hpp`
+   exist, and the shared `test_coroutine_api.cpp` passes over corosio.
+   *5c done 2026-10-01 (`325c5ad`):* the External tests (curl, h2load, nghttp, h2spec; cleartext
+   and TLS with ALPN) pass in CAPY and under ASAN, with child processes on an ASIO context of their
+   own.
+   *5d done 2026-10-01:* HTTP/3 runs in CAPY too, so the whole library builds there; the shared
+   tests run with all three protocols, and `curl_alt_svc` no longer skips. `net.hpp` has a
+   `UdpSocket`, which each runtime opens, cancels and closes its own way. Binding, connecting,
+   `getsockname()`, the socket options and the client's `send()` go to the native handle,
+   identically in both. The server keeps its executor and its bound address instead of asking the
+   socket for them, and the client resolves through `io::resolve()`. One trap: corosio's datagram
+   operations keep a *pointer* to their buffer sequence, where its stream operations copy it. An
+   awaitable returned from a wrapper that made the buffer a temporary reads into freed memory
+   (`EFAULT` from `recv()`), so the CAPY `io::receive()` is a coroutine.
 6. **The test suite in both modes** (§5).
 7. **README**: the two API styles, the per-mode error table, the constraints (OpenSSL, single
    thread).

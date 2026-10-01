@@ -42,10 +42,10 @@ static std::string NameGenerator(const testing::TestParamInfo<anyhttp::Protocol>
    return to_string(info.param);
 }
 
-/// The protocols the parametrized shared tests run with: HTTP/3 is not ported to CAPY yet.
+/// The protocols the parametrized shared tests run with.
 inline std::vector<anyhttp::Protocol> protocols()
 {
-   return {anyhttp::Protocol::h1, anyhttp::Protocol::h2};
+   return {anyhttp::Protocol::h1, anyhttp::Protocol::h2, anyhttp::Protocol::h3};
 }
 
 static void setup_logging()

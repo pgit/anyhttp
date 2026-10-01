@@ -11,6 +11,7 @@
 //
 //    Task<T>, Executor, error_code, Completion<Signature>, system_error
 //    errc (portable error conditions), errors:: (the codes of the API contract), throw_error()
+//    last_error()                                              -- errno, as an error_code
 //    complete_immediately(), complete_later(), on_cancel()     -- parked operations
 //    initiate<Signature>(), launch()                           -- the two directions between them
 //    run_later(), dispatch_to(), new_strand(), delay(), yield_now(), when_both()

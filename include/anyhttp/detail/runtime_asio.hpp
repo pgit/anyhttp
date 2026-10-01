@@ -34,6 +34,7 @@
 #include <boost/beast/http/error.hpp>
 
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <exception>
 #include <limits>
@@ -134,6 +135,9 @@ using system_error = boost::system::system_error;
 {
    throw boost::system::system_error(ec);
 }
+
+/// What `errno` holds, for code that calls the operating system itself.
+inline error_code last_error() noexcept { return {errno, boost::system::system_category()}; }
 
 // =================================================================================================
 
