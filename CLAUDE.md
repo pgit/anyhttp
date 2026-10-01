@@ -13,8 +13,9 @@ and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.jso
 
 `build-capy/` is the capy/corosio API style (`-DANYHTTP_API=CAPY -DTLS_LIBRARY=OpenSSL`, see
 [docs/capy-port-plan.md](docs/capy-port-plan.md)); capy and corosio are FetchContent'd at pinned
-SHAs. While the port is under way it builds only what has been ported: `test/CMakeLists.txt`
-lists its test files explicitly.
+SHAs. Both styles build the same library sources and test files; what belongs to one style only
+is guarded with `ANYHTTP_CAPY`. The `server` and `client` programs are ASIO-only so far.
+`build-capy-asan/` is its ASAN tree.
 
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -122,6 +123,11 @@ headers (`OPENSSL_IS_AWSLC` / `OPENSSL_IS_BORINGSSL`), and the `#if`s are confin
 After adding a dependency, check `ldd` of an AWS-LC build shows no `libssl.so.3` /
 `libcrypto.so.3` -- a shared OpenSSL would interpose the executable's AWS-LC symbols. `curl`,
 `osslclient` and `osslserver` are OpenSSL builds and are useful for interop testing.
+
+**A capy context has to run dry.** Destroying a corosio `io_context`, or stopping it for good,
+while a coroutine is suspended on it leaks that coroutine's whole stack: unlike ASIO, capy cannot
+unwind it. LeakSanitizer reports it in `build-capy-asan/`. Tests run their servers and clients to
+their end -- `server.reset()` on the server's own thread, then let `run()` return.
 
 **Benchmarking.** Confirm `UDP listening` appears in the server log before starting a load run: a
 failed `bind()` aborts quietly and h2load will happily measure whatever other server owns the

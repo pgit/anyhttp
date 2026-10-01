@@ -64,7 +64,7 @@ Ranked by how much each one threatens the approach, the most threatening first.
 | 8 | **Composite operations** | `awaitable_operators` `&&`/`\|\|` (send_loop && recv_loop, and 33 uses in tests). `&&` cancels its sibling only on an exception. | `when_all`/`when_any`. `when_all` also requests stop on the first `io_result` *error*, and `corosio::timeout` loses the progress of a composite operation. | `when_both`/`when_either` helpers in the runtime layer. The loops return `task<void>`, so `when_all`'s error-stop never applies to them. |
 | 9 | **Executors and lifetimes** | `any_io_executor` copies, kept even by detached readers and writers so they can still complete. `bind_executor` makes `cancel_after` find one. | `executor_ref` is non-owning; `capy::any_executor` owns. Destroying an `io_context` with a frame still suspended on it double-frees (lessons §4.2). | Store `any_executor`. CAPY fixtures drain the context before destroying it; nothing may rely on "destroy the context and let it clean up". |
 | 10 | **Public types that leak ASIO** | `local_endpoint()` returns `asio::ip::tcp::endpoint`. Buffers are `asio::mutable_buffer`. `executor_type`. The `RequestHandler` returns `awaitable<void>`. | `corosio::endpoint`, capy buffer sequences, `task<void>`. | Per-mode aliases in `common.hpp`. `Fields` (Beast) and `boost::url` stay the same in both. |
-| 11 | **Tests** | 5.5k lines written in ASIO idioms: 63 `as_tuple`, 20 `cancel_after`, 19 `co_spawn`, 33 awaitable operators. The `External` fixture drives Boost.Process on ASIO. | Different spelling everywhere. Boost.Process needs its own ASIO context and thread (lessons §4.5). | Open decision (§5). |
+| 11 | **Tests** | 5.5k lines written in ASIO idioms: 63 `as_tuple`, 20 `cancel_after`, 19 `co_spawn`, 33 awaitable operators. The `External` fixture drives Boost.Process on ASIO. | Different spelling everywhere. Boost.Process needs its own ASIO context and thread (lessons §4.5). | Decided in §5, done in step 6. |
 
 Not problems, checked:
 
@@ -176,9 +176,43 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
    awaitable returned from a wrapper that made the buffer a temporary reads into freed memory
    (`EFAULT` from `recv()`), so the CAPY `io::receive()` is a coroutine.
 6. **The test suite in both modes** (§5).
+   *Done 2026-10-01 (`012e0a5`..`86ef515`).* Every test file builds in both styles, and so does
+   every library source; the explicit CAPY lists gave way to the globs. CAPY runs 403 tests, ASIO
+   396, with the same 23 skips. The tests use the coroutine spelling plus a few helpers:
+   - `check()` unwraps a result and throws its error, as ASIO's default token does.
+   - `caught()` yields what a task threw, where a coroutine used to be spawned with `as_tuple`.
+   - `when_both()` and `when_either()` are the awaitable operators `&&` and `||`.
+   - `stop_after()` (CAPY fixture) is CAPY's `cancel_after()`.
+   What is about completion tokens stays ASIO-only, inside the shared test where possible:
+   `cancel_after`, cancellation slots, `detached`, immediate executors. Raw peers moved onto
+   `net.hpp` and `h1_io.hpp` (which got `h1::read()` and `h1::read_message()`).
+   Running the shared tests on CAPY found real bugs, most of them latent in ASIO too:
+   - **h2 dropped unread body data.** A stream was erased as soon as it closed, together with the
+     data it still held. ASIO's inline resumption usually kept the reader ahead; a reader that
+     paused lost the rest of the body all the same. `5049570` keeps the stream until it is read.
+   - **h1 closed with an RST.** Closing with unread input (a 431, an unread body) sends an RST,
+     which may cost the client the last response. The server now closes in stages, as RFC 9112
+     section 9.6 asks: FIN, then drain for 2 s at most (`d485ecd`).
+   - **corosio drops data before an RST.** A parked read that gets an error event completes with
+     the socket error without reading what arrived before it
+     (`reactor_descriptor_state.hpp`: `if (err) rd->complete(err, 0); else rd->perform_io();`).
+     ASIO reads first. Upstream issue to be filed; the staged close above avoids the RST.
+   - **h1 reported Beast's `partial_message`** where CAPY's contract is `errors::partial_message`
+     (`b572112`).
+   - **corosio's datagram operations point to their buffer sequence** (`buffer_param`), where its
+     stream operations copy it: CAPY's `io::receive()` is a coroutine for that (5d).
+   - **Cancellation does not carry over one to one.** ASIO resets a coroutine's cancellation
+     state to go on awaiting after one; a stop request can not be taken back, so CAPY runs what
+     follows with a stop token of its own: `reset_cancellation()` plus `shielded()`.
+   - **A capy context has to run dry.** Destroying it with a coroutine suspended on it leaks the
+     coroutine's stack (LeakSanitizer); `Http3IdleTimeout` runs its frozen client and its server
+     to their end now.
 7. **README**: the two API styles, the per-mode error table, the constraints (OpenSSL, single
-   thread).
-8. Later: threads in CAPY; an upstream fix for `openssl_stream` on AWS-LC.
+   thread). The error table includes the resolver: corosio reports a host that does not resolve
+   as `no_such_device_or_address` (`EAI_NONAME` mapped onto a generic code), ASIO as
+   `netdb_errors::host_not_found`.
+8. Later: threads in CAPY; `server_main`/`client_main` for CAPY; upstream issues for corosio
+   (`openssl_stream` on AWS-LC, the read on an error event).
 
 Out of scope for the port, and kept as separate commits if wanted: what lessons §9.1 lists as
 "what this project does better" in h3 (parking on `EAGAIN`, `write_aggregate_pkt`, and so on). A
