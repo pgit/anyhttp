@@ -9,6 +9,7 @@
 #include "anyhttp/request_handlers.hpp"
 #include "anyhttp/server.hpp"
 #include "anyhttp/session.hpp"
+#include "anyhttp/utils.hpp"
 
 #include <boost/corosio/io_context.hpp>
 
@@ -33,6 +34,9 @@ using namespace std::chrono_literals;
 namespace rv = std::ranges::views;
 
 using namespace anyhttp;
+
+/// The context the tests run their servers and clients on.
+using IoContext = boost::corosio::io_context;
 
 // =================================================================================================
 
@@ -109,7 +113,7 @@ protected:
    auto port() const noexcept { return server->local_endpoint().port(); }
 
 protected:
-   boost::corosio::io_context context;
+   IoContext context;
    std::optional<server::Server> server;
    std::function<Task<void>(server::Request request, server::Response response)> requestHandler;
 };

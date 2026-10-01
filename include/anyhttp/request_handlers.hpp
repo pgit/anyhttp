@@ -9,15 +9,7 @@
 #include <expected>
 #include <ranges>
 
-#include <boost/asio/as_tuple.hpp>
-#include <boost/asio/awaitable.hpp>
-#include <boost/asio/co_spawn.hpp>
-#include <boost/asio/deferred.hpp>
-#include <boost/asio/error.hpp>
-#include <boost/asio/this_coro.hpp>
-
-#include <boost/system/detail/error_code.hpp>
-#include <boost/system/system_error.hpp>
+#include <boost/asio/buffer.hpp>
 
 #include <range/v3/view/chunk.hpp>
 
@@ -57,9 +49,7 @@ Task<void> discard(server::Request request, server::Response response);
 
 // =================================================================================================
 
-#if !ANYHTTP_CAPY
 Task<void> generate(Writer& writer, size_t bytes);
-#endif
 Task<std::string> read(Reader& reader);
 
 //
@@ -79,15 +69,20 @@ Task<void> send_eof(Writer& writer);
 
 // =================================================================================================
 
-#if !ANYHTTP_CAPY
 //
-// The helpers below send a body the way the ASIO tests need it, ending with an exception when they
-// are cancelled. Their CAPY counterparts come with the shared tests.
+// The helpers below send a body the way the tests need it: what fails, a cancellation included,
+// comes out as an exception, as the runtime throws them (anyhttp::system_error).
 //
 
 template <typename Range>
 concept ByteRange =
    std::ranges::borrowed_range<Range> && (sizeof(std::ranges::range_value_t<Range>) == 1);
+
+/// Whether \p ep holds a cancellation -- how the helpers below are often meant to end.
+inline bool is_cancellation(const std::exception_ptr& ep)
+{
+   return code(ep) == errc::operation_canceled;
+}
 
 //
 // FIXME: Do we really need to restrict to "borrowed range" here? The range is kept alive in
@@ -98,7 +93,8 @@ template <ByteRange Range>
 Task<void> send(Writer& request, Range range)
 {
    logd("send: (contiguous range)...");
-   co_await request.async_write(asio::buffer(range.data(), range.size()));
+   if (auto [ec] = co_await request.write(asio::buffer(range.data(), range.size())); ec)
+      throw_error(ec);
    logd("send: (contiguous range)... done");
 }
 
@@ -115,42 +111,17 @@ Task<void> send(Writer& request, Range range)
    for (auto chunk : range | ranges::views::chunk(buffer.size()))
    {
       const auto end = std::ranges::copy(chunk, buffer.data()).out;
-      const auto n = end - buffer.data();
-      bytes += n; // FIXME: count after async_write
-#if 0
-#if defined(NDEBUG)
-      co_await request.async_write(asio::buffer(buffer.data(), n));
-#else
-      //
-      // FIXME: With as_tuple<>, testcase h2spec fails, very sporadically.
-      //
-      //        This is also influenced by the logging level: With INFO only for the server,
-      //        it happens more often than with DEBUG.
-      //
-      auto [ec] = co_await request.async_write(asio::buffer(buffer.data(), n),
-                                               asio::as_tuple);
-      if (ec)
+      const auto n = static_cast<size_t>(end - buffer.data());
+      if (auto [ec] = co_await request.write(asio::buffer(buffer.data(), n)); ec)
       {
-         loge("send: (range) \x1b[1;31m{}\x1b[0m after {} bytes", what(ec), bytes);
-         throw boost::system::system_error(ec);
-      }
-#endif
-#else
-      try
-      {
-         co_await request.async_write(asio::buffer(buffer.data(), n));
-      }
-      catch (const boost::system::system_error& ec)
-      {
-         if (ec.code() == boost::system::errc::operation_canceled)
-            logd("[{}] send: (range) {} after {} bytes", request.log_prefix(), ec.code().message(),
-                 bytes);
+         if (ec == errc::operation_canceled)
+            logd("[{}] send: (range) {} after {} bytes", request.log_prefix(), ec.message(), bytes);
          else
             logw("[{}] send: (range) \x1b[1;31m{}\x1b[0m after {} bytes", request.log_prefix(),
-                 ec.code().message(), bytes);
-         throw;
+                 ec.message(), bytes);
+         throw_error(ec);
       }
-#endif
+      bytes += n;
    }
 
    logd("send: (range) sent {} bytes", bytes);
@@ -158,29 +129,20 @@ Task<void> send(Writer& request, Range range)
 
 // -------------------------------------------------------------------------------------------------
 
-/// Whether \p ep holds a cancellation -- how the helpers below are often meant to end.
-inline bool is_cancellation(const std::exception_ptr& ep)
-{
-   try
-   {
-      std::rethrow_exception(ep);
-   }
-   catch (const boost::system::system_error& ex)
-   {
-      return ex.code() == boost::system::errc::operation_canceled;
-   }
-   catch (...)
-   {
-      return false;
-   }
-}
-
 template <ByteRange Range>
 Task<void> send_and_drop(client::Request request, Range range)
 {
-   using namespace asio;
-   auto ex = co_await this_coro::executor;
-   if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
+   std::exception_ptr ep;
+   try
+   {
+      co_await send(request, std::move(range));
+   }
+   catch (...)
+   {
+      ep = std::current_exception();
+   }
+
+   if (ep)
    {
       if (is_cancellation(ep))
          logd("[{}] send_and_drop: {}", request.log_prefix(), what(ep));
@@ -192,20 +154,29 @@ Task<void> send_and_drop(client::Request request, Range range)
 
 // -------------------------------------------------------------------------------------------------
 
+/// Sends \p range and then ends the body, also when sending it failed, which is only logged.
 template <ByteRange Range>
 Task<void> send_and_force_eof(Writer& request, Range range)
 {
-   using namespace asio;
-   auto ex = co_await this_coro::executor;
-   if (auto [ep] = co_await co_spawn(ex, send(request, std::move(range)), as_tuple); ep)
+   std::exception_ptr ep;
+   try
+   {
+      co_await send(request, std::move(range));
+   }
+   catch (...)
+   {
+      ep = std::current_exception();
+   }
+
+   if (ep)
    {
       if (is_cancellation(ep))
          logd("[{}] send_and_force_eof: {}", request.log_prefix(), what(ep));
       else
          logw("[{}] send_and_force_eof: {}", request.log_prefix(), what(ep));
-      co_await this_coro::reset_cancellation_state();
+      co_await reset_cancellation();
    }
-   std::ignore = co_await request.async_write_eof(as_tuple);
+   std::ignore = co_await request.write_eof();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -221,17 +192,16 @@ inline Task<void> generate(server::Request request, server::Response response)
    const auto length = request.get_param_as<size_t>("length");
    if (!length)
    {
-      co_await response.async_submit(400, {});
-      co_await response.async_write_eof();
+      std::ignore = co_await response.submit(400, {});
+      std::ignore = co_await response.write_eof();
       co_return;
    }
 
    logd("generate: {} bytes", *length);
-   co_await response.async_submit(200, fields({{"Content-Length", *length}}));
+   if (auto [ec] = co_await response.submit(200, fields({{"Content-Length", *length}})); ec)
+      co_return;
    co_await send_and_force_eof(response, rv::iota(uint8_t(0)) | rv::take(*length));
 }
-
-#endif // !ANYHTTP_CAPY
 
 // -------------------------------------------------------------------------------------------------
 

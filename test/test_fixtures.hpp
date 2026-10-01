@@ -71,6 +71,9 @@ namespace rv = std::ranges::views;
 
 using namespace anyhttp;
 
+/// The context the tests run their servers and clients on.
+using IoContext = boost::asio::io_context;
+
 // =================================================================================================
 
 /// Returns HTTP11 or HTTP/2 depending on the protocol.
@@ -191,7 +194,7 @@ protected:
    auto port() const noexcept { return server->local_endpoint().port(); }
 
 protected:
-   boost::asio::io_context context;
+   IoContext context;
    std::optional<server::Server> server;
    std::function<awaitable<void>(server::Request request, server::Response response)>
       requestHandler;
@@ -282,3 +285,38 @@ public:
 // =================================================================================================
 
 #endif // ANYHTTP_CAPY
+
+// =================================================================================================
+// Shared by both runtimes
+// =================================================================================================
+
+/**
+ * The value of an operation's result, throwing its error -- what ASIO's default completion token
+ * does, for the tests written in the coroutine spelling both runtimes have:
+ * <tt>auto request = check(co_await session.submit(url));</tt>
+ */
+template <typename... T>
+auto check(std::tuple<error_code, T...>&& result)
+{
+   if (auto& ec = std::get<0>(result))
+      throw_error(ec);
+   if constexpr (sizeof...(T) == 1)
+      return std::move(std::get<1>(result));
+   else if constexpr (sizeof...(T) > 1)
+      return std::apply([](auto&&, auto&&... rest) { return std::tuple{std::move(rest)...}; },
+                        std::move(result));
+}
+
+/// Awaits \p task and yields what it threw, if anything.
+inline Task<std::exception_ptr> caught(Task<void> task)
+{
+   try
+   {
+      co_await std::move(task);
+   }
+   catch (...)
+   {
+      co_return std::current_exception();
+   }
+   co_return nullptr;
+}

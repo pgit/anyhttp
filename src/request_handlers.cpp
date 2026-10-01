@@ -170,12 +170,10 @@ Task<void> discard(server::Request request, server::Response response) { co_retu
 
 // =================================================================================================
 
-#if !ANYHTTP_CAPY
 Task<void> generate(Writer& writer, size_t bytes)
 {
    return send_and_force_eof(writer, rv::iota(uint8_t{0}) | rv::take(bytes));
 }
-#endif
 
 Task<size_t> drain(Reader& reader)
 {

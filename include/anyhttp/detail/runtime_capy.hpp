@@ -42,6 +42,7 @@
 #include <stop_token>
 #include <system_error>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 #include <sys/socket.h>
@@ -388,16 +389,61 @@ inline Task<error_code> delay(std::chrono::steady_clock::duration duration)
    co_return ec;
 }
 
-/// Runs \p a and \p b concurrently, until both are done.
-inline Task<void> when_both(Task<void> a, Task<void> b)
+namespace detail
 {
-   // capy::when_all() takes operations with an io_result only
-   auto as_io = [](Task<void> task) -> capy::io_task<> {
-      co_await std::move(task);
-      co_return capy::io_result<>{};
-   };
-   std::ignore = co_await capy::when_all(as_io(std::move(a)), as_io(std::move(b)));
+/// What when_both() yields: as ASIO's awaitable operator && does.
+template <typename A, typename B>
+using both_t = std::conditional_t<std::is_void_v<A>, B,
+                                  std::conditional_t<std::is_void_v<B>, A, std::tuple<A, B>>>;
+
+/// \p task as what capy::when_all() takes, an operation with an io_result, keeping its value.
+template <typename T>
+capy::io_task<> as_io(Task<T> task, std::optional<T>& result)
+{
+   result.emplace(co_await std::move(task));
+   co_return capy::io_result<>{};
 }
+
+inline capy::io_task<> as_io(Task<void> task)
+{
+   co_await std::move(task);
+   co_return capy::io_result<>{};
+}
+} // namespace detail
+
+/// Runs \p a and \p b concurrently, until both are done, see detail/runtime_asio.hpp.
+template <typename A, typename B>
+Task<detail::both_t<A, B>> when_both(Task<A> a, Task<B> b)
+{
+   if constexpr (std::is_void_v<A> && std::is_void_v<B>)
+      std::ignore =
+         co_await capy::when_all(detail::as_io(std::move(a)), detail::as_io(std::move(b)));
+   else if constexpr (std::is_void_v<A>)
+   {
+      std::optional<B> rb;
+      std::ignore =
+         co_await capy::when_all(detail::as_io(std::move(a)), detail::as_io(std::move(b), rb));
+      co_return std::move(*rb);
+   }
+   else if constexpr (std::is_void_v<B>)
+   {
+      std::optional<A> ra;
+      std::ignore =
+         co_await capy::when_all(detail::as_io(std::move(a), ra), detail::as_io(std::move(b)));
+      co_return std::move(*ra);
+   }
+   else
+   {
+      std::optional<A> ra;
+      std::optional<B> rb;
+      std::ignore =
+         co_await capy::when_all(detail::as_io(std::move(a), ra), detail::as_io(std::move(b), rb));
+      co_return std::tuple{std::move(*ra), std::move(*rb)};
+   }
+}
+
+/// A stop request can not be taken back: nothing to reset, see detail/runtime_asio.hpp.
+inline Task<void> reset_cancellation() { co_return; }
 
 // =================================================================================================
 

@@ -300,13 +300,24 @@ inline Task<error_code> delay(std::chrono::steady_clock::duration duration)
 /// Lets whatever else is ready to run on the caller's executor run first.
 inline auto yield_now() { return asio::post(asio::deferred); }
 
-/// Runs \p a and \p b concurrently, until both are done. If one of them throws, the other is
-/// cancelled, and the exception is rethrown once both are done.
-inline Task<void> when_both(Task<void> a, Task<void> b)
+/**
+ * Runs \p a and \p b concurrently, until both are done, and yields what they return: nothing,
+ * the one value, or both as a tuple. If one of them throws, the other is cancelled, and the
+ * exception is rethrown once both are done.
+ */
+template <typename A, typename B>
+auto when_both(Task<A> a, Task<B> b)
 {
    using namespace asio::experimental::awaitable_operators;
-   co_await (std::move(a) && std::move(b));
+   return std::move(a) && std::move(b);
 }
+
+/**
+ * Lets a coroutine that has handled a cancellation go on awaiting: ASIO would throw from every
+ * operation it awaits after the cancellation otherwise. In CAPY, cancellation is a stop request,
+ * which stays.
+ */
+inline auto reset_cancellation() { return asio::this_coro::reset_cancellation_state(); }
 
 // =================================================================================================
 
