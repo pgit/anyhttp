@@ -211,8 +211,13 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
    thread). The error table includes the resolver: corosio reports a host that does not resolve
    as `no_such_device_or_address` (`EAI_NONAME` mapped onto a generic code), ASIO as
    `netdb_errors::host_not_found`.
-8. Later: threads in CAPY; `server_main`/`client_main` for CAPY; upstream issues for corosio
+8. Later: threads in CAPY; `client_main` for CAPY; upstream issues for corosio
    (`openssl_stream` on AWS-LC, the read on an error event).
+   *`server_main` done 2026-10-01:* it builds in both styles and refuses `--threads` above 1 with
+   CAPY. The Debug `run()` wrapper steps a corosio context with `run_one()` too, and the CAPY
+   fixtures run through it. That reordering flipped an h2 test: a write issued after the stream
+   closed reported `canceled`, one parked when it closed `connection_reset`; both report the
+   latter now (`ccb30df`).
 
 Out of scope for the port, and kept as separate commits if wanted: what lessons §9.1 lists as
 "what this project does better" in h3 (parking on `EAGAIN`, `write_aggregate_pkt`, and so on). A

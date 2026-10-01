@@ -14,7 +14,8 @@ and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.jso
 `build-capy/` is the capy/corosio API style (`-DANYHTTP_API=CAPY -DTLS_LIBRARY=OpenSSL`, see
 [docs/capy-port-plan.md](docs/capy-port-plan.md)); capy and corosio are FetchContent'd at pinned
 SHAs. Both styles build the same library sources and test files; what belongs to one style only
-is guarded with `ANYHTTP_CAPY`. The `server` and `client` programs are ASIO-only so far.
+is guarded with `ANYHTTP_CAPY`. So is the `server` program (single-threaded with CAPY); the
+`client` program is ASIO-only so far.
 `build-capy-asan/` is its ASAN tree.
 
 ```
