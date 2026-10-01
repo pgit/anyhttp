@@ -327,8 +327,13 @@ static int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame*
       break;
 
    case NGHTTP2_GOAWAY:
+      //
+      // Nothing to do here: the streams the GOAWAY leaves open run to completion, and once none
+      // is left, nghttp2 wants neither to read nor to write, which ends the session after sending
+      // our own GOAWAY (h2spec generic/3.8). Shutting the socket down right away, as we used to,
+      // cut those streams off and made that GOAWAY fail with "Broken pipe".
+      //
       logd("[{}] on_frame_recv_callback: GOAWAY", handler->log_prefix(frame));
-      handler->destroy(); // fixes h2spec generic/3.8
       break;
 
    default:

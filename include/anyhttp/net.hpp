@@ -11,6 +11,7 @@
 //    io::make_socket(), io::make_acceptor(), io::listen(), io::local_endpoint(), io::accept()
 //    io::no_delay(), io::buffer_sizes(), io::resolve(), io::connect()
 //    make_server_tls_context(), io::make_tls_stream(), io::handshake(), io::alpn(), io::tls_info()
+//    io::drain()                                             -- below
 //    UdpSocket, io::make_udp_socket(), io::open(), io::cancel(), io::close()
 //    io::bind(), io::connect(), io::local_endpoint(), io::set_option(), io::send()   -- below
 //    Signal                                                  -- a wake-up for any thread
@@ -30,8 +31,54 @@
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/ip/udp.hpp>
 
+#include <algorithm>
+#include <array>
+#include <cerrno>
+#include <chrono>
+
+#include <sys/socket.h>
+
 namespace anyhttp::io
 {
+
+/**
+ * Reads and drops what the socket under \p stream still receives, until the peer has ended its
+ * side of the connection, or \p timeout has passed. Yields the number of bytes dropped.
+ *
+ * This is the last stage of ending a connection (RFC 9112, section 9.6; RFC 9113 has no rule of
+ * its own, but the same TCP beneath it): after the FIN, and before letting go of the socket.
+ * Closing a socket that still has unread data in its receive queue answers the peer with an RST
+ * instead, and an RST may cost the peer what it has not read yet -- which can be the very response
+ * or GOAWAY that said the connection was ending. A peer that ended the connection itself has
+ * nothing left to send, and this costs one read.
+ *
+ * The data is of no interest, not even decrypted: this reads the socket itself, by hand, as that
+ * is what every stream type has in common.
+ */
+template <SocketStream Stream>
+Task<size_t> drain(Stream& stream, const Executor& executor,
+                   std::chrono::steady_clock::duration timeout)
+{
+   Timer timer(executor);
+   timer.arm(timeout, [&stream] { io::cancel(stream); });
+
+   auto& socket = get_socket(stream);
+   std::array<char, 16 * 1024> buffer;
+   size_t drained = 0;
+   for (;;)
+   {
+      if (auto [ec] = co_await io::wait_readable(socket); ec)
+         break;
+      auto n = ::recv(socket.native_handle(), buffer.data(), buffer.size(), MSG_DONTWAIT);
+      if (n == 0)
+         break; // the peer has ended its side
+      if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+         break;
+      drained += std::max<ssize_t>(n, 0);
+   }
+   timer.cancel();
+   co_return drained;
+}
 
 //
 // What the HTTP/3 backend does with its UdpSocket the same way in both runtimes, on the native

@@ -298,6 +298,21 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    if (auto ec = co_await async_teardown(stream_); ec)
       mlogd("teardown: {}", ec.message());
 
+   //
+   // Then send a FIN, and let go of the socket only once the peer has ended its side as well,
+   // reading and dropping what still comes in for two seconds at most: closing it right away would
+   // answer a peer that sent anything after our GOAWAY with an RST, which may cost it that GOAWAY.
+   // See io::drain().
+   //
+   if (auto ec = io::shutdown(stream_, io::Shutdown::send); !ec)
+   {
+      if (auto drained = co_await io::drain(stream_, this->get_executor(), std::chrono::seconds(2)))
+         mlogd("dropped {} bytes the peer sent after the session ended", drained);
+   }
+   else if (ec != errc::not_connected) // the peer may be gone already
+      mlogw("shutdown: {}", ec.message());
+   io::close(stream_);
+
    nghttp2_session_del(session);
    session = nullptr;
    mlogd("server session deleted");
