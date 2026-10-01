@@ -97,6 +97,11 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
       po::value(&config.context.inline_budget_max)->default_value(config.context.inline_budget_max),
       "ceiling of corosio's adaptive inline budget: how many I/O operations that are ready at "
       "once complete without a post before one is posted (0 posts all)");
+   opts(
+      "unassisted-budget",
+      po::value(&config.context.unassisted_budget)->default_value(config.context.unassisted_budget),
+      "the inline budget when other handlers are queued (no other thread takes them), in place "
+      "of the adaptive one; capped by --inline-budget");
 #endif
 
    po::variables_map vm;
