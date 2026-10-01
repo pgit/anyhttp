@@ -122,7 +122,7 @@ protected:
       });
    }
 
-   void run() { context.run(); }
+   void run() { ::run(context); }
 
    /// Lets a derived fixture adjust the server configuration before the server is created.
    virtual void configure_server(server::Config&) {}
