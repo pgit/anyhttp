@@ -123,6 +123,9 @@ inline const error_code already_started = asio::error::already_started;
 inline const error_code header_limit = boost::beast::http::error::header_limit;
 } // namespace errors
 
+/// Whether the runtime supports running a server or client on several threads (with strands).
+inline constexpr bool multithreaded_runtime = true;
+
 /// What the runtime throws an error_code as.
 using system_error = boost::system::system_error;
 

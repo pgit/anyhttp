@@ -130,7 +130,7 @@ using DefaultCompletionToken = asio::default_completion_token_t<Executor>;
  * This also ensures that the callback is destroyed after invocation.
  */
 template <typename F, typename... Args>
-   requires std::invocable<F, Args...>
+   requires std::invocable<std::remove_cvref_t<F>, Args...>
 inline void swap_and_invoke(F&& function, Args&&... args)
 {
    std::exchange(function, nullptr)(std::forward<Args>(args)...);

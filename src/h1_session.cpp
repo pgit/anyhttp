@@ -282,7 +282,6 @@ public:
  */
 template <typename Parent, typename Stream, typename Serializer,
           typename Message = std::remove_const_t<typename Serializer::value_type>>
-   requires boost::beast::is_async_write_stream<Stream>::value
 class WriterBase : public Parent
 {
 public:

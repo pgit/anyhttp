@@ -61,6 +61,9 @@ using Executor = capy::any_executor;
 
 using std::error_code;
 
+/// Everything of a server or client runs on one thread: there are no strands.
+inline constexpr bool multithreaded_runtime = false;
+
 /// What the runtime throws an error_code as.
 using system_error = std::system_error;
 

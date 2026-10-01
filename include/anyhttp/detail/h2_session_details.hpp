@@ -103,7 +103,8 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
       //
       else if (const auto bytes_to_write = buffer.size() + nread; bytes_to_write > 0)
       {
-         const auto seq = std::to_array<const_buffer>({buffer.data(), asio::buffer(data, nread)});
+         const auto seq =
+            std::to_array<asio::const_buffer>({buffer.data(), asio::buffer(data, nread)});
          mylogd("send loop: writing {} bytes...", bytes_to_write);
          auto [ec, written] = co_await io::write(stream_, seq);
          if (ec)

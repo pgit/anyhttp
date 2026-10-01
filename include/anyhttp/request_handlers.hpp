@@ -57,7 +57,9 @@ Task<void> discard(server::Request request, server::Response response);
 
 // =================================================================================================
 
+#if !ANYHTTP_CAPY
 Task<void> generate(Writer& writer, size_t bytes);
+#endif
 Task<std::string> read(Reader& reader);
 
 //
@@ -76,6 +78,12 @@ Task<expected<size_t>> try_read_response(client::Request& request);
 Task<void> send_eof(Writer& writer);
 
 // =================================================================================================
+
+#if !ANYHTTP_CAPY
+//
+// The helpers below send a body the way the ASIO tests need it, ending with an exception when they
+// are cancelled. Their CAPY counterparts come with the shared tests.
+//
 
 template <typename Range>
 concept ByteRange =
@@ -222,6 +230,8 @@ inline Task<void> generate(server::Request request, server::Response response)
    co_await response.async_submit(200, fields({{"Content-Length", *length}}));
    co_await send_and_force_eof(response, rv::iota(uint8_t(0)) | rv::take(*length));
 }
+
+#endif // !ANYHTTP_CAPY
 
 // -------------------------------------------------------------------------------------------------
 

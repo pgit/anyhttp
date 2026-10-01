@@ -47,6 +47,8 @@ Server::Impl::Impl(Executor executor, Config config)
      acceptor_(io::make_acceptor(executor_))
 {
    mlogi("ctor");
+   if (config_.use_strand && !multithreaded_runtime)
+      throw std::invalid_argument("Config::use_strand: this runtime runs on one thread only");
    listen_tcp();
 
    //
@@ -145,10 +147,10 @@ void Server::Impl::remove_session(const std::shared_ptr<Session::Impl>& session)
 
 void Server::Impl::listen_tcp()
 {
-   error_code ec;
+   boost::system::error_code ec; // what Boost.Asio's address parser reports in, either way
    auto address = asio::ip::make_address(config().listen_address, ec);
    if (ec)
-      mlogw("error resolving '{}': {}", config().listen_address, ec.what());
+      mlogw("error resolving '{}': {}", config().listen_address, ec.message());
 
    io::listen(acceptor_, asio::ip::tcp::endpoint(address, config().port));
    mlogi("TCP listening on {}", io::local_endpoint(acceptor_));
