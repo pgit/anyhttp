@@ -171,16 +171,20 @@ void Server::Impl::listen_tcp()
 Task<void> Server::Impl::handle_connection(TcpSocket socket)
 {
    const auto prefix = anyhttp::log_prefix(Role::server, "tcp", io::remote_endpoint(socket));
-   logi("[{}] new connection", prefix);
 
    io::no_delay(socket);
 
    // Playing with socket buffer sizes doesn't seem to do any good: 8 KiB of receive buffer makes
    // the 'PostRange' testcases very slow, for example.
    auto [send_buffer_size, receive_buffer_size] = io::buffer_sizes(socket);
-   logd("[{}] socket buffer sizes: send={} receive={}", prefix, send_buffer_size,
+   logd("[{}] accepted, socket buffer sizes: send={} receive={}", prefix, send_buffer_size,
         receive_buffer_size);
 
+   //
+   // The "new connection" line is logged once it is known what the connection speaks, so that
+   // there is one line per connection, whatever the protocol. One that fails before that gets
+   // the line telling why instead.
+   //
    auto buffer = boost::beast::flat_buffer();
    auto [ec, detected] = co_await detail::detect(socket, buffer);
    if (ec)
@@ -192,8 +196,6 @@ Task<void> Server::Impl::handle_connection(TcpSocket socket)
    std::shared_ptr<Session::Impl> session;
    if (detected == detail::Detected::tls)
    {
-      logi("[{}] detected TLS", prefix);
-
       auto tls = io::make_tls_stream(std::move(socket), tls_context_);
       if (auto [ec] = co_await io::handshake(tls, Role::server); ec)
       {
@@ -202,7 +204,8 @@ Task<void> Server::Impl::handle_connection(TcpSocket socket)
       }
 
       const auto alpn = io::alpn(tls);
-      logi("[{}] {}", prefix, io::tls_info(tls));
+      logi("[{}] new connection, {} over TLS ({})", prefix, alpn == "h2" ? "h2" : "h1",
+           io::tls_info(tls));
 
       //
       // Everything that is not "h2" is served as HTTP/1.1, including the empty ALPN of a client
@@ -217,7 +220,7 @@ Task<void> Server::Impl::handle_connection(TcpSocket socket)
 
    else if (detected == detail::Detected::h2c)
    {
-      logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
+      logi("[{}] new connection, h2c (prior knowledge, {} bytes buffered)", prefix, buffer.size());
       session = nghttp2::make_server_session(*this, make_plain_server_stream(std::move(socket)));
    }
 
@@ -226,7 +229,7 @@ Task<void> Server::Impl::handle_connection(TcpSocket socket)
    //
    else
    {
-      logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", prefix);
+      logi("[{}] new connection, h1 (no HTTP/2 client preface)", prefix);
       session = beast_impl::make_server_session(*this, make_plain_server_stream(std::move(socket)));
    }
 
