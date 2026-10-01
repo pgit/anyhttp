@@ -6,16 +6,7 @@
 #include "anyhttp/h2_backend.hpp"
 #include "anyhttp/h3_backend.hpp"
 
-#include <boost/asio/bind_cancellation_slot.hpp>
-#include <boost/asio/error.hpp>
-#include <boost/asio/executor_work_guard.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
-#include <boost/asio/ip/detail/endpoint.hpp>
 #include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/redirect_error.hpp>
-#include <boost/asio/steady_timer.hpp>
-
-#include <boost/asio/use_awaitable.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/http/message.hpp>
 #include <boost/scope/scope_exit.hpp>
@@ -27,11 +18,9 @@
 #include <utility>
 
 using namespace std::chrono_literals;
-using namespace boost::asio;
 
 namespace anyhttp::client
 {
-using namespace asio::experimental::awaitable_operators;
 
 // =================================================================================================
 
@@ -52,7 +41,7 @@ Response::Impl::~Impl() = default;
 // =================================================================================================
 
 Client::Impl::Impl(Executor executor, Config config)
-   : config_(std::move(config)), executor_(std::move(executor)), resolver_(executor_)
+   : config_(std::move(config)), executor_(std::move(executor))
 {
    mlogi("ctor");
 }
@@ -158,47 +147,35 @@ Task<Session> Client::Impl::async_connect()
    if (config().protocol == Protocol::h3)
       co_return Session{co_await async_connect_http3(executor_, host, port, config())};
 
-   std::vector<ip::tcp::endpoint> endpoints;
    mlogd("resolving {}:{} ...", host, port);
-   {
-      auto flags = ip::tcp::resolver::numeric_service;
-      for (auto&& elem : co_await resolver_->async_resolve(host, port, flags)) // may throw
-      {
-         mlogd("{}:{} -> {}", elem.host_name(), elem.service_name(), elem.endpoint());
-         endpoints.push_back(std::move(elem));
-      }
-   }
+   auto [resolve_ec, endpoints] = co_await io::resolve(executor_, host, port);
+   if (resolve_ec)
+      throw_error(resolve_ec);
+   for (auto& endpoint : endpoints)
+      mlogd("{}:{} -> {}", host, port, endpoint);
 
    //
    // Initiate connection.
    //
    // TODO: TLS
    //
-   ip::tcp::socket socket(executor_);
-   auto endpoint = co_await asio::async_connect(socket, endpoints);
+   auto socket = io::make_socket(executor_);
+   auto [connect_ec, endpoint] = co_await io::connect(socket, std::move(endpoints));
+   if (connect_ec)
+      throw_error(connect_ec);
 
-   mlogi("connected to {}", socket.remote_endpoint());
+   mlogi("connected to {}", endpoint);
 
    // what the session is going to call itself, see make_client_session() below (no TLS yet)
    const auto prefix = anyhttp::log_prefix(
       Role::client, config().protocol == Protocol::h1 ? "h1" : "h2c", io::remote_endpoint(socket));
 
-   // HTTP/2 is very slow without this, and TLS handshake is faster as well.
-   socket.set_option(ip::tcp::no_delay(true));
+   io::no_delay(socket);
 
-   //
-   // Playing with socket buffer sizes... Doesn't seem to do any good.
-   //
-   using sb = asio::socket_base;
-   sb::send_buffer_size send_buffer_size;
-   sb::receive_buffer_size receive_buffer_size;
-   socket.get_option(send_buffer_size);
-   socket.get_option(receive_buffer_size);
-   logd("[{}] socket buffer sizes: send={} receive={}", prefix, send_buffer_size.value(),
-        receive_buffer_size.value());
-
-   // socket.set_option(sb::send_buffer_size(8192));
-   // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
+   // Playing with socket buffer sizes doesn't seem to do any good, see the server.
+   auto [send_buffer_size, receive_buffer_size] = io::buffer_sizes(socket);
+   logd("[{}] socket buffer sizes: send={} receive={}", prefix, send_buffer_size,
+        receive_buffer_size);
 
    //
    // Select implementation, currently by configuration only.

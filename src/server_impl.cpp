@@ -1,30 +1,16 @@
 #include "anyhttp/server_impl.hpp"
 
-#include "anyhttp/detail/any_async_stream.hpp"
 #include "anyhttp/detail/detect.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/h1_backend.hpp"
 #include "anyhttp/h2_backend.hpp"
 #include "anyhttp/h3_backend.hpp"
-#include "anyhttp/tls.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/error.hpp>
-#include <boost/asio/experimental/as_single.hpp>
-#include <boost/asio/experimental/concurrent_channel.hpp>
-#include <boost/asio/immediate.hpp>
-#include <boost/asio/ip/address_v6.hpp>
+#include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/ip/v6_only.hpp>
-#include <boost/asio/ssl/context.hpp>
-#include <boost/asio/ssl/stream.hpp>
-#include <boost/asio/strand.hpp>
+#include <boost/asio/ip/udp.hpp>
 
 #include <boost/beast/core/flat_buffer.hpp>
-#include <boost/beast/ssl/ssl_stream.hpp>
-
-#include <boost/system/detail/errc.hpp>
-#include <boost/system/detail/error_code.hpp>
 
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
@@ -33,7 +19,6 @@
 #include <string_view>
 
 using namespace std::chrono_literals;
-using namespace boost::asio;
 
 namespace anyhttp::server
 {
@@ -56,14 +41,10 @@ Response::Impl::~Impl() = default;
 
 // =================================================================================================
 
-//
-// Defined further down, together with the ALPN callbacks it installs.
-//
-static asio::ssl::context make_tls_server_context(const Config& config);
-
 Server::Impl::Impl(Executor executor, Config config)
    : config_(std::move(config)), executor_(std::move(executor)),
-     tls_context_(make_tls_server_context(config_)), acceptor_(executor_)
+     tls_context_(make_server_tls_context(config_.tls_certificate_chain, config_.tls_private_key)),
+     acceptor_(io::make_acceptor(executor_))
 {
    mlogi("ctor");
    listen_tcp();
@@ -72,8 +53,8 @@ Server::Impl::Impl(Executor executor, Config config)
    // HTTP/3 shares the endpoint the TCP acceptor is listening on, so it has to be set up after
    // listen_tcp(): with port=0 the actual port is only known once the acceptor is bound.
    //
-   auto tcp_ep = acceptor_.local_endpoint();
-   http3_ = make_http3_server(*this, ip::udp::endpoint{tcp_ep.address(), tcp_ep.port()});
+   auto tcp_ep = io::local_endpoint(acceptor_);
+   http3_ = make_http3_server(*this, asio::ip::udp::endpoint{tcp_ep.address(), tcp_ep.port()});
 
    //
    // Advertise that endpoint to HTTP/1.1 and HTTP/2 clients, see Config::alt_svc_max_age. The
@@ -114,7 +95,7 @@ void Server::Impl::destroy()
 {
    mlogi("destroy");
 
-   acceptor_.close(); // breaks listen_loop()
+   io::close(acceptor_); // breaks tcp_accept_loop()
 
    //
    // Destroy all active sessions (TCP and QUIC) so their timers and async operations are
@@ -165,118 +146,38 @@ void Server::Impl::remove_session(const std::shared_ptr<Session::Impl>& session)
 void Server::Impl::listen_tcp()
 {
    error_code ec;
-   auto address = ip::make_address(config().listen_address, ec);
+   auto address = asio::ip::make_address(config().listen_address, ec);
    if (ec)
       mlogw("error resolving '{}': {}", config().listen_address, ec.what());
 
-   ip::tcp::endpoint ep(address, config().port);
-   acceptor_.open(ep.protocol());
-   acceptor_.set_option(asio::socket_base::reuse_address(true));
-
-   //
-   // Accept IPv4 clients on an IPv6 listener, too. This has to go after open() -- there is no
-   // socket to set it on before that -- and before bind(), which is when it takes effect. Not
-   // fatal if it fails: most systems are dual-stack by default (net.ipv6.bindv6only=0) anyway.
-   //
-   if (ep.protocol() == ip::tcp::v6())
-   {
-      acceptor_.set_option(ip::v6_only(false), ec);
-      if (ec)
-         mlogw("error enabling dual-stack on {}: {}", ep, ec.what());
-   }
-
-   acceptor_.bind(ep);
-   acceptor_.listen();
-
-   ep = acceptor_.local_endpoint();
-   mlogi("TCP listening on {}", ep);
+   io::listen(acceptor_, asio::ip::tcp::endpoint(address, config().port));
+   mlogi("TCP listening on {}", io::local_endpoint(acceptor_));
 }
 
 // =================================================================================================
 
 //
-// The protocols we speak over TLS on TCP, in descending order of preference. HTTP/3 is not in
-// here: it is offered on the UDP endpoint instead, see anyhttp/h3_backend.hpp.
-//
-// https://nghttp2.org/documentation/tutorial-server.html
-//
-static unsigned char next_proto_list[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
-
-static unsigned int next_proto_list_len = sizeof(next_proto_list);
-static int next_proto_cb(SSL* s, const unsigned char** data, unsigned int* len, void* arg)
-{
-   *data = next_proto_list;
-   *len = next_proto_list_len;
-   return SSL_TLSEXT_ERR_OK;
-}
-
-//
-// ALPN, picking the first protocol of ours the client offers -- our preference wins, not the
-// client's order.
-//
-static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned char* outlen,
-                                const unsigned char* in, unsigned int inlen, void* arg)
-{
-   for (std::string_view wanted : {"h2", "http/1.1"})
-   {
-      // The wire format is a sequence of length-prefixed, non-empty protocol names.
-      for (auto list = std::span{in, inlen}; !list.empty() && list.size() > list[0];
-           list = list.subspan(1 + list[0]))
-      {
-         if (std::string_view{reinterpret_cast<const char*>(&list[1]), list[0]} != wanted)
-            continue;
-
-         *out = &list[1];
-         *outlen = list[0];
-         return SSL_TLSEXT_ERR_OK;
-      }
-   }
-
-   return SSL_TLSEXT_ERR_NOACK;
-}
-
-//
-// The TLS context every TCP connection is served from. It is created once, when the server is
+// The TLS context every TCP connection is served from is created once, when the server is
 // constructed, and not per connection: building it reads the PEM files from disk, and a context
 // built per connection would also pick up a certificate that was rotated underneath a running
 // server -- unlike HTTP/3, which holds its context for the lifetime of the server. That
 // difference made a regenerated test PKI fail over HTTP/3 while HTTP/2 silently kept working.
 //
-static asio::ssl::context make_tls_server_context(const Config& config)
-{
-   asio::ssl::context ctx{asio::ssl::context::tlsv13};
-   SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, nullptr);
-   SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, nullptr);
-
-   ctx.use_certificate_chain_file(config.tls_certificate_chain);
-   ctx.use_private_key_file(config.tls_private_key, asio::ssl::context::pem);
-
-   return ctx;
-}
 
 // -------------------------------------------------------------------------------------------------
 
-Task<void> Server::Impl::handle_connection(ip::tcp::socket socket)
+Task<void> Server::Impl::handle_connection(TcpSocket socket)
 {
    const auto prefix = anyhttp::log_prefix(Role::server, "tcp", io::remote_endpoint(socket));
    logi("[{}] new connection", prefix);
 
-   // HTTP/2 is very slow without this, and TLS handshake is faster as well.
-   socket.set_option(ip::tcp::no_delay(true));
+   io::no_delay(socket);
 
-   //
-   // Playing with socket buffer sizes... Doesn't seem to do any good.
-   //
-   using sb = boost::asio::socket_base;
-   sb::send_buffer_size send_buffer_size;
-   sb::receive_buffer_size receive_buffer_size;
-   socket.get_option(send_buffer_size);
-   socket.get_option(receive_buffer_size);
-   logd("[{}] socket buffer sizes: send={} receive={}", prefix, send_buffer_size.value(),
-        receive_buffer_size.value());
-
-   // socket.set_option(sb::send_buffer_size(8192));
-   // socket.set_option(sb::receive_buffer_size(8192)); // makes 'PostRange' testcases very slow
+   // Playing with socket buffer sizes doesn't seem to do any good: 8 KiB of receive buffer makes
+   // the 'PostRange' testcases very slow, for example.
+   auto [send_buffer_size, receive_buffer_size] = io::buffer_sizes(socket);
+   logd("[{}] socket buffer sizes: send={} receive={}", prefix, send_buffer_size,
+        receive_buffer_size);
 
    auto buffer = boost::beast::flat_buffer();
    auto [ec, detected] = co_await detail::detect(socket, buffer);
@@ -287,27 +188,19 @@ Task<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    }
 
    std::shared_ptr<Session::Impl> session;
-   std::optional<asio::ssl::stream<asio::ip::tcp::socket>> ssl_stream;
    if (detected == detail::Detected::tls)
    {
       logi("[{}] detected TLS", prefix);
 
-      ssl_stream.emplace(std::move(socket), tls_context_);
-      co_await ssl_stream->async_handshake(asio::ssl::stream_base::server);
-
-      //
-      // perform ALPN
-      //
-      std::string_view alpn;
+      auto tls = io::make_tls_stream(std::move(socket), tls_context_);
+      if (auto [ec] = co_await io::handshake(tls, Role::server); ec)
       {
-         const unsigned char* data;
-         unsigned int len;
-         SSL_get0_alpn_selected(ssl_stream->native_handle(), &data, &len);
-         if (data)
-            alpn = std::string_view(reinterpret_cast<const char*>(data), len);
+         logi("[{}] TLS handshake: {}", prefix, ec.message());
+         co_return;
       }
 
-      logi("[{}] {}", prefix, tls_handshake_info(ssl_stream->native_handle()));
+      const auto alpn = io::alpn(tls);
+      logi("[{}] {}", prefix, io::tls_info(tls));
 
       //
       // Everything that is not "h2" is served as HTTP/1.1, including the empty ALPN of a client
@@ -315,19 +208,15 @@ Task<void> Server::Impl::handle_connection(ip::tcp::socket socket)
       // buy nothing: HTTP/1.1 is what a connection without a negotiated protocol speaks anyway.
       //
       if (alpn == "h2")
-         session = nghttp2::make_server_session(*this, std::move(*ssl_stream));
+         session = nghttp2::make_server_session(*this, std::move(tls));
       else
-         session = beast_impl::make_server_session(*this, std::move(*ssl_stream));
+         session = beast_impl::make_server_session(*this, std::move(tls));
    }
 
    else if (detected == detail::Detected::h2c)
    {
       logi("[{}] detected HTTP2 client preface, {} bytes in buffer", prefix, buffer.size());
-#if 1
-      session = nghttp2::make_server_session(*this, make_any_async_stream(std::move(socket)));
-#else
-      session = nghttp2::make_server_session(*this, std::move(socket));
-#endif
+      session = nghttp2::make_server_session(*this, make_plain_server_stream(std::move(socket)));
    }
 
    //
@@ -336,11 +225,7 @@ Task<void> Server::Impl::handle_connection(ip::tcp::socket socket)
    else
    {
       logi("[{}] no HTTP2 client preface, assuming HTTP/1.x", prefix);
-#if 1
-      session = beast_impl::make_server_session(*this, make_any_async_stream(std::move(socket)));
-#else
-      session = beast_impl::make_server_session(*this, std::move(socket));
-#endif
+      session = beast_impl::make_server_session(*this, make_plain_server_stream(std::move(socket)));
    }
 
    //
@@ -374,7 +259,6 @@ Task<void> Server::Impl::handle_connection(ip::tcp::socket socket)
  */
 Task<void> Server::Impl::tcp_accept_loop()
 {
-   const auto executor = co_await boost::asio::this_coro::executor;
 
    //
    // FIXME: sessionCounter and sessions_ are not thread safe, yet
@@ -388,13 +272,12 @@ Task<void> Server::Impl::tcp_accept_loop()
 
    //
    // Sessions run on their own executors and finish on whatever thread happens to be running
-   // them, so the "one more is gone" signal has to cross threads: concurrent_channel is the
-   // thread-safe flavour. It is only a nudge -- sessionCounter, read under the mutex, is the
-   // actual condition -- so a try_send() that finds the buffer full may be dropped: whenever
-   // the waiter is about to block, the buffer is empty and every session still counted has its
-   // own send() ahead of it.
+   // them, so the "one more is gone" signal has to cross threads: a Signal, not an Event. It is
+   // only a nudge -- sessionCounter, read under the mutex, is the actual condition -- so a
+   // notify() that finds one pending already may be dropped: whenever the waiter is about to
+   // block, none is pending, and every session still counted has its own notify() ahead of it.
    //
-   experimental::concurrent_channel<void(error_code)> sessionDone{executor, 1};
+   Signal sessionDone{executor_};
 
    for (;;)
    {
@@ -406,8 +289,9 @@ Task<void> Server::Impl::tcp_accept_loop()
       // NOTE: This is slow. Consider multiple IO contexts instead,
       //       or explicit thread pools where really needed.
       //
-      ip::tcp::socket socket(config().use_strand ? new_strand(executor) : executor);
-      auto [ec] = co_await acceptor_.async_accept(socket, as_tuple);
+      auto connection_executor = config().use_strand ? new_strand(executor_) : executor_;
+      auto socket = io::make_socket(connection_executor);
+      auto [ec] = co_await io::accept(acceptor_, socket);
       if (ec)
       {
          // bad_descriptor: the acceptor was closed before async_accept() got to it
@@ -430,12 +314,11 @@ Task<void> Server::Impl::tcp_accept_loop()
          ++sessionCounter;
       }
 
-      auto connection_executor = socket.get_executor();
       launch(connection_executor, handle_connection(std::move(socket)),
              [&, prefix](const std::exception_ptr& ex) mutable {
                 auto lock = std::lock_guard(session_mutex_);
                 --sessionCounter;
-                std::ignore = sessionDone.try_send(error_code{});
+                sessionDone.notify();
                 if (ex)
                    logw("[{}] {}", prefix, what(ex));
                 else if (sessionCounter)
@@ -462,7 +345,7 @@ Task<void> Server::Impl::tcp_accept_loop()
       sessions_.clear();
 
       lock.unlock();
-      std::ignore = co_await sessionDone.async_receive(as_tuple);
+      std::ignore = co_await sessionDone.wait();
       lock.lock();
    }
 

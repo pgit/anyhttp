@@ -8,7 +8,7 @@
 #include "anyhttp/h2_common.hpp"
 #include "anyhttp/h2_session.hpp"
 #include "anyhttp/literals.hpp"
-#include "anyhttp/stream_traits.hpp"
+#include "anyhttp/net.hpp"
 
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
@@ -23,10 +23,6 @@
 
 namespace anyhttp::nghttp2
 {
-
-// =================================================================================================
-
-using socket = asio::ip::tcp::socket;
 
 // =================================================================================================
 

@@ -4,11 +4,7 @@
 #include "session.hpp"
 #include "writer_impl.hpp"
 
-#include <boost/asio/any_completion_handler.hpp>
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/awaitable.hpp>
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/ssl/context.hpp>
+#include "net.hpp"
 
 #include <memory>
 #include <set>
@@ -85,7 +81,7 @@ public:
    //
    // The TLS context used for every TCP connection, see make_tls_server_context().
    //
-   boost::asio::ssl::context& tls_context() noexcept { return tls_context_; }
+   TlsContext& tls_context() noexcept { return tls_context_; }
 
    //
    // The "Alt-Svc" field value pointing at this server's HTTP/3 endpoint, put into every response
@@ -95,9 +91,9 @@ public:
    const std::string& alt_svc() const noexcept { return alt_svc_; }
 
    Task<void> tcp_accept_loop();
-   Task<void> handle_connection(asio::ip::tcp::socket socket);
+   Task<void> handle_connection(TcpSocket socket);
 
-   asio::ip::tcp::endpoint local_endpoint() const { return acceptor_.local_endpoint(); }
+   asio::ip::tcp::endpoint local_endpoint() const { return io::local_endpoint(acceptor_); }
 
    void on_request(RequestHandler&& handler) noexcept { request_handler_ = std::move(handler); }
    const RequestHandler& request_handler() const noexcept { return request_handler_; }
@@ -115,8 +111,8 @@ private:
    Config config_;
 
    Executor executor_;
-   asio::ssl::context tls_context_;
-   asio::ip::tcp::acceptor acceptor_;
+   TlsContext tls_context_;
+   TcpAcceptor acceptor_;
    std::string alt_svc_;
 
    std::mutex session_mutex_;

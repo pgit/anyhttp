@@ -6,7 +6,7 @@
 //
 
 #include "anyhttp/detail/any_async_stream.hpp"
-#include "anyhttp/stream_traits.hpp"
+#include "anyhttp/net.hpp"
 
 #include <boost/asio/associated_immediate_executor.hpp>
 

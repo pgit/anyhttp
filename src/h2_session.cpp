@@ -709,16 +709,16 @@ std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
    return std::make_shared<ClientSession<Stream>>(client, std::move(executor), std::move(stream));
 }
 
-template std::shared_ptr<Session::Impl> make_server_session<socket>(server::Server::Impl&, socket&&,
-                                                                    std::optional<Upgrade>);
-template std::shared_ptr<Session::Impl>
-make_server_session<SslStream>(server::Server::Impl&, SslStream&&, std::optional<Upgrade>);
-template std::shared_ptr<Session::Impl>
-make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&,
-                                      std::optional<Upgrade>);
-
-template std::shared_ptr<Session::Impl> make_client_session<socket>(client::Client::Impl&,
-                                                                    socket&&);
+#define ANYHTTP_H2_SERVER(Stream)                                                                  \
+   template std::shared_ptr<Session::Impl> make_server_session<Stream>(                            \
+      server::Server::Impl&, Stream&&, std::optional<Upgrade>);
+#define ANYHTTP_H2_CLIENT(Stream)                                                                  \
+   template std::shared_ptr<Session::Impl> make_client_session<Stream>(client::Client::Impl&,      \
+                                                                       Stream&&);
+ANYHTTP_SERVER_STREAMS(ANYHTTP_H2_SERVER)
+ANYHTTP_CLIENT_STREAMS(ANYHTTP_H2_CLIENT)
+#undef ANYHTTP_H2_SERVER
+#undef ANYHTTP_H2_CLIENT
 
 // =================================================================================================
 

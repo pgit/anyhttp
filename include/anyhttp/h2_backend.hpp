@@ -8,9 +8,9 @@
 //
 
 #include "anyhttp/client_impl.hpp"
+#include "anyhttp/net.hpp"
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
-#include "anyhttp/stream_traits.hpp"
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/stream.hpp>
@@ -53,17 +53,16 @@ std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
 template <SocketStream Stream>
 std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Stream&& stream);
 
-extern template std::shared_ptr<Session::Impl> make_server_session<boost::asio::ip::tcp::socket>(
-   server::Server::Impl&, boost::asio::ip::tcp::socket&&, std::optional<Upgrade>);
-extern template std::shared_ptr<Session::Impl>
-make_server_session<SslStream>(server::Server::Impl&, SslStream&&, std::optional<Upgrade>);
-extern template std::shared_ptr<Session::Impl>
-make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&,
-                                      std::optional<Upgrade>);
-
-extern template std::shared_ptr<Session::Impl>
-make_client_session<boost::asio::ip::tcp::socket>(client::Client::Impl&,
-                                                  boost::asio::ip::tcp::socket&&);
+#define ANYHTTP_H2_SERVER(Stream)                                                                  \
+   extern template std::shared_ptr<Session::Impl> make_server_session<Stream>(                     \
+      server::Server::Impl&, Stream&&, std::optional<Upgrade>);
+#define ANYHTTP_H2_CLIENT(Stream)                                                                  \
+   extern template std::shared_ptr<Session::Impl> make_client_session<Stream>(                     \
+      client::Client::Impl&, Stream&&);
+ANYHTTP_SERVER_STREAMS(ANYHTTP_H2_SERVER)
+ANYHTTP_CLIENT_STREAMS(ANYHTTP_H2_CLIENT)
+#undef ANYHTTP_H2_SERVER
+#undef ANYHTTP_H2_CLIENT
 
 // =================================================================================================
 

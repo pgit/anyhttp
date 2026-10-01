@@ -7,8 +7,8 @@
 #include "anyhttp/h1_io.hpp"
 #include "anyhttp/h2_backend.hpp"
 #include "anyhttp/literals.hpp"
+#include "anyhttp/net.hpp"
 #include "anyhttp/server.hpp"
-#include "anyhttp/stream_traits.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/buffer.hpp>
@@ -53,7 +53,6 @@ namespace anyhttp::beast_impl
 
 using namespace asio;
 using namespace boost::beast;
-using socket = asio::ip::tcp::socket;
 
 /**
  * Adds the user's header fields to an outgoing message. A field replaces whatever the message
@@ -1013,7 +1012,7 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       //
       if (reader->url_.has_scheme())
          ; // keep it
-      else if constexpr (std::is_same_v<Stream, asio::ssl::stream<asio::ip::tcp::socket>>)
+      else if (is_tls(stream_))
          reader->url_.set_scheme("https");
       else
          reader->url_.set_scheme("http");
@@ -1323,9 +1322,9 @@ void ClientSession<Stream>::reader_finished(bool complete)
 
 // =================================================================================================
 
-template class ServerSession<asio::ip::tcp::socket>;
-template class ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>;
-template class ServerSession<any_async_stream>;
+#define ANYHTTP_H1_SESSION(Stream) template class ServerSession<Stream>;
+ANYHTTP_SERVER_STREAMS(ANYHTTP_H1_SESSION)
+#undef ANYHTTP_H1_SESSION
 
 // =================================================================================================
 // Factories, see anyhttp/h1_backend.hpp. Instantiating the session templates is kept to this
@@ -1346,15 +1345,16 @@ std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client,
    return std::make_shared<ClientSession<Stream>>(client, std::move(executor), std::move(stream));
 }
 
-template std::shared_ptr<Session::Impl> make_server_session<socket>(server::Server::Impl&,
-                                                                    socket&&);
-template std::shared_ptr<Session::Impl> make_server_session<SslStream>(server::Server::Impl&,
-                                                                       SslStream&&);
-template std::shared_ptr<Session::Impl> make_server_session<any_async_stream>(server::Server::Impl&,
-                                                                              any_async_stream&&);
-
-template std::shared_ptr<Session::Impl> make_client_session<socket>(client::Client::Impl&,
-                                                                    socket&&);
+#define ANYHTTP_H1_SERVER(Stream)                                                                  \
+   template std::shared_ptr<Session::Impl> make_server_session<Stream>(server::Server::Impl&,      \
+                                                                       Stream&&);
+#define ANYHTTP_H1_CLIENT(Stream)                                                                  \
+   template std::shared_ptr<Session::Impl> make_client_session<Stream>(client::Client::Impl&,      \
+                                                                       Stream&&);
+ANYHTTP_SERVER_STREAMS(ANYHTTP_H1_SERVER)
+ANYHTTP_CLIENT_STREAMS(ANYHTTP_H1_CLIENT)
+#undef ANYHTTP_H1_SERVER
+#undef ANYHTTP_H1_CLIENT
 
 // =================================================================================================
 

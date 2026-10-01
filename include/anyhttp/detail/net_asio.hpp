@@ -1,6 +1,8 @@
 #pragma once
 
 //
+// The network half of the runtime layer for Boost.Asio, see anyhttp/net.hpp.
+//
 // The sessions are templates over the stream they run on, and there are four of those: a plain
 // TCP socket, a TLS stream on top of one, beast's tcp_stream and the type-erased any_async_stream.
 // Beyond the async read and write operations, which all of them have in common already, a session
@@ -17,12 +19,19 @@
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/cancel_after.hpp>
+#include <boost/asio/experimental/concurrent_channel.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
 
 #include <chrono>
 #include <concepts>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 namespace anyhttp
 {
@@ -212,6 +221,130 @@ static_assert(SocketStream<boost::asio::ssl::stream<boost::asio::ip::tcp::socket
 static_assert(SocketStream<boost::beast::tcp_stream>);
 static_assert(SocketStream<any_async_stream>);
 static_assert(!SocketStream<boost::asio::ip::tcp::socket&>); // rvalues only, see above
+
+// =================================================================================================
+
+using TcpSocket = asio::ip::tcp::socket;
+using TcpAcceptor = asio::ip::tcp::acceptor;
+using TlsContext = asio::ssl::context;
+using TlsStream = asio::ssl::stream<TcpSocket>;
+
+/// What the server serves cleartext HTTP/1.1 and h2c over: for ASIO, the type-erased stream,
+/// which keeps it exercised.
+using PlainServerStream = any_async_stream;
+
+inline PlainServerStream make_plain_server_stream(TcpSocket&& socket)
+{
+   return make_any_async_stream(std::move(socket));
+}
+
+//
+// The stream types the backends instantiate their session factories for, as X-macros: the
+// factory templates are defined in one source file per backend and explicitly instantiated there,
+// and these keep the lists out of the backends.
+//
+#define ANYHTTP_SERVER_STREAMS(X)                                                                  \
+   X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream) X(::anyhttp::any_async_stream)
+#define ANYHTTP_CLIENT_STREAMS(X) X(::anyhttp::TcpSocket)
+
+// -------------------------------------------------------------------------------------------------
+
+/**
+ * The server's TLS context, from the certificate chain and private key in the PEM files given.
+ * ALPN offers "h2" and "http/1.1", and our order of preference wins over the client's.
+ */
+TlsContext make_server_tls_context(const std::string& certificate_chain,
+                                   const std::string& private_key);
+
+namespace io
+{
+
+inline TcpSocket make_socket(const Executor& executor) { return TcpSocket(executor); }
+inline TcpAcceptor make_acceptor(const Executor& executor) { return TcpAcceptor(executor); }
+
+/**
+ * Opens \p acceptor on \p endpoint and starts listening: with SO_REUSEADDR, and on an IPv6
+ * endpoint for IPv4 clients, too (dual stack, if the system allows it). Throws what fails.
+ */
+void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint);
+
+inline asio::ip::tcp::endpoint local_endpoint(const TcpAcceptor& acceptor)
+{
+   return acceptor.local_endpoint();
+}
+
+/// Stops accepting: a pending accept() completes with an error.
+inline void close(TcpAcceptor& acceptor) noexcept
+{
+   error_code ec;
+   acceptor.close(ec);
+}
+
+/// Accepts the next connection into \p socket: <tt>(error_code)</tt>.
+inline auto accept(TcpAcceptor& acceptor, TcpSocket& socket)
+{
+   return acceptor.async_accept(socket, asio::as_tuple);
+}
+
+/// Turns off Nagle's algorithm, without which HTTP/2 is very slow (and the TLS handshake slower).
+inline void no_delay(TcpSocket& socket)
+{
+   error_code ec;
+   socket.set_option(asio::ip::tcp::no_delay(true), ec);
+}
+
+/// The kernel's send and receive buffer sizes of \p socket, for the log.
+std::pair<int, int> buffer_sizes(TcpSocket& socket);
+
+/// Resolves \p host and \p port (a number): <tt>(error_code, endpoints)</tt>.
+Task<std::tuple<error_code, std::vector<asio::ip::tcp::endpoint>>>
+resolve(Executor executor, std::string host, std::string port);
+
+/// Connects \p socket to the first of \p endpoints that takes it: <tt>(error_code, endpoint)</tt>.
+Task<std::tuple<error_code, asio::ip::tcp::endpoint>>
+connect(TcpSocket& socket, std::vector<asio::ip::tcp::endpoint> endpoints);
+
+inline TlsStream make_tls_stream(TcpSocket&& socket, TlsContext& context)
+{
+   return TlsStream(std::move(socket), context);
+}
+
+/// The TLS handshake, in the role given: <tt>(error_code)</tt>.
+inline auto handshake(TlsStream& stream, Role role)
+{
+   return stream.async_handshake(role == Role::server ? asio::ssl::stream_base::server
+                                                      : asio::ssl::stream_base::client,
+                                 asio::as_tuple);
+}
+
+/// The protocol ALPN has agreed on, empty for none.
+std::string_view alpn(TlsStream& stream);
+
+/// The one-line summary of the handshake, see tls_handshake_info().
+std::string tls_info(TlsStream& stream);
+
+} // namespace io
+
+// -------------------------------------------------------------------------------------------------
+
+/**
+ * A wake-up that may be sent from any thread, unlike Event. It may also wake up its waiter
+ * spuriously, so the waiter checks the condition it waits for itself. With ASIO this is a
+ * concurrent channel that holds one wake-up.
+ */
+class Signal
+{
+public:
+   explicit Signal(const Executor& executor) : channel_(executor, 1) {}
+
+   void notify() { std::ignore = channel_.try_send(error_code{}); }
+
+   /// <tt>auto [ec] = co_await signal.wait();</tt>
+   auto wait() { return channel_.async_receive(asio::as_tuple); }
+
+private:
+   asio::experimental::concurrent_channel<void(error_code)> channel_;
+};
 
 // =================================================================================================
 

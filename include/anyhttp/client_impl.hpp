@@ -3,11 +3,7 @@
 #include "reader_impl.hpp"
 #include "writer_impl.hpp"
 
-#include <boost/asio/any_completion_handler.hpp>
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/awaitable.hpp>
-#include <boost/asio/experimental/co_composed.hpp>
-#include <boost/asio/ip/tcp.hpp>
+#include "net.hpp"
 
 #include <chrono>
 #include <mutex>
@@ -107,7 +103,6 @@ public:
 private:
    Config config_;
    Executor executor_;
-   std::optional<asio::ip::tcp::resolver> resolver_;
 
    //
    // Sessions run on their own executor, which is not necessarily the one the next connect is
