@@ -24,8 +24,11 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ip/udp.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <concepts>
+#include <cstddef>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -63,18 +66,52 @@ public:
       return tls_.read_some(buffers);
    }
 
+   /**
+    * corosio's TLS stream encrypts only the first buffer of a sequence, into a record of its own
+    * that it sends right away. A response head is a dozen small buffers, and would go out as as
+    * many records and send() calls. This copies small buffers into one first, as Boost.Asio's TLS
+    * stream does: a single buffer, or a first one that would fill the copy, goes out as it is.
+    *
+    * The copy is a member, not on the stack as with Asio: corosio retries the encryption from it
+    * after it has waited for the socket.
+    */
    template <typename ConstBufferSequence>
    auto write_some(const ConstBufferSequence& buffers)
    {
-      return tls_.write_some(buffers);
+      return tls_.write_some(linearize(buffers));
    }
 
    TcpSocket& socket() noexcept { return *socket_; }
    corosio::openssl_stream& tls() noexcept { return tls_; }
 
 private:
+   /// The most a TLS record holds: anything that does not fill one is worth a copy.
+   static constexpr size_t linearize_size = 16384;
+
+   template <typename ConstBufferSequence>
+   capy::const_buffer linearize(const ConstBufferSequence& buffers)
+   {
+      size_t used = 0;
+      for (auto it = capy::begin(buffers), end = capy::end(buffers);
+           it != end && used < linearize_size;)
+      {
+         capy::const_buffer buffer = *it++;
+         if (buffer.size() == 0)
+            continue;
+         if (used == 0 && (it == end || buffer.size() >= linearize_size))
+            return buffer;
+         if (!linearized_)
+            linearized_ = std::make_unique<std::byte[]>(linearize_size);
+         const auto n = std::min(buffer.size(), linearize_size - used);
+         std::memcpy(linearized_.get() + used, buffer.data(), n);
+         used += n;
+      }
+      return {linearized_.get(), used};
+   }
+
    std::unique_ptr<TcpSocket> socket_;
    corosio::openssl_stream tls_;
+   std::unique_ptr<std::byte[]> linearized_;
 };
 
 /// Cleartext goes over the plain socket: there is no type-erased stream to exercise here.
