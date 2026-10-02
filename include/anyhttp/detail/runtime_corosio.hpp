@@ -111,13 +111,16 @@ struct CompletionState
    const capy::io_env* env = nullptr;
    std::optional<std::tuple<error_code, Args...>> result;
    std::optional<std::stop_callback<std::function<void()>>> on_stop;
+   bool starting = false; // the operation is being started, see Initiation::await_suspend()
 
-   /// Never resumes the caller inline: it is posted to the caller's executor.
+   /// Never resumes the caller inline: it is posted to the caller's executor, unless the operation
+   /// completes while it is being started, in which case the caller resumes once that returns.
    void complete(error_code ec, Args... args)
    {
       result.emplace(ec, std::move(args)...);
       on_stop.reset();
-      env->executor.post(continuation);
+      if (!starting)
+         env->executor.post(continuation);
    }
 };
 
@@ -139,7 +142,8 @@ class Completion;
 /**
  * An operation that has been started and not completed yet, see detail/runtime_asio.hpp. Here,
  * it refers to the state of the awaitable its caller waits on. Invoking it posts the caller's
- * resumption, it never resumes it inline.
+ * resumption, it never resumes it inline -- except while the operation is still being started,
+ * see Initiation::await_suspend().
  *
  * One that is destroyed without having been invoked completes as cancelled, so that nobody waits
  * for it forever.
@@ -253,7 +257,18 @@ public:
          canceled(std::type_identity<typename Traits::Result>{});
          return h;
       }
+      //
+      // An operation that completes while it is being started resumes its caller right away, once
+      // it has returned, as ASIO's awaitables do: by then the stack is the caller's own again,
+      // with no engine call on it. Posting instead lets what the operation itself posted run
+      // first: HTTP/3's write pass after submit() would then send the response head on its own,
+      // before the handler has had a chance to add the body.
+      //
+      state_.starting = true;
       init_(Completion<Signature>(&state_));
+      state_.starting = false;
+      if (state_.result)
+         return h;
       return std::noop_coroutine();
    }
 
