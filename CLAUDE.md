@@ -16,7 +16,9 @@ and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.jso
 pinned SHAs. Both styles build the same library sources and test files; what belongs to one style
 only is guarded with `ANYHTTP_COROSIO`. So is the `server` program (single-threaded with COROSIO);
 the `client` program is ASIO-only so far. `build-corosio-asan/` is its ASAN tree,
-`build-corosio-release/` its Release tree (benchmark COROSIO with it).
+`build-corosio-release/` its Release tree (benchmark COROSIO with it). COROSIO needs OpenSSL, so
+compare it against `build-openssl-release/` (ASIO, OpenSSL, Release), not `build-release/`:
+`scripts/bench.sh` runs the two side by side (`-P` for plaintext).
 
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
