@@ -1,7 +1,7 @@
 #pragma once
 
 //
-// The fixtures of test_fixtures.hpp for the CAPY runtime: the same names and members, on a
+// The fixtures of test_fixtures.hpp for the COROSIO runtime: the same names and members, on a
 // corosio::io_context, single-threaded. Shared tests use only what both have.
 //
 #include "anyhttp/client.hpp"
@@ -67,7 +67,7 @@ static void setup_logging()
 }
 
 /**
- * CAPY's spelling of ASIO's cancel_after(): awaits \p task, which is requested to stop after
+ * COROSIO's spelling of ASIO's cancel_after(): awaits \p task, which is requested to stop after
  * \p timeout. The request reaches only the task, not the coroutine that awaits it.
  */
 template <typename T, typename Rep, typename Period>

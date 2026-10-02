@@ -34,7 +34,7 @@ target_link_libraries(anyhttp PRIVATE PkgConfig::NGTCP2_CRYPTO PkgConfig::NGTCP2
 # which needs it.
 target_link_libraries(anyhttp PUBLIC ${TLS_TARGET})
 
-if (ANYHTTP_CAPY)
+if (ANYHTTP_COROSIO)
     target_link_libraries(anyhttp PUBLIC Boost::corosio Boost::corosio_openssl)
 endif()
 
@@ -46,7 +46,7 @@ target_sources(server PRIVATE "server_main.cpp")
 target_link_libraries(server PRIVATE anyhttp)
 target_link_libraries(server PRIVATE Boost::program_options)
 
-if (ANYHTTP_CAPY)
+if (ANYHTTP_COROSIO)
     # the client program comes with the rest of the port
     return()
 endif()

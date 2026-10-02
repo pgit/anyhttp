@@ -15,7 +15,7 @@ link_libraries(Boost::atomic Boost::url Boost::filesystem Boost::process)
 
 #
 # Both API styles build every test file: one that belongs to a single style, or has parts that do,
-# guards them with ANYHTTP_CAPY.
+# guards them with ANYHTTP_COROSIO.
 #
 file(GLOB SRC_FILES test_*.cpp)
 

@@ -3,7 +3,7 @@
 #include "anyhttp/server.hpp"
 #include "anyhttp/utils.hpp"
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 #include <boost/corosio/io_context.hpp>
 #include <boost/corosio/signal_set.hpp>
 #else
@@ -29,7 +29,7 @@ using namespace std::chrono_literals;
 using namespace anyhttp;
 namespace po = boost::program_options;
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 using IoContext = boost::corosio::io_context;
 using SignalSet = boost::corosio::signal_set;
 #else
@@ -45,7 +45,7 @@ struct Config
    size_t verbose = 0;
    size_t threads = 1;
    server::Config server{.port = 8080};
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
    boost::corosio::io_context_options context;
 #endif
 };
@@ -91,7 +91,7 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
    opts("alt-svc-max-age", po::value(&alt_svc_max_age)->default_value(alt_svc_max_age),
         "how long clients may remember the HTTP/3 endpoint advertised as 'Alt-Svc' over HTTP/1.1 "
         "and HTTP/2, in seconds (0 advertises nothing)");
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
    opts(
       "inline-budget",
       po::value(&config.context.inline_budget_max)->default_value(config.context.inline_budget_max),
@@ -135,10 +135,10 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
       std::println(std::cerr, "number of threads must be greater than 0");
       return std::unexpected(1);
    }
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
    if (num_threads > 1)
    {
-      std::println(std::cerr, "the CAPY runtime runs on one thread only");
+      std::println(std::cerr, "the COROSIO runtime runs on one thread only");
       return std::unexpected(1);
    }
 #endif
@@ -159,7 +159,7 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
 /// Waits for one of \p signals, then stops \p server.
 static Task<void> stop_on_signal(SignalSet& signals, std::optional<server::Server>& server)
 {
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
    auto [ec, signal] = co_await signals.wait();
 #else
    auto [ec, signal] = co_await signals.async_wait(boost::asio::as_tuple);
@@ -185,7 +185,7 @@ int main(int argc, char* argv[])
    else
       spdlog::set_level(spdlog::level::info);
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
    IoContext context(config->context, config->threads);
 #else
    IoContext context(config->threads);

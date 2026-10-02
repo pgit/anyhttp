@@ -1,6 +1,6 @@
 #include "test_fixtures.hpp"
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 #include <boost/capy/ex/run.hpp>
 #endif
 
@@ -183,7 +183,7 @@ TEST_P(ClientAsyncCancellation, PerOperationCancellation)
       auto response = check(co_await request.get_response());
 
       std::array<uint8_t, 1024> buffer;
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
       // a stop request, which is all that capy has
       std::stop_source stop;
       Timer timer(context.get_executor());
@@ -209,14 +209,14 @@ TEST_P(ClientAsyncCancellation, CancelAfter)
    clientSession = [this](Session session) -> Task<void> {
       auto request =
          check(co_await session.submit(url.set_path("echo").set_params({{"delay", "1000"}}), {}));
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
       auto [ec, response] = co_await stop_after(250ms, request.get_response());
 #else
       auto [ec, response] = co_await request.async_get_response(cancel_after(250ms, as_tuple));
 #endif
       EXPECT_EQ(ec, errc::operation_canceled);
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
       std::tie(ec, response) = co_await stop_after(0ms, request.get_response());
 #else
       std::tie(ec, response) = co_await request.async_get_response(cancel_after(0ms, as_tuple));
@@ -244,7 +244,7 @@ TEST_P(ClientAsyncCancellation, WHEN_client_read_some_with_cancel_after_THEN_can
       auto response = check(co_await request.get_response());
 
       std::array<uint8_t, 1024> buffer;
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
       auto [ec, n] = co_await stop_after(100ms, response.read_some(asio::buffer(buffer)));
 #else
       auto [ec, n] =
@@ -263,7 +263,7 @@ TEST_P(ClientAsyncCancellation, WHEN_server_read_some_with_cancel_after_THEN_can
 {
    requestHandler = [](server::Request request, server::Response response) -> Task<void> {
       std::array<uint8_t, 1024> buffer;
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
       auto [ec, n] = co_await stop_after(100ms, request.read_some(asio::buffer(buffer)));
 #else
       auto [ec, n] =
@@ -295,7 +295,7 @@ TEST_P(ClientAsyncCancellation, WHEN_read_some_completes_before_cancel_after_THE
       check(co_await request.write_eof(asio::buffer(msg)));
 
       std::array<char, 1024> buffer;
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
       auto [ec, n] = co_await stop_after(10s, response.read_some(asio::buffer(buffer)));
 #else
       auto [ec, n] =
@@ -320,7 +320,7 @@ TEST_P(ClientAsyncCancellation, WHEN_client_write_with_cancel_after_THEN_cancell
       auto response = check(co_await request.get_response());
 
       const std::vector<uint8_t> body(8_m, 'x');
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
       auto [ec] = co_await stop_after(100ms, request.write(asio::buffer(body)));
 #else
       auto [ec] = co_await request.async_write(asio::buffer(body), cancel_after(100ms, as_tuple));

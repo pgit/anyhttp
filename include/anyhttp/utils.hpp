@@ -2,7 +2,7 @@
 
 #include <boost/asio/io_context.hpp>
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 #include <boost/corosio/io_context.hpp>
 #endif
 
@@ -14,7 +14,7 @@
 // or more. That shows which turn of the event loop each log line belongs to.
 //
 size_t run(boost::asio::io_context& context);
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 size_t run(boost::corosio::io_context& context);
 #endif
 

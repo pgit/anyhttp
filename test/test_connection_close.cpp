@@ -6,7 +6,7 @@
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/http.hpp>
 
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
 #include <boost/asio/ssl/host_name_verification.hpp>
 #endif
 
@@ -217,7 +217,7 @@ protected:
    Task<TlsStream> connect_tls()
    {
       auto stream = io::make_tls_stream(co_await connect(), tls_);
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
       stream.tls().set_hostname("127.0.0.2");
 #else
       stream.set_verify_callback(asio::ssl::host_name_verification("127.0.0.2"));
@@ -226,7 +226,7 @@ protected:
       co_return stream;
    }
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
    TlsContext tls_ = std::invoke([] {
       namespace corosio = boost::corosio;
       corosio::tls_context context;

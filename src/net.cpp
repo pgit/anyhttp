@@ -1,6 +1,6 @@
 //
 // The network half of the runtime layer, see anyhttp/net.hpp. What is not inline in
-// detail/net_asio.hpp or detail/net_capy.hpp is here, for either runtime.
+// detail/net_asio.hpp or detail/net_corosio.hpp is here, for either runtime.
 //
 
 #include "anyhttp/net.hpp"
@@ -17,7 +17,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 #include <boost/corosio/resolver.hpp>
 #include <boost/corosio/socket_option.hpp>
 
@@ -32,7 +32,7 @@ namespace anyhttp
 
 // =================================================================================================
 
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
 
 //
 // The protocols we speak over TLS on TCP, in descending order of preference. HTTP/3 is not in
@@ -157,7 +157,7 @@ std::string tls_info(TlsStream& stream) { return tls_handshake_info(stream.nativ
 
 } // namespace io
 
-#else // ANYHTTP_CAPY
+#else // ANYHTTP_COROSIO
 
 TlsContext make_server_tls_context(const std::string& certificate_chain,
                                    const std::string& private_key)
@@ -258,7 +258,7 @@ std::string tls_info(TlsStream& stream)
 
 } // namespace io
 
-#endif // ANYHTTP_CAPY
+#endif // ANYHTTP_COROSIO
 
 // =================================================================================================
 // UDP, the same in both runtimes, see anyhttp/net.hpp.

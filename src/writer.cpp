@@ -50,7 +50,7 @@ Task<std::tuple<error_code>> Writer::write_eof(asio::const_buffer buffer)
    return impl_ ? impl_->write(buffer, true) : no_writer();
 }
 
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
 void Writer::async_write_any(WriteHandler&& handler, asio::const_buffer buffer, bool eof)
 {
    if (impl_)

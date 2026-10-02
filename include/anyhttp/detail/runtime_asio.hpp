@@ -2,7 +2,7 @@
 
 //
 // The runtime layer for Boost.Asio: completion tokens, asio::awaitable, any_io_executor. See
-// anyhttp/runtime.hpp for what this is, and detail/runtime_capy.hpp for the other runtime, which
+// anyhttp/runtime.hpp for what this is, and detail/runtime_corosio.hpp for the other runtime, which
 // defines the same names.
 //
 
@@ -328,14 +328,14 @@ auto when_either(Task<A> a, Task<B> b)
 /**
  * Lets a coroutine that has been cancelled go on awaiting, to clean up after the cancellation:
  * ASIO throws from everything it awaits after that otherwise -- a nested coroutine included, which
- * is why this has to be awaited in the cancelled coroutine itself. In CAPY, there is nothing to
+ * is why this has to be awaited in the cancelled coroutine itself. In COROSIO, there is nothing to
  * reset, see shielded().
  */
 inline auto reset_cancellation() { return asio::this_coro::reset_cancellation_state(); }
 
 /**
  * Awaits \p task although the caller has been cancelled already, once reset_cancellation() has
- * been awaited. With ASIO, that is all it takes. A stop request in CAPY can not be taken back,
+ * been awaited. With ASIO, that is all it takes. A stop request in COROSIO can not be taken back,
  * and there, the task runs with a stop token of its own instead.
  */
 template <typename T>

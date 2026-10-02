@@ -23,13 +23,13 @@ static const error_code end_of_stream =
 
 /**
  * Cancels \p task after \p timeout, the way each runtime does it: ASIO with cancel_after() on the
- * coroutine spawned for it, CAPY with a stop request. Yields what the task threw.
+ * coroutine spawned for it, COROSIO with a stop request. Yields what the task threw.
  */
 template <typename Rep, typename Period>
 Task<std::exception_ptr> cancel_task_after(std::chrono::duration<Rep, Period> timeout,
                                            Task<void> task)
 {
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
    co_return co_await caught(stop_after(timeout, std::move(task)));
 #else
    auto [ep] = co_await co_spawn(co_await this_coro::executor, std::move(task),
@@ -129,7 +129,7 @@ TEST_P(ClientAsync, WHEN_get_response_is_detached_THEN_does_not_crash)
 
    clientSession = [this](Session session) -> Task<void> {
       auto request = check(co_await session.submit(url.set_path("echo")));
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
       // with nobody waiting for it: what a detached completion token is to ASIO
       launch(client->get_executor(), [](client::Request request) -> Task<void> {
          std::ignore = co_await request.get_response();
@@ -649,7 +649,7 @@ TEST_P(ClientAsync, WHEN_server_cancels_write_eof_THEN_client_sees_truncated_bod
       // Far more than the peer's receive window, and the client below doesn't read a byte until
       // this is over, so the write is guaranteed to still be in progress when it is cancelled.
       //
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
       auto [ec] = co_await stop_after(50ms, response.write_eof(asio::buffer(body)));
 #else
       auto [ec] =
@@ -807,7 +807,7 @@ TEST_P(ClientAsync, Recursion)
       auto s1 = stack_remaining_bytes().value();
       EXPECT_EQ(s0, s1);
 
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
       // however, ASIO allows us to control this behavior using "immediate executors"
       auto ex = co_await this_coro::executor;
       co_await response.async_read_some(asio::buffer(empty), bind_immediate_executor(ex));

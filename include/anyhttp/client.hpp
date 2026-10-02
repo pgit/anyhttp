@@ -123,7 +123,7 @@ public:
     * its end, or its request was released without asking for it -- getting any later response
     * fails with \c asio::error::connection_aborted. See README.md, "Concurrent Requests".
     */
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken = DefaultCompletionToken>
    auto async_get_response(CompletionToken&& token = CompletionToken())
    {
@@ -142,7 +142,7 @@ public:
    Task<std::tuple<error_code, Response>> get_response();
 
 private:
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    void async_get_response_any(GetResponseHandler&& handler);
 #endif
 
@@ -178,7 +178,7 @@ public:
     * so the users executor is not blocked, but this still means that the operation cannot be
     * interrupted.
     */
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken = DefaultCompletionToken>
    auto async_connect(CompletionToken&& token = CompletionToken())
    {
@@ -193,7 +193,7 @@ public:
    Task<std::tuple<error_code, Session>> connect();
 
 private:
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    void async_connect_any(ConnectHandler&& handler);
 #endif
    std::shared_ptr<Impl> impl;

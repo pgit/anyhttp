@@ -176,7 +176,7 @@ public:
    /**
     * Sends the response header, which opens the body for writing.
     */
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Status) CompletionToken = DefaultCompletionToken>
    auto async_submit(unsigned int status_code, const Fields& headers,
                      CompletionToken&& token = CompletionToken())
@@ -196,7 +196,7 @@ public:
    Task<std::tuple<error_code>> submit(unsigned int status_code, Fields headers);
 
 private:
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    void async_submit_any(StatusHandler&& handler, unsigned int status_code, const Fields& headers);
 #endif
 

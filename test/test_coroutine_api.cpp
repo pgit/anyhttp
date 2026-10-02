@@ -104,7 +104,7 @@ TEST_P(CoroutineApi, WHEN_writing_after_the_end_THEN_error_is_reported_not_throw
 //
 // A body may end, and its stream close, before the reader comes back for the rest of it -- which
 // has to be there when it does. (HTTP/2 used to drop the stream with the data it held: with ASIO,
-// a reader that is resumed inline usually kept up; CAPY, which resumes it later, always lost it.)
+// a reader resumed inline usually kept up; COROSIO, which resumes it later, always lost it.)
 //
 constexpr size_t small_body = 16 * 1024; // well within the flow control window
 

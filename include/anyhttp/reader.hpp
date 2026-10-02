@@ -4,7 +4,7 @@
 
 #include <boost/asio/buffer.hpp>
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 #include <boost/capy/concept/mutable_buffer_sequence.hpp>
 #include <boost/capy/concept/read_stream.hpp>
 #else
@@ -64,7 +64,7 @@ public:
    /// What the incoming message announced as its body length, if it announced one.
    std::optional<size_t> content_length() const noexcept;
 
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    /**
     * Reads a part of the incoming body.
     *
@@ -130,7 +130,7 @@ public:
       return read_some(asio::mutable_buffer{});
    }
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
    /// \overload
    ///
    /// For capy's buffer sequences, which is what makes a Reader a \c capy::ReadStream.
@@ -149,14 +149,14 @@ protected:
    Impl& pimpl() const noexcept { return *impl_; }
 
 private:
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    void async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler);
 #endif
 
    std::shared_ptr<Impl> impl_;
 };
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 static_assert(capy::ReadStream<Reader>);
 #else
 static_assert(AsyncReadStream<Reader>);

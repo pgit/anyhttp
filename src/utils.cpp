@@ -39,7 +39,7 @@ size_t run_one_by_one(IoContext& context)
 
 size_t run(boost::asio::io_context& context) { return run_one_by_one(context); }
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 size_t run(boost::corosio::io_context& context) { return run_one_by_one(context); }
 #endif
 

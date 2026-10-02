@@ -163,7 +163,7 @@ TEST_P(AsyncGet, WHEN_cancelled_THEN_completes_with_operation_canceled_and_empty
       std::ignore = co_await response.write_eof();
    };
    clientSession = [this](Session session) -> Task<void> {
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
       auto [ec, message] = co_await stop_after(100ms, session.get(url));
 #else
       auto [ec, message] = co_await session.async_get(url, {}, cancel_after(100ms, as_tuple));

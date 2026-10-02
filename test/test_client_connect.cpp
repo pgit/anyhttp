@@ -35,7 +35,7 @@ protected:
 TEST_F(ClientConnect, WHEN_unknown_host_THEN_completes_with_host_not_found_eventually)
 {
    auto ec = connect(boost::urls::url("http://this-domain-does-not-exist:12345"));
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
    // corosio maps the errors of getaddrinfo() onto generic ones
    EXPECT_TRUE(ec == errc::no_such_device_or_address || ec == errc::resource_unavailable_try_again)
       << ec.message();
@@ -54,7 +54,7 @@ TEST_F(ClientConnect, WHEN_wrong_port_THEN_completes_with_connection_refused)
              errc::connection_refused);
 }
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 TEST_F(ClientConnect, WHEN_connect_is_stopped_THEN_returns_operation_canceled)
 {
    client::Client client(context.get_executor(),

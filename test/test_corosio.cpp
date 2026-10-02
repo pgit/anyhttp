@@ -1,9 +1,9 @@
 //
-// What the CAPY port builds on, checked against the pinned capy/corosio (docs/capy-port-plan.md).
-// Should one of these break after moving a pin, it says which assumption went away. Empty in an
-// ASIO build.
+// What the COROSIO port builds on, checked against the pinned capy/corosio
+// (docs/corosio-port-plan.md). Should one of these break after moving a pin, it says which
+// assumption went away. Empty in an ASIO build.
 //
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 
 #include <boost/beast/core/buffers_range.hpp>
 #include <boost/beast/http/error.hpp>
@@ -158,7 +158,7 @@ TEST(Corosio, BeastParserAndSerializer)
 //
 // Why each API style needs error constants of its own: a Boost.System code survives the conversion
 // to std::error_code -- Beast's errors stay comparable across it -- but asio's eof does not become
-// capy's. The README's "asio::error::eof at the end of a body" is capy::error::eof in CAPY.
+// capy's. The README's "asio::error::eof at the end of a body" is capy::error::eof in COROSIO.
 //
 TEST(Corosio, ErrorCodeInterop)
 {
@@ -183,7 +183,7 @@ TEST(Corosio, ErrorCodeInterop)
 }
 
 // =================================================================================================
-// The CAPY half of the runtime layer (detail/runtime_capy.hpp), without any protocol on top.
+// The COROSIO half of the runtime layer (detail/runtime_corosio.hpp), without any protocol on top.
 // =================================================================================================
 
 namespace
@@ -224,7 +224,7 @@ Task<void> finish_later(Parked& parked, size_t n)
 
 } // namespace
 
-TEST(CapyRuntime, WHEN_parked_operation_is_completed_THEN_caller_resumes_with_result)
+TEST(CorosioRuntime, WHEN_parked_operation_is_completed_THEN_caller_resumes_with_result)
 {
    corosio::io_context context;
    Parked parked;
@@ -242,7 +242,7 @@ TEST(CapyRuntime, WHEN_parked_operation_is_completed_THEN_caller_resumes_with_re
    EXPECT_EQ(std::get<1>(*result), 42);
 }
 
-TEST(CapyRuntime, WHEN_caller_is_stopped_THEN_parked_operation_is_cancelled)
+TEST(CorosioRuntime, WHEN_caller_is_stopped_THEN_parked_operation_is_cancelled)
 {
    corosio::io_context context;
    Parked parked;
@@ -261,7 +261,7 @@ TEST(CapyRuntime, WHEN_caller_is_stopped_THEN_parked_operation_is_cancelled)
    EXPECT_EQ(parked.cancelled, 1);
 }
 
-TEST(CapyRuntime, WHEN_completion_is_dropped_THEN_caller_resumes_cancelled)
+TEST(CorosioRuntime, WHEN_completion_is_dropped_THEN_caller_resumes_cancelled)
 {
    corosio::io_context context;
    Parked parked;
@@ -278,7 +278,7 @@ TEST(CapyRuntime, WHEN_completion_is_dropped_THEN_caller_resumes_cancelled)
    EXPECT_EQ(std::get<0>(*result), capy::cond::canceled);
 }
 
-TEST(CapyRuntime, WHEN_task_is_launched_for_a_completion_THEN_its_result_completes_it)
+TEST(CorosioRuntime, WHEN_task_is_launched_for_a_completion_THEN_its_result_completes_it)
 {
    corosio::io_context context;
    std::optional<std::tuple<error_code, size_t>> result;
@@ -301,7 +301,7 @@ TEST(CapyRuntime, WHEN_task_is_launched_for_a_completion_THEN_its_result_complet
    EXPECT_EQ(std::get<1>(*result), 7);
 }
 
-TEST(CapyRuntime, WHEN_event_is_set_before_and_while_waiting_THEN_waits_end)
+TEST(CorosioRuntime, WHEN_event_is_set_before_and_while_waiting_THEN_waits_end)
 {
    corosio::io_context context;
    Event event;
@@ -323,7 +323,7 @@ TEST(CapyRuntime, WHEN_event_is_set_before_and_while_waiting_THEN_waits_end)
    EXPECT_EQ(woken, 2);
 }
 
-TEST(CapyRuntime, WHEN_timer_is_rearmed_or_cancelled_THEN_only_the_last_callback_runs)
+TEST(CorosioRuntime, WHEN_timer_is_rearmed_or_cancelled_THEN_only_the_last_callback_runs)
 {
    corosio::io_context context;
    Timer timer(context.get_executor());
@@ -338,7 +338,7 @@ TEST(CapyRuntime, WHEN_timer_is_rearmed_or_cancelled_THEN_only_the_last_callback
    EXPECT_THAT(fired, ElementsAre(2));
 }
 
-TEST(CapyRuntime, WHEN_both_tasks_run_THEN_when_both_waits_for_both)
+TEST(CorosioRuntime, WHEN_both_tasks_run_THEN_when_both_waits_for_both)
 {
    corosio::io_context context;
    std::vector<int> done;
@@ -357,7 +357,7 @@ TEST(CapyRuntime, WHEN_both_tasks_run_THEN_when_both_waits_for_both)
    EXPECT_THAT(done, ElementsAre(1, 2, 0));
 }
 
-TEST(CapyRuntime, WHEN_peeking_THEN_bytes_are_seen_but_not_taken)
+TEST(CorosioRuntime, WHEN_peeking_THEN_bytes_are_seen_but_not_taken)
 {
    corosio::io_context context;
    auto [server, client] = corosio::test::make_socket_pair(context);
@@ -383,4 +383,4 @@ TEST(CapyRuntime, WHEN_peeking_THEN_bytes_are_seen_but_not_taken)
 
 // =================================================================================================
 
-#endif // ANYHTTP_CAPY
+#endif // ANYHTTP_COROSIO

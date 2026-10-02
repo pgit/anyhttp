@@ -22,8 +22,8 @@
 
 #include "anyhttp/common.hpp"
 
-#if ANYHTTP_CAPY
-#include "anyhttp/detail/net_capy.hpp"
+#if ANYHTTP_COROSIO
+#include "anyhttp/detail/net_corosio.hpp"
 #else
 #include "anyhttp/detail/net_asio.hpp"
 #endif

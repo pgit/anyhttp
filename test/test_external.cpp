@@ -16,7 +16,7 @@
 
 namespace bp = boost::process::v2;
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 // test_fixtures.hpp brings these in for ASIO; the child processes need Boost.Asio either way
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/co_spawn.hpp>
@@ -43,9 +43,9 @@ using namespace boost::asio::experimental::awaitable_operators;
 class External : public Server
 {
 protected:
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
    //
-   // Boost.Process needs Boost.Asio, so with CAPY the child processes run on an io_context of
+   // Boost.Process needs Boost.Asio, so with COROSIO the child processes run on an io_context of
    // their own, on a thread of their own, next to the server's corosio::io_context.
    //
    void SetUp() override
@@ -204,7 +204,7 @@ protected:
       return spawn(CURL_PATH, std::move(args));
    }
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
    io_context processes_;
    executor_work_guard<io_context::executor_type> work_{processes_.get_executor()};
    std::jthread processes_thread_;
@@ -386,7 +386,7 @@ TEST_P(ExternalTLS, h2load) { h2load(100, 4, 3); }
 // its own strand. For HTTP/3 this is the regression test for concurrent access to a single
 // ngtcp2_conn, which used to crash right away.
 //
-#if !ANYHTTP_CAPY // there is only one thread with CAPY
+#if !ANYHTTP_COROSIO // there is only one thread with COROSIO
 class ExternalTLSThreaded : public ExternalTLS
 {
 protected:

@@ -4,7 +4,7 @@
 
 #include <boost/asio/buffer.hpp>
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 #include <boost/capy/concept/const_buffer_sequence.hpp>
 #include <boost/capy/concept/write_stream.hpp>
 #else
@@ -60,7 +60,7 @@ public:
    /// Announces the length of the outgoing body, before its header is submitted.
    void content_length(std::optional<size_t> content_length);
 
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    /**
     * Writes \p buffer as part of the outgoing body, which stays open for more.
     *
@@ -119,7 +119,7 @@ public:
    /// writer.write_eof();</tt>
    Task<std::tuple<error_code>> write_eof(asio::const_buffer buffer = {});
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
    /**
     * Writes the first non-empty buffer of \p buffers as part of the body, and yields its size:
     * this is what makes a Writer a \c capy::WriteStream. The body stays open, as with write().
@@ -142,7 +142,7 @@ protected:
    Impl& pimpl() const noexcept { return *impl_; }
 
 private:
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    //
    // Binding an executor to the initiating function lets tokens that need one -- the timer behind
    // cancel_after -- find it here, with the token's own executor taking precedence as usual. A
@@ -164,7 +164,7 @@ private:
    std::shared_ptr<Impl> impl_;
 };
 
-#if ANYHTTP_CAPY
+#if ANYHTTP_COROSIO
 static_assert(capy::WriteStream<Writer>);
 #endif
 

@@ -3,8 +3,8 @@
 //
 // Fixtures and helpers shared by the test_*.cpp files.
 //
-#if ANYHTTP_CAPY
-#include "test_fixtures_capy.hpp"
+#if ANYHTTP_COROSIO
+#include "test_fixtures_corosio.hpp"
 #else
 #include "anyhttp/client.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
@@ -284,7 +284,7 @@ public:
 
 // =================================================================================================
 
-#endif // ANYHTTP_CAPY
+#endif // ANYHTTP_COROSIO
 
 // =================================================================================================
 // Shared by both runtimes

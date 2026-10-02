@@ -59,7 +59,7 @@ public:
     *       and fully implement all requirements for asynchronous operations.
     *
     */
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Submit) CompletionToken = DefaultCompletionToken>
    auto async_submit(boost::urls::url target, const Fields& headers = {},
                      CompletionToken&& token = CompletionToken())
@@ -103,7 +103,7 @@ public:
     * than the 200 a default-constructed Beast response would claim. A response that says 404, on
     * the other hand, is not an error -- it is a response, and arrives as one.
     */
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Get) CompletionToken = DefaultCompletionToken>
    auto async_get(boost::urls::url url, const Fields& headers = {},
                   CompletionToken&& token = CompletionToken())
@@ -135,7 +135,7 @@ public:
    Executor get_executor() const noexcept;
 
 private:
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
    void async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers);
    void async_get_any(GetHandler&& handler, boost::urls::url url, const Fields& headers);
 #endif

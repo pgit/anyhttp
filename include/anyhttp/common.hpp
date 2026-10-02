@@ -117,7 +117,7 @@ using WriteHandler = Completion<Write>;
 using Status = void(error_code);
 using StatusHandler = Completion<Status>;
 
-#if !ANYHTTP_CAPY
+#if !ANYHTTP_COROSIO
 using DefaultCompletionToken = asio::default_completion_token_t<Executor>;
 #endif
 

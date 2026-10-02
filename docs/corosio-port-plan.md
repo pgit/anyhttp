@@ -25,13 +25,13 @@ A standalone spike (capy `a372a6b`, corosio `6a3eed4`, both `develop`) establish
 
 ## 1. Shape of the dual build
 
-- **One switch per build tree**: `-DANYHTTP_API=ASIO|CAPY` (default ASIO) defines
-  `ANYHTTP_CAPY=0|1`. A binary is one or the other, never both. The CAPY tree is `build-capy/`.
-- **CAPY means corosio all the way down**: its reactor, sockets, timers and TLS; `capy::task`;
+- **One switch per build tree**: `-DANYHTTP_API=ASIO|COROSIO` (default ASIO) defines
+  `ANYHTTP_COROSIO=0|1`. A binary is one or the other, never both. The COROSIO tree is `build-corosio/`.
+- **COROSIO means corosio all the way down**: its reactor, sockets, timers and TLS; `capy::task`;
   results as `io_result` tuples. Boost.Asio *headers* stay, because Beast needs asio's buffer
   and error types (capy's `buffers/asio.hpp` bridges the buffers). No `io_context`, socket,
   handler or `awaitable` of ASIO's is used.
-- **CAPY requires `TLS_LIBRARY=OpenSSL`** (see §0). The "one TLS library per process" rule holds:
+- **COROSIO requires `TLS_LIBRARY=OpenSSL`** (see §0). The "one TLS library per process" rule holds:
   corosio's `openssl_stream` and `ngtcp2_crypto_ossl` both use OpenSSL 3.5. This constraint goes
   away only if corosio's engine stops using the BIO pair's zero-copy API (a candidate upstream PR).
 - **Single source for the protocol code.** The `#if`s are confined to three places, the way the
@@ -54,15 +54,15 @@ Ranked by how much each one threatens the approach, the most threatening first.
 
 | # | Area | ASIO today | capy/corosio | Approach |
 |---|---|---|---|---|
-| 1 | **Parked operations and their cancellation** | Backends park an `any_completion_handler<Sig>` (read, write, get_response) and complete it from engine callbacks. Cancellation is per operation, through its cancellation slot (terminal/partial/total), and is what `cancel_after` drives. | A parked `coroutine_handle` plus the `io_env` from `await_suspend`. Cancellation comes from the *chain's* `std::stop_token`, which a `std::stop_callback` observes and which may fire on any thread. There is no per-operation slot: per-operation cancellation means `when_any` or `corosio::timeout` around the one operation. | A `Completion<Sig>` type: `any_completion_handler` in ASIO, a continuation + env + result slot + `stop_callback` in CAPY. It offers `complete(...)`, `complete_immediately(...)` and `on_cancel(fn)`. The backends' `Reader::Impl`/`Writer::Impl` virtuals take it in place of today's handler aliases. Stop maps to *terminal* cancellation, which is what the README's `async_write_eof()` rules are written for. |
-| 2 | **Completion resumes inline vs. posted** | `swap_and_invoke()` resumes the waiting coroutine inline, from inside nghttp2/nghttp3 callbacks. The recursion guards (`inside_call_read_handler_`) exist because of that. | Lessons §3.2: never resume application code inside an engine callback; `async_event::set()` posts. | In CAPY, `Completion` posts to `env->executor`. The guards stay; they just never trigger there. Note that ASIO's `co_spawn` *also* starts inline (it `dispatch`es), so "spawn starts inline" (lessons §4.4) is not a new hazard. |
+| 1 | **Parked operations and their cancellation** | Backends park an `any_completion_handler<Sig>` (read, write, get_response) and complete it from engine callbacks. Cancellation is per operation, through its cancellation slot (terminal/partial/total), and is what `cancel_after` drives. | A parked `coroutine_handle` plus the `io_env` from `await_suspend`. Cancellation comes from the *chain's* `std::stop_token`, which a `std::stop_callback` observes and which may fire on any thread. There is no per-operation slot: per-operation cancellation means `when_any` or `corosio::timeout` around the one operation. | A `Completion<Sig>` type: `any_completion_handler` in ASIO, a continuation + env + result slot + `stop_callback` in COROSIO. It offers `complete(...)`, `complete_immediately(...)` and `on_cancel(fn)`. The backends' `Reader::Impl`/`Writer::Impl` virtuals take it in place of today's handler aliases. Stop maps to *terminal* cancellation, which is what the README's `async_write_eof()` rules are written for. |
+| 2 | **Completion resumes inline vs. posted** | `swap_and_invoke()` resumes the waiting coroutine inline, from inside nghttp2/nghttp3 callbacks. The recursion guards (`inside_call_read_handler_`) exist because of that. | Lessons §3.2: never resume application code inside an engine callback; `async_event::set()` posts. | In COROSIO, `Completion` posts to `env->executor`. The guards stay; they just never trigger there. Note that ASIO's `co_spawn` *also* starts inline (it `dispatch`es), so "spawn starts inline" (lessons §4.4) is not a new hazard. |
 | 3 | **Error vocabulary** | `boost::system::error_code`. The README contract is `asio::error::eof`, `http::error::partial_message`, `asio::error::would_block`/`connection_aborted`, `errc::broken_pipe`. | `std::error_code`; `capy::error::eof`, `capy::error::stream_truncated`, compared through `capy::cond::*`. | An `anyhttp::error_code` alias plus named constants per mode (`errors::eof`, `errors::truncated`, ...). Beast's own codes (`header_limit`, parser errors) cross over through Boost.System's `std::error_code` interop. Needs a test that compares through the conversion. The README gets a per-mode table. |
 | 4 | **HTTP/1.1** | `h1_session.cpp` (1.4k lines) uses `http::async_read`/`async_write`, which need an ASIO AsyncStream. | No AsyncStream exists. | Move **both** modes onto Beast's parser/serializer, driven by read/write loops on the runtime layer (spike-proven, §0). This is the one step that changes ASIO behaviour-bearing code substantially, so it comes before any capy work, with the full suite green. |
-| 5 | **TLS over TCP, detection** | `asio::ssl::stream`. `detect_ssl`/`detect_h2` sniff into a `flat_buffer`, which is handed to the SSL handshake or the session. | `openssl_stream` + `tls_context` (`set_alpn`, `alpn_protocol()`). Its handshake takes no pre-read bytes, and it does not build against AWS-LC. | Detection becomes a portable prefix sniff. In CAPY, a `PrefixedStream<S>` replays the sniffed bytes beneath `openssl_stream` (lessons §9.2). Sessions already accept a pre-read `Buffer`. Spike the TLS-over-prefix stack first. |
-| 6 | **Timers** | `steady_timer`, re-armed for ngtcp2's expiry and elsewhere. | Public API: `corosio::delay` and `corosio::timeout`. A re-armable `timer` exists, but only as `corosio::detail::timer`. | The runtime layer offers a `Timer` with `expires_at`, `wait` and `cancel`. Build the CAPY one on `detail::timer`, with a regression test, or restructure the h3 expiry loop the way lessons §3.1 does (`timeout(event.wait(), deadline)`). Decide at the h3 step. |
-| 7 | **Threads and strands** | `use_strand`, a per-connection strand, `server_main --threads`. Tests are single-threaded (`MULTITHREADED` is off). | `capy::strand` exists and corosio's `io_context` is thread-safe by default. But `async_event` is single-threaded by design, and nothing in the sibling project ran multi-threaded. | CAPY starts single-threaded, and `use_strand` fails loudly there. Threads come last, if ever (lessons §9.2). |
+| 5 | **TLS over TCP, detection** | `asio::ssl::stream`. `detect_ssl`/`detect_h2` sniff into a `flat_buffer`, which is handed to the SSL handshake or the session. | `openssl_stream` + `tls_context` (`set_alpn`, `alpn_protocol()`). Its handshake takes no pre-read bytes, and it does not build against AWS-LC. | Detection becomes a portable prefix sniff. In COROSIO, a `PrefixedStream<S>` replays the sniffed bytes beneath `openssl_stream` (lessons §9.2). Sessions already accept a pre-read `Buffer`. Spike the TLS-over-prefix stack first. |
+| 6 | **Timers** | `steady_timer`, re-armed for ngtcp2's expiry and elsewhere. | Public API: `corosio::delay` and `corosio::timeout`. A re-armable `timer` exists, but only as `corosio::detail::timer`. | The runtime layer offers a `Timer` with `expires_at`, `wait` and `cancel`. Build the COROSIO one on `detail::timer`, with a regression test, or restructure the h3 expiry loop the way lessons §3.1 does (`timeout(event.wait(), deadline)`). Decide at the h3 step. |
+| 7 | **Threads and strands** | `use_strand`, a per-connection strand, `server_main --threads`. Tests are single-threaded (`MULTITHREADED` is off). | `capy::strand` exists and corosio's `io_context` is thread-safe by default. But `async_event` is single-threaded by design, and nothing in the sibling project ran multi-threaded. | COROSIO starts single-threaded, and `use_strand` fails loudly there. Threads come last, if ever (lessons §9.2). |
 | 8 | **Composite operations** | `awaitable_operators` `&&`/`\|\|` (send_loop && recv_loop, and 33 uses in tests). `&&` cancels its sibling only on an exception. | `when_all`/`when_any`. `when_all` also requests stop on the first `io_result` *error*, and `corosio::timeout` loses the progress of a composite operation. | `when_both`/`when_either` helpers in the runtime layer. The loops return `task<void>`, so `when_all`'s error-stop never applies to them. |
-| 9 | **Executors and lifetimes** | `any_io_executor` copies, kept even by detached readers and writers so they can still complete. `bind_executor` makes `cancel_after` find one. | `executor_ref` is non-owning; `capy::any_executor` owns. Destroying an `io_context` with a frame still suspended on it double-frees (lessons §4.2). | Store `any_executor`. CAPY fixtures drain the context before destroying it; nothing may rely on "destroy the context and let it clean up". |
+| 9 | **Executors and lifetimes** | `any_io_executor` copies, kept even by detached readers and writers so they can still complete. `bind_executor` makes `cancel_after` find one. | `executor_ref` is non-owning; `capy::any_executor` owns. Destroying an `io_context` with a frame still suspended on it double-frees (lessons §4.2). | Store `any_executor`. COROSIO fixtures drain the context before destroying it; nothing may rely on "destroy the context and let it clean up". |
 | 10 | **Public types that leak ASIO** | `local_endpoint()` returns `asio::ip::tcp::endpoint`. Buffers are `asio::mutable_buffer`. `executor_type`. The `RequestHandler` returns `awaitable<void>`. | `corosio::endpoint`, capy buffer sequences, `task<void>`. | Per-mode aliases in `common.hpp`. `Fields` (Beast) and `boost::url` stay the same in both. |
 | 11 | **Tests** | 5.5k lines written in ASIO idioms: 63 `as_tuple`, 20 `cancel_after`, 19 `co_spawn`, 33 awaitable operators. The `External` fixture drives Boost.Process on ASIO. | Different spelling everywhere. Boost.Process needs its own ASIO context and thread (lessons §4.5). | Decided in §5, done in step 6. |
 
@@ -103,7 +103,7 @@ Task<void> when_both(Task<void>, Task<void>);
 ```
 
 In ASIO mode each helper is a one-line forward (`s.async_read_some(b, as_tuple(use_awaitable))`),
-so it adds no coroutine frame, and ASIO behaviour does not change. In CAPY mode the public front
+so it adds no coroutine frame, and ASIO behaviour does not change. In COROSIO mode the public front
 ends become awaitables whose `await_suspend` builds a `Completion` and calls the same `*_any`
 entry point the token front ends call today. That is the pattern of the old `capy` branch, with
 corosio underneath instead of ASIO.
@@ -113,10 +113,10 @@ corosio underneath instead of ASIO.
 ## 4. Steps
 
 Each step ends with the ASIO suite green, both serial and under `gtest-parallel`. Steps that touch
-the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pass as well.
+the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must pass as well.
 
-1. **Build plumbing.** `ANYHTTP_API`, pinned FetchContent, the `build-capy/` tree, and CAPY
-   requiring OpenSSL. `build-capy` builds a smoke test only, and the ASIO build is untouched.
+1. **Build plumbing.** `ANYHTTP_API`, pinned FetchContent, the `build-corosio/` tree, and COROSIO
+   requiring OpenSSL. `build-corosio` builds a smoke test only, and the ASIO build is untouched.
    *Done 2026-09-30.* `test/test_corosio.cpp` holds the spike's findings as tests: Beast's
    parser/serializer over corosio, and why each mode needs its own error constants.
 2. **Runtime layer, ASIO half; move the internals onto it.**
@@ -142,7 +142,7 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
    The implementation interfaces have each operation in two shapes: handler (`async_*`) and
    coroutine (`read_some`, `write`, `submit`, `get_response`). A backend implements one and gets
    the other: via `initiate()` (cheap) or `launch()` (a spawn). The coroutine spelling of the API
-   awaits the coroutine shape directly. That is the CAPY-native interface already: CAPY's front
+   awaits the coroutine shape directly. That is the COROSIO-native interface already: COROSIO's front
    ends only have to await it. HTTP/1.1 is now slightly faster than with Beast's operations.
 4. **Sockets, streams and TLS, portable.** The acceptor and accept loop, the resolver and connect,
    the UDP sockets and endpoints of h3, socket options, `stream_traits` (shutdown, cancel,
@@ -154,19 +154,19 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
    ASIO serves cleartext over; the backends instantiate for the stream types of the
    `ANYHTTP_SERVER_STREAMS`/`ANYHTTP_CLIENT_STREAMS` X-macros. Spike `openssl_stream` over
    `PrefixedStream` first, including full duplex (corosio#330/#331).
-5. **CAPY half of the runtime layer, plus the public front ends.** Bring it up one protocol at a
-   time, each with its slice of tests in `build-capy`:
+5. **COROSIO half of the runtime layer, plus the public front ends.** Bring it up one protocol at a
+   time, each with its slice of tests in `build-corosio`:
    - 5a: h2c with prior knowledge
    - 5b: HTTP/1.1 and h2c upgrade
    - 5c: TLS with ALPN
    - 5d: HTTP/3
 
-   *5a and 5b done 2026-10-01 (`54b1873`..`8c54877`).* `runtime_capy.hpp` and `net_capy.hpp`
+   *5a and 5b done 2026-10-01 (`54b1873`..`8c54877`).* `runtime_corosio.hpp` and `net_corosio.hpp`
    exist, and the shared `test_coroutine_api.cpp` passes over corosio.
    *5c done 2026-10-01 (`325c5ad`):* the External tests (curl, h2load, nghttp, h2spec; cleartext
-   and TLS with ALPN) pass in CAPY and under ASAN, with child processes on an ASIO context of their
+   and TLS with ALPN) pass in COROSIO and under ASAN, with child processes on an ASIO context of their
    own.
-   *5d done 2026-10-01:* HTTP/3 runs in CAPY too, so the whole library builds there; the shared
+   *5d done 2026-10-01:* HTTP/3 runs in COROSIO too, so the whole library builds there; the shared
    tests run with all three protocols, and `curl_alt_svc` no longer skips. `net.hpp` has a
    `UdpSocket`, which each runtime opens, cancels and closes its own way. Binding, connecting,
    `getsockname()`, the socket options and the client's `send()` go to the native handle,
@@ -174,19 +174,19 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
    socket for them, and the client resolves through `io::resolve()`. One trap: corosio's datagram
    operations keep a *pointer* to their buffer sequence, where its stream operations copy it. An
    awaitable returned from a wrapper that made the buffer a temporary reads into freed memory
-   (`EFAULT` from `recv()`), so the CAPY `io::receive()` is a coroutine.
+   (`EFAULT` from `recv()`), so the COROSIO `io::receive()` is a coroutine.
 6. **The test suite in both modes** (§5).
    *Done 2026-10-01 (`012e0a5`..`86ef515`).* Every test file builds in both styles, and so does
-   every library source; the explicit CAPY lists gave way to the globs. CAPY runs 403 tests, ASIO
+   every library source; the explicit COROSIO lists gave way to the globs. COROSIO runs 403 tests, ASIO
    396, with the same 23 skips. The tests use the coroutine spelling plus a few helpers:
    - `check()` unwraps a result and throws its error, as ASIO's default token does.
    - `caught()` yields what a task threw, where a coroutine used to be spawned with `as_tuple`.
    - `when_both()` and `when_either()` are the awaitable operators `&&` and `||`.
-   - `stop_after()` (CAPY fixture) is CAPY's `cancel_after()`.
+   - `stop_after()` (COROSIO fixture) is COROSIO's `cancel_after()`.
    What is about completion tokens stays ASIO-only, inside the shared test where possible:
    `cancel_after`, cancellation slots, `detached`, immediate executors. Raw peers moved onto
    `net.hpp` and `h1_io.hpp` (which got `h1::read()` and `h1::read_message()`).
-   Running the shared tests on CAPY found real bugs, most of them latent in ASIO too:
+   Running the shared tests on COROSIO found real bugs, most of them latent in ASIO too:
    - **h2 dropped unread body data.** A stream was erased as soon as it closed, together with the
      data it still held. ASIO's inline resumption usually kept the reader ahead; a reader that
      paused lost the rest of the body all the same. `5049570` keeps the stream until it is read.
@@ -197,12 +197,12 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
      the socket error without reading what arrived before it
      (`reactor_descriptor_state.hpp`: `if (err) rd->complete(err, 0); else rd->perform_io();`).
      ASIO reads first. Upstream issue to be filed; the staged close above avoids the RST.
-   - **h1 reported Beast's `partial_message`** where CAPY's contract is `errors::partial_message`
+   - **h1 reported Beast's `partial_message`** where COROSIO's contract is `errors::partial_message`
      (`b572112`).
    - **corosio's datagram operations point to their buffer sequence** (`buffer_param`), where its
-     stream operations copy it: CAPY's `io::receive()` is a coroutine for that (5d).
+     stream operations copy it: COROSIO's `io::receive()` is a coroutine for that (5d).
    - **Cancellation does not carry over one to one.** ASIO resets a coroutine's cancellation
-     state to go on awaiting after one; a stop request can not be taken back, so CAPY runs what
+     state to go on awaiting after one; a stop request can not be taken back, so COROSIO runs what
      follows with a stop token of its own: `reset_cancellation()` plus `shielded()`.
    - **A capy context has to run dry.** Destroying it with a coroutine suspended on it leaks the
      coroutine's stack (LeakSanitizer); `Http3IdleTimeout` runs its frozen client and its server
@@ -211,10 +211,10 @@ the h3 write path also run under ASAN. From step 5 on, CAPY's own tests must pas
    thread). The error table includes the resolver: corosio reports a host that does not resolve
    as `no_such_device_or_address` (`EAI_NONAME` mapped onto a generic code), ASIO as
    `netdb_errors::host_not_found`.
-8. Later: threads in CAPY; `client_main` for CAPY; upstream issues for corosio
+8. Later: threads in COROSIO; `client_main` for COROSIO; upstream issues for corosio
    (`openssl_stream` on AWS-LC, the read on an error event).
    *`server_main` done 2026-10-01:* it builds in both styles and refuses `--threads` above 1 with
-   CAPY. The Debug `run()` wrapper steps a corosio context with `run_one()` too, and the CAPY
+   COROSIO. The Debug `run()` wrapper steps a corosio context with `run_one()` too, and the COROSIO
    fixtures run through it. That reordering flipped an h2 test: a write issued after the stream
    closed reported `canceled`, one parked when it closed `connection_reset`; both report the
    latter now (`ccb30df`).
@@ -229,15 +229,15 @@ port that also changes behaviour cannot be verified against the old tests.
 
 - **Single source** (§1). The ASIO internals move onto the runtime layer, HTTP/1.1 onto Beast's
   parser/serializer, and all of it happens before any capy code runs.
-- **The CAPY API is capy-idiomatic**: `read_some`, `write`, `write_eof`, `submit`,
+- **The COROSIO API is capy-idiomatic**: `read_some`, `write`, `write_eof`, `submit`,
   `get_response`, `connect`, `get`. `Reader` and `Writer` model
   `capy::ReadStream`/`capy::WriteStream`.
 - **Tests are shared, plus per mode.** Protocol-behaviour tests are written once, against thin
   per-mode helpers in the fixtures. Token and `cancel_after` tests stay ASIO-only; `stop_token`
-  and `timeout` tests are CAPY-only. While the port is under way, `test/CMakeLists.txt` lists
-  the files CAPY builds explicitly. That list grows until it equals the glob.
+  and `timeout` tests are COROSIO-only. While the port is under way, `test/CMakeLists.txt` lists
+  the files COROSIO builds explicitly. That list grows until it equals the glob.
 - **Both runtimes share a coroutine spelling** (decided during 2d). The ASIO handles also have
   `read_some`, `write`, `write_eof`, `submit`, `get_response`, `connect` and `get`, yielding
   tuples and forwarding to `async_*(..., as_tuple)`. Shared code and shared tests use only these.
   A library coroutine that returns `Task<std::tuple<error_code, T>>` is `capy::io_task<T>` in
-  CAPY.
+  COROSIO.
