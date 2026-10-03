@@ -55,6 +55,20 @@ Http3Session::~Http3Session()
 
 void Http3Session::clear_streams() { streams_.clear(); }
 
+void Http3Session::fail_streams(error_code ec)
+{
+   //
+   // Streams may erase themselves from streams_ as a side effect of fail() (via maybe_close()),
+   // so snapshot first.
+   //
+   std::vector<std::shared_ptr<Http3Stream>> streams;
+   streams.reserve(streams_.size());
+   for (auto& [id, stream] : streams_)
+      streams.push_back(stream);
+   for (auto& stream : streams)
+      stream->fail(ec);
+}
+
 // -------------------------------------------------------------------------------------------------
 
 std::shared_ptr<Http3Stream> Http3Session::find_stream(int64_t id)

@@ -139,7 +139,7 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
    // sits in the server's connection table for good.
    //
    ASSERT_EQ(result.wait_for(5s), std::future_status::ready) << "request handler never completed";
-   EXPECT_EQ(result.get(), errc::connection_reset);
+   EXPECT_EQ(result.get(), errors::partial_message); // the body was cut short
 
    //
    // Only now, on the way out, is the frozen client allowed to unwind: doing so earlier would

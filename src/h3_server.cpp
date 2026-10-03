@@ -857,6 +857,16 @@ int Http3ServerSession::handle_error(int /*rv*/)
    closed_ = true;
 
    //
+   // Whatever comes next -- a closing or draining period, or none -- no stream can make progress
+   // any more. Fail them now rather than when the session is finally destroyed: the closing and
+   // draining periods last 3 PTO and exist only for the connection ID, and a response submitted
+   // in the meantime would otherwise report success for data that can never be sent.
+   //
+   // the handlers, and erase_quic_session() below, may drop the last outside reference
+   auto self = weak_from_this().lock();
+   fail_streams(make_error_code(errc::connection_reset));
+
+   //
    // Idle timeout and drop-conn need no CONNECTION_CLOSE packet -- and with no packet there is
    // no closing period either, so none of the cleanup in Http3ServerImpl::process_quic_batch() can
    // ever run for this session: it is reached from the expiry timer precisely because nothing is
@@ -867,7 +877,6 @@ int Http3ServerSession::handle_error(int /*rv*/)
    if (last_error_.type == NGTCP2_CCERR_TYPE_IDLE_CLOSE ||
        last_error_.type == NGTCP2_CCERR_TYPE_DROP_CONN)
    {
-      auto self = weak_from_this().lock(); // erase_quic_session() may drop the last reference
       timer_.cancel();
       server_.erase_quic_session(this);
       signal_done();

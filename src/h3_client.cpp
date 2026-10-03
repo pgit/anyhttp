@@ -577,15 +577,9 @@ void Http3ClientSession::close()
    //
    // The connection is going away (user-initiated destroy(), or a protocol/transport error via
    // handle_error()) -- fail every request that hasn't completed yet instead of leaving its
-   // async_get_response()/async_read_some() hanging forever. Streams may erase themselves from
-   // streams_ as a side effect of fail() (via maybe_close()), so snapshot first.
+   // async_get_response()/async_read_some() hanging forever.
    //
-   std::vector<std::shared_ptr<http3::Http3Stream>> streams;
-   streams.reserve(streams_.size());
-   for (auto& [id, stream] : streams_)
-      streams.push_back(stream);
-   for (auto& stream : streams)
-      stream->fail(make_error_code(errc::connection_reset));
+   fail_streams(make_error_code(errc::connection_reset));
 
    //
    // An idle-timed-out (or dropped) connection is discarded silently: RFC 9000 has no

@@ -214,6 +214,12 @@ protected:
    void clear_streams();
 
    //
+   // The connection is over: fails every stream that has not completed yet, instead of leaving
+   // its operations to succeed into the void or hang until the session object goes away.
+   //
+   void fail_streams(error_code ec);
+
+   //
    // Role-specific: everything a QUIC connection cannot decide on its own.
    //
    /// The connection is dead or dying; the role decides how it goes away (closing period and a
