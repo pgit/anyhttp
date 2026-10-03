@@ -5,11 +5,13 @@
 # COROSIO has to, so that the TLS library is not part of the comparison: build-openssl-release/
 # is the ASIO one (build-release/ is ASIO on AWS-LC).
 #
-# Usage: scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-p port] [-u path] [-P] [-n]
+# Usage: scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-t threads] [-p port] [-u path]
+#                         [-P] [-n]
 #
 #   -D  duration of each run in seconds (default 10)
 #   -c  number of h2load clients (default 8)
 #   -m  max concurrent streams per client for h2 and h3 (default 10); h1 always uses 1
+#   -t  threads the servers run on (default 1); h2load gets as many, up to the clients
 #   -p  port (default 18080)
 #   -u  request path (default /)
 #   -P  plaintext: HTTP/1.1 and HTTP/2 (prior knowledge) without TLS; no HTTP/3
@@ -23,21 +25,23 @@ set -euo pipefail
 duration=10
 clients=8
 streams=10
+threads=1
 port=18080
 path=/
 build=1
 scheme=https
 
-while getopts "D:c:m:p:u:Pnh" opt; do
+while getopts "D:c:m:t:p:u:Pnh" opt; do
    case $opt in
    D) duration=$OPTARG ;;
    c) clients=$OPTARG ;;
    m) streams=$OPTARG ;;
+   t) threads=$OPTARG ;;
    p) port=$OPTARG ;;
    u) path=$OPTARG ;;
    P) scheme=http ;;
    n) build=0 ;;
-   *) sed -n '3,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+   *) sed -n '3,21p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
    esac
 done
 
@@ -71,7 +75,7 @@ trap stop_server EXIT
 # quietly, and h2load would then measure whatever else owns the port.
 start_server() {
    local style=$1 log=$out/server-$1.log
-   "${trees[$style]}/src/server" -p "$port" >"$log" 2>&1 &
+   "${trees[$style]}/src/server" -p "$port" -t "$threads" >"$log" 2>&1 &
    server_pid=$!
    for _ in $(seq 50); do
       grep -q "UDP listening" "$log" && return 0
@@ -92,13 +96,16 @@ parse() {
       END { printf "%s %s %s %s %s %s\n", rps, mbs, ok, failed, median, p99 }' "$1"
 }
 
+# h2load wants at least one client per thread
+h2load_threads=$((threads < clients ? threads : clients))
+
 declare -A results
 for style in "${styles[@]}"; do
    start_server "$style"
    for proto in "${protocols[@]}"; do
-      args=(-D "$duration" -c "$clients" -m "$streams")
+      args=(-D "$duration" -c "$clients" -m "$streams" -t "$h2load_threads")
       case $proto in
-      h1) args=(--h1 -D "$duration" -c "$clients" -m 1) ;;
+      h1) args=(--h1 -D "$duration" -c "$clients" -m 1 -t "$h2load_threads") ;;
       h3) args+=(--h3) ;;
       esac
       log=$out/h2load-$style-$proto.log
@@ -115,7 +122,8 @@ for style in "${styles[@]}"; do
 done
 
 echo
-echo "h2load -D ${duration}s -c $clients -m $streams (h1: -m 1), $scheme://127.0.0.1:$port$path"
+echo "h2load -D ${duration}s -c $clients -m $streams -t $h2load_threads (h1: -m 1)," \
+   "$scheme://127.0.0.1:$port$path, server threads: $threads"
 echo
 row='%-8s %-5s %12s %10s %10s %7s %9s %9s\n'
 printf "$row" build proto req/s MB/s succeeded failed median p99
