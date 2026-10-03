@@ -41,6 +41,18 @@ Response::Impl::~Impl() = default;
 
 // =================================================================================================
 
+/**
+ * Destroys \p session on its own executor. With Config::use_strand, that is a strand that may be
+ * in the middle of something on another thread right now: closing the socket, say, or upgrading
+ * to h2c. Right away if the caller is on it already.
+ */
+static void destroy_on_its_executor(const std::shared_ptr<Session::Impl>& session)
+{
+   dispatch_to(session->get_executor(), [session] { session->destroy(); });
+}
+
+// =================================================================================================
+
 Server::Impl::Impl(Executor executor, Config config)
    : config_(std::move(config)), executor_(std::move(executor)),
      tls_context_(make_server_tls_context(config_.tls_certificate_chain, config_.tls_private_key)),
@@ -111,7 +123,7 @@ void Server::Impl::destroy()
       auto lock = std::lock_guard(session_mutex_);
       destroyed_ = true;
       for (auto& session : sessions_)
-         session->destroy();
+         destroy_on_its_executor(session);
    }
 
    if (http3_)
@@ -346,7 +358,7 @@ Task<void> Server::Impl::tcp_accept_loop()
    for (; sessionCounter; ++i)
    {
       for (auto& session : sessions_)
-         session->destroy();
+         destroy_on_its_executor(session);
       sessions_.clear();
 
       lock.unlock();
