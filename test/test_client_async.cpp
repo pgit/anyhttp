@@ -1,8 +1,8 @@
 #include "test_fixtures.hpp"
 
-#include <pthread.h>
+#include "anyhttp/net.hpp"
 
-#include <boost/asio/experimental/concurrent_channel.hpp>
+#include <pthread.h>
 
 #include <array>
 #include <optional>
@@ -15,39 +15,57 @@ using namespace testing;
 
 // =================================================================================================
 
-INSTANTIATE_TEST_SUITE_P(ClientAsync, ClientAsync,
-                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
-                                anyhttp::Protocol::h3),
-                         NameGenerator);
+INSTANTIATE_TEST_SUITE_P(ClientAsync, ClientAsync, ValuesIn(protocols()), NameGenerator);
+
+/// Beast's end_of_stream, as the runtime's error code.
+static const error_code end_of_stream =
+   boost::system::error_code(boost::beast::http::error::end_of_stream);
+
+/**
+ * Cancels \p task after \p timeout, the way each runtime does it: ASIO with cancel_after() on the
+ * coroutine spawned for it, COROSIO with a stop request. Yields what the task threw.
+ */
+template <typename Rep, typename Period>
+Task<std::exception_ptr> cancel_task_after(std::chrono::duration<Rep, Period> timeout,
+                                           Task<void> task)
+{
+#if ANYHTTP_COROSIO
+   co_return co_await caught(stop_after(timeout, std::move(task)));
+#else
+   auto [ep] = co_await co_spawn(co_await this_coro::executor, std::move(task),
+                                 cancel_after(timeout, as_tuple));
+   co_return ep;
+#endif
+}
 
 // -------------------------------------------------------------------------------------------------
 
 TEST_P(ClientAsync, WHEN_post_data_THEN_receive_echo)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
       size_t bytes = 1024;
-      auto count = co_await (generate(request, bytes) && count_response(request));
+      auto count = co_await when_both(generate(request, bytes), count_response(request));
       EXPECT_EQ(bytes, count);
    };
 }
 
 TEST_P(ClientAsync, WHEN_post_without_path_THEN_error_404)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path(""), {});
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path(""), {}));
       co_await generate(request, 1024);
-      auto [ec, response] = co_await request.async_get_response(as_tuple);
+      auto [ec, response] = co_await request.get_response();
       EXPECT_TRUE(ec);
    };
 }
 
 TEST_P(ClientAsync, WHEN_post_to_unknown_path_THEN_error_404)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("unknown"), {});
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("unknown"), {}));
       co_await generate(request, 1_m);
-      auto response = co_await request.async_get_response();
+      auto response = check(co_await request.get_response());
       EXPECT_EQ(response.status_code(), 404);
       auto received = co_await drain(response);
    };
@@ -55,53 +73,52 @@ TEST_P(ClientAsync, WHEN_post_to_unknown_path_THEN_error_404)
 
 TEST_P(ClientAsync, WHEN_server_discards_request_THEN_error_500)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("discard"), {});
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("discard"), {}));
       co_await generate(request, 1024);
-      auto [ec, response] = co_await request.async_get_response(as_tuple);
+      auto [ec, response] = co_await request.get_response();
       EXPECT_TRUE(ec);
    };
 }
 
 TEST_P(ClientAsync, WHEN_server_discards_request_delayed_THEN_error_500)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("detach"), {});
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("detach"), {}));
       co_await generate(request, 1024);
-      auto [ec, response] = co_await request.async_get_response(as_tuple);
+      auto [ec, response] = co_await request.get_response();
       EXPECT_TRUE(ec);
    };
 }
 
 TEST_P(ClientAsync, WHEN_server_discards_request_with_body_delayed_THEN_error_500)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto executor = co_await this_coro::executor;
-      auto request = co_await session.async_submit(url.set_path("detach"), {});
-      auto [ep] = co_await co_spawn(executor, send(request, rv::iota(uint8_t{0})), as_tuple);
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("detach"), {}));
+      auto ep = co_await caught(send(request, rv::iota(uint8_t{0})));
       EXPECT_TRUE(ep);
    };
 }
 
 TEST_P(ClientAsync, WHEN_invalid_port_in_host_header_THEN_reports_error)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       Fields fields;
       fields.set("Host", "host:12345x");
-      auto request = co_await session.async_submit(url.set_path("echo"), fields);
-      auto response = co_await (send_eof(request) && count_response(request));
+      auto request = check(co_await session.submit(url.set_path("echo"), fields));
+      auto response = co_await when_both(send_eof(request), count_response(request));
    };
 }
 
 TEST_P(ClientAsync, WHEN_get_response_is_called_twice_THEN_reports_error)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"));
-      auto [ec, response] = co_await request.async_get_response(as_tuple);
-      EXPECT_EQ(ec, boost::system::errc::success);
-      std::tie(ec, response) = co_await request.async_get_response(as_tuple);
-      EXPECT_EQ(ec, boost::system::errc::connection_already_in_progress);
-      EXPECT_EQ(ec, asio::error::basic_errors::already_started);
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo")));
+      auto [ec, response] = co_await request.get_response();
+      EXPECT_FALSE(ec) << what(ec);
+      std::tie(ec, response) = co_await request.get_response();
+      EXPECT_EQ(ec, errc::connection_already_in_progress);
+      EXPECT_EQ(ec, errors::already_started);
    };
 }
 
@@ -110,9 +127,16 @@ TEST_P(ClientAsync, WHEN_get_response_is_detached_THEN_does_not_crash)
    if (GetParam() == anyhttp::Protocol::h1)
       GTEST_SKIP();
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"));
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo")));
+#if ANYHTTP_COROSIO
+      // with nobody waiting for it: what a detached completion token is to ASIO
+      launch(client->get_executor(), [](client::Request request) -> Task<void> {
+         std::ignore = co_await request.get_response();
+      }(std::move(request)));
+#else
       request.async_get_response(detached);
+#endif
    };
 }
 
@@ -127,10 +151,9 @@ TEST_P(ClientAsync, WHEN_get_response_is_detached_THEN_does_not_crash)
 // sessions shut down asynchronously, so operations may still complete successfully for a little
 // while, with data that has already arrived.
 //
-static bool is_connection_error(const boost::system::error_code& ec)
+static bool is_connection_error(const error_code& ec)
 {
-   return ec == boost::system::errc::connection_aborted ||
-          ec == boost::system::errc::connection_reset;
+   return ec == errc::connection_aborted || ec == errc::connection_reset;
 }
 
 TEST_P(ClientAsync, WHEN_session_is_gone_THEN_request_reports_error)
@@ -138,17 +161,17 @@ TEST_P(ClientAsync, WHEN_session_is_gone_THEN_request_reports_error)
    if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP();
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
       session.reset();
 
-      auto [ec] = co_await request.async_write(asio::buffer("Hello"sv), as_tuple);
+      auto [ec] = co_await request.write(asio::buffer("Hello"sv));
       EXPECT_TRUE(is_connection_error(ec)) << what(ec);
 
-      std::tie(ec) = co_await request.async_write_eof(as_tuple);
+      std::tie(ec) = co_await request.write_eof();
       EXPECT_TRUE(is_connection_error(ec)) << what(ec);
 
-      auto [ec2, response] = co_await request.async_get_response(as_tuple);
+      auto [ec2, response] = co_await request.get_response();
       EXPECT_TRUE(is_connection_error(ec2)) << what(ec2);
    };
 }
@@ -163,44 +186,89 @@ TEST_P(ClientAsync, WHEN_session_is_gone_THEN_request_reports_error)
 // connection -- a network event, which nothing in this process can be woken by. So the sleep
 // stays, but it now covers only that, with the client's own teardown fenced off ahead of it.
 //
-using Signal = asio::experimental::concurrent_channel<void(boost::system::error_code)>;
-
 TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
 {
-   auto clientGone = std::make_shared<Signal>(context.get_executor(), 1);
-   auto responded = std::make_shared<Signal>(context.get_executor(), 1);
+   auto clientGone = std::make_shared<Signal>(context.get_executor());
+   auto responded = std::make_shared<Signal>(context.get_executor());
 
-   requestHandler = [clientGone, responded](server::Request request,
-                                            server::Response response) -> awaitable<void> {
+   requestHandler = [this, clientGone, responded](server::Request request,
+                                                  server::Response response) -> Task<void> {
       //
       // Keep the response around beyond the request handler, until the client has closed the
       // connection and the server session has ended.
       //
-      co_spawn(
-         co_await this_coro::executor,
-         [clientGone, responded, response = std::move(response)]() mutable -> awaitable<void> {
-            co_await clientGone->async_receive();
-            co_await sleep(100ms); // no channel can stand in for this, see above
+      auto respond = [](std::shared_ptr<Signal> clientGone, std::shared_ptr<Signal> responded,
+                        server::Response response) -> Task<void> {
+         std::ignore = co_await clientGone->wait();
+         co_await sleep(100ms); // no signal can stand in for this, see above
 
-            auto [ec] = co_await response.async_submit(200, {}, as_tuple);
-            EXPECT_TRUE(is_connection_error(ec)) << what(ec);
+         auto [ec] = co_await response.submit(200, {});
+         EXPECT_TRUE(is_connection_error(ec)) << what(ec);
 
-            std::tie(ec) = co_await response.async_write(asio::buffer("Hello"sv), as_tuple);
-            EXPECT_TRUE(is_connection_error(ec)) << what(ec);
+         std::tie(ec) = co_await response.write(asio::buffer("Hello"sv));
+         EXPECT_TRUE(is_connection_error(ec)) << what(ec);
 
-            co_await responded->async_send(boost::system::error_code{});
-         },
-         detached);
+         responded->notify();
+      };
+      launch(context.get_executor(), respond(clientGone, responded, std::move(response)));
       co_return;
    };
-   clientSession = [this, clientGone, responded](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url, {});
-      co_await request.async_write_eof();
+   clientSession = [this, clientGone, responded](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url, {}));
+      check(co_await request.write_eof());
       request.reset();
       session.reset();
 
-      co_await clientGone->async_send(boost::system::error_code{});
-      co_await responded->async_receive();
+      clientGone->notify();
+      std::ignore = co_await responded->wait();
+   };
+}
+
+//
+// The head of a request has arrived in full before the handler sees it, so it stays readable
+// after the session is gone. A handler may first look at it only then: under load, a server
+// shutting down can tear down a session before the handlers of its last requests have run.
+//
+TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_request_head_is_still_there)
+{
+   auto clientGone = std::make_shared<Signal>(context.get_executor());
+   auto inspected = std::make_shared<Signal>(context.get_executor());
+
+   requestHandler = [this, clientGone, inspected](server::Request request,
+                                                  server::Response response) -> Task<void> {
+      //
+      // Keep the request beyond the request handler, until the client has closed the connection
+      // and the server session has ended. The response, too, so the exchange is still open then.
+      //
+      auto inspect = [](std::shared_ptr<Signal> clientGone, std::shared_ptr<Signal> inspected,
+                        server::Request request, server::Response) -> Task<void> {
+         const std::string method(request.method());
+         const std::string url(request.url().buffer());
+
+         std::ignore = co_await clientGone->wait();
+         co_await sleep(100ms); // see WHEN_server_session_is_gone_THEN_response_reports_error
+
+         EXPECT_EQ(request.method(), method);
+         EXPECT_EQ(request.url().buffer(), url);
+         EXPECT_EQ(request.url().path(), "/custom/head");
+         EXPECT_EQ(request.fields()["X-Test"], "42");
+
+         inspected->notify();
+      };
+      launch(context.get_executor(),
+             inspect(clientGone, inspected, std::move(request), std::move(response)));
+      co_return;
+   };
+   clientSession = [this, clientGone, inspected](Session session) -> Task<void> {
+      Fields fields;
+      fields.set("X-Test", "42");
+      auto request = check(co_await session.submit(url.set_path("custom/head"), fields));
+      check(co_await request.write_eof());
+      request.reset();
+      session.reset();
+
+      clientGone->notify();
+      std::ignore = co_await inspected->wait();
    };
 }
 
@@ -215,15 +283,15 @@ TEST_P(ClientAsync,
    if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP();
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request1.async_write_eof(asio::buffer("Hello, Server #1!"sv));
-      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
+   clientSession = [this](Session session) -> Task<void> {
+      auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request1.write_eof(asio::buffer("Hello, Server #1!"sv)));
+      auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
 
       request1.reset();
       session.reset();
 
-      auto [ec] = co_await request2.async_write(asio::buffer("Hello"sv), as_tuple);
+      auto [ec] = co_await request2.write(asio::buffer("Hello"sv));
       EXPECT_TRUE(is_connection_error(ec)) << what(ec);
    };
 }
@@ -233,14 +301,14 @@ TEST_P(ClientAsync, WHEN_session_is_gone_THEN_earlier_request_reports_error)
    if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP();
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request1.async_write_eof(asio::buffer("Hello, Server #1!"sv));
-      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
+   clientSession = [this](Session session) -> Task<void> {
+      auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request1.write_eof(asio::buffer("Hello, Server #1!"sv)));
+      auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
 
       session.reset();
 
-      auto [ec, response] = co_await request1.async_get_response(as_tuple);
+      auto [ec, response] = co_await request1.get_response();
       EXPECT_TRUE(is_connection_error(ec)) << what(ec);
    };
 }
@@ -251,15 +319,15 @@ TEST_P(ClientAsync,
    if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP();
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request1.async_write_eof(asio::buffer("Hello, Server #1!"sv));
-      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request2.async_write(asio::buffer("Hello, Server #2!"sv));
+   clientSession = [this](Session session) -> Task<void> {
+      auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request1.write_eof(asio::buffer("Hello, Server #1!"sv)));
+      auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request2.write(asio::buffer("Hello, Server #2!"sv)));
 
-      auto response1 = co_await request1.async_get_response();
+      auto response1 = check(co_await request1.get_response());
       EXPECT_EQ(co_await drain(response1), 17);
-      auto response2 = co_await request2.async_get_response();
+      auto response2 = check(co_await request2.get_response());
 
       response1.reset();
       session.reset();
@@ -268,30 +336,29 @@ TEST_P(ClientAsync,
       // The body of the second response is still open, as its request has not been ended.
       //
       std::array<char, 64> buffer;
-      auto [ec, n] = co_await response2.async_read_some(asio::buffer(buffer), as_tuple);
-      EXPECT_EQ(ec, boost::beast::http::error::partial_message) << what(ec);
+      auto [ec, n] = co_await response2.read_some(asio::buffer(buffer));
+      EXPECT_EQ(ec, errors::partial_message) << what(ec);
    };
 }
 
 TEST_P(ClientAsync, WHEN_server_discards_request_while_writing_THEN_connection_is_reset)
 {
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       co_await sleep(150ms);
       request.reset();
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url);
-      auto executor = co_await this_coro::executor;
-      auto [ec] = co_await co_spawn(executor, send(request, rv::iota(uint8_t(0))), as_tuple);
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url));
+      auto ep = co_await caught(send(request, rv::iota(uint8_t(0))));
 
       //
       // Which of the two it is depends on where the teardown catches the write: the RST that
       // follows the server's FIN fails the write in progress with ECONNRESET, and every one
       // after it with EPIPE.
       //
-      EXPECT_THAT(code(ec), AnyOf(boost::system::errc::connection_reset, //
-                                  boost::system::errc::broken_pipe))
-         << what(ec);
+      EXPECT_THAT(code(ep), AnyOf(errc::connection_reset, //
+                                  errc::broken_pipe))
+         << what(ep);
    };
 }
 
@@ -300,15 +367,15 @@ TEST_P(ClientAsync, WHEN_server_discards_request_and_response_THEN_completes_any
    // if (GetParam() == anyhttp::Protocol::h1)
    //    GTEST_SKIP(); // FIXME: timeout
 
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       std::ignore = request;
       std::ignore = response;
       co_return;
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url);
-      auto [ec, _] = co_await request.async_get_response(as_tuple);
-      EXPECT_EQ(ec, boost::beast::http::error::end_of_stream);
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url));
+      auto [ec, _] = co_await request.get_response();
+      EXPECT_EQ(ec, end_of_stream);
       // EXPECT_EQ(ec, std::errc::connection_reset);
    };
 }
@@ -318,16 +385,13 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_THEN_can_resume)
    if (GetParam() == anyhttp::Protocol::h1)
       GTEST_SKIP(); // a chunked body cannot be cancelled correctly --> disconnects
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      co_await this_coro::throw_if_cancelled(false);
-      auto executor = co_await this_coro::executor;
-      auto request = co_await session.async_submit(url.set_path("echo"));
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo")));
+      auto response = check(co_await request.get_response());
 
       // send as much data as possible within 1s, should run into backpressure
-      auto [ep] = co_await co_spawn(executor, send(request, rv::iota(uint8_t(0))),
-                                    cancel_after(1s, as_tuple));
-      EXPECT_EQ(code(ep), boost::system::errc::operation_canceled);
+      auto ep = co_await cancel_task_after(1s, send(request, rv::iota(uint8_t(0))));
+      EXPECT_EQ(code(ep), errc::operation_canceled);
 
       if (GetParam() == anyhttp::Protocol::h3)
       {
@@ -336,17 +400,17 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_THEN_can_resume)
          // control timing, so don't assert either way here. What matters is that ending the
          // upload and draining the response together complete the exchange.
          //
-         auto received = co_await (send_eof(request) && drain(response));
+         auto received = co_await when_both(send_eof(request), drain(response));
          EXPECT_GT(received, 0);
       }
       else
       {
          // now, with a closed window, we cannot even end the upload
-         std::tie(ep) = co_await co_spawn(executor, send_eof(request), cancel_after(1ms, as_tuple));
-         EXPECT_EQ(code(ep), boost::system::errc::operation_canceled);
+         ep = co_await cancel_task_after(1ms, send_eof(request));
+         EXPECT_EQ(code(ep), errc::operation_canceled);
 
          // as we have no control over when the send window is re-opened, wait for it in parallel
-         auto received = co_await (send_eof(request) && drain(response));
+         auto received = co_await when_both(send_eof(request), drain(response));
          EXPECT_GT(received, 0);
       }
    };
@@ -363,22 +427,22 @@ TEST_P(ClientAsync, YieldFuzz)
    static std::mt19937 gen(42); // fixed seed for reproducibility
 #endif
 
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       std::uniform_int_distribution<> dist(0, 10);
       constexpr auto msg = "Hello, Client!"sv;
       co_await yield(dist(gen));
       Fields fields;
       fields.set("Content-Length", std::to_string(msg.size()));
-      co_await response.async_submit(200, fields);
+      check(co_await response.submit(200, fields));
       co_await yield(dist(gen));
-      co_await response.async_write(asio::buffer(msg));
+      check(co_await response.write(asio::buffer(msg)));
       co_await yield(dist(gen));
-      co_await response.async_write_eof();
+      check(co_await response.write_eof());
       co_await yield(dist(gen));
       std::array<uint8_t, 16> data;
-      co_await request.async_read_some(asio::buffer(data), as_tuple);
+      co_await request.read_some(asio::buffer(data));
    };
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       std::uniform_int_distribution<> dist(0, 10);
       for (size_t i = 0; i < 100; ++i)
       {
@@ -389,9 +453,9 @@ TEST_P(ClientAsync, YieldFuzz)
          if (GetParam() == anyhttp::Protocol::h1)
             fields.set("Connection", "Keep-Alive");
          fields.set("Content-Length", "0");
-         auto request = co_await session.async_submit(url, fields);
+         auto request = check(co_await session.submit(url, fields));
          co_await yield(dist(gen));
-         co_await request.async_write_eof();
+         check(co_await request.write_eof());
          co_await yield(dist(gen));
          co_await count_response(request);
       }
@@ -406,24 +470,24 @@ TEST_P(ClientAsync, YieldFuzz)
 TEST_P(ClientAsync, WHEN_body_ends_THEN_read_reports_eof)
 {
    static const auto hello = "Hello, World!"sv;
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       co_await drain(request);
-      co_await response.async_submit(200, fields({{"Content-Length", hello.size()}}));
-      co_await response.async_write_eof(asio::buffer(hello));
+      check(co_await response.submit(200, fields({{"Content-Length", hello.size()}})));
+      check(co_await response.write_eof(asio::buffer(hello)));
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url);
-      co_await request.async_write_eof();
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url));
+      check(co_await request.write_eof());
+      auto response = check(co_await request.get_response());
 
       std::string body;
       std::array<char, 4> buffer; // small on purpose: several reads before the end
       for (;;)
       {
-         auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
+         auto [ec, n] = co_await response.read_some(asio::buffer(buffer));
          if (ec)
          {
-            EXPECT_EQ(ec, asio::error::eof);
+            EXPECT_EQ(ec, errors::eof);
             EXPECT_EQ(n, 0u);
             break;
          }
@@ -437,12 +501,12 @@ TEST_P(ClientAsync, WHEN_body_ends_THEN_read_reports_eof)
       // opportunity to do (both sides of the exchange are finished by now).
       //
       co_await yield(20);
-      auto [ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
-      EXPECT_EQ(ec, asio::error::eof);
+      auto [ec, n] = co_await response.read_some(asio::buffer(buffer));
+      EXPECT_EQ(ec, errors::eof);
 
       // ... but a zero-length read is not a read, and reports nothing
       std::array<char, 0> empty;
-      std::tie(ec, n) = co_await response.async_read_some(asio::buffer(empty), as_tuple);
+      std::tie(ec, n) = co_await response.read_some(asio::buffer(empty));
       EXPECT_FALSE(ec);
       EXPECT_EQ(n, 0u);
    };
@@ -454,20 +518,20 @@ TEST_P(ClientAsync, WHEN_body_ends_THEN_read_reports_eof)
 TEST_P(ClientAsync, WHEN_reading_into_buffer_sequence_THEN_empty_buffers_are_skipped)
 {
    static const auto hello = "Hello, World!"sv;
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       co_await drain(request);
-      co_await response.async_submit(200, fields({{"Content-Length", hello.size()}}));
-      co_await response.async_write_eof(asio::buffer(hello));
+      check(co_await response.submit(200, fields({{"Content-Length", hello.size()}})));
+      check(co_await response.write_eof(asio::buffer(hello)));
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url);
-      co_await request.async_write_eof();
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url));
+      check(co_await request.write_eof());
+      auto response = check(co_await request.get_response());
 
       std::array<char, 0> empty;
       std::array<char, 64> buffer;
       auto n =
-         co_await response.async_read_some(std::array{asio::buffer(empty), asio::buffer(buffer)});
+         check(co_await response.read_some(std::array{asio::buffer(empty), asio::buffer(buffer)}));
       EXPECT_GT(n, 0u);
       EXPECT_THAT(hello, StartsWith(std::string_view(buffer.data(), n)));
    };
@@ -480,17 +544,17 @@ TEST_P(ClientAsync, WHEN_reading_into_buffer_sequence_THEN_empty_buffers_are_ski
 TEST_P(ClientAsync, WHEN_empty_buffer_is_written_THEN_body_stays_open)
 {
    static const auto tail = "still here"sv;
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       EXPECT_EQ(co_await drain(request), 0u);
-      co_await response.async_submit(200, {});
-      co_await response.async_write({}); // writes nothing, leaves the body open
-      co_await response.async_write_eof(asio::buffer(tail));
+      check(co_await response.submit(200, {}));
+      check(co_await response.write({})); // writes nothing, leaves the body open
+      check(co_await response.write_eof(asio::buffer(tail)));
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url);
-      co_await request.async_write({}); // likewise: the request body stays open
-      co_await request.async_write_eof();
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url));
+      check(co_await request.write({})); // likewise: the request body stays open
+      check(co_await request.write_eof());
+      auto response = check(co_await request.get_response());
       EXPECT_EQ(co_await read(response), tail);
    };
 }
@@ -503,37 +567,37 @@ TEST_P(ClientAsync, WHEN_empty_buffer_is_written_THEN_body_stays_open)
 TEST_P(ClientAsync, WHEN_written_after_eof_THEN_reports_broken_pipe)
 {
    static const auto hello = "Hello, World!"sv;
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       co_await drain(request);
-      co_await response.async_submit(200, fields({{"Content-Length", hello.size()}}));
-      co_await response.async_write_eof(asio::buffer(hello));
+      check(co_await response.submit(200, fields({{"Content-Length", hello.size()}})));
+      check(co_await response.write_eof(asio::buffer(hello)));
 
-      auto [ec] = co_await response.async_write_eof(as_tuple);
+      auto [ec] = co_await response.write_eof();
       EXPECT_FALSE(ec);
 
-      std::tie(ec) = co_await response.async_write({}, as_tuple);
+      std::tie(ec) = co_await response.write({});
       EXPECT_FALSE(ec);
 
-      std::tie(ec) = co_await response.async_write(asio::buffer(hello), as_tuple);
-      EXPECT_EQ(ec, boost::system::errc::broken_pipe);
+      std::tie(ec) = co_await response.write(asio::buffer(hello));
+      EXPECT_EQ(ec, errc::broken_pipe);
 
-      std::tie(ec) = co_await response.async_write_eof(asio::buffer(hello), as_tuple);
-      EXPECT_EQ(ec, boost::system::errc::broken_pipe);
+      std::tie(ec) = co_await response.write_eof(asio::buffer(hello));
+      EXPECT_EQ(ec, errc::broken_pipe);
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      EXPECT_EQ((co_await session.async_get(url)).body(), hello);
+   clientSession = [this](Session session) -> Task<void> {
+      EXPECT_EQ((check(co_await session.get(url))).body(), hello);
    };
 }
 
 TEST_P(ClientAsync, HelloWorld)
 {
    static const auto hello = "Hello, World!"sv;
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
-      co_await response.async_submit(200, {});
-      co_await response.async_write_eof(asio::buffer(hello));
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
+      check(co_await response.submit(200, {}));
+      check(co_await response.write_eof(asio::buffer(hello)));
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto message = co_await session.async_get(url);
+   clientSession = [this](Session session) -> Task<void> {
+      auto message = check(co_await session.get(url));
       EXPECT_EQ(message.result_int(), 200);
       EXPECT_EQ(message.body(), hello);
    };
@@ -555,15 +619,15 @@ TEST_P(ClientAsync, WHEN_server_writes_large_buffer_at_once_THEN_receives_all)
       return data;
    }();
 
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       // drain the request -- HTTP/1.1 closes the connection on an unfinished parser
       co_await drain(request);
 
-      co_await response.async_submit(200, fields({{"Content-Length", body.size()}}));
-      co_await response.async_write_eof(asio::buffer(body));
+      check(co_await response.submit(200, fields({{"Content-Length", body.size()}})));
+      check(co_await response.write_eof(asio::buffer(body)));
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      EXPECT_EQ((co_await session.async_get(url)).body().size(), body.size());
+   clientSession = [this](Session session) -> Task<void> {
+      EXPECT_EQ((check(co_await session.get(url))).body().size(), body.size());
    };
 }
 
@@ -577,31 +641,34 @@ TEST_P(ClientAsync, WHEN_server_cancels_write_eof_THEN_client_sees_truncated_bod
 {
    static const std::vector<uint8_t> body(8_m, 'x');
 
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       co_await drain(request);
-      co_await response.async_submit(200, {});
+      check(co_await response.submit(200, {}));
 
       //
       // Far more than the peer's receive window, and the client below doesn't read a byte until
       // this is over, so the write is guaranteed to still be in progress when it is cancelled.
       //
+#if ANYHTTP_COROSIO
+      auto [ec] = co_await stop_after(50ms, response.write_eof(asio::buffer(body)));
+#else
       auto [ec] =
          co_await response.async_write_eof(asio::buffer(body), cancel_after(50ms, as_tuple));
-      EXPECT_EQ(ec, boost::system::errc::operation_canceled);
+#endif
+      EXPECT_EQ(ec, errc::operation_canceled);
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url);
-      co_await request.async_write_eof();
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url));
+      check(co_await request.write_eof());
+      auto response = check(co_await request.get_response());
 
       // leave the body untouched until the cancellation above has hit, see the sibling testcase
-      asio::steady_timer timer(co_await this_coro::executor, 150ms);
-      co_await timer.async_wait(deferred);
+      co_await sleep(150ms);
 
-      boost::system::error_code ec;
+      error_code ec;
       auto received = co_await try_receive(response, ec);
       EXPECT_LT(received, body.size());
-      EXPECT_EQ(ec, boost::beast::http::error::partial_message);
+      EXPECT_EQ(ec, errors::partial_message);
    };
 }
 
@@ -617,21 +684,19 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_eof_THEN_can_still_end)
 
    static const std::vector<uint8_t> body(8_m, 'x');
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      co_await this_coro::throw_if_cancelled(false);
-      auto executor = co_await this_coro::executor;
-      auto request = co_await session.async_submit(url.set_path("echo"));
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo")));
+      auto response = check(co_await request.get_response());
 
       // far more than the send window, with nobody reading the echo yet: this cannot complete
-      auto write_eof = [&]() -> awaitable<void> {
-         co_await request.async_write_eof(asio::buffer(body));
+      auto write_eof = [&]() -> Task<void> {
+         check(co_await request.write_eof(asio::buffer(body)));
       };
-      auto [ep] = co_await co_spawn(executor, write_eof(), cancel_after(100ms, as_tuple));
-      EXPECT_EQ(code(ep), boost::system::errc::operation_canceled);
+      auto ep = co_await cancel_task_after(100ms, write_eof());
+      EXPECT_EQ(code(ep), errc::operation_canceled);
 
       // the FIN never went out with the cancelled write, so the body can still be ended
-      auto received = co_await (send_eof(request) && drain(response));
+      auto received = co_await when_both(send_eof(request), drain(response));
       EXPECT_GT(received, 0u);
       EXPECT_LT(received, body.size());
    };
@@ -646,39 +711,36 @@ TEST_P(ClientAsync, WHEN_server_cancels_write_THEN_client_sees_truncated_body)
 {
    static const std::vector<uint8_t> body(8_m, 'x');
 
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       // drain the request -- HTTP/1.1 closes the connection on an unfinished parser
       co_await drain(request);
 
-      co_await response.async_submit(200, {});
+      check(co_await response.submit(200, {}));
 
       //
       // Far more than the peer's receive window, and the client below doesn't read a byte until
       // this is over, so the write is guaranteed to still be in progress when it is cancelled.
       //
-      auto executor = co_await this_coro::executor;
-      auto [ep] =
-         co_await co_spawn(executor, send(response, std::span(body)), cancel_after(50ms, as_tuple));
-      EXPECT_EQ(code(ep), boost::system::errc::operation_canceled);
+      auto ep = co_await cancel_task_after(50ms, send(response, std::span(body)));
+      EXPECT_EQ(code(ep), errc::operation_canceled);
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url);
-      co_await request.async_write_eof();
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url));
+      check(co_await request.write_eof());
+      auto response = check(co_await request.get_response());
 
       //
       // Leave the response body untouched for now: whatever the server manages to send fills up
       // the receive window and stays there, so its write cannot run to completion before the
       // cancellation above hits.
       //
-      asio::steady_timer timer(co_await this_coro::executor, 150ms);
-      co_await timer.async_wait(deferred);
+      co_await sleep(150ms);
 
-      boost::system::error_code ec;
+      error_code ec;
       auto received = co_await try_receive(response, ec);
       std::println("received {} of {} bytes ({})", received, body.size(), ec.message());
       EXPECT_LT(received, body.size());
-      EXPECT_EQ(ec, boost::beast::http::error::partial_message);
+      EXPECT_EQ(ec, errors::partial_message);
    };
 }
 
@@ -686,14 +748,14 @@ TEST_P(ClientAsync, WHEN_server_cancels_write_THEN_client_sees_truncated_body)
 
 TEST_P(ClientAsync, ServerYieldFirst)
 {
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       co_await yield(10);
-      co_await response.async_submit(200, {});
+      check(co_await response.submit(200, {}));
       co_await yield(10);
-      co_await response.async_write_eof();
+      check(co_await response.write_eof());
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      EXPECT_EQ((co_await session.async_get(url)).result_int(), 200);
+   clientSession = [this](Session session) -> Task<void> {
+      EXPECT_EQ((check(co_await session.get(url))).result_int(), 200);
    };
 }
 
@@ -733,23 +795,25 @@ TEST_P(ClientAsync, Recursion)
    if (!stack_remaining_bytes())
       GTEST_SKIP() << "unable to measure stack on this platform";
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto ex = co_await this_coro::executor;
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      auto response = check(co_await request.get_response());
 
       // verify that immediate completion (here, due to an empty buffer) does not cause recursion
       std::array<uint8_t, 0> empty;
-      co_await response.async_read_some(asio::buffer(empty));
+      check(co_await response.read_some(asio::buffer(empty)));
       auto s0 = stack_remaining_bytes().value();
-      co_await response.async_read_some(asio::buffer(empty));
+      check(co_await response.read_some(asio::buffer(empty)));
       auto s1 = stack_remaining_bytes().value();
       EXPECT_EQ(s0, s1);
 
+#if !ANYHTTP_COROSIO
       // however, ASIO allows us to control this behavior using "immediate executors"
+      auto ex = co_await this_coro::executor;
       co_await response.async_read_some(asio::buffer(empty), bind_immediate_executor(ex));
       auto s2 = stack_remaining_bytes().value();
       EXPECT_GT(s1, s2);
+#endif
    };
 }
 
@@ -757,53 +821,53 @@ TEST_P(ClientAsync, Recursion)
 
 TEST_P(ClientAsync, Custom)
 {
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
-      co_await response.async_submit(200, {});
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
+      check(co_await response.submit(200, {}));
       std::array<uint8_t, 1024> buffer;
       for (;;)
       {
-         auto [ec, n] = co_await request.async_read_some(asio::buffer(buffer), as_tuple);
+         auto [ec, n] = co_await request.read_some(asio::buffer(buffer));
          if (ec)
          {
-            co_await response.async_write_eof();
+            check(co_await response.write_eof());
             co_return;
          }
-         co_await response.async_write(asio::buffer(buffer, n));
+         check(co_await response.write(asio::buffer(buffer, n)));
       }
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url, {});
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url, {}));
       constexpr size_t bytes = 1024;
-      auto count = co_await (generate(request, bytes) && count_response(request));
+      auto count = co_await when_both(generate(request, bytes), count_response(request));
       EXPECT_EQ(bytes, count);
    };
 }
 
 TEST_P(ClientAsync, IgnoreRequest)
 {
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
-      co_await response.async_submit(200, {});
-      co_await response.async_write_eof();
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
+      check(co_await response.submit(200, {}));
+      check(co_await response.write_eof());
    };
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       Fields fields;
       fields.set("content-length", "0");
-      auto request = co_await session.async_submit(url, fields);
-      auto count = co_await (generate(request, 0) && count_response(request));
+      auto request = check(co_await session.submit(url, fields));
+      auto count = co_await when_both(generate(request, 0), count_response(request));
       EXPECT_EQ(count, 0);
    };
 }
 
 TEST_P(ClientAsync, IgnoreRequestAndResponse)
 {
-   requestHandler = [this](server::Request request, server::Response response) -> awaitable<void> {
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       std::ignore = request;
       std::ignore = response;
       co_return;
    };
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url, {});
-      auto res = co_await (generate(request, 0) && try_read_response(request));
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url, {}));
+      auto res = co_await when_both(generate(request, 0), try_read_response(request));
       EXPECT_FALSE(res.has_value());
       std::println("ERROR: {}", res.error().message());
    };
@@ -813,15 +877,15 @@ TEST_P(ClientAsync, IgnoreRequestAndResponse)
 
 TEST_P(ClientAsync, PostRange)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
-      // co_await request.async_write(asio::buffer("ping"sv)); // FIXME:
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      // check(co_await request.write(asio::buffer("ping"sv))); // FIXME:
+      auto response = check(co_await request.get_response());
       // std::string s(10_m, 'a');
       // auto sender = send(request, std::string_view("blah"));
       // auto sender = send(request, std::string(10_m, 'a'));
       auto sender = send_and_force_eof(request, rv::iota(uint8_t(0)) | rv::take(1_m));
-      auto received = co_await (std::move(sender) && drain(response));
+      auto received = co_await when_both(std::move(sender), drain(response));
       loge("received: {}", received);
       EXPECT_EQ(received, 1_m);
    };
@@ -829,10 +893,10 @@ TEST_P(ClientAsync, PostRange)
 
 TEST_P(ClientAsync, PostRangeImmediate)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
       auto sender = send_and_force_eof(request, rv::iota(uint8_t(0)) | rv::take(1_m));
-      auto received = co_await (std::move(sender) && count_response(request));
+      auto received = co_await when_both(std::move(sender), count_response(request));
       loge("received: {}", received);
       EXPECT_EQ(received, 1_m);
    };
@@ -842,9 +906,9 @@ TEST_P(ClientAsync, PostRangeImmediate)
 
 TEST_P(ClientAsync, WHEN_request_is_sent_THEN_response_is_received_before_body_is_posted)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("echo"), {});
-      auto response = co_await request.async_get_response();
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      auto response = check(co_await request.get_response());
       constexpr size_t bytes = 1024;
       co_await generate(request, bytes);
       EXPECT_EQ(co_await drain(response), bytes);
@@ -861,17 +925,17 @@ TEST_P(ClientAsync, WHEN_request_is_sent_THEN_response_is_received_before_body_i
 //
 TEST_P(ClientAsync, WHEN_multiple_request_are_made_THEN_responses_are_received_in_order)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request1.async_write_eof(asio::buffer("Hello, Server #1!"sv));
+   clientSession = [this](Session session) -> Task<void> {
+      auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request1.write_eof(asio::buffer("Hello, Server #1!"sv)));
 
-      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request2.async_write_eof(asio::buffer("Hello, Server #2! XYZ"sv));
+      auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request2.write_eof(asio::buffer("Hello, Server #2! XYZ"sv)));
 
-      auto response1 = co_await request1.async_get_response();
+      auto response1 = check(co_await request1.get_response());
       EXPECT_EQ(co_await drain(response1), 17);
 
-      auto response2 = co_await request2.async_get_response();
+      auto response2 = check(co_await request2.get_response());
       EXPECT_EQ(co_await drain(response2), 21);
    };
 }
@@ -888,44 +952,44 @@ static constexpr auto body2 = "Hello, Server #2! XYZ"sv;
 //
 TEST_P(ClientAsync, WHEN_request_is_submitted_before_previous_is_complete_THEN_reports_would_block)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       const bool limited = GetParam() == anyhttp::Protocol::h1;
 
-      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
-      auto [ec, request2] = co_await session.async_submit(url.set_path("echo"), {}, as_tuple);
+      auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
+      auto [ec, request2] = co_await session.submit(url.set_path("echo"), {});
       if (limited)
       {
-         EXPECT_EQ(ec, asio::error::would_block);
+         EXPECT_EQ(ec, errors::would_block);
          EXPECT_FALSE(request2);
       }
       else
          EXPECT_FALSE(ec) << what(ec);
 
-      co_await request1.async_write_eof(asio::buffer(body1));
+      check(co_await request1.write_eof(asio::buffer(body1)));
       if (limited)
-         request2 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request2.async_write_eof(asio::buffer(body2));
+         request2 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request2.write_eof(asio::buffer(body2)));
 
-      auto response1 = co_await request1.async_get_response();
+      auto response1 = check(co_await request1.get_response());
       EXPECT_EQ(co_await read(response1), body1);
-      auto response2 = co_await request2.async_get_response();
+      auto response2 = check(co_await request2.get_response());
       EXPECT_EQ(co_await read(response2), body2);
    };
 }
 
 TEST_P(ClientAsync, WHEN_many_requests_are_made_THEN_all_are_answered_in_order)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       std::vector<client::Request> requests;
       for (size_t i = 0; i < 10; ++i)
       {
-         requests.push_back(co_await session.async_submit(url.set_path("echo"), {}));
-         co_await requests.back().async_write_eof(asio::buffer(std::format("request #{}", i)));
+         requests.push_back(check(co_await session.submit(url.set_path("echo"), {})));
+         check(co_await requests.back().write_eof(asio::buffer(std::format("request #{}", i))));
       }
 
       for (size_t i = 0; i < requests.size(); ++i)
       {
-         auto response = co_await requests[i].async_get_response();
+         auto response = check(co_await requests[i].get_response());
          EXPECT_EQ(co_await read(response), std::format("request #{}", i));
       }
    };
@@ -940,21 +1004,21 @@ TEST_P(ClientAsync, WHEN_getting_response_before_previous_is_read_THEN_reports_w
    if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP(); // requests are multiplexed, nothing to wait for
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request1.async_write_eof(asio::buffer(body1));
-      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request2.async_write_eof(asio::buffer(body2));
+   clientSession = [this](Session session) -> Task<void> {
+      auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request1.write_eof(asio::buffer(body1)));
+      auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request2.write_eof(asio::buffer(body2)));
 
-      auto [ec, response2] = co_await request2.async_get_response(as_tuple);
-      EXPECT_EQ(ec, asio::error::would_block) << "response #1 not requested yet";
+      auto [ec, response2] = co_await request2.get_response();
+      EXPECT_EQ(ec, errors::would_block) << "response #1 not requested yet";
 
-      auto response1 = co_await request1.async_get_response();
-      std::tie(ec, response2) = co_await request2.async_get_response(as_tuple);
-      EXPECT_EQ(ec, asio::error::would_block) << "response #1 not read yet";
+      auto response1 = check(co_await request1.get_response());
+      std::tie(ec, response2) = co_await request2.get_response();
+      EXPECT_EQ(ec, errors::would_block) << "response #1 not read yet";
 
       EXPECT_EQ(co_await read(response1), body1);
-      response2 = co_await request2.async_get_response();
+      response2 = check(co_await request2.get_response());
       EXPECT_EQ(co_await read(response2), body2);
    };
 }
@@ -969,20 +1033,20 @@ TEST_P(ClientAsync, WHEN_request_has_no_body_THEN_it_is_complete_after_submit)
    if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP(); // requests are multiplexed, nothing to wait for
 
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto request1 =
-         co_await session.async_submit(url.set_path("echo"), fields({{"Content-Length", 0}}));
-      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request2.async_write_eof(asio::buffer(body2));
+         check(co_await session.submit(url.set_path("echo"), fields({{"Content-Length", 0}})));
+      auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request2.write_eof(asio::buffer(body2)));
 
-      auto [ec] = co_await request1.async_write_eof(as_tuple);
+      auto [ec] = co_await request1.write_eof();
       EXPECT_FALSE(ec) << what(ec);
-      std::tie(ec) = co_await request1.async_write(asio::buffer(body1), as_tuple);
-      EXPECT_EQ(ec, boost::system::errc::broken_pipe) << what(ec);
+      std::tie(ec) = co_await request1.write(asio::buffer(body1));
+      EXPECT_EQ(ec, errc::broken_pipe) << what(ec);
 
-      auto response1 = co_await request1.async_get_response();
+      auto response1 = check(co_await request1.get_response());
       EXPECT_EQ(co_await read(response1), "");
-      auto response2 = co_await request2.async_get_response();
+      auto response2 = check(co_await request2.get_response());
       EXPECT_EQ(co_await read(response2), body2);
    };
 }
@@ -996,21 +1060,21 @@ TEST_P(ClientAsync, WHEN_content_length_is_written_without_eof_THEN_request_is_n
    if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP(); // requests are multiplexed, nothing to wait for
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request1 = co_await session.async_submit(url.set_path("echo"),
-                                                    fields({{"Content-Length", body1.size()}}));
-      co_await request1.async_write(asio::buffer(body1));
+   clientSession = [this](Session session) -> Task<void> {
+      auto request1 = check(
+         co_await session.submit(url.set_path("echo"), fields({{"Content-Length", body1.size()}})));
+      check(co_await request1.write(asio::buffer(body1)));
 
-      auto [ec, request2] = co_await session.async_submit(url.set_path("echo"), {}, as_tuple);
-      EXPECT_EQ(ec, asio::error::would_block);
+      auto [ec, request2] = co_await session.submit(url.set_path("echo"), {});
+      EXPECT_EQ(ec, errors::would_block);
 
-      co_await request1.async_write_eof();
-      request2 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request2.async_write_eof(asio::buffer(body2));
+      check(co_await request1.write_eof());
+      request2 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request2.write_eof(asio::buffer(body2)));
 
-      auto response1 = co_await request1.async_get_response();
+      auto response1 = check(co_await request1.get_response());
       EXPECT_EQ(co_await read(response1), body1);
-      auto response2 = co_await request2.async_get_response();
+      auto response2 = check(co_await request2.get_response());
       EXPECT_EQ(co_await read(response2), body2);
    };
 }
@@ -1024,13 +1088,13 @@ TEST_P(ClientAsync, WHEN_incomplete_request_is_released_THEN_later_requests_repo
    if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP(); // requests are multiplexed, and independent of each other
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request1.async_write(asio::buffer(body1));
+   clientSession = [this](Session session) -> Task<void> {
+      auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request1.write(asio::buffer(body1)));
       request1.reset();
 
-      auto [ec, request2] = co_await session.async_submit(url.set_path("echo"), {}, as_tuple);
-      EXPECT_EQ(ec, asio::error::connection_aborted);
+      auto [ec, request2] = co_await session.submit(url.set_path("echo"), {});
+      EXPECT_EQ(ec, errors::connection_aborted);
    };
 }
 
@@ -1044,15 +1108,15 @@ TEST_P(ClientAsync,
    if (GetParam() != anyhttp::Protocol::h1)
       GTEST_SKIP(); // requests are multiplexed, and independent of each other
 
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request1 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request1.async_write_eof(asio::buffer(body1));
-      auto request2 = co_await session.async_submit(url.set_path("echo"), {});
-      co_await request2.async_write_eof(asio::buffer(body2));
+   clientSession = [this](Session session) -> Task<void> {
+      auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request1.write_eof(asio::buffer(body1)));
+      auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
+      check(co_await request2.write_eof(asio::buffer(body2)));
       request1.reset();
 
-      auto [ec, response] = co_await request2.async_get_response(as_tuple);
-      EXPECT_EQ(ec, asio::error::connection_aborted);
+      auto [ec, response] = co_await request2.get_response();
+      EXPECT_EQ(ec, errors::connection_aborted);
    };
 }
 
@@ -1060,10 +1124,10 @@ TEST_P(ClientAsync,
 
 TEST_P(ClientAsync, EatRequest)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(url.set_path("eat_request"), {});
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("eat_request"), {}));
       co_await generate(request, 1024);
-      auto response = co_await request.async_get_response();
+      auto response = check(co_await request.get_response());
       auto received = co_await drain(response);
       EXPECT_EQ(received, 0);
    };
@@ -1073,11 +1137,11 @@ TEST_P(ClientAsync, EatRequest)
 
 TEST_P(ClientAsync, Dump)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto request = co_await session.async_submit(
-         url.set_path("dump space").set_params({{"blah", "white space"}, {"x", "y"}}), {});
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(
+         url.set_path("dump space").set_params({{"blah", "white space"}, {"x", "y"}}), {}));
       co_await send_eof(request);
-      auto response = co_await request.async_get_response();
+      auto response = check(co_await request.get_response());
       auto dump = co_await read(response);
       EXPECT_THAT(dump, HasSubstr("method: POST"));
       EXPECT_THAT(dump, HasSubstr("path: /dump space"));

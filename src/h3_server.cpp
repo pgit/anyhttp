@@ -34,19 +34,10 @@
 #include "anyhttp/h3_session.hpp"
 #include "anyhttp/h3_stream.hpp"
 #include "anyhttp/literals.hpp"
+#include "anyhttp/net.hpp"
 #include "anyhttp/request_handlers.hpp" // IWYU pragma: keep
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
-
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/co_spawn.hpp>
-#include <boost/asio/detached.hpp>
-#include <boost/asio/error.hpp>
-#include <boost/asio/ip/v6_only.hpp>
-#include <boost/asio/redirect_error.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <boost/asio/strand.hpp>
-#include <boost/asio/use_awaitable.hpp>
 
 #include <boost/container/container_fwd.hpp>
 #include <boost/container/flat_map.hpp>
@@ -86,7 +77,6 @@
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
-namespace errc = boost::system::errc;
 
 using anyhttp::http3::Address;
 using anyhttp::http3::format_hex;
@@ -297,7 +287,7 @@ public:
    //
    void async_submit(SubmitHandler&& handler, std::string_view, boost::urls::url,
                      const Fields&) override;
-   awaitable<void> do_session(Buffer&& data) override;
+   Task<void> do_session(Buffer&& data) override;
    void destroy() noexcept override;
 
    //
@@ -311,7 +301,6 @@ public:
    /// closing period.
    void resend_conn_close();
 
-   const ngtcp2_cid& scid() const noexcept { return scid_; }
    Http3ServerImpl& server() noexcept { return server_; }
    void count_request() noexcept { ++request_counter_; }
 
@@ -334,9 +323,8 @@ private:
    Endpoint ep_;
    bool owns_fd_ = false; // ep_.fd was dup()ed in the ctor, close it in the dtor
    Address remote_;
-   ngtcp2_cid scid_{};
 
-   asio::steady_timer done_signal_; // used to wake do_session() on connection close
+   Event done_; // wakes do_session() on connection close
    std::vector<uint8_t> conn_closebuf_; // buffered CONNECTION_CLOSE packet
    bool no_gso_ = false; // Config::disable_gso, or sendmsg() rejected UDP_SEGMENT
    size_t request_counter_ = 0;
@@ -396,7 +384,7 @@ public:
    Server::Impl& parent() noexcept { return parent_; }
    const Config& config() const noexcept { return parent_.config(); }
    const RequestHandler& request_handler() const noexcept { return parent_.request_handler(); }
-   asio::any_io_executor get_executor() const noexcept { return parent_.get_executor(); }
+   Executor get_executor() const noexcept { return parent_.get_executor(); }
 
    //
    // The TLS context every QUIC connection is served from, created with this server rather than
@@ -416,7 +404,7 @@ public:
    void erase_quic_session(Http3ServerSession* session);
 
 private:
-   awaitable<void> udp_receive_loop();
+   Task<void> udp_receive_loop();
    int udp_on_read(Endpoint& ep);
    void process_quic_batch(const std::shared_ptr<Http3ServerSession>& session, QuicBatch&& batch);
 
@@ -430,9 +418,12 @@ private:
 
    //
    // The socket gets its own strand: udp_receive_loop() runs on it, and destroy() dispatches the
-   // shutdown close() through it, so the two never touch the socket concurrently.
+   // shutdown close() through it, so the two never touch the socket concurrently. Its address is
+   // kept from when it was bound: every datagram it receives is addressed to it.
    //
-   std::optional<asio::ip::udp::socket> socket_;
+   Executor executor_;
+   UdpSocket socket_;
+   asio::ip::udp::endpoint local_endpoint_;
 
    std::mutex mutex_;
    std::unordered_map<std::string, std::shared_ptr<Http3ServerSession>> sessions_;
@@ -448,6 +439,8 @@ namespace
 //
 // The reading half of a server request: what http3::Http3Reader has for both roles, plus the
 // request line, which only this role has. Its counterpart on the client is Http3ResponseReader.
+// Like the fields, the request line is moved out of the stream on detach(): a handler may well
+// look at it only after the session is gone, e.g. when it first runs during shutdown.
 //
 class Http3RequestReader final : public http3::Http3Reader<server::Request::Impl>
 {
@@ -456,15 +449,22 @@ public:
 
    std::string_view method() const noexcept override
    {
-      assert(stream);
-      return stream->method;
+      return stream ? stream->method : detached_method;
    }
 
-   boost::url_view url() const override
+   boost::url_view url() const override { return stream ? stream->url : detached_url; }
+
+   void detach() override
    {
       assert(stream);
-      return stream->url;
+      detached_method = std::move(stream->method);
+      detached_url = std::move(stream->url);
+      Http3Reader::detach();
    }
+
+private:
+   std::string detached_method;
+   boost::urls::url detached_url;
 };
 
 } // namespace
@@ -512,14 +512,13 @@ void Http3ServerStream::on_headers_complete()
    ss.count_request();
    auto& sv = ss.server();
    if (header_limit_exceeded)
-      co_spawn(get_executor(), header_fields_too_large(std::move(request), std::move(response)),
-               detached);
+      launch(get_executor(), header_fields_too_large(std::move(request), std::move(response)));
    else if (auto& handler = sv.request_handler())
-      co_spawn(get_executor(), handler(std::move(request), std::move(response)), detached);
+      launch(get_executor(), handler(std::move(request), std::move(response)));
    else
    {
       mloge("no request handler set");
-      co_spawn(get_executor(), not_found(std::move(response)), detached);
+      launch(get_executor(), not_found(std::move(response)));
    }
 }
 
@@ -566,11 +565,9 @@ void Http3ServerStream::submit_response(unsigned int status, const Fields& user_
 // =================================================================================================
 
 Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Address remote)
-   : http3::Http3Session(server.config().use_strand
-                            ? asio::any_io_executor{asio::make_strand(server.get_executor())}
-                            : server.get_executor()),
-     server_(server), ep_(ep), remote_(remote), done_signal_(get_executor()),
-     no_gso_(server.config().disable_gso)
+   : http3::Http3Session(server.config().use_strand ? new_strand(server.get_executor())
+                                                    : server.get_executor()),
+     server_(server), ep_(ep), remote_(remote), no_gso_(server.config().disable_gso)
 {
    max_header_size_ = server.config().max_header_size;
    log_prefix_ = http3::log_prefix(Role::server, "h3", &remote_.su.sa, remote_.len);
@@ -590,8 +587,6 @@ Http3ServerSession::Http3ServerSession(Http3ServerImpl& server, Endpoint ep, Add
    else
       mloge("dup: {}", strerror(errno));
 
-   // done_signal_ is armed at "never" until signal_done() moves it to the past.
-   done_signal_.expires_at(asio::steady_timer::time_point::max());
    mlogd("session created");
 }
 
@@ -601,7 +596,6 @@ Http3ServerSession::~Http3ServerSession()
    // Tear the streams down while this object is still whole: destroying a stream fires pending
    // handlers, which reach back into the session.
    //
-   done_signal_.cancel();
    clear_streams();
    if (owns_fd_)
       ::close(ep_.fd);
@@ -614,16 +608,13 @@ void Http3ServerSession::async_submit(SubmitHandler&& handler, std::string_view,
                                       const Fields&)
 {
    // A server does not initiate requests; see Http3ClientSession::async_submit().
-   std::move(handler)(errc::make_error_code(errc::operation_not_supported),
-                      client::Request{nullptr});
+   std::move(handler)(make_error_code(errc::operation_not_supported), client::Request{nullptr});
 }
 
-awaitable<void> Http3ServerSession::do_session(Buffer&&)
+Task<void> Http3ServerSession::do_session(Buffer&&)
 {
-   boost::system::error_code ec;
-   co_await done_signal_.async_wait(redirect_error(use_awaitable, ec));
-   // ec is boost::asio::error::operation_aborted (from destroy()) or a spurious
-   // wake-up; either way, this coroutine's job is done.
+   // Set by signal_done(), or cancelled: either way, this coroutine's job is done.
+   auto [ec] = co_await done_.wait();
    co_return;
 }
 
@@ -636,7 +627,7 @@ void Http3ServerSession::destroy() noexcept
    // this session's executor first; with use_strand off and the caller already inside the
    // io_context, dispatch() degenerates to an inline call.
    //
-   asio::dispatch(get_executor(), [self = shared_from_this()] {
+   dispatch_to(get_executor(), [self = shared_from_this()] {
       static_cast<Http3ServerSession&>(*self).do_destroy();
    });
 }
@@ -679,11 +670,7 @@ void Http3ServerSession::do_destroy() noexcept
    signal_done();
 }
 
-void Http3ServerSession::signal_done()
-{
-   // Move the sentinel timer to the past so any waiter wakes up.
-   done_signal_.expires_at(asio::steady_timer::time_point::min());
-}
+void Http3ServerSession::signal_done() { done_.set(); }
 
 // -------------------------------------------------------------------------------------------------
 
@@ -842,7 +829,7 @@ int Http3ServerSession::init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uin
    if (setup_tls(server_.tls_context(), true /* server */) != 0)
       return -1;
 
-   mlogi("new connection, scid={} version=0x{:x}", format_hex(scid_.data, scid_.datalen), version);
+   mlogd("accepted, scid={} version=0x{:x}", format_hex(scid_.data, scid_.datalen), version);
 
    return on_read(pi, data, remote_);
 }
@@ -870,6 +857,16 @@ int Http3ServerSession::handle_error(int /*rv*/)
    closed_ = true;
 
    //
+   // Whatever comes next -- a closing or draining period, or none -- no stream can make progress
+   // any more. Fail them now rather than when the session is finally destroyed: the closing and
+   // draining periods last 3 PTO and exist only for the connection ID, and a response submitted
+   // in the meantime would otherwise report success for data that can never be sent.
+   //
+   // the handlers, and erase_quic_session() below, may drop the last outside reference
+   auto self = weak_from_this().lock();
+   fail_streams(make_error_code(errc::connection_reset));
+
+   //
    // Idle timeout and drop-conn need no CONNECTION_CLOSE packet -- and with no packet there is
    // no closing period either, so none of the cleanup in Http3ServerImpl::process_quic_batch() can
    // ever run for this session: it is reached from the expiry timer precisely because nothing is
@@ -880,7 +877,6 @@ int Http3ServerSession::handle_error(int /*rv*/)
    if (last_error_.type == NGTCP2_CCERR_TYPE_IDLE_CLOSE ||
        last_error_.type == NGTCP2_CCERR_TYPE_DROP_CONN)
    {
-      auto self = weak_from_this().lock(); // erase_quic_session() may drop the last reference
       timer_.cancel();
       server_.erase_quic_session(this);
       signal_done();
@@ -918,10 +914,7 @@ void Http3ServerSession::schedule_close_timer()
 {
    auto delay = conn_ ? std::chrono::nanoseconds{ngtcp2_conn_get_pto(conn_) * 3}
                       : std::chrono::nanoseconds{std::chrono::milliseconds{100}};
-   timer_.expires_after(delay);
-   timer_.async_wait([self = weak_from_this()](const boost::system::error_code& ec) {
-      if (ec)
-         return;
+   timer_.arm(delay, [self = weak_from_this()] {
       auto session = std::static_pointer_cast<Http3ServerSession>(self.lock());
       if (!session)
          return;
@@ -947,34 +940,35 @@ void Http3ServerSession::resend_conn_close()
 // =================================================================================================
 
 Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endpoint& endpoint)
-   : parent_(parent), tls_(parent.config())
+   : parent_(parent), tls_(parent.config()),
+     executor_(config().use_strand ? new_strand(parent.get_executor()) : parent.get_executor()),
+     socket_(io::make_udp_socket(executor_))
 {
-   namespace socket_option = boost::asio::detail::socket_option;
+   if (auto ec = io::open(socket_, endpoint))
+      throw_error(ec);
 
-   const bool is_v6 = endpoint.protocol() == ip::udp::v6();
-
-   socket_.emplace(config().use_strand ? asio::make_strand(parent_.get_executor())
-                                       : parent_.get_executor());
-   socket_->open(is_v6 ? ip::udp::v6() : ip::udp::v4());
-
-   if (is_v6)
+   auto enable = [this](int level, int name) {
+      if (auto ec = io::set_option(socket_, level, name, 1))
+         throw_error(ec);
+   };
+   if (endpoint.address().is_v6())
    {
-      boost::system::error_code ec;
-      socket_->set_option(ip::v6_only(false), ec);
-      socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVTCLASS>(1));
-      socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_MTU_DISCOVER>(1));
-      socket_->set_option(socket_option::integer<IPPROTO_IPV6, IPV6_RECVPKTINFO>(1));
+      std::ignore = io::set_option(socket_, IPPROTO_IPV6, IPV6_V6ONLY, 0); // if the system lets us
+      enable(IPPROTO_IPV6, IPV6_RECVTCLASS);
+      enable(IPPROTO_IPV6, IPV6_MTU_DISCOVER);
+      enable(IPPROTO_IPV6, IPV6_RECVPKTINFO);
    }
    else
    {
-      socket_->set_option(socket_option::integer<IPPROTO_IP, IP_RECVTOS>(1));
-      socket_->set_option(socket_option::integer<IPPROTO_IP, IP_PKTINFO>(1));
+      enable(IPPROTO_IP, IP_RECVTOS);
+      enable(IPPROTO_IP, IP_PKTINFO);
    }
    if (!config().disable_gro)
-      socket_->set_option(socket_option::integer<IPPROTO_UDP, UDP_GRO>(1));
-   socket_->non_blocking(true);
+      enable(IPPROTO_UDP, UDP_GRO);
 
-   socket_->bind(endpoint);
+   if (auto ec = io::bind(socket_, endpoint))
+      throw_error(ec);
+   local_endpoint_ = io::local_endpoint(socket_);
    mlogi("UDP listening on {} (GRO {}, GSO {})", endpoint, config().disable_gro ? "off" : "on",
          config().disable_gso ? "off" : "on");
 }
@@ -984,13 +978,13 @@ Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endp
 void Http3ServerImpl::start()
 {
    // On the socket's strand, so that the loop and destroy()'s close() never race on the socket.
-   co_spawn(socket_->get_executor(), udp_receive_loop(),
-            [self = shared_from_this(), owner = owner()](const std::exception_ptr& ex) {
-               if (ex)
-                  logw("[{}] UDP receive loop: {}", self->log_prefix(), what(ex));
-               else
-                  logi("[{}] UDP receive loop: done", self->log_prefix());
-            });
+   launch(executor_, udp_receive_loop(),
+          [self = shared_from_this(), owner = owner()](const std::exception_ptr& ex) {
+             if (ex)
+                logw("[{}] UDP receive loop: {}", self->log_prefix(), what(ex));
+             else
+                logi("[{}] UDP receive loop: done", self->log_prefix());
+          });
 }
 
 void Http3ServerImpl::destroy()
@@ -1002,8 +996,8 @@ void Http3ServerImpl::destroy()
    // Server::Impl at this point, each sending its final CONNECTION_CLOSE through its own
    // dup()ed fd, so closing this socket doesn't race that.
    //
-   asio::dispatch(socket_->get_executor(), [self = shared_from_this(), owner = owner()] {
-      self->socket_->close();
+   dispatch_to(executor_, [self = shared_from_this(), owner = owner()] {
+      io::close(self->socket_);
    }); // breaks udp_receive_loop()
 }
 
@@ -1042,9 +1036,10 @@ int Http3ServerImpl::udp_on_read(Endpoint& ep)
    msg.msg_iov = &msg_iov;
    msg.msg_iovlen = 1;
 
-   uint8_t
-      msg_ctrl[CMSG_SPACE(sizeof(int)) + CMSG_SPACE(sizeof(in6_pktinfo)) + CMSG_SPACE(sizeof(int))];
-   msg.msg_control = msg_ctrl;
+   std::array<uint8_t,
+              CMSG_SPACE(sizeof(int)) + CMSG_SPACE(sizeof(in6_pktinfo)) + CMSG_SPACE(sizeof(int))>
+      msg_ctrl;
+   msg.msg_control = msg_ctrl.data();
 
    //
    // Datagrams collected per session over the whole batch. Each session gets its accumulated
@@ -1168,8 +1163,8 @@ int Http3ServerImpl::udp_on_read(Endpoint& ep)
    //
    for (auto& [session, batch] : batches)
    {
-      asio::post(session->get_executor(), [self = shared_from_this(), owner = owner(), session,
-                                           batch = std::move(batch)]() mutable { //
+      run_later(session->get_executor(), [self = shared_from_this(), owner = owner(), session,
+                                          batch = std::move(batch)]() mutable { //
          self->process_quic_batch(session, std::move(batch));
       });
    }
@@ -1224,12 +1219,12 @@ void Http3ServerImpl::process_quic_batch(const std::shared_ptr<Http3ServerSessio
          return;
       }
 
-      co_spawn(session->get_executor(), session->do_session({}),
-               [self = shared_from_this(), owner = owner(), session](const std::exception_ptr& ex) {
-                  if (ex)
-                     logw("[{}] {}", session->log_prefix(), what(ex));
-                  self->parent_.remove_session(session);
-               });
+      launch(session->get_executor(), session->do_session({}),
+             [self = shared_from_this(), owner = owner(), session](const std::exception_ptr& ex) {
+                if (ex)
+                   logw("[{}] {}", session->log_prefix(), what(ex));
+                self->parent_.remove_session(session);
+             });
    }
 
    for (; next < batch.datagrams.size(); ++next)
@@ -1291,16 +1286,14 @@ void Http3ServerImpl::process_quic_batch(const std::shared_ptr<Http3ServerSessio
 
 // -------------------------------------------------------------------------------------------------
 
-awaitable<void> Http3ServerImpl::udp_receive_loop()
+Task<void> Http3ServerImpl::udp_receive_loop()
 {
    for (;;)
    {
-      boost::system::error_code ec;
-      co_await socket_->async_wait(boost::asio::socket_base::wait_read,
-                                   redirect_error(use_awaitable, ec));
+      auto [ec] = co_await io::wait_readable(socket_);
       if (ec)
       {
-         if (ec == boost::asio::error::operation_aborted)
+         if (ec == errc::operation_canceled)
             mlogi("UDP receive: {}", ec.message());
          else
             mlogw("UDP receive: {}", ec.message());
@@ -1308,11 +1301,9 @@ awaitable<void> Http3ServerImpl::udp_receive_loop()
       }
 
       Endpoint ep{};
-      ep.fd = socket_->native_handle();
-      auto local = socket_->local_endpoint();
-      auto data = local.data();
-      std::memcpy(&ep.addr.su, data, local.size());
-      ep.addr.len = local.size();
+      ep.fd = socket_.native_handle();
+      std::memcpy(&ep.addr.su, local_endpoint_.data(), local_endpoint_.size());
+      ep.addr.len = local_endpoint_.size();
 
       udp_on_read(ep);
    }

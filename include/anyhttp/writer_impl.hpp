@@ -24,7 +24,7 @@ class Writer::Impl : public std::enable_shared_from_this<Writer::Impl>
 {
 public:
    virtual ~Impl() = default;
-   virtual asio::any_io_executor get_executor() const noexcept = 0;
+   virtual Executor get_executor() const noexcept = 0;
 
    /// The log prefix of the stream this belongs to, still valid after detach().
    virtual std::string log_prefix() const = 0;
@@ -45,6 +45,15 @@ public:
    // failures (closed, cancelled) get their say.
    //
    virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) = 0;
+
+   /// async_write() as a coroutine, see Reader::Impl::read_some().
+   virtual Task<std::tuple<error_code>> write(asio::const_buffer buffer, bool eof)
+   {
+      co_return co_await initiate<Write>([this, buffer, eof](WriteHandler handler) {
+         async_write(std::move(handler), buffer, eof);
+      });
+   }
+
    virtual void detach() = 0;
    virtual void destroy() {};
 };

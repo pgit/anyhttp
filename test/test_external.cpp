@@ -16,6 +16,23 @@
 
 namespace bp = boost::process::v2;
 
+#if ANYHTTP_COROSIO
+// test_fixtures.hpp brings these in for ASIO; the child processes need Boost.Asio either way
+#include <boost/asio/as_tuple.hpp>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/executor_work_guard.hpp>
+#include <boost/asio/experimental/awaitable_operators.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/read.hpp>
+#include <boost/asio/read_until.hpp>
+#include <boost/asio/readable_pipe.hpp>
+#include <boost/asio/strand.hpp>
+#include <boost/asio/this_coro.hpp>
+#include <thread>
+using namespace boost::asio;
+using namespace boost::asio::experimental::awaitable_operators;
+#endif
+
 // https://github.com/curl/curl/issues/10634 --> use custom built curl
 #define CURL_PATH "/usr/local/bin/curl"
 #define NGHTTP_PATH "/usr/local/bin/nghttp"
@@ -26,6 +43,36 @@ namespace bp = boost::process::v2;
 class External : public Server
 {
 protected:
+#if ANYHTTP_COROSIO
+   //
+   // Boost.Process needs Boost.Asio, so with COROSIO the child processes run on an io_context of
+   // their own, on a thread of their own, next to the server's corosio::io_context.
+   //
+   void SetUp() override
+   {
+      Server::SetUp();
+      processes_thread_ = std::jthread([this] { processes_.run(); });
+   }
+
+   void TearDown() override
+   {
+      work_.reset();
+      processes_thread_.join();
+   }
+
+   /// Stops the server from the thread of the child processes: posted to the server's thread.
+   void stop_server()
+   {
+      run_later(server->get_executor(), [this] { server.reset(); });
+   }
+#else
+   /// Stops the server, posted to its executor.
+   void stop_server()
+   {
+      asio::post(server->get_executor(), [this] { server.reset(); });
+   }
+#endif
+
    auto split_lines(std::string_view lines)
    {
       if (lines.ends_with('\n'))
@@ -118,10 +165,8 @@ protected:
 
       if (--numSpawned <= 0)
       {
-         co_await post(server->get_executor());
          logi("all processes exited, stopping server...");
-         server.reset();
-         logi("all processes exited, stopping server... done");
+         stop_server();
       }
 
       co_return result;
@@ -138,7 +183,7 @@ protected:
                   if (ex)
                   {
                      loge("{}", what(ex));
-                     server.reset();
+                     stop_server();
                   }
                   promise.set_value(std::move(str));
                }));
@@ -159,7 +204,14 @@ protected:
       return spawn(CURL_PATH, std::move(args));
    }
 
+#if ANYHTTP_COROSIO
+   io_context processes_;
+   executor_work_guard<io_context::executor_type> work_{processes_.get_executor()};
+   std::jthread processes_thread_;
+   any_io_executor strand{make_strand(processes_.get_executor())};
+#else
    any_io_executor strand{make_strand(context.get_executor())};
+#endif
    std::filesystem::path testFile{"CMakeLists.txt"};
    std::filesystem::path dataFile{"test/data/64kminus1"}; // posted by h2load, one file per request
    std::atomic<int> numSpawned = 0;
@@ -263,11 +315,7 @@ protected:
    }
 };
 
-INSTANTIATE_TEST_SUITE_P(ExternalTLS, ExternalTLS,
-                         ::testing::Values(anyhttp::Protocol::h1, // HTTP/1.1
-                                           anyhttp::Protocol::h2, // HTTP/2
-                                           anyhttp::Protocol::h3), // HTTP/3 (QUIC)
-                         NameGenerator);
+INSTANTIATE_TEST_SUITE_P(ExternalTLS, ExternalTLS, ::testing::ValuesIn(protocols()), NameGenerator);
 
 // -------------------------------------------------------------------------------------------------
 
@@ -338,6 +386,7 @@ TEST_P(ExternalTLS, h2load) { h2load(100, 4, 3); }
 // its own strand. For HTTP/3 this is the regression test for concurrent access to a single
 // ngtcp2_conn, which used to crash right away.
 //
+#if !ANYHTTP_COROSIO // there is only one thread with COROSIO
 class ExternalTLSThreaded : public ExternalTLS
 {
 protected:
@@ -351,6 +400,7 @@ INSTANTIATE_TEST_SUITE_P(ExternalTLSThreaded, ExternalTLSThreaded,
                          NameGenerator);
 
 TEST_P(ExternalTLSThreaded, h2load) { h2load(1000, 8, 5); }
+#endif
 
 // =================================================================================================
 
@@ -456,6 +506,9 @@ TEST_F(ExternalCustom, curl_h2c_upgrade)
 //
 TEST_F(ExternalCustom, curl_alt_svc)
 {
+   if (!std::ranges::contains(protocols(), anyhttp::Protocol::h3))
+      GTEST_SKIP() << "this build has no HTTP/3 to advertise";
+
    auto url = boost::url("https://127.0.0.2/dump").set_port_number(port());
    auto cmd = std::format("cache=$(mktemp) && trap 'rm -f $cache' EXIT && "
                           "for i in 1 2 3; do "

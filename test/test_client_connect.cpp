@@ -8,39 +8,67 @@ class ClientConnect : public Test
 {
 public:
    void SetUp() override { setup_logging(); }
+
+protected:
+   /// Connects a client to \p url, on a context of its own, and returns how that went.
+   error_code connect(boost::urls::url url)
+   {
+      client::Client client(context.get_executor(), client::Config{.url = std::move(url)});
+      error_code result;
+      launch(context.get_executor(), connect(client, result));
+      context.run();
+      return result;
+   }
+
+   static Task<void> connect(client::Client& client, error_code& result)
+   {
+      auto [ec, session] = co_await client.connect();
+      loge("ERROR: {}", ec.message());
+      result = ec;
+   }
+
+   IoContext context;
 };
 
 // -------------------------------------------------------------------------------------------------
 
 TEST_F(ClientConnect, WHEN_unknown_host_THEN_completes_with_host_not_found_eventually)
 {
-   boost::asio::io_context context;
-   client::Config config{.url = boost::urls::url("http://this-domain-does-not-exist:12345")};
-   client::Client client(context.get_executor(), config);
-   client.async_connect([this](boost::system::error_code ec, Session session) {
-      loge("ERROR: {}", ec.message());
-      EXPECT_TRUE(ec == boost::asio::error::netdb_errors::host_not_found ||
-                  ec == boost::asio::error::netdb_errors::host_not_found_try_again);
-   });
-   context.run();
+   auto ec = connect(boost::urls::url("http://this-domain-does-not-exist:12345"));
+#if ANYHTTP_COROSIO
+   // corosio maps the errors of getaddrinfo() onto generic ones
+   EXPECT_TRUE(ec == errc::no_such_device_or_address || ec == errc::resource_unavailable_try_again)
+      << ec.message();
+#else
+   EXPECT_TRUE(ec == boost::asio::error::netdb_errors::host_not_found ||
+               ec == boost::asio::error::netdb_errors::host_not_found_try_again)
+      << ec.message();
+#endif
 }
 
 TEST_F(ClientConnect, WHEN_wrong_port_THEN_completes_with_connection_refused)
 {
-   boost::asio::io_context context;
-   auto port = get_unused_port(context);
-   client::Config config{.url = boost::urls::url("http://localhost").set_port_number(port)};
-   client::Client client(context.get_executor(), config);
-   client.async_connect([this](boost::system::error_code ec, Session session) {
-      loge("ERROR: {}", ec.message());
-      EXPECT_EQ(ec, boost::system::errc::connection_refused);
-   });
-   context.run();
+   boost::asio::io_context io;
+   auto port = get_unused_port(io);
+   EXPECT_EQ(connect(boost::urls::url("http://localhost").set_port_number(port)),
+             errc::connection_refused);
 }
 
+#if ANYHTTP_COROSIO
+TEST_F(ClientConnect, WHEN_connect_is_stopped_THEN_returns_operation_canceled)
+{
+   client::Client client(context.get_executor(),
+                         client::Config{.url = boost::urls::url("http://localhost:12345")});
+   error_code result;
+   std::stop_source stop;
+   boost::capy::run_async(context.get_executor(), stop.get_token())(connect(client, result));
+   run_later(context.get_executor(), [&] { stop.request_stop(); }); // once it is under way
+   context.run();
+   EXPECT_EQ(result, errc::operation_canceled);
+}
+#else
 TEST_F(ClientConnect, WHEN_async_connect_is_cancelled_THEN_returns_operation_canceled)
 {
-   boost::asio::io_context context;
    client::Config config{.url = boost::urls::url("http://localhost:12345")};
    client::Client client(context.get_executor(), config);
    client.async_connect(cancel_after(0ms, [this](boost::system::error_code ec, Session session) {
@@ -50,17 +78,11 @@ TEST_F(ClientConnect, WHEN_async_connect_is_cancelled_THEN_returns_operation_can
 
    context.run();
 }
+#endif
 
 TEST_F(ClientConnect, WHEN_connect_to_broadcast_ip_THEN_completes_with_network_unreachable)
 {
-   boost::asio::io_context context;
-   client::Config config{.url = boost::urls::url("http://255.255.255.255:12345")};
-   client::Client client(context.get_executor(), config);
-   client.async_connect([this](boost::system::error_code ec, Session session) {
-      loge("ERROR: {}", ec.message());
-      EXPECT_EQ(ec, boost::system::errc::network_unreachable);
-   });
-   context.run();
+   EXPECT_EQ(connect(boost::urls::url("http://255.255.255.255:12345")), errc::network_unreachable);
 }
 
 // =================================================================================================
@@ -73,15 +95,19 @@ TEST_F(ClientConnect, WHEN_connect_to_broadcast_ip_THEN_completes_with_network_u
 class ClientTls : public Client
 {
 protected:
-   boost::system::error_code connect()
+   error_code connect()
    {
-      boost::system::error_code result;
-      client->async_connect([&](boost::system::error_code ec, Session) {
-         result = ec;
-         server.reset();
-      });
+      error_code result;
+      launch(client->get_executor(), connect(this, result));
       run();
       return result;
+   }
+
+   static Task<void> connect(ClientTls* self, error_code& result)
+   {
+      auto [ec, session] = co_await self->client->connect();
+      result = ec;
+      self->server.reset();
    }
 };
 
@@ -89,7 +115,7 @@ INSTANTIATE_TEST_SUITE_P(ClientTls, ClientTls, Values(anyhttp::Protocol::h3), Na
 
 TEST_P(ClientTls, WHEN_server_certificate_verifies_THEN_connect_succeeds)
 {
-   EXPECT_EQ(connect(), boost::system::error_code{});
+   EXPECT_EQ(connect(), error_code{});
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -105,7 +131,7 @@ INSTANTIATE_TEST_SUITE_P(ClientTlsDefaultTrust, ClientTlsDefaultTrust,
 
 TEST_P(ClientTlsDefaultTrust, WHEN_issuer_is_not_trusted_THEN_connect_fails)
 {
-   EXPECT_EQ(connect(), boost::system::errc::connection_refused);
+   EXPECT_EQ(connect(), errc::connection_refused);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -126,7 +152,7 @@ INSTANTIATE_TEST_SUITE_P(ClientTlsWrongHost, ClientTlsWrongHost, Values(anyhttp:
 
 TEST_P(ClientTlsWrongHost, WHEN_certificate_is_for_another_host_THEN_connect_fails)
 {
-   EXPECT_EQ(connect(), boost::system::errc::connection_refused);
+   EXPECT_EQ(connect(), errc::connection_refused);
 }
 
 // =================================================================================================

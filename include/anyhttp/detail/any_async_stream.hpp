@@ -127,7 +127,7 @@ public:
    // async_shutdown
    //
    // Ends the stream itself, which is something only a TLS stream has to do: see async_teardown()
-   // in anyhttp/stream_traits.hpp, which is how the sessions reach this. For a stream that has
+   // in anyhttp/detail/net_asio.hpp, which is how the sessions reach this. For a stream that has
    // nothing to end, this completes immediately and successfully.
    //
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Shutdown)

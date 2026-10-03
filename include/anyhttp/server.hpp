@@ -176,6 +176,7 @@ public:
    /**
     * Sends the response header, which opens the body for writing.
     */
+#if !ANYHTTP_COROSIO
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Status) CompletionToken = DefaultCompletionToken>
    auto async_submit(unsigned int status_code, const Fields& headers,
                      CompletionToken&& token = CompletionToken())
@@ -189,9 +190,15 @@ public:
                              }),
          token, status_code, headers);
    }
+#endif
+
+   /// \c async_submit() as a coroutine: <tt>auto [ec] = co_await response.submit(200, {});</tt>
+   Task<std::tuple<error_code>> submit(unsigned int status_code, Fields headers);
 
 private:
+#if !ANYHTTP_COROSIO
    void async_submit_any(StatusHandler&& handler, unsigned int status_code, const Fields& headers);
+#endif
 
    /// Hides Writer::pimpl(), narrowing it to the implementation this handle was built from.
    Impl& pimpl() const noexcept;
@@ -199,18 +206,18 @@ private:
 
 // =================================================================================================
 
-using RequestHandler = std::function<asio::awaitable<void>(Request, Response)>;
+using RequestHandler = std::function<Task<void>(Request, Response)>;
 
 class Server
 {
 public:
    class Impl;
-   Server(asio::any_io_executor executor, Config config);
+   Server(Executor executor, Config config);
    Server(Server&& other) noexcept;
    Server& operator=(Server&& other) noexcept;
    ~Server();
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
    executor_type get_executor() const noexcept;
 
    void on_request(RequestHandler&& handler);

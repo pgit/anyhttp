@@ -3,13 +3,14 @@
 #include "anyhttp/server.hpp"
 #include "anyhttp/utils.hpp"
 
+#if ANYHTTP_COROSIO
+#include <boost/corosio/io_context.hpp>
+#include <boost/corosio/signal_set.hpp>
+#else
 #include <boost/asio/as_tuple.hpp>
-#include <boost/asio/deferred.hpp>
 #include <boost/asio/io_context.hpp>
-#include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/signal_set.hpp>
-#include <boost/asio/strand.hpp>
-#include <boost/asio/use_awaitable.hpp>
+#endif
 
 #include <boost/program_options.hpp>
 
@@ -25,9 +26,16 @@
 namespace rv = std::ranges::views;
 
 using namespace std::chrono_literals;
-using namespace boost::asio;
 using namespace anyhttp;
 namespace po = boost::program_options;
+
+#if ANYHTTP_COROSIO
+using IoContext = boost::corosio::io_context;
+using SignalSet = boost::corosio::signal_set;
+#else
+using IoContext = boost::asio::io_context;
+using SignalSet = boost::asio::signal_set;
+#endif
 
 namespace
 {
@@ -37,6 +45,9 @@ struct Config
    size_t verbose = 0;
    size_t threads = 1;
    server::Config server{.port = 8080};
+#if ANYHTTP_COROSIO
+   boost::corosio::io_context_options context;
+#endif
 };
 
 } // namespace
@@ -80,6 +91,19 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
    opts("alt-svc-max-age", po::value(&alt_svc_max_age)->default_value(alt_svc_max_age),
         "how long clients may remember the HTTP/3 endpoint advertised as 'Alt-Svc' over HTTP/1.1 "
         "and HTTP/2, in seconds (0 advertises nothing)");
+#if ANYHTTP_COROSIO
+   opts(
+      "inline-budget",
+      po::value(&config.context.inline_budget_max)->default_value(config.context.inline_budget_max),
+      "ceiling of corosio's adaptive inline budget: how many I/O operations that are ready at "
+      "once complete without a post before one is posted (0 posts all). With --threads above 1 "
+      "and all budgets at their defaults, corosio posts all");
+   opts(
+      "unassisted-budget",
+      po::value(&config.context.unassisted_budget)->default_value(config.context.unassisted_budget),
+      "the inline budget when other handlers are queued (no other thread takes them), in place "
+      "of the adaptive one; capped by --inline-budget");
+#endif
 
    po::variables_map vm;
    try
@@ -126,6 +150,22 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
    return {std::move(config)};
 }
 
+/// Waits for one of \p signals, then stops \p server.
+static Task<void> stop_on_signal(SignalSet& signals, std::optional<server::Server>& server)
+{
+#if ANYHTTP_COROSIO
+   auto [ec, signal] = co_await signals.wait();
+#else
+   auto [ec, signal] = co_await signals.async_wait(boost::asio::as_tuple);
+#endif
+   if (ec)
+      co_return;
+
+   std::println(" INTERRUPTED (signal {})", signal);
+   logw("interrupt");
+   server.reset();
+}
+
 int main(int argc, char* argv[])
 {
    auto config = parse_config(argc, argv);
@@ -139,19 +179,19 @@ int main(int argc, char* argv[])
    else
       spdlog::set_level(spdlog::level::info);
 
-   io_context context(config->threads);
+#if ANYHTTP_COROSIO
+   IoContext context(config->context, config->threads);
+#else
+   IoContext context(config->threads);
+#endif
    auto executor = context.get_executor();
    config->server.use_strand = config->threads > 1;
    auto server = std::make_optional<server::Server>(executor, config->server);
 
-   signal_set signals(context, SIGINT, SIGTERM);
-   signals.async_wait([&](boost::system::error_code error, auto signal) {
-      std::println(" INTERRUPTED (signal {})", signal);
-      logw("interrupt");
-      server.reset();
-   });
+   SignalSet signals(context, SIGINT, SIGTERM);
+   launch(executor, stop_on_signal(signals, server));
 
-   server->on_request([](server::Request request, server::Response response) -> awaitable<void> {
+   server->on_request([](server::Request request, server::Response response) -> Task<void> {
       std::string path = request.url().path();
       if (path == "/echo")
          co_await echo(std::move(request), std::move(response));
@@ -172,8 +212,8 @@ int main(int argc, char* argv[])
          // Unlike eat_request, respond only after the whole body is in: clients such as h2load
          // stop uploading as soon as the response is complete.
          co_await drain(request);
-         co_await response.async_submit(200, {});
-         co_await response.async_write_eof();
+         if (auto [ec] = co_await response.submit(200, {}); !ec)
+            co_await response.write_eof();
       }
       else if (path == "/" || path == "/h2spec")
          co_await h2spec(std::move(request), std::move(response));

@@ -167,7 +167,7 @@ public:
    Writer::Impl* writer = nullptr; // the Http3Writer, while attached
    bool closed = false;
 
-   asio::any_io_executor get_executor() const noexcept;
+   Executor get_executor() const noexcept;
    const std::string& log_prefix() const noexcept { return log_prefix_; }
 
    //
@@ -204,7 +204,7 @@ public:
    // Called when the stream dies before its exchange completed, and from either the reader's or
    // the writer's destructor.
    //
-   void fail(boost::system::error_code ec);
+   void fail(error_code ec);
    void delete_reader();
    void delete_writer();
    void maybe_close();
@@ -218,7 +218,7 @@ protected:
    /// The incoming header block is complete: dispatch the request (server) / response (client).
    virtual void on_headers_complete() = 0;
    /// The stream failed or closed early; fail whatever else the role has pending.
-   virtual void on_failed(boost::system::error_code ec) { (void)ec; }
+   virtual void on_failed(error_code ec) { (void)ec; }
 
 public:
    /// Submit the outgoing response headers. A no-op on the client, whose request headers went out
@@ -253,18 +253,14 @@ public:
       }
    }
 
-   asio::any_io_executor get_executor() const noexcept override { return executor; }
+   Executor get_executor() const noexcept override { return executor; }
 
    std::optional<size_t> content_length() const noexcept override
    {
       return stream ? stream->content_length : std::nullopt;
    }
 
-   const Fields& fields() const override
-   {
-      assert(stream);
-      return stream->fields;
-   }
+   const Fields& fields() const override { return stream ? stream->fields : detached_fields; }
 
    void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) override
    {
@@ -290,21 +286,11 @@ public:
          return;
       }
 
-      auto cs = asio::get_associated_cancellation_slot(handler);
-      if (cs.is_connected() && !cs.has_handler())
-      {
-         cs.assign([this](asio::cancellation_type_t) {
-            if (stream && stream->read_handler)
-            {
-               asio::post(stream->get_executor(),
-                          [handler = std::move(stream->read_handler)]() mutable {
-                             std::move(handler)(boost::system::errc::make_error_code(
-                                                   boost::system::errc::operation_canceled),
-                                                0);
-                          });
-            }
-         });
-      }
+      on_cancel(handler, [this] {
+         if (stream && stream->read_handler)
+            complete_later(std::move(stream->read_handler), stream->get_executor(),
+                           errors::canceled, size_t{0});
+      });
 
       assert(!stream->read_handler);
       stream->read_handler = std::move(handler);
@@ -319,10 +305,9 @@ public:
       // the body stood, so that reads issued from now on keep answering per the Reader contract.
       //
       assert(stream);
-      detached_ec = stream->reading_finished()
-                       ? error_code{asio::error::eof}
-                       : error_code{boost::beast::http::error::partial_message};
+      detached_ec = stream->reading_finished() ? errors::eof : errors::partial_message;
       detached_log_prefix = stream->log_prefix();
+      detached_fields = std::move(stream->fields); // the stream is being destroyed
       stream = nullptr;
    }
 
@@ -332,11 +317,12 @@ public:
    }
 
    Http3Stream* stream;
-   asio::any_io_executor executor; // kept as a copy so a detached reader can still complete
+   Executor executor; // kept as a copy so a detached reader can still complete
    std::string detached_log_prefix; // latched by detach()
 
    /// What a read past detach() reports: eof for a body read to its clean end, else truncation.
-   error_code detached_ec{boost::beast::http::error::partial_message};
+   error_code detached_ec{errors::partial_message};
+   Fields detached_fields; // moved out of the stream by detach(), so fields() outlives it
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -358,7 +344,7 @@ public:
       }
    }
 
-   asio::any_io_executor get_executor() const noexcept override { return executor; }
+   Executor get_executor() const noexcept override { return executor; }
 
    void content_length(std::optional<size_t> len) override
    {
@@ -388,10 +374,9 @@ public:
       if (empty && !eof)
          ec = {};
       else if (detached_body_ended)
-         ec = empty ? error_code{}
-                    : boost::system::errc::make_error_code(boost::system::errc::broken_pipe);
+         ec = empty ? error_code{} : make_error_code(errc::broken_pipe);
       else
-         ec = boost::system::errc::make_error_code(boost::system::errc::connection_reset);
+         ec = make_error_code(errc::connection_reset);
       complete_immediately(std::move(handler), executor, ec);
    }
 
@@ -399,12 +384,11 @@ public:
    {
       if (!stream || stream->closed)
       {
-         std::move(handler)(
-            boost::system::errc::make_error_code(boost::system::errc::connection_reset));
+         std::move(handler)(make_error_code(errc::connection_reset));
          return;
       }
       stream->submit_response(status_code, fields);
-      std::move(handler)(boost::system::error_code{});
+      std::move(handler)(error_code{});
    }
 
    void detach() override
@@ -423,7 +407,7 @@ public:
    }
 
    Http3Stream* stream;
-   asio::any_io_executor executor; // kept as a copy so a detached writer can still complete
+   Executor executor; // kept as a copy so a detached writer can still complete
    std::string detached_log_prefix; // latched by detach()
    bool detached_body_ended = false; // latched by detach(), see there
 };

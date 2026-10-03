@@ -11,8 +11,6 @@
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/awaitable.hpp>
 #include <boost/asio/ip/udp.hpp>
 
 #include <memory>
@@ -57,9 +55,8 @@ namespace anyhttp::client
 // =================================================================================================
 
 /// Connects to `host`:`port` over QUIC and returns the HTTP/3 session running on it.
-boost::asio::awaitable<std::shared_ptr<Session::Impl>>
-async_connect_http3(boost::asio::any_io_executor executor, std::string host, std::string port,
-                    const Config& config);
+Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor, std::string host,
+                                                         std::string port, const Config& config);
 
 // =================================================================================================
 

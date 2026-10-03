@@ -1,8 +1,14 @@
 #include "test_fixtures.hpp"
 
-#include <boost/asio/ssl.hpp>
+#include "anyhttp/h1_io.hpp"
+#include "anyhttp/net.hpp"
+
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/http.hpp>
+
+#if !ANYHTTP_COROSIO
+#include <boost/asio/ssl/host_name_verification.hpp>
+#endif
 
 #include <array>
 #include <format>
@@ -11,6 +17,7 @@
 using namespace testing;
 
 namespace http = boost::beast::http;
+namespace h1 = anyhttp::beast_impl::h1;
 
 // =================================================================================================
 
@@ -28,34 +35,34 @@ protected:
    using Request = http::request<http::string_body>;
    using Response = http::response<http::string_body>;
 
-   awaitable<tcp::socket> connect()
+   Task<TcpSocket> connect()
    {
-      tcp::socket socket(co_await this_coro::executor);
-      co_await socket.async_connect(server->local_endpoint());
+      auto socket = io::make_socket(context.get_executor());
+      check(co_await io::connect(socket, {server->local_endpoint()}));
       co_return socket;
    }
 
    /// Writes \p request, with the Host field filled in, and reads the response that follows.
    template <typename Stream>
-   awaitable<Response> exchange(Stream& socket, Request request)
+   Task<Response> exchange(Stream& socket, Request request)
    {
       request.set(http::field::host, std::format("127.0.0.2:{}", port()));
       request.prepare_payload();
-      co_await http::async_write(socket, request);
+      check(co_await h1::write_message(socket, request));
 
       Response response;
-      co_await http::async_read(socket, buffer_, response);
+      check(co_await h1::read_message(socket, buffer_, response));
       co_return response;
    }
 
    /// Reads what follows the last response, which must be the end of the stream and nothing else.
    template <typename Stream>
-   awaitable<error_code> read_eof(Stream& socket)
+   Task<error_code> read_eof(Stream& socket)
    {
       EXPECT_EQ(buffer_.size(), 0) << "unread data left over from the response";
 
       std::array<char, 64> buffer;
-      auto [ec, n] = co_await socket.async_read_some(asio::buffer(buffer), as_tuple);
+      auto [ec, n] = co_await io::read_some(socket, asio::buffer(buffer));
       if (!ec)
          ADD_FAILURE() << std::format("{} bytes after the last response: '{}'", n,
                                       std::string_view(buffer.data(), n));
@@ -63,9 +70,9 @@ protected:
    }
 
    /// Runs \p task to completion, then stops the server.
-   void run(awaitable<void> task)
+   void run(Task<void> task)
    {
-      co_spawn(context, std::move(task), [this](const std::exception_ptr& ep) {
+      launch(context.get_executor(), std::move(task), [this](const std::exception_ptr& ep) {
          if (ep)
             ADD_FAILURE() << what(ep);
          server.reset();
@@ -80,7 +87,7 @@ protected:
 
 TEST_F(ConnectionClose, WHEN_request_asks_to_close_THEN_response_says_so_and_stream_ends)
 {
-   run([&]() -> awaitable<void> {
+   run([&]() -> Task<void> {
       auto socket = co_await connect();
 
       Request request{http::verb::get, "/dump", 11};
@@ -89,13 +96,13 @@ TEST_F(ConnectionClose, WHEN_request_asks_to_close_THEN_response_says_so_and_str
 
       EXPECT_EQ(response.result_int(), 200);
       EXPECT_FALSE(response.keep_alive()) << "the last response has to announce itself as one";
-      EXPECT_EQ(co_await read_eof(socket), asio::error::eof);
+      EXPECT_EQ(co_await read_eof(socket), errors::eof);
    }());
 }
 
 TEST_F(ConnectionClose, WHEN_request_with_body_asks_to_close_THEN_body_is_served_first)
 {
-   run([&]() -> awaitable<void> {
+   run([&]() -> Task<void> {
       auto socket = co_await connect();
 
       Request request{http::verb::post, "/echo", 11};
@@ -106,13 +113,13 @@ TEST_F(ConnectionClose, WHEN_request_with_body_asks_to_close_THEN_body_is_served
       EXPECT_EQ(response.result_int(), 200);
       EXPECT_EQ(response.body(), "hello");
       EXPECT_FALSE(response.keep_alive());
-      EXPECT_EQ(co_await read_eof(socket), asio::error::eof);
+      EXPECT_EQ(co_await read_eof(socket), errors::eof);
    }());
 }
 
 TEST_F(ConnectionClose, WHEN_request_does_not_ask_to_close_THEN_connection_takes_the_next_request)
 {
-   run([&]() -> awaitable<void> {
+   run([&]() -> Task<void> {
       auto socket = co_await connect();
 
       auto first = co_await exchange(socket, Request{http::verb::get, "/dump?first", 11});
@@ -129,7 +136,7 @@ TEST_F(ConnectionClose, WHEN_request_does_not_ask_to_close_THEN_connection_takes
 
 TEST_F(ConnectionClose, WHEN_request_is_http_1_0_THEN_stream_ends_after_the_response)
 {
-   run([&]() -> awaitable<void> {
+   run([&]() -> Task<void> {
       auto socket = co_await connect();
 
       //
@@ -140,7 +147,7 @@ TEST_F(ConnectionClose, WHEN_request_is_http_1_0_THEN_stream_ends_after_the_resp
 
       EXPECT_EQ(response.result_int(), 200);
       EXPECT_FALSE(response.keep_alive());
-      EXPECT_EQ(co_await read_eof(socket), asio::error::eof);
+      EXPECT_EQ(co_await read_eof(socket), errors::eof);
    }());
 }
 
@@ -162,7 +169,7 @@ protected:
 
 TEST_F(RejectedRequest, WHEN_request_is_rejected_THEN_the_response_arrives_anyway)
 {
-   run([&]() -> awaitable<void> {
+   run([&]() -> Task<void> {
       auto socket = co_await connect();
 
       //
@@ -179,16 +186,16 @@ TEST_F(RejectedRequest, WHEN_request_is_rejected_THEN_the_response_arrives_anywa
       // is out, so a write of all of it only completes once the connection is gone.
       //
       Response response;
-      auto send = [&]() -> awaitable<error_code> {
-         auto [ec, n] = co_await asio::async_write(socket, asio::buffer(request), as_tuple);
+      auto send = [&]() -> Task<error_code> {
+         auto [ec, n] = co_await io::write(socket, asio::buffer(request));
          co_return ec;
       };
-      auto receive = [&]() -> awaitable<error_code> {
-         auto [ec, n] = co_await http::async_read(socket, buffer_, response, as_tuple);
+      auto receive = [&]() -> Task<error_code> {
+         auto [ec, n] = co_await h1::read_message(socket, buffer_, response);
          co_return ec;
       };
 
-      auto [send_ec, receive_ec] = co_await (send() && receive());
+      auto [send_ec, receive_ec] = co_await when_both(send(), receive());
       EXPECT_FALSE(receive_ec) << "the 431 was lost: " << receive_ec.message();
       EXPECT_EQ(response.result_int(), 431);
       EXPECT_FALSE(response.keep_alive());
@@ -206,30 +213,49 @@ TEST_F(RejectedRequest, WHEN_request_is_rejected_THEN_the_response_arrives_anywa
 class TlsConnectionClose : public ConnectionClose
 {
 protected:
-   using SslStream = asio::ssl::stream<tcp::socket>;
-
-   awaitable<SslStream> connect_tls()
+   /// TLS 1.3, with the certificate checked against the test PKI's root CA, for 127.0.0.2.
+   Task<TlsStream> connect_tls()
    {
-      SslStream stream(co_await this_coro::executor, context_);
-      co_await stream.next_layer().async_connect(server->local_endpoint());
-      co_await stream.async_handshake(asio::ssl::stream_base::client);
+      auto stream = io::make_tls_stream(co_await connect(), tls_);
+#if ANYHTTP_COROSIO
+      stream.tls().set_hostname("127.0.0.2");
+#else
+      stream.set_verify_callback(asio::ssl::host_name_verification("127.0.0.2"));
+#endif
+      check(co_await io::handshake(stream, Role::client));
       co_return stream;
    }
 
-   asio::ssl::context context_ = std::invoke([] {
+#if ANYHTTP_COROSIO
+   TlsContext tls_ = std::invoke([] {
+      namespace corosio = boost::corosio;
+      corosio::tls_context context;
+      throw_on_error(context.set_min_protocol_version(corosio::tls_version::tls_1_3));
+      throw_on_error(context.load_verify_file("pki/out/root.pem"));
+      throw_on_error(context.set_verify_mode(corosio::tls_verify_mode::peer));
+      return context;
+   });
+#else
+   TlsContext tls_ = std::invoke([] {
       asio::ssl::context context{asio::ssl::context::tlsv13};
       context.load_verify_file("pki/out/root.pem");
       context.set_verify_mode(asio::ssl::verify_peer);
-      context.set_verify_callback(asio::ssl::host_name_verification("127.0.0.2"));
       return context;
    });
+#endif
+
+   static void throw_on_error(error_code ec)
+   {
+      if (ec)
+         throw_error(ec);
+   }
 };
 
 // -------------------------------------------------------------------------------------------------
 
 TEST_F(TlsConnectionClose, WHEN_request_asks_to_close_THEN_close_notify_comes_before_the_end)
 {
-   run([&]() -> awaitable<void> {
+   run([&]() -> Task<void> {
       auto stream = co_await connect_tls();
 
       Request request{http::verb::get, "/dump", 11};
@@ -240,7 +266,7 @@ TEST_F(TlsConnectionClose, WHEN_request_asks_to_close_THEN_close_notify_comes_be
       EXPECT_FALSE(response.keep_alive());
 
       // a clean end of stream, not ssl::error::stream_truncated
-      EXPECT_EQ(co_await read_eof(stream), asio::error::eof);
+      EXPECT_EQ(co_await read_eof(stream), errors::eof);
    }());
 }
 

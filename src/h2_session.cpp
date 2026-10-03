@@ -33,9 +33,6 @@
 #include <charconv>
 #include <string>
 
-using namespace boost::asio::experimental::awaitable_operators;
-
-namespace errc = boost::system::errc;
 namespace http = boost::beast::http;
 
 // =================================================================================================
@@ -330,8 +327,13 @@ static int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame*
       break;
 
    case NGHTTP2_GOAWAY:
+      //
+      // Nothing to do here: the streams the GOAWAY leaves open run to completion, and once none
+      // is left, nghttp2 wants neither to read nor to write, which ends the session after sending
+      // our own GOAWAY (h2spec generic/3.8). Shutting the socket down right away, as we used to,
+      // cut those streams off and made that GOAWAY fail with "Broken pipe".
+      //
       logd("[{}] on_frame_recv_callback: GOAWAY", handler->log_prefix(frame));
-      handler->destroy(); // fixes h2spec generic/3.8
       break;
 
    default:
@@ -443,7 +445,7 @@ nghttp2_unique_ptr<nghttp2_session_callbacks> NGHttp2Session::setup_callbacks()
 
 // =================================================================================================
 
-NGHttp2Session::NGHttp2Session(std::string_view prefix, asio::any_io_executor executor)
+NGHttp2Session::NGHttp2Session(std::string_view prefix, Executor executor)
    : executor_(std::move(executor)), log_prefix_(prefix)
 {
    mlogd("session created");
@@ -467,13 +469,13 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    if (!session)
    {
       mloge("submit: session already gone!");
-      std::move(handler)(errc::make_error_code(errc::operation_canceled), client::Request{nullptr});
+      std::move(handler)(errors::canceled, client::Request{nullptr});
       return;
    }
    if (!nghttp2_session_check_request_allowed(session))
    {
       mloge("submit: request not allowed!");
-      std::move(handler)(errc::make_error_code(errc::operation_canceled), client::Request{nullptr});
+      std::move(handler)(errors::canceled, client::Request{nullptr});
       return;
    }
 
@@ -536,7 +538,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    {
       mloge("submit: nghttp2_submit_request: ERROR: {}", id);
       using namespace boost::system;
-      std::move(handler)(errc::make_error_code(errc::invalid_argument), client::Request{nullptr});
+      std::move(handler)(make_error_code(errc::invalid_argument), client::Request{nullptr});
    }
 
    stream->id = id;
@@ -545,11 +547,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
 
    logd("[{}] submit: new stream ID: {}", stream->log_prefix_, id);
    streams_.emplace(id, stream);
-   post(get_executor(),
-        [handler = std::move(handler),
-         writer = std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)]() mutable {
-           std::move(handler)(boost::system::error_code{}, client::Request{std::move(writer)}); //
-        });
+   complete_later(std::move(handler), get_executor(), error_code{},
+                  client::Request{std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)});
    start_write();
 }
 
@@ -615,7 +614,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    if (stream->write_handler)
    {
       // Use the same error code as reported by the underlying TCP connection used in HTTP/1.1.
-      swap_and_invoke(stream->write_handler, asio::error::basic_errors::connection_reset);
+      swap_and_invoke(stream->write_handler, make_error_code(errc::connection_reset));
    }
 
    //
@@ -638,6 +637,19 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    }
 
    //
+   // A body that ended cleanly may not have been read to its end yet: the reader has not come back
+   // for the rest, which the stream holds. Keep the stream until it has, see
+   // NGHttp2Stream::finish_deferred_close(). (A reader that is resumed inline from within the read
+   // callback usually keeps up, so this is what posting the completion makes common.)
+   //
+   if (stream->reader && stream->eof_received && !stream->reading_finished())
+   {
+      logd("[{}] close_stream: body not read to its end yet", log_prefix(stream_id));
+      stream->close_deferred = true;
+      return; // keep stream for now
+   }
+
+   //
    // Finally, erase stream from map.
    //
    streams_.erase(it);
@@ -654,7 +666,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    if (stream->read_handler_)
    {
       logd("[{}] stream closed while reading, raising 'partial_message'", log_prefix(stream_id));
-      swap_and_invoke(stream->read_handler_, boost::beast::http::error::partial_message, 0);
+      swap_and_invoke(stream->read_handler_, errors::partial_message, 0);
    }
 
    if (stream->response_handler)
@@ -682,17 +694,14 @@ void NGHttp2Session::close_stream(int32_t stream_id)
 
    // see NGHttp2Stream::call_read_handler() why this is needed
    if (stream)
-      post(get_executor(), [stream = std::move(stream)]() { /* deferred delete */ });
+      run_later(get_executor(), [stream = std::move(stream)]() { /* deferred delete */ });
 }
 
 void NGHttp2Session::start_write()
 {
-   if (send_handler_)
-   {
-      mlogd("start_write: signalling write loop...");
-      swap_and_invoke(send_handler_);
-      mlogd("start_write: signalling write loop... done");
-   }
+   mlogd("start_write: signalling write loop...");
+   send_ready_.set();
+   mlogd("start_write: signalling write loop... done");
 }
 
 // =================================================================================================
@@ -701,10 +710,9 @@ void NGHttp2Session::start_write()
 // =================================================================================================
 
 template <SocketStream Stream>
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Stream&& stream,
-                                                   std::optional<Upgrade> upgrade)
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Executor executor,
+                                                   Stream&& stream, std::optional<Upgrade> upgrade)
 {
-   auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
    auto session =
       std::make_shared<ServerSession<Stream>>(server, std::move(executor), std::move(stream));
    session->upgrade_ = std::move(upgrade);
@@ -712,22 +720,22 @@ std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
 }
 
 template <SocketStream Stream>
-std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Stream&& stream)
+std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Executor executor,
+                                                   Stream&& stream)
 {
-   auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
    return std::make_shared<ClientSession<Stream>>(client, std::move(executor), std::move(stream));
 }
 
-template std::shared_ptr<Session::Impl> make_server_session<socket>(server::Server::Impl&, socket&&,
-                                                                    std::optional<Upgrade>);
-template std::shared_ptr<Session::Impl>
-make_server_session<SslStream>(server::Server::Impl&, SslStream&&, std::optional<Upgrade>);
-template std::shared_ptr<Session::Impl>
-make_server_session<any_async_stream>(server::Server::Impl&, any_async_stream&&,
-                                      std::optional<Upgrade>);
-
-template std::shared_ptr<Session::Impl> make_client_session<socket>(client::Client::Impl&,
-                                                                    socket&&);
+#define ANYHTTP_H2_SERVER(Stream)                                                                  \
+   template std::shared_ptr<Session::Impl> make_server_session<Stream>(                            \
+      server::Server::Impl&, Executor, Stream&&, std::optional<Upgrade>);
+#define ANYHTTP_H2_CLIENT(Stream)                                                                  \
+   template std::shared_ptr<Session::Impl> make_client_session<Stream>(client::Client::Impl&,      \
+                                                                       Executor, Stream&&);
+ANYHTTP_SERVER_STREAMS(ANYHTTP_H2_SERVER)
+ANYHTTP_CLIENT_STREAMS(ANYHTTP_H2_CLIENT)
+#undef ANYHTTP_H2_SERVER
+#undef ANYHTTP_H2_CLIENT
 
 // =================================================================================================
 

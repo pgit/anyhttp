@@ -11,6 +11,22 @@ benchmark with the latter, never with `build/`. Both use clang, which builds aga
 the libraries in `/opt/libc++` (`USE_LIBCXX`, `LIBCXX_ROOT`); `build-gcc/` is GCC with libstdc++
 and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.json`.
 
+`build-corosio/` is the COROSIO API style (`-DANYHTTP_API=COROSIO -DTLS_LIBRARY=OpenSSL`, see
+[docs/corosio-port-plan.md](docs/corosio-port-plan.md)); capy and corosio are FetchContent'd at
+pinned SHAs. Both styles build the same library sources and test files; what belongs to one style
+only is guarded with `ANYHTTP_COROSIO`. So is the `server` program; the `client` program is
+ASIO-only so far. `build-corosio-asan/` is its ASAN tree, `build-corosio-release/` its Release
+tree (benchmark COROSIO with it). COROSIO needs OpenSSL, so compare it against
+`build-openssl-release/` (ASIO, OpenSSL, Release), not `build-release/`: `scripts/bench.sh` runs
+the two side by side (`-P` for plaintext, `-t` for server threads).
+
+`build-corosio-tsan/` is COROSIO under TSAN with `-DMULTITHREADED` in `CMAKE_CXX_FLAGS`: the
+fixtures run the tests on all cores, a strand per connection. Expect reports inside corosio's
+epoll reactor, which frees a socket's descriptor state while another thread still handles an
+event for it (see the port plan, step 8); a report with an anyhttp frame at the racing access is
+ours. A few tests set up their own server or client on the bare context and are not
+thread-aware.
+
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --parallel
@@ -89,6 +105,9 @@ files.
 ## Conventions
 
 - clang-format is authoritative: 3-space indent, 100 columns.
+- The two API styles are ASIO and COROSIO: `ANYHTTP_COROSIO`, `net_asio`/`net_corosio`,
+  `build-corosio/`. "capy" names only the library itself (`capy::task`, `<boost/capy/...>`), the
+  non-I/O base that corosio adds I/O to.
 - Test `.cpp` files put `using namespace testing;` after the includes and use `HasSubstr`,
   `Values`, `Not` unqualified. Never in `test_fixtures.hpp` (it would leak), and not in
   `test_external.cpp`, whose own `Args` alias collides with gmock's.
@@ -117,6 +136,11 @@ headers (`OPENSSL_IS_AWSLC` / `OPENSSL_IS_BORINGSSL`), and the `#if`s are confin
 After adding a dependency, check `ldd` of an AWS-LC build shows no `libssl.so.3` /
 `libcrypto.so.3` -- a shared OpenSSL would interpose the executable's AWS-LC symbols. `curl`,
 `osslclient` and `osslserver` are OpenSSL builds and are useful for interop testing.
+
+**A capy context has to run dry.** Destroying a corosio `io_context`, or stopping it for good,
+while a coroutine is suspended on it leaks that coroutine's whole stack: unlike ASIO, capy cannot
+unwind it. LeakSanitizer reports it in `build-corosio-asan/`. Tests run their servers and clients to
+their end -- `server.reset()` on the server's own thread, then let `run()` return.
 
 **Benchmarking.** Confirm `UDP listening` appears in the server log before starting a load run: a
 failed `bind()` aborts quietly and h2load will happily measure whatever other server owns the

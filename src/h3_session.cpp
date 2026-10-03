@@ -28,7 +28,7 @@ namespace anyhttp::http3
 
 // =================================================================================================
 
-Http3Session::Http3Session(asio::any_io_executor executor)
+Http3Session::Http3Session(Executor executor)
    : executor_(std::move(executor)), timer_(executor_), tx_buf_(64_k)
 {
    ngtcp2_ccerr_default(&last_error_);
@@ -54,6 +54,20 @@ Http3Session::~Http3Session()
 }
 
 void Http3Session::clear_streams() { streams_.clear(); }
+
+void Http3Session::fail_streams(error_code ec)
+{
+   //
+   // Streams may erase themselves from streams_ as a side effect of fail() (via maybe_close()),
+   // so snapshot first.
+   //
+   std::vector<std::shared_ptr<Http3Stream>> streams;
+   streams.reserve(streams_.size());
+   for (auto& [id, stream] : streams_)
+      streams.push_back(stream);
+   for (auto& stream : streams)
+      stream->fail(ec);
+}
 
 // -------------------------------------------------------------------------------------------------
 
@@ -120,7 +134,7 @@ void Http3Session::wake_write()
       return;
    write_posted_ = true;
 
-   asio::post(get_executor(), [self = weak_from_this()] {
+   run_later(get_executor(), [self = weak_from_this()] {
       auto session = std::static_pointer_cast<Http3Session>(self.lock());
       if (!session)
          return;
@@ -325,13 +339,10 @@ void Http3Session::arm_timer_from_ngtcp2()
    }
 
    auto now = timestamp();
-   asio::steady_timer::duration delay =
+   auto delay =
       expiry <= now ? std::chrono::nanoseconds{1} : std::chrono::nanoseconds{expiry - now};
 
-   timer_.expires_after(delay);
-   timer_.async_wait([self = weak_from_this()](const boost::system::error_code& ec) {
-      if (ec)
-         return;
+   timer_.arm(delay, [self = weak_from_this()] {
       if (auto session = std::static_pointer_cast<Http3Session>(self.lock()))
          session->handle_expiry();
    });
@@ -607,7 +618,7 @@ int Http3Session::setup_http3()
       return -1;
    }
 
-   mlogi("HTTP/3 ready (ctrl={} qpack_enc={} qpack_dec={})", ctrl_stream_id, qpack_enc_stream_id,
+   mlogd("HTTP/3 ready (ctrl={} qpack_enc={} qpack_dec={})", ctrl_stream_id, qpack_enc_stream_id,
          qpack_dec_stream_id);
 
    on_http3_ready();
@@ -618,10 +629,18 @@ int Http3Session::setup_http3()
 // ngtcp2 callback implementations
 // =================================================================================================
 
-int Http3Session::cb_handshake_completed(ngtcp2_conn*, void* user)
+//
+// The one line per connection, like the TCP server's "new connection" (see handle_connection()):
+// logged once the handshake has told what it negotiated. A connection that fails before is logged
+// by whatever ends it instead.
+//
+int Http3Session::cb_handshake_completed(ngtcp2_conn* conn, void* user)
 {
    auto self = static_cast<Http3Session*>(user);
-   logi("[{}] {}", self->log_prefix_, tls_handshake_info(self->ssl_));
+   logi("[{}] {}, h3 over QUIC (version=0x{:x}, scid={}, {})", self->log_prefix_,
+        ngtcp2_conn_is_server(conn) ? "new connection" : "connected",
+        ngtcp2_conn_get_negotiated_version(conn), format_hex(self->scid_.data, self->scid_.datalen),
+        tls_handshake_info(self->ssl_));
    if (self->setup_http3() != 0)
       return NGTCP2_ERR_CALLBACK_FAILURE;
    return 0;
@@ -817,9 +836,8 @@ int Http3Session::h3_cb_stream_close(nghttp3_conn*, int64_t stream_id, uint64_t 
       // it again, and a stream that ended in an error has, by definition, not delivered its whole
       // message.
       //
-      auto ec = (app_error_code == NGHTTP3_H3_NO_ERROR)
-                   ? boost::system::error_code{}
-                   : boost::system::errc::make_error_code(boost::system::errc::connection_reset);
+      auto ec = (app_error_code == NGHTTP3_H3_NO_ERROR) ? error_code{}
+                                                        : make_error_code(errc::connection_reset);
       s->fail(ec);
    }
    if (ngtcp2_conn_is_server(self->conn_))

@@ -13,10 +13,17 @@ FetchContent_MakeAvailable(googletest)
 
 link_libraries(Boost::atomic Boost::url Boost::filesystem Boost::process)
 
+#
+# Both API styles build every test file: one that belongs to a single style, or has parts that do,
+# guards them with ANYHTTP_COROSIO.
+#
 file(GLOB SRC_FILES test_*.cpp)
+
 add_executable(test_all ${SRC_FILES})
-target_link_libraries(test_all PRIVATE GTest::gtest_main GTest::gmock anyhttp)
+target_link_libraries(test_all PRIVATE GTest::gtest_main GTest::gmock)
 target_link_libraries(test_all PRIVATE spdlog::spdlog_header_only)
+
+target_link_libraries(test_all PRIVATE anyhttp)
 
 # the h2c upgrade tests drive an HTTP/2 client session by hand
 target_link_libraries(test_all PRIVATE PkgConfig::NGHTTP2)

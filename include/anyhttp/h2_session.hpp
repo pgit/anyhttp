@@ -45,10 +45,10 @@ class NGHttp2Stream;
 class NGHttp2Session : public anyhttp::Session::Impl
 {
 public:
-   NGHttp2Session(std::string_view prefix, asio::any_io_executor executor);
+   NGHttp2Session(std::string_view prefix, Executor executor);
    virtual ~NGHttp2Session();
 
-   asio::any_io_executor get_executor() const noexcept override { return executor_; }
+   Executor get_executor() const noexcept override { return executor_; }
    const std::string& log_prefix() const { return log_prefix_; }
 
    std::string log_prefix(int stream_id) const
@@ -71,23 +71,9 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   using Resume = void();
-   using ResumeHandler = asio::any_completion_handler<Resume>;
-
-   // If set, the send loop has run out of data to send and is waiting for re-activation.
-   ResumeHandler send_handler_;
-
-   // Wait to be resumed via `start_write()`, called from within `send_loop()`.
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Resume) CompletionToken = DefaultCompletionToken>
-   auto async_wait_send(CompletionToken&& token = CompletionToken())
-   {
-      return asio::async_initiate<CompletionToken, Resume>(
-         [&](ResumeHandler handler) {
-            assert(!send_handler_);
-            send_handler_ = std::move(handler);
-         },
-         std::forward<CompletionToken>(token));
-   }
+   // Set by `start_write()`: nghttp2 may have something to send. The send loop waits for it once
+   // it has run out of data to send.
+   Event send_ready_;
 
    void start_write();
 
@@ -99,8 +85,8 @@ public:
     */
    void handle_buffer_contents();
 
-   virtual awaitable<void> send_loop() = 0;
-   virtual awaitable<void> recv_loop() = 0;
+   virtual Task<void> send_loop() = 0;
+   virtual Task<void> recv_loop() = 0;
 
    // ----------------------------------------------------------------------------------------------
 
@@ -120,7 +106,7 @@ public:
 
 public:
    std::string log_prefix_;
-   asio::any_io_executor executor_;
+   Executor executor_;
 
    nghttp2_session* session = nullptr;
    std::map<int32_t, std::shared_ptr<NGHttp2Stream>> streams_;
@@ -145,14 +131,14 @@ template <typename Stream>
 class NGHttp2SessionImpl : public NGHttp2Session
 {
 protected:
-   NGHttp2SessionImpl(std::string_view log_prefix, asio::any_io_executor executor, Stream&& stream)
+   NGHttp2SessionImpl(std::string_view log_prefix, Executor executor, Stream&& stream)
       : NGHttp2Session(log_prefix, executor), stream_(std::move(stream))
    {
    }
 
 public:
-   awaitable<void> send_loop() override;
-   awaitable<void> recv_loop() override;
+   Task<void> send_loop() override;
+   Task<void> recv_loop() override;
    void destroy() noexcept override;
 
 public:
@@ -195,9 +181,9 @@ class ServerSession : public ServerReference, public NGHttp2SessionImpl<Stream>
    using super::stream_;
 
 public:
-   ServerSession(server::Server::Impl& parent, asio::any_io_executor executor, Stream&& stream);
+   ServerSession(server::Server::Impl& parent, Executor executor, Stream&& stream);
 
-   awaitable<void> do_session(Buffer&& data) override;
+   Task<void> do_session(Buffer&& data) override;
 
    /// Set if this session continues an HTTP/1.1 request that has been upgraded to h2c.
    std::optional<Upgrade> upgrade_;
@@ -238,9 +224,9 @@ class ClientSession : public ClientReference, public NGHttp2SessionImpl<Stream>
    using super::stream_;
 
 public:
-   ClientSession(client::Client::Impl& parent, asio::any_io_executor executor, Stream&& stream);
+   ClientSession(client::Client::Impl& parent, Executor executor, Stream&& stream);
 
-   awaitable<void> do_session(Buffer&& data) override;
+   Task<void> do_session(Buffer&& data) override;
 
    void on_alt_svc(std::string_view field_value) override { client().on_alt_svc(field_value); }
 };

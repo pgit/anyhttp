@@ -38,8 +38,7 @@ public:
 
       ClientAsync::SetUp();
 
-      requestHandler = [this](server::Request request,
-                              server::Response response) -> awaitable<void> {
+      requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
          co_await serve_file(std::move(request), std::move(response), root, "/custom");
       };
    }
@@ -56,12 +55,12 @@ public:
    }
 
    /// Requests \p target and returns the whole response, body and all.
-   awaitable<client::Message> get(Session& session, boost::urls::url target)
+   Task<client::Message> get(Session& session, boost::urls::url target)
    {
-      co_return co_await session.async_get(std::move(target));
+      co_return check(co_await session.get(std::move(target)));
    }
 
-   awaitable<client::Message> get(Session& session, std::string_view path)
+   Task<client::Message> get(Session& session, std::string_view path)
    {
       co_return co_await get(session, boost::urls::url(url).set_path(path));
    }
@@ -81,16 +80,13 @@ protected:
 
 // -------------------------------------------------------------------------------------------------
 
-INSTANTIATE_TEST_SUITE_P(FileHandler, FileHandler,
-                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
-                                anyhttp::Protocol::h3),
-                         NameGenerator);
+INSTANTIATE_TEST_SUITE_P(FileHandler, FileHandler, ValuesIn(protocols()), NameGenerator);
 
 // =================================================================================================
 
 TEST_P(FileHandler, WHEN_file_exists_THEN_serves_content)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/custom/hello.txt");
       EXPECT_EQ(message.result_int(), 200);
       EXPECT_EQ(message.body(), "Hello, File!");
@@ -99,7 +95,7 @@ TEST_P(FileHandler, WHEN_file_exists_THEN_serves_content)
 
 TEST_P(FileHandler, WHEN_file_is_in_subdirectory_THEN_serves_content)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/custom/sub/nested.txt");
       EXPECT_EQ(message.result_int(), 200);
       EXPECT_EQ(message.body(), "Nested!");
@@ -112,7 +108,7 @@ TEST_P(FileHandler, WHEN_file_is_in_subdirectory_THEN_serves_content)
 //
 TEST_P(FileHandler, WHEN_file_is_empty_THEN_serves_empty_body)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/custom/empty.txt");
       EXPECT_EQ(message.result_int(), 200);
       EXPECT_THAT(message.body(), IsEmpty());
@@ -125,7 +121,7 @@ TEST_P(FileHandler, WHEN_file_is_empty_THEN_serves_empty_body)
 //
 TEST_P(FileHandler, WHEN_file_is_large_THEN_serves_all_of_it)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/custom/large.bin");
       EXPECT_EQ(message.result_int(), 200);
       EXPECT_EQ(message.body(), std::string(256_k, 'x'));
@@ -134,7 +130,7 @@ TEST_P(FileHandler, WHEN_file_is_large_THEN_serves_all_of_it)
 
 TEST_P(FileHandler, WHEN_file_does_not_exist_THEN_error_404)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/custom/missing.txt");
       EXPECT_EQ(message.result_int(), 404);
       EXPECT_THAT(message.body(), IsEmpty());
@@ -146,7 +142,7 @@ TEST_P(FileHandler, WHEN_file_does_not_exist_THEN_error_404)
 //
 TEST_P(FileHandler, WHEN_path_is_a_directory_THEN_error_404)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       EXPECT_EQ((co_await get(session, "/custom/sub")).result_int(), 404);
       EXPECT_EQ((co_await get(session, "/custom/")).result_int(), 404);
    };
@@ -154,7 +150,7 @@ TEST_P(FileHandler, WHEN_path_is_a_directory_THEN_error_404)
 
 TEST_P(FileHandler, WHEN_path_escapes_the_root_THEN_error_404)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       EXPECT_EQ((co_await get(session, "/custom/../outside.txt")).result_int(), 404);
       EXPECT_EQ((co_await get(session, "/custom/sub/../../outside.txt")).result_int(), 404);
       EXPECT_EQ((co_await get(session, encoded("/custom/%2e%2e/outside.txt"))).result_int(), 404);
@@ -166,7 +162,7 @@ TEST_P(FileHandler, WHEN_path_escapes_the_root_THEN_error_404)
 //
 TEST_P(FileHandler, WHEN_symlink_points_outside_the_root_THEN_error_404)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       EXPECT_EQ((co_await get(session, "/custom/escape.txt")).result_int(), 404);
    };
 }
@@ -177,7 +173,7 @@ TEST_P(FileHandler, WHEN_symlink_points_outside_the_root_THEN_error_404)
 //
 TEST_P(FileHandler, WHEN_prefix_matches_mid_segment_THEN_error_404)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/customer.txt");
       EXPECT_EQ(message.result_int(), 404);
       EXPECT_THAT(message.body(), IsEmpty());
@@ -190,7 +186,7 @@ TEST_P(FileHandler, WHEN_file_is_not_readable_THEN_error_403)
    if (::geteuid() == 0)
       GTEST_SKIP() << "running as root, permissions do not apply";
 
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/custom/secret.txt");
       EXPECT_EQ(message.result_int(), 403);
       EXPECT_THAT(message.body(), IsEmpty());
@@ -199,7 +195,7 @@ TEST_P(FileHandler, WHEN_file_is_not_readable_THEN_error_403)
 
 TEST_P(FileHandler, WHEN_same_file_is_requested_twice_THEN_serves_it_twice)
 {
-   clientSession = [this](Session session) -> awaitable<void> {
+   clientSession = [this](Session session) -> Task<void> {
       EXPECT_EQ((co_await get(session, "/custom/hello.txt")).body(), "Hello, File!");
       EXPECT_EQ((co_await get(session, "/custom/hello.txt")).body(), "Hello, File!");
    };

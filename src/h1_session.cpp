@@ -4,19 +4,14 @@
 #include "anyhttp/detail/any_async_stream.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/h1_backend.hpp"
+#include "anyhttp/h1_io.hpp"
 #include "anyhttp/h2_backend.hpp"
 #include "anyhttp/literals.hpp"
+#include "anyhttp/net.hpp"
 #include "anyhttp/server.hpp"
-#include "anyhttp/stream_traits.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/associated_allocator.hpp>
-#include <boost/asio/associated_cancellation_slot.hpp>
-#include <boost/asio/associated_executor.hpp>
-#include <boost/asio/bind_cancellation_slot.hpp>
-#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
 #include <boost/beast/core.hpp>
@@ -24,14 +19,13 @@
 #include <boost/beast/core/detail/base64.hpp>
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/core/stream_traits.hpp>
-#include <boost/beast/http.hpp>
 #include <boost/beast/http/basic_parser.hpp>
-#include <boost/beast/http/dynamic_body.hpp>
+#include <boost/beast/http/buffer_body.hpp>
+#include <boost/beast/http/empty_body.hpp>
 #include <boost/beast/http/error.hpp>
-#include <boost/beast/http/impl/write.hpp>
 #include <boost/beast/http/parser.hpp>
+#include <boost/beast/http/rfc7230.hpp>
 #include <boost/beast/http/serializer.hpp>
-#include <boost/beast/http/write.hpp>
 #include <boost/beast/ssl/ssl_stream.hpp>
 #include <boost/beast/version.hpp>
 
@@ -43,6 +37,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <optional>
 #include <string_view>
 
@@ -51,7 +46,6 @@ using namespace std::chrono_literals;
 using namespace boost::asio;
 namespace beast = boost::beast;
 namespace http = beast::http;
-namespace errc = boost::system::errc;
 
 namespace anyhttp::beast_impl
 {
@@ -60,7 +54,6 @@ namespace anyhttp::beast_impl
 
 using namespace asio;
 using namespace boost::beast;
-using socket = asio::ip::tcp::socket;
 
 /**
  * Adds the user's header fields to an outgoing message. A field replaces whatever the message
@@ -111,11 +104,9 @@ public:
          // We could still try to send an error response here.
          // This breaks WHEN_server_discards_request_THEN_is_still_able_to_deliver_response.
          //
-         error_code ec;
-         // get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send, ec);
-         get_socket(stream).shutdown(boost::asio::socket_base::shutdown_receive, ec);
+         auto ec = io::shutdown(stream, io::Shutdown::receive);
          session->closed_ = true;
-         logwd(ec != asio::error::not_connected, //
+         logwd(ec != errc::not_connected, //
                "[{}] destroy: shutdown: {}", log_prefix(), what(ec));
       }
       finish();
@@ -153,7 +144,17 @@ public:
          return std::nullopt;
    }
 
+   //
+   // The I/O is done in a coroutine, see Reader::Impl::read_some(). As a task of its own, it is
+   // what the caller's cancellation reaches.
+   //
    void async_read_some(asio::mutable_buffer body_buffer, ReadSomeHandler&& handler) override
+   {
+      launch(get_executor(), read_some(body_buffer), std::move(handler));
+   }
+
+   /// Reads until something of the body has arrived in \p body_buffer, or the body has ended.
+   Task<std::tuple<error_code, size_t>> read_some(asio::mutable_buffer body_buffer) override
    {
       assert(!reading);
 
@@ -164,75 +165,71 @@ public:
       // the end of the body, ASIO-style, session or no session; and a read past a detached,
       // unfinished parser is a truncation the caller must hear about.
       //
-      if (body_buffer.size() == 0 || parser.is_done() || !session)
-      {
-         error_code ec;
-         if (body_buffer.size() == 0)
-            ec = {};
-         else if (parser.is_done())
-            ec = asio::error::eof;
-         else
-            ec = boost::beast::http::error::partial_message;
-
-         complete_immediately(std::move(handler), get_executor(), ec, size_t{0});
-         return;
-      }
+      if (body_buffer.size() == 0)
+         co_return std::tuple{error_code{}, size_t{0}};
+      else if (parser.is_done())
+         co_return std::tuple{errors::eof, size_t{0}};
+      else if (!session)
+         co_return std::tuple{errors::partial_message, size_t{0}};
 
       buffer.reserve(64_k); // the buffer is the session's, so not before checking for it
       mlogd("async_read_some: is_done={} size={} capacity={}", parser.is_done(), buffer.size(),
             buffer.capacity());
 
+      auto self = Interface::shared_from_this();
       reading = true;
-      parser.get().body().data = body_buffer.data();
-      parser.get().body().size = body_buffer.size();
+      for (;;)
+      {
+         parser.get().body().data = body_buffer.data();
+         parser.get().body().size = body_buffer.size();
 
-      auto ex = get_associated_executor(handler, get_executor());
-      auto cs = get_associated_cancellation_slot(handler);
-      auto cb = [this, self = Interface::shared_from_this(), body_buffer,
-                 handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable {
-         reading = false;
+         error_code ec;
+         size_t n = 0;
+         try
+         {
+            std::tie(ec, n) = co_await h1::read_some(stream, buffer, parser);
+         }
+         catch (const system_error& e) // a cancelled coroutine throws from its next co_await
+         {
+            ec = e.code();
+         }
 
          auto& body = parser.get().body();
          size_t payload = body_buffer.size() - body.size;
          mlogd("async_read_some: n={} (body={}) ({}) is_done={} size={} capacity={}", n, payload,
                ec.message(), parser.is_done(), buffer.size(), buffer.capacity());
-         if (ec == beast::http::error::need_buffer)
-            ec = {}; // FIXME: maybe we should keep 'need_buffer' to avoid extra empty round trip
 
          if (parser.is_done())
             finish();
 
          //
-         // Nothing of the body came out of this round -- either the parser is now done, in which
-         // case the retry below turns straight into the EOF completion above, or it just needs
-         // more input. Either way there is nothing to hand to the caller yet.
+         // Nothing of the body came out of this round -- either the parser is done now, which
+         // is the end of the body, or it just needs more input. Either way there is nothing to
+         // hand to the caller yet.
          //
          if (!ec && payload == 0)
-            async_read_some(body_buffer, std::move(handler));
-         else
-            std::move(handler)(ec, payload);
-      };
+         {
+            if (parser.is_done())
+               ec = errors::eof;
+            else if (!session)
+               ec = errors::partial_message;
+            else
+               continue;
+         }
 
-      //
-      // TODO: Manually forwarding the cancellation slot fixes per-operation cancellation. But
-      //       there are other handler traits (executor, allocator) that might need forwarding.
-      //       Instead of doing this, we should try to use async_compose<>, which seems to do
-      //       that automatically.
-      //
-      //  Note that beast::http::async_read_same() is implemented using async_compose<>, too.
-      //
-      boost::beast::http::async_read_some(
-         stream, buffer, parser, bind_executor(ex, bind_cancellation_slot(cs, std::move(cb))));
+         reading = false;
+         co_return std::tuple{ec, payload};
+      }
    }
 
-   asio::any_io_executor get_executor() const noexcept override { return executor_; }
+   Executor get_executor() const noexcept override { return executor_; }
    std::string log_prefix() const override { return log_prefix_; }
 
    BeastSession<Stream>* session;
    Stream& stream;
    Buffer& buffer;
    Parser parser;
-   asio::any_io_executor executor_; // kept as a copy so a detached reader can still complete
+   Executor executor_; // kept as a copy so a detached reader can still complete
    std::string log_prefix_; // likewise, for logging
    bool reading = false;
    bool finished = false; // see finish()
@@ -282,41 +279,10 @@ public:
 // -------------------------------------------------------------------------------------------------
 
 /**
- * Handler wrapper that forwards all associated properties (executor, allocator, cancellation slot)
- * to the underlying async operation. This is more efficient and cleaner than nested bind_* calls.
- */
-template <typename Handler, typename Executor, typename Allocator, typename CancellationSlot>
-struct forwarding_handler
-{
-   Handler handler;
-   Executor executor;
-   Allocator allocator;
-   CancellationSlot cancellation_slot;
-
-   template <typename... Args>
-   void operator()(Args&&... args)
-   {
-      std::move(handler)(std::forward<Args>(args)...);
-   }
-
-   using executor_type = Executor;
-   executor_type get_executor() const noexcept { return executor; }
-
-   using allocator_type = Allocator;
-   allocator_type get_allocator() const noexcept { return allocator; }
-
-   using cancellation_slot_type = CancellationSlot;
-   cancellation_slot_type get_cancellation_slot() const noexcept { return cancellation_slot; }
-};
-
-// -------------------------------------------------------------------------------------------------
-
-/**
  * Common implementation of server::Response and client::Request writer.
  */
 template <typename Parent, typename Stream, typename Serializer,
           typename Message = std::remove_const_t<typename Serializer::value_type>>
-   requires boost::beast::is_async_write_stream<Stream>::value
 class WriterBase : public Parent
 {
 public:
@@ -339,7 +305,7 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   asio::any_io_executor get_executor() const noexcept override { return executor_; }
+   Executor get_executor() const noexcept override { return executor_; }
 
    void detach() override
    {
@@ -347,7 +313,13 @@ public:
       session = nullptr;
    }
 
+   /// The I/O is done in a coroutine, see Reader::Impl::read_some() and BeastReader.
    void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) override
+   {
+      launch(get_executor(), write(buffer, eof), std::move(handler));
+   }
+
+   Task<std::tuple<error_code>> write(asio::const_buffer buffer, bool eof) override
    {
       const bool empty = buffer.size() == 0;
 
@@ -359,34 +331,25 @@ public:
       // Only then does it matter that the session, and with it the stream, may be gone.
       //
       if (empty && !eof)
-      {
-         complete_immediately(std::move(handler), get_executor(), error_code{});
-         return;
-      }
+         co_return std::tuple{error_code{}};
 
       if (eof_submitted)
       {
          if (!empty)
             mloge("async_write: body has already been ended");
-         complete_immediately(std::move(handler), get_executor(),
-                              empty ? error_code{} : errc::make_error_code(errc::broken_pipe));
-         return;
+         co_return std::tuple{empty ? error_code{} : make_error_code(errc::broken_pipe)};
       }
 
       if (!session)
       {
          mlogw("async_write: session already gone");
-         complete_immediately(std::move(handler), get_executor(),
-                              make_error_code(asio::error::connection_aborted));
-         return;
+         co_return std::tuple{errors::connection_aborted};
       }
 
       if (cancelled)
       {
          mloge("async_write: already canceled");
-         complete_immediately(std::move(handler), get_executor(),
-                              errc::make_error_code(errc::operation_canceled));
-         return;
+         co_return std::tuple{errors::canceled};
       }
 
       assert(!writing);
@@ -416,90 +379,79 @@ public:
       // can not be done gracefully at chunk boundary any more. See 'Cancellation' testcase for an
       // example of this.
       //
-      // Use a custom forwarding handler to propagate all associated properties without nested
-      // bind_* calls. This is more efficient and avoids multiple layers of wrappers.
+      auto self = Parent::shared_from_this();
+      const auto expected = buffer.size();
+
+      // 'n' is the number of bytes written to the stream, not the number taken from the buffer
+      error_code ec;
+      size_t n = 0;
+      try
+      {
+         std::tie(ec, n) = co_await h1::write(stream, serializer);
+      }
+      catch (const system_error& e) // a cancelled coroutine throws from its next co_await
+      {
+         ec = e.code();
+      }
+      mlogd("async_write: n={} (\x1b[1;{}m{}\x1b[0m) done={} (body {})", n, ec ? 31 : 32,
+            ec.message(), serializer.is_done(), serializer.get().body().size);
+
+      writing = false;
+
+      if (ec == errc::operation_canceled)
+      {
+         //
+         // Cancellation is tricky, see e.g.: https://github.com/boostorg/beast/issues/2325.
+         //
+         // Main reason is that, depending on when the cancellation actually takes place,
+         // the stream is in an undefined state. For example, when writing a large chunk is
+         // interrupted, there is no meaningful way to recover: The length of the chunk has
+         // been written, but only part of the data.
+         //
+         // So the only sensible thing to do here is to close the socket.
+         //
+         // TODO: We could try to support partial cancellation, but that would only work
+         //       at chunk boundaries.
+         //
+         mlogi("async_write: canceled after writing {} of {} bytes", n, expected);
+         cancelled = true;
+         if (session) // otherwise, the stream is gone already
+         {
+            mlogi("async_write: canceled, closing stream");
+            io::shutdown(stream, io::Shutdown::send);
+         }
+      }
+      else if (ec)
+      {
+         cancelled = true;
+      }
+      /*
+      else if (!ec && n < expected)
+      {
+         mlogw("async_write: wrote {} bytes which is less than expected ({})", n, expected);
+         ec = make_error_code(errc::message_size);
+      }
+      */
+
       //
-      auto cs = get_associated_cancellation_slot(handler);
-      auto ex = get_associated_executor(handler, get_executor());
-      auto alloc = get_associated_allocator(handler);
+      // Only now is the body really ended: a cancelled or failed EOF write never got its
+      // terminating bytes onto the wire, and latching the flag at accept time would let a
+      // retried async_write_eof() report success for a body the peer sees as truncated.
+      //
+      if (!ec && eof)
+         eof_submitted = true;
 
-      auto cb = [this, self = Parent::shared_from_this(), expected = buffer.size(), eof,
-                 handler = std::move(handler)] //
-         (boost::system::error_code ec, size_t n) mutable {
-            // async op result 'n' is the number of bytes written to the stream,
-            // not the number of bytes read from the buffer
-            mlogd("async_write: n={} (\x1b[1;{}m{}\x1b[0m) done={} (body {})", n,
-                  ec == beast::http::error::need_buffer ? 33 : 31, // need_buffer in yellow only
-                  ec.message(), serializer.is_done(), serializer.get().body().size);
+      if (session && eof_submitted)
+         body_ended();
+      else if (session && cancelled)
+         write_failed();
 
-            writing = false;
-
-            //
-            // 'need_buffer' means that the serializer is done consuming all of the given buffer
-            // and is ready to accept a new one.
-            //
-            if (ec == beast::http::error::need_buffer)
-               ec = {};
-            else if (ec == errc::operation_canceled)
-            {
-               //
-               // Cancellation is tricky, see e.g.: https://github.com/boostorg/beast/issues/2325.
-               //
-               // Main reason is that, depending on when the cancellation actually takes place,
-               // the stream is in an undefined state. For example, when writing a large chunk is
-               // interrupted, there is no meaningful way to recover: The length of the chunk has
-               // been written, but only part of the data.
-               //
-               // So the only sensible thing to do here is to close the socket.
-               //
-               // TODO: We could try to support partial cancellation, but that would only work
-               //       at chunk boundaries.
-               //
-               mlogi("async_write: canceled after writing {} of {} bytes", n, expected);
-               cancelled = true;
-               if (session) // otherwise, the stream is gone already
-               {
-                  mlogi("async_write: canceled, closing stream");
-                  get_socket(stream).shutdown(boost::asio::socket_base::shutdown_send);
-               }
-            }
-            else if (ec)
-            {
-               cancelled = true;
-            }
-            /*
-            else if (!ec && n < expected)
-            {
-               mlogw("async_write: wrote {} bytes which is less than expected ({})", n, expected);
-               ec = errc::make_error_code(errc::message_size);
-            }
-            */
-
-            //
-            // Only now is the body really ended: a cancelled or failed EOF write never got its
-            // terminating bytes onto the wire, and latching the flag at accept time would let a
-            // retried async_write_eof() report success for a body the peer sees as truncated.
-            //
-            if (!ec && eof)
-               eof_submitted = true;
-
-            if (session && eof_submitted)
-               body_ended();
-            else if (session && cancelled)
-               write_failed();
-
-            //
-            // The handler may resume the caller right here. If it releases the writer, that has to
-            // take effect immediately, not only when this callback is gone.
-            //
-            self.reset();
-            std::move(handler)(ec);
-         };
-
-      http::async_write(
-         stream, serializer,
-         forwarding_handler<decltype(cb), decltype(ex), decltype(alloc), decltype(cs)>{
-            std::move(cb), std::move(ex), std::move(alloc), std::move(cs)});
+      //
+      // The caller may be resumed right after this. If it releases the writer, that has to take
+      // effect immediately, not only when this task is gone.
+      //
+      self.reset();
+      co_return std::tuple{ec};
    }
 
    /// Called when a write has ended the body, before its handler is invoked.
@@ -509,6 +461,21 @@ public:
    virtual void write_failed() {}
 
    // ----------------------------------------------------------------------------------------------
+
+   /// Writes the header of the message, see submit_headers().
+   Task<std::tuple<error_code>> write_head()
+   {
+      error_code ec;
+      try
+      {
+         std::tie(ec, std::ignore) = co_await h1::write_header(stream, serializer);
+      }
+      catch (const system_error& e) // a cancelled coroutine throws from its next co_await
+      {
+         ec = e.code();
+      }
+      co_return std::tuple{ec};
+   }
 
    /**
     * Common submit functionality for both server response and client request.
@@ -532,7 +499,7 @@ public:
    Stream& stream;
    Message message;
    Serializer serializer{message};
-   asio::any_io_executor executor_; // kept as a copy so a detached writer can still complete
+   Executor executor_; // kept as a copy so a detached writer can still complete
    std::string log_prefix_; // likewise, for logging
    bool writing = false;
    bool cancelled = false;
@@ -568,15 +535,19 @@ public:
          message.content_length(boost::none);
    }
 
+   /// The I/O is done in a coroutine, see BeastReader.
    void async_submit(StatusHandler&& handler, unsigned int status_code,
                      const Fields& headers) override
+   {
+      launch(super::get_executor(), submit(status_code, headers), std::move(handler));
+   }
+
+   Task<std::tuple<error_code>> submit(unsigned int status_code, Fields headers) override
    {
       if (!session)
       {
          mlogw("async_submit: session already gone");
-         complete_immediately(std::move(handler), super::get_executor(),
-                              make_error_code(asio::error::connection_aborted));
-         return;
+         co_return std::tuple{errors::connection_aborted};
       }
 
       message.result(status_code);
@@ -598,13 +569,7 @@ public:
       // TODO: For bundling writing the header and body, we should just post the writing here,
       //       giving an async_write the chance to add a body to the message first.
       //
-      // post(get_executor(), [this](){write);
-
-      auto ex = get_associated_executor(handler, super::get_executor());
-      auto cb = [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
-         std::move(handler)(ec);
-      };
-      async_write_header(stream, serializer, bind_executor(ex, std::move(cb)));
+      co_return co_await super::write_head();
    }
 };
 
@@ -696,50 +661,43 @@ public:
    void async_submit(StatusHandler&& handler, unsigned int status_code,
                      const Fields& headers) override
    {
+      launch(get_executor(), submit_head(headers), std::move(handler));
+   }
+
+   Task<std::tuple<error_code>> submit_head(Fields headers)
+   {
       if (!session)
       {
          mlogw("async_submit: session already gone");
-         complete_immediately(std::move(handler), get_executor(),
-                              make_error_code(asio::error::connection_aborted));
-         return;
+         co_return std::tuple{errors::connection_aborted};
       }
 
       submit_headers(headers);
       message.method(http::verb::post);
-
-      //
-      // TODO: For bundling writing the header and body, we should just post the writing here,
-      //       giving an async_write the chance to add a body to the message first.
-      //
-      auto ex = get_associated_executor(handler, get_executor());
-      auto cb = [handler = std::move(handler)](boost::system::error_code ec, size_t n) mutable { //
-         std::move(handler)(ec);
-      };
-      async_write_header(stream, serializer, bind_executor(ex, std::move(cb)));
+      co_return co_await super::write_head();
    }
 
+   /// The I/O is done in a coroutine, see BeastReader.
    void async_get_response(client::Request::GetResponseHandler&& handler) override
+   {
+      launch(get_executor(), get_response(), std::move(handler));
+   }
+
+   Task<std::tuple<error_code, client::Response>> get_response() override
    {
       mlogd("async_get_response:");
 
       if (response_requested)
       {
-         auto ec = asio::error::basic_errors::already_started;
+         auto ec = errors::already_started;
          mlogw("async_get_response: \x1b[1;31m{}\x1b[0m", what(ec));
-         any_completion_executor ex = get_associated_immediate_executor(handler, get_executor());
-         ex.execute([handler = std::move(handler), ec]() mutable { //
-            std::move(handler)(ec, client::Response{nullptr});
-         });
-         return;
+         co_return std::tuple{ec, client::Response{}};
       }
 
       if (!session)
       {
          mlogw("async_get_response: session already gone");
-         complete_immediately(std::move(handler), get_executor(),
-                              make_error_code(asio::error::connection_aborted),
-                              client::Response{nullptr});
-         return;
+         co_return std::tuple{errors::connection_aborted, client::Response{}};
       }
 
       //
@@ -750,71 +708,70 @@ public:
       auto& cs = client_session();
       error_code ec;
       if (cs.receive_failed_)
-         ec = asio::error::connection_aborted;
+         ec = errors::connection_aborted;
       else if (sequence != cs.responses_read_)
-         ec = asio::error::would_block;
+         ec = errors::would_block;
       if (ec)
       {
          mlogw("async_get_response: {} (request #{}, {} responses read)", what(ec), sequence,
                cs.responses_read_);
-         complete_immediately(std::move(handler), get_executor(), ec, client::Response{nullptr});
-         return;
+         co_return std::tuple{ec, client::Response{}};
       }
       response_requested = true;
 
       auto& buffer = session->buffer_;
-      // auto& stream = session->stream_;
-
       auto reader =
          std::make_unique<BeastResponseReader<std::decay_t<decltype(stream)>, decltype(buffer)>>(
             *session, stream, buffer);
-      http::response_parser<http::buffer_body>& parser = reader->parser;
+      auto& parser = reader->parser;
       parser.header_limit(header_limit(cs.client().config().max_header_size));
 
-      auto ex = get_associated_executor(handler, get_executor());
-      auto slot = get_associated_cancellation_slot(handler);
-      auto intermediate = [reader = std::move(reader), handler = std::move(handler),
-                           this](boost::system::error_code ec, size_t len) mutable {
-         if (!ec)
-         {
-            http::response_parser<http::buffer_body>::value_type& msg = reader->parser.get();
-            mlogd("{} {}", msg.result_int(), msg.reason());
-            for (const auto& header : msg)
-               mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
-                     truncated(header.value()));
-
-            //
-            // An "Alt-Svc" on any response may point at an HTTP/3 endpoint to use for the next
-            // connection (RFC 7838), see Client::Impl::on_alt_svc().
-            //
-            if (auto alt_svc = msg[http::field::alt_svc]; session && !alt_svc.empty())
-               client_session().client().on_alt_svc(std::string_view(alt_svc));
-         }
-         else
-            mlogw("async_read_header: {} len={}", ec.message(), len);
-
-         //
-         // If reading the headers was cancelled before receiving anything, we can allow another
-         // attempt. TODO: If we move the parser into the session, we can even relax this further.
-         //
-         // As this reader has not taken anything from the connection, it does not count as having
-         // failed to read the response, either.
-         //
-         if (ec == errc::operation_canceled && !reader->parser.got_some())
-         {
-            response_requested = false;
-            reader->finished = true;
-         }
-
-         if (!ec && reader->parser.is_done()) // a response without body is complete already
-            reader->finish();
-
-         std::move(handler)(ec, client::Response(std::move(reader)));
-      };
-
       mlogd("waiting for response (size={} capacity={})", buffer.size(), buffer.capacity());
-      async_read_header(stream, buffer, parser,
-                        bind_executor(ex, bind_cancellation_slot(slot, std::move(intermediate))));
+      size_t len = 0;
+      try
+      {
+         std::tie(ec, len) = co_await h1::read_header(stream, buffer, parser);
+      }
+      catch (const system_error& e) // a cancelled coroutine throws from its next co_await
+      {
+         ec = e.code();
+      }
+
+      if (!ec)
+      {
+         auto& msg = parser.get();
+         mlogd("{} {}", msg.result_int(), msg.reason());
+         for (const auto& header : msg)
+            mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
+                  truncated(header.value()));
+
+         //
+         // An "Alt-Svc" on any response may point at an HTTP/3 endpoint to use for the next
+         // connection (RFC 7838), see Client::Impl::on_alt_svc().
+         //
+         if (auto alt_svc = msg[http::field::alt_svc]; session && !alt_svc.empty())
+            client_session().client().on_alt_svc(std::string_view(alt_svc));
+      }
+      else
+         mlogw("async_read_header: {} len={}", ec.message(), len);
+
+      //
+      // If reading the headers was cancelled before receiving anything, we can allow another
+      // attempt. TODO: If we move the parser into the session, we can even relax this further.
+      //
+      // As this reader has not taken anything from the connection, it does not count as having
+      // failed to read the response, either.
+      //
+      if (ec == errc::operation_canceled && !parser.got_some())
+      {
+         response_requested = false;
+         reader->finished = true;
+      }
+
+      if (!ec && parser.is_done()) // a response without body is complete already
+         reader->finish();
+
+      co_return std::tuple{ec, client::Response(std::move(reader))};
    }
 
    client::Request::GetResponseHandler responseHandler;
@@ -826,8 +783,7 @@ public:
 // =================================================================================================
 
 template <typename Stream>
-BeastSession<Stream>::BeastSession(std::string_view prefix, asio::any_io_executor executor,
-                                   Stream&& stream)
+BeastSession<Stream>::BeastSession(std::string_view prefix, Executor executor, Stream&& stream)
    : executor_(std::move(executor)), log_prefix_(prefix), stream_(std::move(stream))
 {
    mlogd("session created");
@@ -846,18 +802,20 @@ BeastSession<Stream>::~BeastSession()
 }
 
 template <typename Stream>
-ServerSession<Stream>::ServerSession(server::Server::Impl& parent, any_io_executor executor,
+ServerSession<Stream>::ServerSession(server::Server::Impl& parent, Executor executor,
                                      Stream&& stream)
-   : ServerSessionBase(parent), super(anyhttp::log_prefix(Role::server, "h1", get_socket(stream)),
-                                      std::move(executor), std::move(stream))
+   : ServerSessionBase(parent),
+     super(anyhttp::log_prefix(Role::server, "h1", io::remote_endpoint(stream)),
+           std::move(executor), std::move(stream))
 {
 }
 
 template <typename Stream>
-ClientSession<Stream>::ClientSession(client::Client::Impl& parent, any_io_executor executor,
+ClientSession<Stream>::ClientSession(client::Client::Impl& parent, Executor executor,
                                      Stream&& stream)
-   : ClientSessionBase(parent), super(anyhttp::log_prefix(Role::client, "h1", get_socket(stream)),
-                                      std::move(executor), std::move(stream))
+   : ClientSessionBase(parent),
+     super(anyhttp::log_prefix(Role::client, "h1", io::remote_endpoint(stream)),
+           std::move(executor), std::move(stream))
 {
 }
 
@@ -872,10 +830,9 @@ void BeastSession<Stream>::destroy() noexcept
    //
 
    // post(get_executor(), [this, self]() mutable {
-   boost::system::error_code ec;
-   get_socket(stream_).shutdown(socket_base::shutdown_both, ec);
+   auto ec = io::shutdown(stream_, io::Shutdown::both);
    // not_connected: the peer is gone already, which is what we wanted anyway
-   logwd(ec && ec != asio::error::not_connected, //
+   logwd(ec && ec != errc::not_connected, //
          "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
    // });
 }
@@ -992,14 +949,11 @@ static std::optional<nghttp2::Upgrade> h2c_upgrade(std::string_view log_prefix,
  *
  */
 template <typename Stream>
-awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
+Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 {
    buffer_ = std::move(buffer);
 
    mlogd("do_server_session, {} bytes in buffer", buffer_.size());
-
-   bool close = false;
-   beast::error_code ec;
 
    size_t requestCounter = 0;
    while (!closed_)
@@ -1012,11 +966,11 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       mlogd("waiting for request (size={} capacity={})", buffer_.size(), buffer_.capacity());
       auto& parser = reader->parser;
       parser.header_limit(header_limit(server().config().max_header_size));
-      auto [ec, len] = co_await async_read_header(stream_, buffer_, parser, as_tuple);
+      auto [ec, len] = co_await h1::read_header(stream_, buffer_, parser);
       if (!ec)
          mlogd("async_read_header: len={} size={} capacity={} ec={}", len, buffer_.size(),
                buffer_.capacity(), ec.message());
-      else if (ec == http::error::end_of_stream)
+      else if (ec == h1::to_error_code(http::error::end_of_stream))
          mlogd("async_read_header: end of stream");
       else
          mlogw("async_read_header: len={} size={} capacity={} ec=\x1b[1;31m{}\x1b[0m", len,
@@ -1026,13 +980,13 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       // The rest of the request can not be told apart from whatever follows it on the connection,
       // so there is nothing left to do after telling the client why.
       //
-      if (ec == http::error::header_limit)
+      if (ec == errors::header_limit)
       {
          http::response<http::empty_body> res{http::status::request_header_fields_too_large, 11};
          res.set(http::field::server, "anyhttp");
          res.set(http::field::connection, "close");
          res.content_length(0);
-         if (auto [ec, n] = co_await http::async_write(stream_, res, as_tuple); ec)
+         if (auto [ec, n] = co_await h1::write_message(stream_, res); ec)
             mlogw("writing 431 response: {}", ec.message());
       }
       if (ec)
@@ -1058,7 +1012,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       //
       if (reader->url_.has_scheme())
          ; // keep it
-      else if constexpr (std::is_same_v<Stream, asio::ssl::stream<asio::ip::tcp::socket>>)
+      else if (is_tls(stream_))
          reader->url_.set_scheme("https");
       else
          reader->url_.set_scheme("http");
@@ -1089,7 +1043,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          res.set(http::field::upgrade, "h2c");
          reader.reset(); // owns the parser and thereby 'request'
 
-         if (auto [ec, n] = co_await http::async_write(stream_, res, as_tuple); ec)
+         if (auto [ec, n] = co_await h1::write_message(stream_, res); ec)
          {
             mlogw("upgrade: writing 101 response: {}", ec.message());
             break;
@@ -1098,8 +1052,8 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          mlogi("upgrading to h2c, {} bytes in buffer", buffer_.size());
          // Stream is whatever this session runs on, but never a TLS one: h2c_upgrade() takes
          // cleartext requests only, as h2 over TLS is negotiated by ALPN instead.
-         upgraded_ =
-            nghttp2::make_server_session(server(), std::move(stream_), std::move(*upgrade));
+         upgraded_ = nghttp2::make_server_session(server(), super::get_executor(),
+                                                  std::move(stream_), std::move(*upgrade));
          co_await upgraded_->do_session(std::move(buffer_));
          mlogi("h2c session done, served {} requests before upgrade", requestCounter - 1);
          co_return;
@@ -1151,10 +1105,10 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          {
             co_await handler(std::move(request_wrapper), std::move(response_wrapper));
          }
-         catch (const boost::system::system_error& e)
+         catch (const system_error& e)
          {
             mloge("exception in request handler: {}", e.code().message());
-            get_socket(stream_).shutdown(socket_base::shutdown_both);
+            io::shutdown(stream_, io::Shutdown::both);
             throw;
          }
       }
@@ -1197,15 +1151,18 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       mlogw("teardown: {}", teardown_ec.message());
 
    //
-   // Send a FIN next, and let go of the socket only after that: closing one that still has
-   // unread data in its receive queue answers the peer with an RST instead, and an RST discards
-   // whatever has not been delivered yet -- which can be the very response that said the
-   // connection was ending.
+   // Send a FIN next, and let go of the socket only once the peer has ended its side as well
+   // (RFC 9112, section 9.6), reading and dropping what still comes in for two seconds at most:
+   // see io::drain() why.
    //
-   get_socket(stream_).shutdown(asio::ip::tcp::socket::shutdown_send, ec);
-   if (ec && ec != asio::error::not_connected) // the peer may be gone already
+   if (auto ec = io::shutdown(stream_, io::Shutdown::send); !ec)
+   {
+      if (auto drained = co_await io::drain(stream_, super::get_executor(), 2s))
+         mlogd("dropped {} bytes the peer sent after the last request", drained);
+   }
+   else if (ec != errc::not_connected) // the peer may be gone already
       mlogw("shutdown: {}", ec.message());
-   get_socket(stream_).close(ec);
+   io::close(stream_);
 
    mlogd("session done");
 }
@@ -1213,7 +1170,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
+Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
    buffer_ = std::move(buffer);
 
@@ -1242,16 +1199,6 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    //       the client to make a request here right now...
    //
    co_return;
-
-   //
-   // TEST: wait
-   //
-   asio::steady_timer timer(co_await asio::this_coro::executor);
-   timer.expires_after(2s);
-   co_await timer.async_wait(deferred);
-
-   // auto [ec, len] = co_await async_read_header(stream_, buffer, parser, as_tuple);
-   co_return;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1267,9 +1214,18 @@ void ServerSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
    assert(false);
 }
 
+/// The I/O is done in a coroutine, see BeastReader.
 template <typename Stream>
 void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_view method,
                                          boost::urls::url target, const Fields& headers)
+{
+   launch(super::get_executor(), submit(std::string(method), std::move(target), headers),
+          std::move(handler));
+}
+
+template <typename Stream>
+Task<std::tuple<error_code, client::Request>>
+ClientSession<Stream>::submit(std::string method, boost::urls::url target, Fields headers)
 {
    //
    // Only one request can be incomplete at a time, see ClientSession. Instead of waiting for the
@@ -1278,15 +1234,14 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
    //
    error_code ec;
    if (send_failed_)
-      ec = asio::error::connection_aborted;
+      ec = errors::connection_aborted;
    else if (sending_)
-      ec = asio::error::would_block;
+      ec = errors::would_block;
    if (ec)
    {
       mlogw("async_submit: {} ({})", what(ec),
             sending_ ? "previous request not complete yet" : "an earlier request failed");
-      complete_immediately(std::move(handler), super::get_executor(), ec, client::Request{nullptr});
-      return;
+      co_return std::tuple{ec, client::Request{}};
    }
 
    auto writer = std::make_unique<RequestWriter<Stream>>(*this, stream_);
@@ -1314,15 +1269,9 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
    writer->sequence = requests_sent_++;
    sending_ = writer.get();
 
-   auto& serializer = writer->serializer;
-   auto ex = get_associated_executor(handler, super::get_executor());
-   auto cb = [handler = std::move(handler), writer = std::move(writer)] //
-      (error_code ec, size_t) mutable {
-         writer->header_written(ec);
-         std::move(handler)(ec, client::Request(std::move(writer)));
-      };
-
-   async_write_header(stream_, serializer, bind_executor(ex, std::move(cb)));
+   std::tie(ec) = co_await writer->write_head();
+   writer->header_written(ec);
+   co_return std::tuple{ec, client::Request(std::move(writer))};
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1376,9 +1325,9 @@ void ClientSession<Stream>::reader_finished(bool complete)
 
 // =================================================================================================
 
-template class ServerSession<asio::ip::tcp::socket>;
-template class ServerSession<asio::ssl::stream<asio::ip::tcp::socket>>;
-template class ServerSession<any_async_stream>;
+#define ANYHTTP_H1_SESSION(Stream) template class ServerSession<Stream>;
+ANYHTTP_SERVER_STREAMS(ANYHTTP_H1_SESSION)
+#undef ANYHTTP_H1_SESSION
 
 // =================================================================================================
 // Factories, see anyhttp/h1_backend.hpp. Instantiating the session templates is kept to this
@@ -1386,28 +1335,29 @@ template class ServerSession<any_async_stream>;
 // =================================================================================================
 
 template <SocketStream Stream>
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Stream&& stream)
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Executor executor,
+                                                   Stream&& stream)
 {
-   auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
    return std::make_shared<ServerSession<Stream>>(server, std::move(executor), std::move(stream));
 }
 
 template <SocketStream Stream>
-std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Stream&& stream)
+std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Executor executor,
+                                                   Stream&& stream)
 {
-   auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
    return std::make_shared<ClientSession<Stream>>(client, std::move(executor), std::move(stream));
 }
 
-template std::shared_ptr<Session::Impl> make_server_session<socket>(server::Server::Impl&,
-                                                                    socket&&);
-template std::shared_ptr<Session::Impl> make_server_session<SslStream>(server::Server::Impl&,
-                                                                       SslStream&&);
-template std::shared_ptr<Session::Impl> make_server_session<any_async_stream>(server::Server::Impl&,
-                                                                              any_async_stream&&);
-
-template std::shared_ptr<Session::Impl> make_client_session<socket>(client::Client::Impl&,
-                                                                    socket&&);
+#define ANYHTTP_H1_SERVER(Stream)                                                                  \
+   template std::shared_ptr<Session::Impl> make_server_session<Stream>(server::Server::Impl&,      \
+                                                                       Executor, Stream&&);
+#define ANYHTTP_H1_CLIENT(Stream)                                                                  \
+   template std::shared_ptr<Session::Impl> make_client_session<Stream>(client::Client::Impl&,      \
+                                                                       Executor, Stream&&);
+ANYHTTP_SERVER_STREAMS(ANYHTTP_H1_SERVER)
+ANYHTTP_CLIENT_STREAMS(ANYHTTP_H1_CLIENT)
+#undef ANYHTTP_H1_SERVER
+#undef ANYHTTP_H1_CLIENT
 
 // =================================================================================================
 

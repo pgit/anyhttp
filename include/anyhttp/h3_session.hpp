@@ -3,7 +3,6 @@
 #include "anyhttp/session_impl.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/steady_timer.hpp>
 
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
@@ -52,18 +51,19 @@ class Http3Stream;
 class Http3Session : public Session::Impl
 {
 public:
-   explicit Http3Session(asio::any_io_executor executor);
+   explicit Http3Session(Executor executor);
    ~Http3Session() override;
 
    //
    // Session::Impl
    //
-   asio::any_io_executor get_executor() const noexcept override { return executor_; }
+   Executor get_executor() const noexcept override { return executor_; }
 
    ngtcp2_conn* conn() const noexcept { return conn_; }
    nghttp3_conn* h3() const noexcept { return h3_; }
    bool closed() const noexcept { return closed_; }
    const std::string& log_prefix() const noexcept { return log_prefix_; }
+   const ngtcp2_cid& scid() const noexcept { return scid_; }
 
    /// The largest header section accepted from the peer, see Config::max_header_size.
    size_t max_header_size() const noexcept { return max_header_size_; }
@@ -214,6 +214,12 @@ protected:
    void clear_streams();
 
    //
+   // The connection is over: fails every stream that has not completed yet, instead of leaving
+   // its operations to succeed into the void or hang until the session object goes away.
+   //
+   void fail_streams(error_code ec);
+
+   //
    // Role-specific: everything a QUIC connection cannot decide on its own.
    //
    /// The connection is dead or dying; the role decides how it goes away (closing period and a
@@ -236,9 +242,10 @@ protected:
                                     void* user_data);
 
 protected:
-   asio::any_io_executor executor_;
+   Executor executor_;
 
    ngtcp2_conn* conn_ = nullptr;
+   ngtcp2_cid scid_{}; // the connection ID this end chose for itself when creating conn_
 #if ANYHTTP_H3_BORINGSSL
    SSL* ssl_ = nullptr; // also ngtcp2's TLS native handle
 #else
@@ -250,7 +257,7 @@ protected:
    nghttp3_conn* h3_ = nullptr;
    size_t max_header_size_ = default_max_header_size; // set by the derived session's constructor
 
-   asio::steady_timer timer_; // ngtcp2 expiry (handshake / idle / PTO)
+   Timer timer_; // ngtcp2 expiry (handshake / idle / PTO)
    ngtcp2_ccerr last_error_{};
    bool closed_ = false;
 

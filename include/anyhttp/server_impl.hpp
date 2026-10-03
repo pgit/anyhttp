@@ -4,11 +4,7 @@
 #include "session.hpp"
 #include "writer_impl.hpp"
 
-#include <boost/asio/any_completion_handler.hpp>
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/awaitable.hpp>
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/ssl/context.hpp>
+#include "net.hpp"
 
 #include <memory>
 #include <set>
@@ -48,6 +44,13 @@ public:
 
    virtual void async_submit(StatusHandler&& handler, unsigned int status_code,
                              const Fields& fields) = 0;
+
+   /// async_submit() as a coroutine, see Reader::Impl::read_some().
+   virtual Task<std::tuple<error_code>> submit(unsigned int status_code, Fields fields)
+   {
+      co_return co_await initiate<Status>(
+         [&](StatusHandler handler) { async_submit(std::move(handler), status_code, fields); });
+   }
 };
 
 // =================================================================================================
@@ -61,7 +64,7 @@ class Http3Server;
 class Server::Impl : public std::enable_shared_from_this<Server::Impl>
 {
 public:
-   Impl(boost::asio::any_io_executor executor, Config config);
+   Impl(Executor executor, Config config);
    ~Impl();
 
    /// For log lines that belong to no connection, see anyhttp::log_prefix().
@@ -73,12 +76,12 @@ public:
    void listen_tcp();
 
    const Config& config() const { return config_; }
-   boost::asio::any_io_executor get_executor() const noexcept { return executor_; }
+   Executor get_executor() const noexcept { return executor_; }
 
    //
    // The TLS context used for every TCP connection, see make_tls_server_context().
    //
-   boost::asio::ssl::context& tls_context() noexcept { return tls_context_; }
+   TlsContext& tls_context() noexcept { return tls_context_; }
 
    //
    // The "Alt-Svc" field value pointing at this server's HTTP/3 endpoint, put into every response
@@ -87,10 +90,11 @@ public:
    //
    const std::string& alt_svc() const noexcept { return alt_svc_; }
 
-   asio::awaitable<void> tcp_accept_loop();
-   asio::awaitable<void> handle_connection(asio::ip::tcp::socket socket);
+   Task<void> tcp_accept_loop();
+   /// Serves \p socket on \p executor, which is the connection's strand with Config::use_strand.
+   Task<void> handle_connection(Executor executor, TcpSocket socket);
 
-   asio::ip::tcp::endpoint local_endpoint() const { return acceptor_.local_endpoint(); }
+   asio::ip::tcp::endpoint local_endpoint() const { return io::local_endpoint(acceptor_); }
 
    void on_request(RequestHandler&& handler) noexcept { request_handler_ = std::move(handler); }
    const RequestHandler& request_handler() const noexcept { return request_handler_; }
@@ -107,9 +111,9 @@ public:
 private:
    Config config_;
 
-   asio::any_io_executor executor_;
-   asio::ssl::context tls_context_;
-   asio::ip::tcp::acceptor acceptor_;
+   Executor executor_;
+   TlsContext tls_context_;
+   TcpAcceptor acceptor_;
    std::string alt_svc_;
 
    std::mutex session_mutex_;

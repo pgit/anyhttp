@@ -15,7 +15,6 @@
 #include <charconv>
 
 using namespace boost::asio;
-namespace errc = boost::system::errc;
 
 namespace anyhttp::http3
 {
@@ -42,13 +41,13 @@ Http3Stream::~Http3Stream()
    if (writer)
       writer->detach();
    if (read_handler)
-      swap_and_invoke(read_handler, errc::make_error_code(errc::connection_reset), 0);
+      swap_and_invoke(read_handler, make_error_code(errc::connection_reset), 0);
    if (write_active && write_handler)
-      swap_and_invoke(write_handler, errc::make_error_code(errc::connection_reset));
+      swap_and_invoke(write_handler, make_error_code(errc::connection_reset));
    mlogd("\x1b[33mStream: dtor... done\x1b[0m");
 }
 
-asio::any_io_executor Http3Stream::get_executor() const noexcept { return session.get_executor(); }
+Executor Http3Stream::get_executor() const noexcept { return session.get_executor(); }
 
 // =================================================================================================
 // Incoming body
@@ -153,14 +152,14 @@ void Http3Stream::call_read_handler()
          }
 
          consumed += copied;
-         swap_and_invoke(read_handler, boost::system::error_code{}, copied);
+         swap_and_invoke(read_handler, error_code{}, copied);
          continue;
       }
 
       if (eof_received)
       {
          // the end of the body, reported the way ASIO reports it everywhere else
-         swap_and_invoke(read_handler, error_code{asio::error::eof}, 0);
+         swap_and_invoke(read_handler, errors::eof, 0);
          continue;
       }
 
@@ -171,7 +170,7 @@ void Http3Stream::call_read_handler()
          // there is nothing left that could ever complete it, so report the truncation now rather
          // than leaving it pending forever.
          //
-         swap_and_invoke(read_handler, boost::beast::http::error::partial_message, 0);
+         swap_and_invoke(read_handler, errors::partial_message, 0);
          continue;
       }
 
@@ -224,7 +223,7 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer,
       if (n > 0)
       {
          mloge("start_write: body has already been ended");
-         complete_immediately(errc::make_error_code(errc::broken_pipe));
+         complete_immediately(make_error_code(errc::broken_pipe));
          return;
       }
 
@@ -244,7 +243,7 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer,
          return;
       }
 
-      complete_immediately(closed && !fin_offered ? errc::make_error_code(errc::connection_reset)
+      complete_immediately(closed && !fin_offered ? make_error_code(errc::connection_reset)
                                                   : error_code{});
       return;
    }
@@ -252,7 +251,7 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer,
    if (closed)
    {
       mlogw("start_write: stream already closed");
-      complete_immediately(errc::make_error_code(errc::connection_reset));
+      complete_immediately(make_error_code(errc::connection_reset));
       return;
    }
 
@@ -291,11 +290,7 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
    if (!handler)
       return;
 
-   auto cs = asio::get_associated_cancellation_slot(handler);
-   if (!cs.is_connected() || cs.has_handler())
-      return;
-
-   cs.assign([this, token](asio::cancellation_type_t ct) {
+   on_cancel(handler, [this, token] {
       //
       // Cancellation completes the write immediately, without waiting for what it would normally
       // complete on -- see below for what that costs in either write mode.
@@ -316,13 +311,11 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
          // exactly like any other data write below -- keeping it active would leave nghttp3 and
          // ngtcp2 pointing into freed memory.
          //
-         mlogd("async_write: \x1b[1;31mcancelled\x1b[0m ({}), FIN still pending", ct);
-         asio::post(get_executor(), [handler = std::move(write_handler)]() mutable { //
-            std::move(handler)(errc::make_error_code(errc::operation_canceled));
-         });
+         mlogd("async_write: \x1b[1;31mcancelled\x1b[0m, FIN still pending");
+         complete_later(std::move(write_handler), get_executor(), errors::canceled);
          return;
       }
-      mlogd("async_write: \x1b[1;31mcancelled\x1b[0m ({})", ct);
+      mlogd("async_write: \x1b[1;31mcancelled\x1b[0m");
 
       if (write_mode == WriteMode::ZeroCopy)
       {
@@ -377,9 +370,7 @@ void Http3Stream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
       write_active = false;
       write_source = {};
       // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
-      asio::post(get_executor(), [handler = std::move(write_handler)]() mutable { //
-         std::move(handler)(errc::make_error_code(errc::operation_canceled));
-      });
+      complete_later(std::move(write_handler), get_executor(), errors::canceled);
    });
 }
 
@@ -602,8 +593,8 @@ void Http3Stream::finish_active_write()
    // pass this is nested in and at worst trips ngtcp2's own "time must not go backwards"
    // assertion. Post instead -- one hop, on a path that is not latency critical.
    //
-   asio::post(get_executor(), [self = shared_from_this(), handler = std::move(handler)]() mutable {
-      std::move(handler)(boost::system::error_code{});
+   run_later(get_executor(), [self = shared_from_this(), handler = std::move(handler)]() mutable {
+      std::move(handler)(error_code{});
    });
 }
 
@@ -720,7 +711,7 @@ bool Http3Stream::submit_headers(std::span<const nghttp3_nv> nva, bool is_reques
 // Lifecycle
 // =================================================================================================
 
-void Http3Stream::fail(boost::system::error_code ec)
+void Http3Stream::fail(error_code ec)
 {
    //
    // The handlers below may run synchronously and drop the last owning reference to this stream
@@ -737,7 +728,7 @@ void Http3Stream::fail(boost::system::error_code ec)
       // never see the rest of it, not which QUIC error code carried that news -- report the
       // truncation, matching what the HTTP/2 side delivers for a stream closing early.
       //
-      auto read_ec = (ec && !eof_received) ? boost::beast::http::error::partial_message : ec;
+      auto read_ec = (ec && !eof_received) ? errors::partial_message : ec;
       swap_and_invoke(read_handler, read_ec, 0);
    }
 
@@ -757,7 +748,7 @@ void Http3Stream::fail(boost::system::error_code ec)
       write_active = false;
       write_source = {};
       if (write_handler)
-         swap_and_invoke(write_handler, ec ? ec : errc::make_error_code(errc::connection_reset));
+         swap_and_invoke(write_handler, ec ? ec : make_error_code(errc::connection_reset));
    }
 
    maybe_close();
@@ -839,7 +830,7 @@ void Http3Stream::delete_writer()
       //
       mlogw("delete_writer: body never ended, resetting stream");
       session.reset_stream(id, NGHTTP3_H3_REQUEST_CANCELLED);
-      fail(boost::beast::http::error::partial_message);
+      fail(errors::partial_message);
    }
 
    maybe_close();

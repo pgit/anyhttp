@@ -38,13 +38,25 @@ std::optional<size_t> Reader::content_length() const noexcept
    return impl_ ? impl_->content_length() : std::nullopt;
 }
 
+static Task<std::tuple<error_code, size_t>> no_reader()
+{
+   co_return std::tuple{errors::bad_descriptor, size_t{0}};
+}
+
+Task<std::tuple<error_code, size_t>> Reader::read_some(asio::mutable_buffer buffer)
+{
+   return impl_ ? impl_->read_some(buffer) : no_reader();
+}
+
+#if !ANYHTTP_COROSIO
 void Reader::async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler)
 {
    if (impl_)
       impl_->async_read_some(buffer, std::move(handler));
    else
-      std::move(handler)(asio::error::bad_descriptor, 0);
+      std::move(handler)(errors::bad_descriptor, 0);
 }
+#endif
 
 // =================================================================================================
 

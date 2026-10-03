@@ -63,15 +63,22 @@ Response::~Response() { reset(); }
 
 Response::Impl& Response::pimpl() const noexcept { return static_cast<Impl&>(Writer::pimpl()); }
 
+Task<std::tuple<error_code>> Response::submit(unsigned int status_code, Fields headers)
+{
+   return pimpl().submit(status_code, std::move(headers));
+}
+
+#if !ANYHTTP_COROSIO
 void Response::async_submit_any(StatusHandler&& handler, unsigned int status_code,
                                 const Fields& headers)
 {
    pimpl().async_submit(std::move(handler), status_code, headers);
 }
+#endif
 
 // =================================================================================================
 
-Server::Server(boost::asio::any_io_executor executor, Config config)
+Server::Server(Executor executor, Config config)
    : impl(std::make_unique<Server::Impl>(std::move(executor), std::move(config)))
 {
    impl->start();
@@ -86,7 +93,7 @@ Server::~Server() { impl->destroy(); }
 
 void Server::on_request(RequestHandler&& handler) { impl->on_request(std::move(handler)); }
 
-asio::any_io_executor Server::get_executor() const noexcept { return impl->get_executor(); }
+Executor Server::get_executor() const noexcept { return impl->get_executor(); }
 
 asio::ip::tcp::endpoint Server::local_endpoint() const { return impl->local_endpoint(); }
 

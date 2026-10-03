@@ -68,42 +68,19 @@ std::string log_prefix(Role role, std::string_view protocol, const asio::ip::add
 }
 
 std::string log_prefix(Role role, std::string_view protocol,
-                       const asio::basic_socket<asio::ip::tcp, asio::any_io_executor>& socket)
+                       const std::optional<asio::ip::tcp::endpoint>& remote)
 {
-   boost::system::error_code ec;
-   auto remote = socket.remote_endpoint(ec);
-   if (ec)
+   if (!remote)
       return colored(role, protocol);
 
-   return log_prefix(role, protocol, remote.address(), remote.port());
+   return log_prefix(role, protocol, remote->address(), remote->port());
 }
 
 }; // namespace anyhttp
 
 // =================================================================================================
 
-boost::system::error_code code(const std::exception_ptr& ptr)
-{
-   if (!ptr)
-      return {};
-   else
-   {
-      try
-      {
-         std::rethrow_exception(ptr);
-      }
-      catch (boost::asio::multiple_exceptions& mex)
-      {
-         return code(mex.first_exception());
-      }
-      catch (boost::system::system_error& ex)
-      {
-         return ex.code();
-      }
-   }
-}
-
-std::string what(const boost::system::error_code& ec) { return ec.message(); }
+std::string what(const anyhttp::error_code& ec) { return ec.message(); }
 std::string what(const boost::system::system_error& ex) { return what(ex.code()); }
 std::string what(const std::exception_ptr& ptr)
 {

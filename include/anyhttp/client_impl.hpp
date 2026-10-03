@@ -3,11 +3,7 @@
 #include "reader_impl.hpp"
 #include "writer_impl.hpp"
 
-#include <boost/asio/any_completion_handler.hpp>
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/awaitable.hpp>
-#include <boost/asio/experimental/co_composed.hpp>
-#include <boost/asio/ip/tcp.hpp>
+#include "net.hpp"
 
 #include <chrono>
 #include <mutex>
@@ -28,6 +24,13 @@ public:
    virtual void async_submit(StatusHandler&& handler, unsigned int status_code,
                              const Fields& headers) = 0;
    virtual void async_get_response(GetResponseHandler&& handler) = 0;
+
+   /// async_get_response() as a coroutine, see Reader::Impl::read_some().
+   virtual Task<std::tuple<error_code, Response>> get_response()
+   {
+      co_return co_await initiate<GetResponse>(
+         [this](GetResponseHandler handler) { async_get_response(std::move(handler)); });
+   }
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -51,15 +54,21 @@ public:
 class Client::Impl
 {
 public:
-   explicit Impl(asio::any_io_executor executor, Config config);
+   explicit Impl(Executor executor, Config config);
    ~Impl();
 
    /// For log lines that belong to no connection, see anyhttp::log_prefix().
    std::string log_prefix() const { return anyhttp::log_prefix(Role::client); }
 
-   boost::asio::any_io_executor get_executor() const noexcept { return executor_; }
+   Executor get_executor() const noexcept { return executor_; }
 
+#if !ANYHTTP_COROSIO
    void async_connect(ConnectHandler handler);
+#endif
+
+   /// Connects and returns the session, see Client::connect(). Throws what goes wrong.
+   Task<Session> async_connect();
+
    const Config& config() const { return config_; }
 
    // ----------------------------------------------------------------------------------------------
@@ -92,12 +101,8 @@ public:
    std::optional<AlternativeService> alt_svc() const;
 
 private:
-   awaitable<Session> async_connect();
-
-private:
    Config config_;
-   asio::any_io_executor executor_;
-   std::optional<asio::ip::tcp::resolver> resolver_;
+   Executor executor_;
 
    //
    // Sessions run on their own executor, which is not necessarily the one the next connect is

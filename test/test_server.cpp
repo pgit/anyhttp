@@ -1,5 +1,7 @@
 #include "test_fixtures.hpp"
 
+#include <boost/scope/scope_exit.hpp>
+
 #include <array>
 #include <future>
 #include <optional>
@@ -52,27 +54,26 @@ protected:
       server.emplace(
          context.get_executor(),
          server::Config{.listen_address = "127.0.0.2", .port = 0, .idle_timeout = IdleTimeout});
-      server->on_request(
-         [this](server::Request request, server::Response response) -> awaitable<void> {
-            co_await response.async_submit(200, {});
+      server->on_request([this](server::Request request, server::Response response) -> Task<void> {
+         check(co_await response.submit(200, {}));
 
-            //
-            // Wait for a request body that never comes: this first read is where the handler is
-            // suspended when the client freezes, and it must be resumed -- with an error -- once
-            // the server gives up on the connection.
-            //
-            std::array<uint8_t, 1024> buffer;
-            auto [ec, n] = co_await request.async_read_some(asio::buffer(buffer), as_tuple);
-            handler_result.set_value(ec);
-         });
+         //
+         // Wait for a request body that never comes: this first read is where the handler is
+         // suspended when the client freezes, and it must be resumed -- with an error -- once
+         // the server gives up on the connection.
+         //
+         std::array<uint8_t, 1024> buffer;
+         auto [ec, n] = co_await request.read_some(asio::buffer(buffer));
+         handler_result.set_value(ec);
+      });
 
       url.set_port_number(server->local_endpoint().port());
    }
 
-   asio::io_context context;
+   IoContext context;
    std::optional<server::Server> server;
 
-   std::promise<boost::system::error_code> handler_result;
+   std::promise<error_code> handler_result;
    boost::urls::url url{"http://127.0.0.2/echo"};
 };
 
@@ -85,15 +86,21 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
    //
    // The server has to keep running while the client is frozen, so it gets a thread of its own.
    //
-   std::jthread server_thread([this] { run(context); });
-   boost::scope::scope_exit stop_server([this] { context.stop(); });
+   std::jthread server_thread([this] { context.run(); });
+
+   //
+   // On the way out, the server is shut down on its own thread, and the thread is joined once that
+   // is done: a stopped context would leave the server's coroutines suspended for good.
+   //
+   boost::scope::scope_exit stop_server(
+      [this] { run_later(context.get_executor(), [this] { server.reset(); }); });
 
    //
    // The client runs on its own io_context, which is what makes freezing it possible: stopping
    // that context takes the client off the air mid-request without unwinding anything, so no
    // CONNECTION_CLOSE is ever sent -- just like a client process that was killed.
    //
-   asio::io_context client_context;
+   IoContext client_context;
    client::Client client(client_context.get_executor(),
                          client::Config{.url = url,
                                         .protocol = anyhttp::Protocol::h3,
@@ -109,15 +116,13 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
    std::optional<client::Response> response;
 
    bool responded = false;
-   co_spawn(
-      client_context,
-      [&]() -> awaitable<void> {
-         session = co_await client.async_connect();
-         request = co_await session->async_submit(url, {});
-         response = co_await request->async_get_response();
-         responded = true;
-      },
-      detached);
+   auto client_main = [&]() -> Task<void> {
+      session = check(co_await client.connect());
+      request = check(co_await session->submit(url, {}));
+      response = check(co_await request->get_response());
+      responded = true;
+   };
+   launch(client_context.get_executor(), client_main());
 
    //
    // Run the client just far enough to have the request open and answered, then stop running it:
@@ -134,12 +139,18 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
    // sits in the server's connection table for good.
    //
    ASSERT_EQ(result.wait_for(5s), std::future_status::ready) << "request handler never completed";
-   EXPECT_EQ(result.get(), boost::system::errc::connection_reset);
+   EXPECT_EQ(result.get(), errors::partial_message); // the body was cut short
 
    //
    // Only now, on the way out, is the frozen client allowed to unwind: doing so earlier would
-   // have sent the CONNECTION_CLOSE that this test is all about not sending.
+   // have sent the CONNECTION_CLOSE that this test is all about not sending. It is run to its end
+   // rather than destroyed along with its context, which only ASIO could unwind: capy has no way
+   // of destroying a coroutine that is suspended on an operation of a context that goes away.
    //
+   response.reset();
+   request.reset();
+   session.reset();
+   client_context.run();
 }
 
 // =================================================================================================
@@ -151,7 +162,7 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
 //
 TEST(ServerTls, WHEN_certificate_chain_is_missing_THEN_constructor_throws)
 {
-   asio::io_context context;
+   IoContext context;
    EXPECT_ANY_THROW(server::Server(context.get_executor(),
                                    server::Config{.listen_address = "127.0.0.2",
                                                   .port = 0,
@@ -160,7 +171,7 @@ TEST(ServerTls, WHEN_certificate_chain_is_missing_THEN_constructor_throws)
 
 TEST(ServerTls, WHEN_private_key_is_missing_THEN_constructor_throws)
 {
-   asio::io_context context;
+   IoContext context;
    EXPECT_ANY_THROW(server::Server(context.get_executor(),
                                    server::Config{.listen_address = "127.0.0.2",
                                                   .port = 0,

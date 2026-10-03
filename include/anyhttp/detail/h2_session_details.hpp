@@ -8,11 +8,10 @@
 #include "anyhttp/h2_common.hpp"
 #include "anyhttp/h2_session.hpp"
 #include "anyhttp/literals.hpp"
-#include "anyhttp/stream_traits.hpp"
+#include "anyhttp/net.hpp"
 
 #include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/beast/core/static_buffer.hpp>
@@ -27,18 +26,13 @@ namespace anyhttp::nghttp2
 
 // =================================================================================================
 
-using socket = asio::ip::tcp::socket;
-
-// =================================================================================================
-
 template <typename Stream>
 void NGHttp2SessionImpl<Stream>::destroy() noexcept
 {
    // post(get_executor(), [this, self]() mutable {
-   boost::system::error_code ec;
-   get_socket(stream_).shutdown(asio::socket_base::shutdown_both, ec);
+   auto ec = io::shutdown(stream_, io::Shutdown::both);
    // not_connected: the peer is gone already, which is what we wanted anyway
-   logwd(ec && ec != asio::error::not_connected, //
+   logwd(ec && ec != errc::not_connected, //
          "[{}] destroy: socket shutdown: {}", log_prefix_, ec.message());
    // });
 }
@@ -61,13 +55,19 @@ void NGHttp2SessionImpl<Stream>::destroy() noexcept
 // to the stream. Finally, if still no more data is returned, it waits for a signal to resume.
 //
 template <typename Stream>
-awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
+Task<void> NGHttp2SessionImpl<Stream>::send_loop()
 {
    Buffer buffer;
    buffer.reserve(1460);
 
    for (;;)
    {
+      //
+      // Cleared before asking nghttp2, not before waiting: a start_write() while the write below
+      // is suspended must still find its way to the wait.
+      //
+      send_ready_.clear();
+
       //
       // Retrieve a chunk of data to be sent from NGHTTP2.
       // The buffer is valid until next call nghttp2_session_mem_send, so we don't need to copy it.
@@ -81,7 +81,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
       if (nread < 0)
       {
          logw("send loop: closing stream and throwing");
-         get_socket(stream_).close(); // will also cancel the read loop
+         io::close(stream_); // will also cancel the read loop
          throw std::runtime_error("nghttp2_session_mem_send");
       }
 
@@ -103,13 +103,14 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
       //
       else if (const auto bytes_to_write = buffer.size() + nread; bytes_to_write > 0)
       {
-         const auto seq = std::to_array<const_buffer>({buffer.data(), asio::buffer(data, nread)});
+         const auto seq =
+            std::to_array<asio::const_buffer>({buffer.data(), asio::buffer(data, nread)});
          mylogd("send loop: writing {} bytes...", bytes_to_write);
-         auto [ec, written] = co_await asio::async_write(stream_, seq, asio::as_tuple);
+         auto [ec, written] = co_await io::write(stream_, seq);
          if (ec)
          {
             // a peer that hung up is not our error
-            if (ec == asio::error::broken_pipe || ec == asio::error::connection_reset)
+            if (ec == errc::broken_pipe || ec == errc::connection_reset)
                mlogi("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
             else
                mloge("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
@@ -135,10 +136,23 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
             break; // nghttp2 doesn't want to send or receive any more, so we are done
 
          mylogd("send loop: waiting...");
-         co_await async_wait_send(asio::deferred);
+         if (auto [ec] = co_await send_ready_.wait(); ec)
+            break;
          mylogd("send loop: waiting... done");
       }
    }
+
+   //
+   // Nothing more goes out: nghttp2 wants neither to read nor to write any more, or the connection
+   // broke. Whatever the receive loop might still read would go unused, and the peer may well be
+   // waiting for us to close the connection, having received our GOAWAY (which, for an error,
+   // RFC 9113 section 5.4.1 requires). So end the read as well, which ends the session.
+   //
+   // Before, this happened by accident of timing: start_write() drained the GOAWAY into the socket
+   // before the receive loop checked nghttp2_session_want_read() again. Now that the send loop is
+   // woken by a posted Event, the receive loop gets there first.
+   //
+   io::cancel(stream_);
 
    mylogd("send loop: destroying streams...");
    streams_.clear();
@@ -154,7 +168,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::send_loop()
 // because it does not need to wait on re-activation by the user.
 //
 template <typename Stream>
-awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
+Task<void> NGHttp2SessionImpl<Stream>::recv_loop()
 {
    buffer_.reserve(64_k);
 
@@ -162,7 +176,7 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
    while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
    {
       auto free = buffer_.capacity() - buffer_.size();
-      auto [ec, n] = co_await stream_.async_read_some(buffer_.prepare(free), asio::as_tuple);
+      auto [ec, n] = co_await io::read_some(stream_, buffer_.prepare(free));
       if (ec)
       {
          mylogd("read: {}, terminating session", ec.message());
@@ -184,11 +198,11 @@ awaitable<void> NGHttp2SessionImpl<Stream>::recv_loop()
 // =================================================================================================
 
 template <typename Stream>
-ServerSession<Stream>::ServerSession(server::Server::Impl& parent, asio::any_io_executor executor,
+ServerSession<Stream>::ServerSession(server::Server::Impl& parent, Executor executor,
                                      Stream&& stream)
-   : ServerReference(parent),
-     super(anyhttp::log_prefix(Role::server, is_tls(stream) ? "h2" : "h2c", get_socket(stream)),
-           executor, std::move(stream))
+   : ServerReference(parent), super(anyhttp::log_prefix(Role::server, is_tls(stream) ? "h2" : "h2c",
+                                                        io::remote_endpoint(stream)),
+                                    executor, std::move(stream))
 {
    max_header_size_ = parent.config().max_header_size;
    alt_svc_ = parent.alt_svc();
@@ -197,7 +211,7 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, asio::any_io_
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
+Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 {
    buffer_ = std::move(buffer);
    auto callbacks = super::setup_callbacks();
@@ -273,8 +287,7 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    //
    // send/receive loop
    //
-   using namespace asio::experimental::awaitable_operators;
-   co_await (send_loop() && recv_loop());
+   co_await when_both(send_loop(), recv_loop());
 
    mlogd("server session done");
 
@@ -285,6 +298,21 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    if (auto ec = co_await async_teardown(stream_); ec)
       mlogd("teardown: {}", ec.message());
 
+   //
+   // Then send a FIN, and let go of the socket only once the peer has ended its side as well,
+   // reading and dropping what still comes in for two seconds at most: closing it right away would
+   // answer a peer that sent anything after our GOAWAY with an RST, which may cost it that GOAWAY.
+   // See io::drain().
+   //
+   if (auto ec = io::shutdown(stream_, io::Shutdown::send); !ec)
+   {
+      if (auto drained = co_await io::drain(stream_, this->get_executor(), std::chrono::seconds(2)))
+         mlogd("dropped {} bytes the peer sent after the session ended", drained);
+   }
+   else if (ec != errc::not_connected) // the peer may be gone already
+      mlogw("shutdown: {}", ec.message());
+   io::close(stream_);
+
    nghttp2_session_del(session);
    session = nullptr;
    mlogd("server session deleted");
@@ -293,11 +321,11 @@ awaitable<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 // =================================================================================================
 
 template <typename Stream>
-ClientSession<Stream>::ClientSession(client::Client::Impl& parent, asio::any_io_executor executor,
+ClientSession<Stream>::ClientSession(client::Client::Impl& parent, Executor executor,
                                      Stream&& stream)
-   : ClientReference(parent),
-     super(anyhttp::log_prefix(Role::client, is_tls(stream) ? "h2" : "h2c", get_socket(stream)),
-           executor, std::move(stream))
+   : ClientReference(parent), super(anyhttp::log_prefix(Role::client, is_tls(stream) ? "h2" : "h2c",
+                                                        io::remote_endpoint(stream)),
+                                    executor, std::move(stream))
 {
    max_header_size_ = parent.config().max_header_size;
 }
@@ -305,7 +333,7 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, asio::any_io_
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
+Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
    buffer_ = std::move(buffer);
    auto callbacks = super::setup_callbacks();
@@ -357,8 +385,7 @@ awaitable<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    //
    // send/receive loop
    //
-   using namespace asio::experimental::awaitable_operators;
-   co_await (send_loop() && recv_loop());
+   co_await when_both(send_loop(), recv_loop());
 
    mlogd("client session done");
 
