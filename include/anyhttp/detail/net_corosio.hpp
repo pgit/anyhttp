@@ -9,6 +9,8 @@
 #include "anyhttp/common.hpp"
 #include "anyhttp/runtime.hpp"
 
+#include <boost/capy/ex/async_waker.hpp>
+
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/io_context.hpp>
 #include <boost/corosio/ip_address.hpp>
@@ -306,23 +308,26 @@ inline void close(UdpSocket& socket) noexcept { socket.close(); }
 
 // -------------------------------------------------------------------------------------------------
 
-/// With only one thread, an Event does, cleared again for the next wait.
+/**
+ * capy's async_waker: notify() may come from any thread, and wakes up the waiter or is kept for
+ * the next wait(), several of them as one. The waiter has to run on a strand, or on a context run
+ * by one thread only.
+ */
 class Signal
 {
 public:
    explicit Signal(const Executor&) {}
 
-   void notify() { event_.set(); }
+   void notify() { waker_.wake(); }
 
    Task<std::tuple<error_code>> wait()
    {
-      auto [ec] = co_await event_.wait();
-      event_.clear();
+      auto [ec] = co_await waker_.wait();
       co_return std::tuple{ec};
    }
 
 private:
-   Event event_;
+   capy::async_waker waker_;
 };
 
 // =================================================================================================

@@ -6,7 +6,10 @@
 // detail/runtime_asio.hpp defines the same names for Boost.Asio and has their documentation; what
 // is said here is what differs.
 //
-// Only single-threaded use is supported: everything of a server or client runs on one thread.
+// Threads work as with ASIO: a server with Config::use_strand puts every connection on a capy
+// strand of its own. corosio resumes a coroutine after I/O through the coroutine's executor, so
+// one that runs on a strand stays there. Like ASIO's, an operation may only be cancelled from the
+// strand its caller runs on: a stop callback runs on the thread that requests the stop.
 //
 
 #include <boost/capy/buffers.hpp>
@@ -19,6 +22,7 @@
 #include <boost/capy/ex/io_env.hpp>
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/run_async.hpp>
+#include <boost/capy/ex/strand.hpp>
 #include <boost/capy/ex/this_coro.hpp>
 #include <boost/capy/io_result.hpp>
 #include <boost/capy/io_task.hpp>
@@ -27,6 +31,7 @@
 #include <boost/capy/when_any.hpp>
 #include <boost/capy/write.hpp>
 #include <boost/corosio/delay.hpp>
+#include <boost/corosio/io_context.hpp>
 #include <boost/corosio/wait_type.hpp>
 
 // the buffer vocabulary stays Boost.Asio's, which Beast needs anyway
@@ -65,8 +70,8 @@ using Executor = capy::any_executor;
 
 using std::error_code;
 
-/// Everything of a server or client runs on one thread: there are no strands.
-inline constexpr bool multithreaded_runtime = false;
+/// Whether the runtime supports running a server or client on several threads (with strands).
+inline constexpr bool multithreaded_runtime = true;
 
 /// What the runtime throws an error_code as.
 using system_error = std::system_error;
@@ -300,20 +305,58 @@ auto initiate(Init&& init)
 template <typename F>
 inline void run_later(const Executor& executor, F&& function);
 
-/// Only one thread runs everything here, so there is nothing to hop onto: calls \p function now.
-template <typename F>
-inline void dispatch_to(const Executor&, F&& function)
-{
-   std::forward<F>(function)();
-}
-
-/// There are no strands: everything runs on one thread (server::Config::use_strand is refused).
-inline Executor new_strand(const Executor& executor) { return executor; }
-
 /// Starts \p task on \p executor, detached: nobody waits for it, and what it throws is dropped.
 inline void launch(const Executor& executor, Task<void> task)
 {
    capy::run_async(executor, []() noexcept {}, [](std::exception_ptr) noexcept {})(std::move(task));
+}
+
+/**
+ * Calls \p function on \p executor: right away if the caller runs on it already, later if not.
+ * That is how capy starts a task, see launch(): it dispatches.
+ */
+template <typename F>
+inline void dispatch_to(const Executor& executor, F&& function)
+{
+   launch(executor, [](std::decay_t<F> function) -> Task<void> {
+      function();
+      co_return;
+   }(std::forward<F>(function)));
+}
+
+namespace detail
+{
+/**
+ * A capy strand on a corosio io_context, forwarding to it. capy::any_executor does not take a
+ * capy::strand itself (which keeps the constructors of a strand<any_executor> apart), but it
+ * takes this.
+ */
+class Strand
+{
+public:
+   explicit Strand(const corosio::io_context::executor_type& executor) : strand_(executor) {}
+
+   auto& context() const noexcept { return strand_.context(); }
+   void on_work_started() const noexcept { strand_.on_work_started(); }
+   void on_work_finished() const noexcept { strand_.on_work_finished(); }
+   std::coroutine_handle<> dispatch(capy::continuation& c) const { return strand_.dispatch(c); }
+   void post(capy::continuation& c) const { strand_.post(c); }
+   bool operator==(const Strand&) const noexcept = default;
+
+private:
+   capy::strand<corosio::io_context::executor_type> strand_;
+};
+} // namespace detail
+
+/**
+ * A new strand on the io_context \p executor belongs to, for a connection that has to be
+ * serialized against itself while the context runs on several threads. The strand wraps the
+ * context's own executor, not \p executor, which may be a strand itself.
+ */
+inline Executor new_strand(const Executor& executor)
+{
+   auto& context = static_cast<corosio::io_context&>(executor.context());
+   return Executor(detail::Strand(context.get_executor()));
 }
 
 /// Starts \p task on \p executor and calls \p on_done with what it threw, if anything.
@@ -510,6 +553,10 @@ private:
 /**
  * A timer that calls back when it expires, see detail/runtime_asio.hpp. Each arm() starts a wait
  * of its own, which the next arm() or cancel() stops.
+ *
+ * A wait whose delay has expired may still be queued, behind the strand, when it is stopped: it
+ * looks at its stop token again once it runs, so that a callback that has been replaced or
+ * cancelled is never called.
  */
 class Timer
 {
@@ -526,7 +573,8 @@ public:
       stop_.emplace();
       auto wait = [](std::chrono::steady_clock::duration delay,
                      std::function<void()> on_expiry) -> Task<void> {
-         if (auto [ec] = co_await corosio::delay(delay); !ec)
+         auto [ec] = co_await corosio::delay(delay);
+         if (!ec && !(co_await capy::this_coro::stop_token).stop_requested())
             on_expiry();
       };
       capy::run_async(

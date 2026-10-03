@@ -96,7 +96,8 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
       "inline-budget",
       po::value(&config.context.inline_budget_max)->default_value(config.context.inline_budget_max),
       "ceiling of corosio's adaptive inline budget: how many I/O operations that are ready at "
-      "once complete without a post before one is posted (0 posts all)");
+      "once complete without a post before one is posted (0 posts all). With --threads above 1 "
+      "and all budgets at their defaults, corosio posts all");
    opts(
       "unassisted-budget",
       po::value(&config.context.unassisted_budget)->default_value(config.context.unassisted_budget),
@@ -135,13 +136,6 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
       std::println(std::cerr, "number of threads must be greater than 0");
       return std::unexpected(1);
    }
-#if ANYHTTP_COROSIO
-   if (num_threads > 1)
-   {
-      std::println(std::cerr, "the COROSIO runtime runs on one thread only");
-      return std::unexpected(1);
-   }
-#endif
 
    for (auto [name, rate] : {std::pair{"drop-rx", config.server.drop_rate_rx},
                              std::pair{"drop-tx", config.server.drop_rate_tx}})

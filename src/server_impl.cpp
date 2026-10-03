@@ -92,12 +92,18 @@ Server::Impl::Impl(Executor executor, Config config)
  */
 void Server::Impl::start()
 {
-   launch(executor_, tcp_accept_loop(), [self = shared_from_this()](const std::exception_ptr& ex) {
-      if (ex)
-         logw("[{}] TCP accept loop: {}", self->log_prefix(), what(ex));
-      else
-         logi("[{}] TCP accept loop: done", self->log_prefix());
-   });
+   //
+   // With several threads, the accept loop needs a strand of its own as well: it waits for the
+   // sessions to finish on a Signal, which COROSIO's capy primitives allow only on an executor
+   // that never runs the waiter concurrently with itself.
+   //
+   launch(config_.use_strand ? new_strand(executor_) : executor_, tcp_accept_loop(),
+          [self = shared_from_this()](const std::exception_ptr& ex) {
+             if (ex)
+                logw("[{}] TCP accept loop: {}", self->log_prefix(), what(ex));
+             else
+                logi("[{}] TCP accept loop: done", self->log_prefix());
+          });
 
    if (http3_)
       http3_->start();

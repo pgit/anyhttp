@@ -2,7 +2,8 @@
 
 //
 // The fixtures of test_fixtures.hpp for the COROSIO runtime: the same names and members, on a
-// corosio::io_context, single-threaded. Shared tests use only what both have.
+// corosio::io_context. Shared tests use only what both have. MULTITHREADED (defined here, or on
+// the compiler's command line) runs it on several threads, with a strand per connection.
 //
 #include "anyhttp/client.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
@@ -29,6 +30,7 @@
 #include <ranges>
 #include <stop_token>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace std::string_view_literals;
@@ -84,14 +86,30 @@ Task<T> stop_after(std::chrono::duration<Rep, Period> timeout, Task<T> task)
 //
 // Server fixture with some default request handlers, see test_fixtures.hpp.
 //
+// #define MULTITHREADED
+
 class Server : public testing::TestWithParam<anyhttp::Protocol>
 {
 protected:
+   //
+   // Number of threads run() will run the io_context on. More than one makes the server put
+   // every connection on its own strand.
+   //
+   virtual size_t threads() const
+   {
+#if defined(MULTITHREADED)
+      return std::max(2u, std::thread::hardware_concurrency());
+#else
+      return 1;
+#endif
+   }
+
    void SetUp() override
    {
       setup_logging();
 
       auto config = server::Config{.listen_address = "127.0.0.2", .port = 0};
+      config.use_strand = threads() > 1;
       configure_server(config);
 
       server.emplace(context.get_executor(), config);
@@ -122,7 +140,22 @@ protected:
       });
    }
 
-   void run() { ::run(context); }
+   void run()
+   {
+      const size_t n = threads();
+      if (n <= 1)
+      {
+         ::run(context);
+         return;
+      }
+
+      auto pool =
+         rv::iota(size_t{1}, n) |
+         rv::transform([this](size_t) { return std::jthread([this] { context.run(); }); }) |
+         std::ranges::to<std::vector>();
+
+      context.run();
+   }
 
    /// Lets a derived fixture adjust the server configuration before the server is created.
    virtual void configure_server(server::Config&) {}
@@ -147,7 +180,11 @@ protected:
       url.set_port_number(server->local_endpoint().port());
       client::Config config{.url = url, .protocol = GetParam(), .tls_ca_file = "pki/out/root.pem"};
       configure_client(config);
+#if defined(MULTITHREADED)
+      client.emplace(new_strand(context.get_executor()), config);
+#else
       client.emplace(context.get_executor(), config);
+#endif
    }
 
    /// Lets a derived fixture adjust the client configuration before the client is created.

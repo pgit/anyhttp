@@ -139,7 +139,16 @@ Task<std::tuple<error_code, client::Request>> Session::submit(boost::urls::url t
 
 Task<std::tuple<error_code, client::Message>> Session::get(boost::urls::url url, Fields headers)
 {
+#if ANYHTTP_COROSIO
+   //
+   // A task runs on its caller's executor. This one runs on the session's -- its strand, if it
+   // has one -- as async_get_any() does with ASIO, and the caller resumes on its own afterwards.
+   //
+   co_return co_await capy::run(impl->get_executor())(
+      get_message(impl, std::move(url), std::move(headers)));
+#else
    return get_message(impl, std::move(url), std::move(headers));
+#endif
 }
 
 #if !ANYHTTP_COROSIO
