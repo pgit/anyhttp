@@ -146,3 +146,5 @@ their end -- `server.reset()` on the server's own thread, then let `run()` retur
 failed `bind()` aborts quietly and h2load will happily measure whatever other server owns the
 port. Use ports from 18080 upwards. Upload benchmarks must target `/upload` (drains, then
 responds), not `/eat_request` -- h2load stops sending the body once the response is complete.
+[docs/benchmark.md](docs/benchmark.md) has the method, the tools that work on this host, and what
+has been measured so far.

@@ -75,10 +75,16 @@ stop_server() {
 }
 trap stop_server EXIT
 
-# Starts the server of $1 and waits until it listens on TCP and UDP. A failed bind() aborts
-# quietly, and h2load would then measure whatever else owns the port.
+# Starts the server of $1 and waits until it listens on TCP and UDP (on every thread with -i). A
+# failed bind() aborts quietly, and h2load would then measure whatever else owns the port.
 start_server() {
    local style=$1 log=$out/server-$1.log
+   # With -i the servers bind with SO_REUSEPORT, and so would share the port with a leftover one.
+   if ss -Hltun "sport = :$port" | grep -q .; then
+      echo "error: port $port is in use:" >&2
+      ss -ltunp "sport = :$port" >&2
+      exit 1
+   fi
    "${trees[$style]}/src/server" -p "$port" -t "$threads" "${independent[@]}" >"$log" 2>&1 &
    server_pid=$!
    for _ in $(seq 50); do
