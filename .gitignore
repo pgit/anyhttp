@@ -10,6 +10,7 @@ build-*
 secrets
 Testing
 *.pcap
+*.pcapng
 *.junit
 .claude
 callgrind.*
