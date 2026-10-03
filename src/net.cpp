@@ -93,10 +93,12 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 namespace io
 {
 
-void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint)
+void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint, bool reuse_port)
 {
    acceptor.open(endpoint.protocol());
    acceptor.set_option(asio::socket_base::reuse_address(true));
+   if (reuse_port)
+      acceptor.set_option(asio::detail::socket_option::boolean<SOL_SOCKET, SO_REUSEPORT>(true));
 
    //
    // Accept IPv4 clients on an IPv6 listener, too. This has to go after open() -- there is no
@@ -178,12 +180,14 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 namespace io
 {
 
-void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint)
+void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint, bool reuse_port)
 {
    const auto family = endpoint.address().is_v4() ? corosio::family::v4 : corosio::family::v6;
    if (auto ec = acceptor.open(family))
       throw std::system_error(ec, "open");
    acceptor.set_option(corosio::socket_option::reuse_address(true));
+   if (reuse_port)
+      acceptor.set_option(corosio::socket_option::reuse_port(true));
 
    // Accept IPv4 clients on an IPv6 listener, too, see the ASIO version.
    if (family == corosio::family::v6)

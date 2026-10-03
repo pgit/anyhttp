@@ -265,10 +265,12 @@ inline TcpSocket make_socket(const Executor& executor) { return TcpSocket(execut
 inline TcpAcceptor make_acceptor(const Executor& executor) { return TcpAcceptor(executor); }
 
 /**
- * Opens \p acceptor on \p endpoint and starts listening: with SO_REUSEADDR, and on an IPv6
+ * Opens \p acceptor on \p endpoint and starts listening: with SO_REUSEADDR (and SO_REUSEPORT
+ * if \p reuse_port), and on an IPv6
  * endpoint for IPv4 clients, too (dual stack, if the system allows it). Throws what fails.
  */
-void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint);
+void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint,
+            bool reuse_port = false);
 
 inline asio::ip::tcp::endpoint local_endpoint(const TcpAcceptor& acceptor)
 {

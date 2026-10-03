@@ -170,7 +170,7 @@ void Server::Impl::listen_tcp()
    if (ec)
       mlogw("error resolving '{}': {}", config().listen_address, ec.message());
 
-   io::listen(acceptor_, asio::ip::tcp::endpoint(address, config().port));
+   io::listen(acceptor_, asio::ip::tcp::endpoint(address, config().port), config().reuse_port);
    mlogi("TCP listening on {}", io::local_endpoint(acceptor_));
 }
 

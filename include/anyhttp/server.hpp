@@ -30,6 +30,16 @@ struct Config
    bool use_strand = false;
 
    //
+   // Bind the TCP acceptor and the HTTP/3 UDP socket with SO_REUSEPORT, so that several servers,
+   // each on an executor of its own, can listen on the same port and the kernel spreads the load
+   // over them: new TCP connections, and UDP datagrams by their address and port. A QUIC
+   // connection whose client address changes (migration, NAT rebinding) lands on another server
+   // then, which does not know it. All of them have to be bound before traffic arrives -- each one
+   // that joins reshuffles where the datagrams go.
+   //
+   bool reuse_port = false;
+
+   //
    // The server's certificate chain and private key, as PEM files, for TLS over TCP and for
    // HTTP/3. The chain starts with the server certificate, followed by its intermediates. Both
    // files are read when the Server is constructed, which fails if they can't be, and not again:

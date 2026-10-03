@@ -257,7 +257,8 @@ inline TcpAcceptor make_acceptor(const Executor& executor)
    return TcpAcceptor(executor.context());
 }
 
-void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint);
+void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint,
+            bool reuse_port = false);
 
 inline asio::ip::tcp::endpoint local_endpoint(const TcpAcceptor& acceptor)
 {

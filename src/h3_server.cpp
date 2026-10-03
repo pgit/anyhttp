@@ -965,6 +965,8 @@ Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endp
    }
    if (!config().disable_gro)
       enable(IPPROTO_UDP, UDP_GRO);
+   if (config().reuse_port)
+      enable(SOL_SOCKET, SO_REUSEPORT);
 
    if (auto ec = io::bind(socket_, endpoint))
       throw_error(ec);

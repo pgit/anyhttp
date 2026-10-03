@@ -18,12 +18,9 @@
 #include <expected>
 #include <iostream>
 #include <print>
-#include <ranges>
 
 #include <sys/ioctl.h>
 #include <unistd.h>
-
-namespace rv = std::ranges::views;
 
 using namespace std::chrono_literals;
 using namespace anyhttp;
@@ -44,6 +41,7 @@ struct Config
 {
    size_t verbose = 0;
    size_t threads = 1;
+   bool independent = false;
    server::Config server{.port = 8080};
 #if ANYHTTP_COROSIO
    boost::corosio::io_context_options context;
@@ -67,6 +65,10 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
    opts("verbose,v", po::value<std::vector<std::string>>()->zero_tokens()->composing(),
         "enable verbose logging (repeat for trace level)");
    opts("threads,t", po::value(&config.threads)->default_value(1), "number of threads to run");
+   opts("independent,i", po::bool_switch(&config.independent),
+        "with --threads above 1: run an I/O context and a server of its own on each thread, "
+        "sharing the port through SO_REUSEPORT, instead of one context on all threads with a "
+        "strand per connection");
    opts("port,p", po::value(&config.server.port)->default_value(config.server.port),
         "listening port");
    opts("drop-rx", po::value(&config.server.drop_rate_rx)->default_value(0.0),
@@ -150,8 +152,9 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
    return {std::move(config)};
 }
 
-/// Waits for one of \p signals, then stops \p server.
-static Task<void> stop_on_signal(SignalSet& signals, std::optional<server::Server>& server)
+/// Waits for one of \p signals, then stops \p servers, each on its own executor.
+static Task<void> stop_on_signal(SignalSet& signals,
+                                 std::vector<std::optional<server::Server>>& servers)
 {
 #if ANYHTTP_COROSIO
    auto [ec, signal] = co_await signals.wait();
@@ -163,7 +166,39 @@ static Task<void> stop_on_signal(SignalSet& signals, std::optional<server::Serve
 
    std::println(" INTERRUPTED (signal {})", signal);
    logw("interrupt");
-   server.reset();
+   for (auto& server : servers)
+      dispatch_to(server->get_executor(), [&server] { server.reset(); });
+}
+
+static Task<void> handle_request(server::Request request, server::Response response)
+{
+   std::string path = request.url().path();
+   if (path == "/echo")
+      co_await echo(std::move(request), std::move(response));
+   else if (path == "/generate")
+      co_await generate(std::move(request), std::move(response));
+   else if (path == "/dump")
+      co_await dump(std::move(request), std::move(response));
+   else if (path == "/dump space")
+      co_await dump(std::move(request), std::move(response));
+   else if (path == "/discard")
+      co_return;
+   else if (path == "/test" || path.starts_with("/test/"))
+      co_await serve_file(std::move(request), std::move(response), "test", "/test");
+   else if (path == "/eat_request")
+      co_await eat_request(std::move(request), std::move(response));
+   else if (path == "/upload")
+   {
+      // Unlike eat_request, respond only after the whole body is in: clients such as h2load
+      // stop uploading as soon as the response is complete.
+      co_await drain(request);
+      if (auto [ec] = co_await response.submit(200, {}); !ec)
+         co_await response.write_eof();
+   }
+   else if (path == "/" || path == "/h2spec")
+      co_await h2spec(std::move(request), std::move(response));
+   else
+      co_await not_found(std::move(response));
 }
 
 int main(int argc, char* argv[])
@@ -179,51 +214,41 @@ int main(int argc, char* argv[])
    else
       spdlog::set_level(spdlog::level::info);
 
+   //
+   // Either one I/O context, run by all threads, with a strand per connection, or (--independent)
+   // one context per thread, each with a server of its own: they share the port through
+   // SO_REUSEPORT, and nothing is shared between them but the signal handler.
+   //
+   size_t num_contexts = config->independent ? config->threads : 1;
+   size_t threads_per_context = config->independent ? 1 : config->threads;
+   config->server.use_strand = threads_per_context > 1;
+   config->server.reuse_port = num_contexts > 1;
+
+   std::vector<std::unique_ptr<IoContext>> contexts;
+   std::vector<std::optional<server::Server>> servers;
+   for (size_t i = 0; i < num_contexts; ++i)
+   {
 #if ANYHTTP_COROSIO
-   IoContext context(config->context, config->threads);
+      auto& context =
+         *contexts.emplace_back(std::make_unique<IoContext>(config->context, threads_per_context));
 #else
-   IoContext context(config->threads);
+      auto& context = *contexts.emplace_back(std::make_unique<IoContext>(threads_per_context));
 #endif
-   auto executor = context.get_executor();
-   config->server.use_strand = config->threads > 1;
-   auto server = std::make_optional<server::Server>(executor, config->server);
+      auto& server = servers.emplace_back(std::in_place, context.get_executor(), config->server);
+      server->on_request(handle_request);
+      if (config->server.port == 0) // the others join the port the first one got
+         config->server.port = server->local_endpoint().port();
+   }
 
+   auto& context = *contexts.front();
    SignalSet signals(context, SIGINT, SIGTERM);
-   launch(executor, stop_on_signal(signals, server));
+   launch(context.get_executor(), stop_on_signal(signals, servers));
 
-   server->on_request([](server::Request request, server::Response response) -> Task<void> {
-      std::string path = request.url().path();
-      if (path == "/echo")
-         co_await echo(std::move(request), std::move(response));
-      else if (path == "/generate")
-         co_await generate(std::move(request), std::move(response));
-      else if (path == "/dump")
-         co_await dump(std::move(request), std::move(response));
-      else if (path == "/dump space")
-         co_await dump(std::move(request), std::move(response));
-      else if (path == "/discard")
-         co_return;
-      else if (path == "/test" || path.starts_with("/test/"))
-         co_await serve_file(std::move(request), std::move(response), "test", "/test");
-      else if (path == "/eat_request")
-         co_await eat_request(std::move(request), std::move(response));
-      else if (path == "/upload")
-      {
-         // Unlike eat_request, respond only after the whole body is in: clients such as h2load
-         // stop uploading as soon as the response is complete.
-         co_await drain(request);
-         if (auto [ec] = co_await response.submit(200, {}); !ec)
-            co_await response.write_eof();
-      }
-      else if (path == "/" || path == "/h2spec")
-         co_await h2spec(std::move(request), std::move(response));
-      else
-         co_await not_found(std::move(response));
-   });
-
-   auto threads = rv::iota(0) | rv::take(config->threads > 0 ? config->threads - 1 : 0) |
-                  rv::transform([&](size_t) { return std::thread([&] { context.run(); }); }) |
-                  std::ranges::to<std::vector>();
+   std::vector<std::thread> threads;
+   for (auto& other : contexts)
+      for (size_t i = 0; i < threads_per_context; ++i)
+         if (&other != &contexts.front() || i > 0)
+            threads.emplace_back([&context = *other] { context.run(); });
 
    if (config->verbose && config->threads == 1)
       run(context);

@@ -5,13 +5,15 @@
 # COROSIO has to, so that the TLS library is not part of the comparison: build-openssl-release/
 # is the ASIO one (build-release/ is ASIO on AWS-LC).
 #
-# Usage: scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-t threads] [-p port] [-u path]
-#                         [-P] [-n]
+# Usage: scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-t threads] [-i] [-p port]
+#                         [-u path] [-P] [-n]
 #
 #   -D  duration of each run in seconds (default 10)
 #   -c  number of h2load clients (default 8)
 #   -m  max concurrent streams per client for h2 and h3 (default 10); h1 always uses 1
 #   -t  threads the servers run on (default 1); h2load gets as many, up to the clients
+#   -i  independent: an I/O context and a server per thread, sharing the port (SO_REUSEPORT),
+#       instead of one context on all threads with a strand per connection
 #   -p  port (default 18080)
 #   -u  request path (default /)
 #   -P  plaintext: HTTP/1.1 and HTTP/2 (prior knowledge) without TLS; no HTTP/3
@@ -30,18 +32,20 @@ port=18080
 path=/
 build=1
 scheme=https
+independent=()
 
-while getopts "D:c:m:t:p:u:Pnh" opt; do
+while getopts "D:c:m:t:ip:u:Pnh" opt; do
    case $opt in
    D) duration=$OPTARG ;;
    c) clients=$OPTARG ;;
    m) streams=$OPTARG ;;
    t) threads=$OPTARG ;;
+   i) independent=(--independent) ;;
    p) port=$OPTARG ;;
    u) path=$OPTARG ;;
    P) scheme=http ;;
    n) build=0 ;;
-   *) sed -n '3,21p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+   *) sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
    esac
 done
 
@@ -75,10 +79,10 @@ trap stop_server EXIT
 # quietly, and h2load would then measure whatever else owns the port.
 start_server() {
    local style=$1 log=$out/server-$1.log
-   "${trees[$style]}/src/server" -p "$port" -t "$threads" >"$log" 2>&1 &
+   "${trees[$style]}/src/server" -p "$port" -t "$threads" "${independent[@]}" >"$log" 2>&1 &
    server_pid=$!
    for _ in $(seq 50); do
-      grep -q "UDP listening" "$log" && return 0
+      (($(grep -c "UDP listening" "$log") == (${#independent[@]} ? threads : 1))) && return 0
       kill -0 "$server_pid" 2>/dev/null || break
       sleep 0.1
    done
@@ -123,7 +127,7 @@ done
 
 echo
 echo "h2load -D ${duration}s -c $clients -m $streams -t $h2load_threads (h1: -m 1)," \
-   "$scheme://127.0.0.1:$port$path, server threads: $threads"
+   "$scheme://127.0.0.1:$port$path, server threads: $threads${independent:+ (independent)}"
 echo
 row='%-8s %-5s %12s %10s %10s %7s %9s %9s\n'
 printf "$row" build proto req/s MB/s succeeded failed median p99
