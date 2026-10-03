@@ -14,11 +14,18 @@ and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.jso
 `build-corosio/` is the COROSIO API style (`-DANYHTTP_API=COROSIO -DTLS_LIBRARY=OpenSSL`, see
 [docs/corosio-port-plan.md](docs/corosio-port-plan.md)); capy and corosio are FetchContent'd at
 pinned SHAs. Both styles build the same library sources and test files; what belongs to one style
-only is guarded with `ANYHTTP_COROSIO`. So is the `server` program (single-threaded with COROSIO);
-the `client` program is ASIO-only so far. `build-corosio-asan/` is its ASAN tree,
-`build-corosio-release/` its Release tree (benchmark COROSIO with it). COROSIO needs OpenSSL, so
-compare it against `build-openssl-release/` (ASIO, OpenSSL, Release), not `build-release/`:
-`scripts/bench.sh` runs the two side by side (`-P` for plaintext).
+only is guarded with `ANYHTTP_COROSIO`. So is the `server` program; the `client` program is
+ASIO-only so far. `build-corosio-asan/` is its ASAN tree, `build-corosio-release/` its Release
+tree (benchmark COROSIO with it). COROSIO needs OpenSSL, so compare it against
+`build-openssl-release/` (ASIO, OpenSSL, Release), not `build-release/`: `scripts/bench.sh` runs
+the two side by side (`-P` for plaintext, `-t` for server threads).
+
+`build-corosio-tsan/` is COROSIO under TSAN with `-DMULTITHREADED` in `CMAKE_CXX_FLAGS`: the
+fixtures run the tests on all cores, a strand per connection. Expect reports inside corosio's
+epoll reactor, which frees a socket's descriptor state while another thread still handles an
+event for it (see the port plan, step 8); a report with an anyhttp frame at the racing access is
+ours. A few tests set up their own server or client on the bare context and are not
+thread-aware.
 
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug

@@ -60,7 +60,7 @@ Ranked by how much each one threatens the approach, the most threatening first.
 | 4 | **HTTP/1.1** | `h1_session.cpp` (1.4k lines) uses `http::async_read`/`async_write`, which need an ASIO AsyncStream. | No AsyncStream exists. | Move **both** modes onto Beast's parser/serializer, driven by read/write loops on the runtime layer (spike-proven, §0). This is the one step that changes ASIO behaviour-bearing code substantially, so it comes before any capy work, with the full suite green. |
 | 5 | **TLS over TCP, detection** | `asio::ssl::stream`. `detect_ssl`/`detect_h2` sniff into a `flat_buffer`, which is handed to the SSL handshake or the session. | `openssl_stream` + `tls_context` (`set_alpn`, `alpn_protocol()`). Its handshake takes no pre-read bytes, and it does not build against AWS-LC. | Detection becomes a portable prefix sniff. In COROSIO, a `PrefixedStream<S>` replays the sniffed bytes beneath `openssl_stream` (lessons §9.2). Sessions already accept a pre-read `Buffer`. Spike the TLS-over-prefix stack first. |
 | 6 | **Timers** | `steady_timer`, re-armed for ngtcp2's expiry and elsewhere. | Public API: `corosio::delay` and `corosio::timeout`. A re-armable `timer` exists, but only as `corosio::detail::timer`. | The runtime layer offers a `Timer` with `expires_at`, `wait` and `cancel`. Build the COROSIO one on `detail::timer`, with a regression test, or restructure the h3 expiry loop the way lessons §3.1 does (`timeout(event.wait(), deadline)`). Decide at the h3 step. |
-| 7 | **Threads and strands** | `use_strand`, a per-connection strand, `server_main --threads`. Tests are single-threaded (`MULTITHREADED` is off). | `capy::strand` exists and corosio's `io_context` is thread-safe by default. But `async_event` is single-threaded by design, and nothing in the sibling project ran multi-threaded. | COROSIO starts single-threaded, and `use_strand` fails loudly there. Threads come last, if ever (lessons §9.2). |
+| 7 | **Threads and strands** | `use_strand`, a per-connection strand, `server_main --threads`. Tests are single-threaded (`MULTITHREADED` is off). | `capy::strand` exists and corosio's `io_context` is thread-safe by default. But `async_event` is single-threaded by design, and nothing in the sibling project ran multi-threaded. | COROSIO started single-threaded. *Since 2026-10-03 it runs threaded too, see step 8:* `new_strand()` makes a `capy::strand`, and corosio resumes a coroutine after I/O through the coroutine's own executor, so a connection launched on its strand stays there. |
 | 8 | **Composite operations** | `awaitable_operators` `&&`/`\|\|` (send_loop && recv_loop, and 33 uses in tests). `&&` cancels its sibling only on an exception. | `when_all`/`when_any`. `when_all` also requests stop on the first `io_result` *error*, and `corosio::timeout` loses the progress of a composite operation. | `when_both`/`when_either` helpers in the runtime layer. The loops return `task<void>`, so `when_all`'s error-stop never applies to them. |
 | 9 | **Executors and lifetimes** | `any_io_executor` copies, kept even by detached readers and writers so they can still complete. `bind_executor` makes `cancel_after` find one. | `executor_ref` is non-owning; `capy::any_executor` owns. Destroying an `io_context` with a frame still suspended on it double-frees (lessons §4.2). | Store `any_executor`. COROSIO fixtures drain the context before destroying it; nothing may rely on "destroy the context and let it clean up". |
 | 10 | **Public types that leak ASIO** | `local_endpoint()` returns `asio::ip::tcp::endpoint`. Buffers are `asio::mutable_buffer`. `executor_type`. The `RequestHandler` returns `awaitable<void>`. | `corosio::endpoint`, capy buffer sequences, `task<void>`. | Per-mode aliases in `common.hpp`. `Fields` (Beast) and `boost::url` stay the same in both. |
@@ -207,17 +207,73 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
    - **A capy context has to run dry.** Destroying it with a coroutine suspended on it leaks the
      coroutine's stack (LeakSanitizer); `Http3IdleTimeout` runs its frozen client and its server
      to their end now.
-7. **README**: the two API styles, the per-mode error table, the constraints (OpenSSL, single
-   thread). The error table includes the resolver: corosio reports a host that does not resolve
+7. **README**: the two API styles, the per-mode error table, the constraints (OpenSSL). The error table includes the resolver: corosio reports a host that does not resolve
    as `no_such_device_or_address` (`EAI_NONAME` mapped onto a generic code), ASIO as
    `netdb_errors::host_not_found`.
 8. Later: threads in COROSIO; `client_main` for COROSIO; upstream issues for corosio
-   (`openssl_stream` on AWS-LC, the read on an error event).
+   (`openssl_stream` on AWS-LC, the read on an error event, the reactor's use-after-free with
+   threads).
    *`server_main` done 2026-10-01:* it builds in both styles and refuses `--threads` above 1 with
    COROSIO. The Debug `run()` wrapper steps a corosio context with `run_one()` too, and the COROSIO
    fixtures run through it. That reordering flipped an h2 test: a write issued after the stream
    closed reported `canceled`, one parked when it closed `connection_reset`; both report the
    latter now (`ccb30df`).
+
+   *Threads in COROSIO done 2026-10-03.* `server --threads N` and `Config::use_strand` work in both
+   styles. corosio resumes a coroutine after I/O through the executor in its `io_env` (capy's
+   executor affinity), so a connection launched on a strand stays on it, and so does everything it
+   awaits. What changed:
+   - `new_strand()` returns a `capy::strand` on the context's executor, wrapped in a forwarding
+     `detail::Strand`: `capy::any_executor` does not take a `capy::strand` itself, only to keep
+     `strand<any_executor>`'s constructors apart. `dispatch_to()` dispatches for real, by
+     launching a task, which capy starts through the executor's `dispatch()`.
+   - The session factories take the connection's executor: a corosio socket knows its context, not
+     its strand, so `stream_traits` has no `get_executor()` in COROSIO any more. A session's
+     executor cannot come from `this_coro::executor` either: that is a non-owning `executor_ref`
+     into the launching frame, and Readers and Writers keep the executor after they detach.
+   - `Signal` is capy's `async_waker` (`notify()` from any thread). Its waiter must run on a
+     strand, so the accept loop has one of its own with `use_strand`.
+   - `Server::Impl` destroys each session on the session's executor (`dispatch_to()`), in both
+     styles: `shutdown()` from the signal handler's thread raced the strand closing the socket.
+     ASIO had the same race; it never ran threaded under TSAN.
+   - `Timer` checks its stop token once its wait has resumed: an expired wait may still be queued
+     behind the strand when the timer is re-armed or cancelled.
+   - `Session::get()` runs on the session's executor through `capy::run()`, as ASIO's
+     `async_get_any()` launches on it; called from another strand, it raced the h2 session.
+
+   The fixtures take `MULTITHREADED` (also from the compiler's command line); `build-corosio-tsan/`
+   is built with it. Findings:
+   - **corosio's epoll reactor has a use-after-free with more than one thread in `run()`.**
+     `epoll_scheduler::run_task()` dereferences each event's `reactor_descriptor_state*` after
+     `epoll_wait()`, without the lock. `reactor_socket_service::destroy()` on another thread
+     closes and frees the socket meanwhile; `close_socket()` pins the impl through `impl_ref_`
+     only once `is_enqueued_` is set, which the reactor thread has not done yet. TSAN reports it
+     as `heap-use-after-free` in `add_ready_events()`/`invoke_deferred_io()` and as data races on
+     `operator delete`, almost all of the reports (unchanged on upstream `develop`, 2026-10-02).
+     The full suite under ASAN, threaded, stays clean: the window is narrow. Not filed yet.
+   - TSAN also reports the `enabled` flag of a descriptor's mutex, written by
+     `register_descriptor()` and read by the thread that gets its first event: ordered by
+     `epoll_ctl()`/`epoll_wait()`, which TSAN cannot see.
+   - `WHEN_server_session_is_gone_THEN_*` (HTTP/3) hang threaded: the client drops its session
+     right after `write_eof()`, and ngtcp2 still holds the request back until the server's next
+     packet, so the CONNECTION_CLOSE abandons it. Single-threaded, the server's packet happens to
+     come first. `write_eof()` completing says the data is handed over, not sent -- unlike TCP,
+     closing the connection then loses it. Open question whether the h3 client should flush
+     first.
+   - Tests that set up their own server or client on the bare context (`AltSvcFrame`,
+     `DualStackSecondaryAddress`), share a `static` generator (`YieldFuzz`) or a log sink are not
+     thread-aware.
+
+   TLS, `scripts/bench.sh -c 32 -t N` (h2load threads as many), req/s, COROSIO vs ASIO on OpenSSL:
+
+   | threads | h1 | h2 | h3 |
+   |---|---|---|---|
+   | 1 | 86k vs 74k | 251k vs 205k | 127k vs 119k |
+   | 4 | 148k vs 102k | 792k vs 259k | 344k vs 180k |
+   | 8 | 194k vs 104k | 1143k vs 385k | 534k vs 286k |
+
+   With more than one thread and its budgets at their defaults, corosio posts every completion
+   (no inline budget); these numbers are with that default.
 
 Out of scope for the port, and kept as separate commits if wanted: what lessons §9.1 lists as
 "what this project does better" in h3 (parking on `EAGAIN`, `write_aggregate_pkt`, and so on). A
