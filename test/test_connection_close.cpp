@@ -11,8 +11,11 @@
 #endif
 
 #include <array>
+#include <atomic>
 #include <format>
 #include <string>
+
+#include <sys/socket.h>
 
 using namespace testing;
 
@@ -148,6 +151,59 @@ TEST_F(ConnectionClose, WHEN_request_is_http_1_0_THEN_stream_ends_after_the_resp
       EXPECT_EQ(response.result_int(), 200);
       EXPECT_FALSE(response.keep_alive());
       EXPECT_EQ(co_await read_eof(socket), errors::eof);
+   }());
+}
+
+// =================================================================================================
+
+//
+// A client that pipelines requests and then resets the connection leaves them in the server's
+// buffer, where they can be parsed without touching the connection. Once the response to the first
+// one has failed, the rest must be dropped: with ASIO, the third write on the dead socket would
+// never complete, and the session would hang until the server is destroyed.
+//
+TEST_F(ConnectionClose, WHEN_peer_resets_with_requests_pipelined_THEN_the_rest_are_dropped)
+{
+   std::atomic<int> started = 0, finished = 0, failed = 0;
+   requestHandler = [&](server::Request request, server::Response response) -> Task<void> {
+      ++started;
+      co_await sleep(200ms); // for the reset to arrive
+      if (auto [ec] = co_await response.submit(200, fields({{"Content-Length", 0}})); ec)
+         ++failed;
+      ++finished;
+   };
+
+   //
+   // Polls instead of waiting on an Event: the handler runs on a strand of its own under
+   // MULTITHREADED.
+   //
+   auto until = [](const std::atomic<int>& counter, int value) -> Task<void> {
+      for (int i = 0; counter < value && i < 500; ++i)
+         co_await delay(10ms);
+   };
+
+   run([&]() -> Task<void> {
+      auto socket = co_await connect();
+
+      std::string requests;
+      for (int i = 0; i < 3; ++i)
+         requests += std::format("GET /custom HTTP/1.1\r\nHost: 127.0.0.2:{}\r\n\r\n", port());
+      check(co_await io::write(socket, asio::buffer(requests)));
+
+      //
+      // Reset only once the server has the requests: data still in its receive queue may be lost
+      // to the reset.
+      //
+      co_await until(started, 1);
+      linger l{.l_onoff = 1, .l_linger = 0};
+      EXPECT_EQ(::setsockopt(socket.native_handle(), SOL_SOCKET, SO_LINGER, &l, sizeof(l)), 0);
+      io::close(socket);
+
+      co_await until(finished, 1);
+      co_await delay(300ms); // for the next request to be started, if it is going to be
+
+      EXPECT_EQ(failed, 1) << "the response should have found the connection reset";
+      EXPECT_EQ(started, 1) << "requests after a failed response must not be served";
    }());
 }
 

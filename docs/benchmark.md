@@ -43,8 +43,7 @@ comparison.
 | `-n` | don't build first |
 
 h1 always runs with `-m 1`: h2load pipelines with `--h1 -m N`, which is not what we want to
-measure, and which trips a
-[shutdown bug](#asio-http11-shutdown-hangs-after-pipelined-requests).
+measure.
 Raw h2load output and server logs stay in a temporary directory that the script prints at the end.
 
 The tables below use `-c 32` unless they say otherwise.
@@ -312,15 +311,23 @@ context) avoids it.
 
 `h2load --h1 -m 10` pipelines ten requests per connection. When h2load stops at the end of `-D`
 with requests still in flight, the ASIO server's HTTP/1.1 sessions never finish: on SIGINT it
-logs `waiting for 32 sessions` and hangs, although no TCP connection is left. This happens with
-any number of threads, on the commit before the threading work too. COROSIO shuts down cleanly.
-Not fixed yet.
+logged `waiting for 32 sessions` and hung, although no TCP connection was left. COROSIO shut down
+cleanly.
 
 ```bash
 build-openssl-release/src/server -p 18080 & pid=$!
 h2load --h1 -D 2 -c 32 -m 10 -t 4 https://127.0.0.1:18080/
-kill -INT $pid   # never exits
+kill -INT $pid   # never exited
 ```
+
+The sessions were stuck before the signal. After the first failed response, a session went on to
+the requests still in its buffer, which it can parse without reading from the connection. ASIO's
+epoll reactor treats a failed send like a short write: it stops trying writes right away and waits
+for the socket to become writable, which a reset socket signals only once under edge triggering.
+So the third write on the dead connection never completed. `destroy()` only shut the socket down,
+which on a reset connection fails with `ENOTCONN`. Fixed: a failed response ends the session, and
+`destroy()` also cancels what is pending
+(`ConnectionClose.WHEN_peer_resets_with_requests_pipelined_THEN_the_rest_are_dropped`).
 
 ### `server::Server` destroyed after a move
 

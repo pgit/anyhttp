@@ -106,8 +106,7 @@ public:
          //
          auto ec = io::shutdown(stream, io::Shutdown::receive);
          session->closed_ = true;
-         logwd(ec != errc::not_connected, //
-               "[{}] destroy: shutdown: {}", log_prefix(), what(ec));
+         logwd(ec != errc::not_connected, "[{}] destroy: shutdown: {}", log_prefix(), what(ec));
       }
       finish();
    }
@@ -517,6 +516,7 @@ class ResponseWriter
       WriterBase<server::Response::Impl, Stream, http::response_serializer<http::buffer_body>>;
 
 public:
+   using super::cancelled;
    using super::log_prefix;
    using super::message;
    using super::serializer;
@@ -526,6 +526,14 @@ public:
 
 public:
    ResponseWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_) {}
+
+   //
+   // A response that could not be written leaves the connection unusable, so the session must not
+   // go on to whatever the client has pipelined behind this request. With a reset connection, the
+   // next writes would not even fail: after a couple of failed sends, ASIO's epoll reactor waits
+   // for the socket to become writable, which a dead socket signals only once.
+   //
+   void write_failed() override { session->closed_ = true; }
 
    void content_length(std::optional<size_t> content_length) override
    {
@@ -569,7 +577,15 @@ public:
       // TODO: For bundling writing the header and body, we should just post the writing here,
       //       giving an async_write the chance to add a body to the message first.
       //
-      co_return co_await super::write_head();
+      auto [ec] = co_await super::write_head();
+      if (ec)
+      {
+         mlogd("async_submit: {}", what(ec));
+         cancelled = true; // nothing more of this response is going to reach the stream
+         if (session)
+            write_failed();
+      }
+      co_return std::tuple{ec};
    }
 };
 
@@ -843,7 +859,18 @@ void ServerSession<Stream>::destroy() noexcept
    if (upgraded_)
       upgraded_->destroy(); // the stream has been moved there
    else
+   {
       super::destroy();
+
+      //
+      // Shutting the socket down does not end what is pending on it in every case: on a
+      // connection the peer has reset, it fails with not_connected, and a write the reactor has
+      // queued may be waiting for a readiness that never comes (see ResponseWriter). Neither
+      // should the requests still in the buffer be served.
+      //
+      io::cancel(stream_);
+      closed_ = true;
+   }
 }
 
 // =================================================================================================
