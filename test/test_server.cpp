@@ -30,6 +30,20 @@ TEST_P(Server, Stop)
    run();
 }
 
+// A moved-from Server has nothing to stop, and one moved onto stops the server it had.
+TEST_P(Server, StopAfterMove)
+{
+   context.run_one();
+   {
+      server::Server moved(std::move(*server));
+      server.reset();
+      server::Server other(context.get_executor(),
+                           server::Config{.listen_address = "127.0.0.1", .port = 0});
+      other = std::move(moved);
+   }
+   run();
+}
+
 // =================================================================================================
 
 //

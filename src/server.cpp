@@ -85,9 +85,22 @@ Server::Server(Executor executor, Config config)
 }
 
 Server::Server(Server&& other) noexcept = default;
-Server& Server::operator=(Server&& other) noexcept = default;
+Server& Server::operator=(Server&& other) noexcept
+{
+   if (this != &other)
+   {
+      if (impl)
+         impl->destroy();
+      impl = std::move(other.impl);
+   }
+   return *this;
+}
 
-Server::~Server() { impl->destroy(); }
+Server::~Server()
+{
+   if (impl) // not moved from
+      impl->destroy();
+}
 
 // -------------------------------------------------------------------------------------------------
 
