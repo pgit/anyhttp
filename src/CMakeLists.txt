@@ -17,7 +17,7 @@ pkg_check_modules(NGTCP2_CRYPTO          REQUIRED IMPORTED_TARGET ${NGTCP2_CRYPT
 add_library(anyhttp)
 file(GLOB anyhttp_sources CONFIGURE_DEPENDS *.cpp)
 list(FILTER anyhttp_sources EXCLUDE REGEX "_main\.cpp$")
-list(FILTER anyhttp_sources EXCLUDE REGEX "_issue_[0-9]+\.cpp$")
+list(FILTER anyhttp_sources EXCLUDE REGEX "_issue_[^/]+\.cpp$")
 target_sources(anyhttp PRIVATE ${anyhttp_sources})
 target_include_directories(anyhttp PUBLIC ../include)
 
@@ -47,6 +47,13 @@ target_link_libraries(server PRIVATE anyhttp)
 target_link_libraries(server PRIVATE Boost::program_options)
 
 if (ANYHTTP_COROSIO)
+    #
+    # corosio_issue_reactor_uaf: the reactor's use-after-free with several threads, standalone
+    #
+    add_executable(corosio_issue_reactor_uaf)
+    target_sources(corosio_issue_reactor_uaf PRIVATE "corosio_issue_reactor_uaf.cpp")
+    target_link_libraries(corosio_issue_reactor_uaf PRIVATE Boost::corosio Threads::Threads)
+
     # the client program comes with the rest of the port
     return()
 endif()
