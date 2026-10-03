@@ -710,10 +710,9 @@ void NGHttp2Session::start_write()
 // =================================================================================================
 
 template <SocketStream Stream>
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Stream&& stream,
-                                                   std::optional<Upgrade> upgrade)
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Executor executor,
+                                                   Stream&& stream, std::optional<Upgrade> upgrade)
 {
-   auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
    auto session =
       std::make_shared<ServerSession<Stream>>(server, std::move(executor), std::move(stream));
    session->upgrade_ = std::move(upgrade);
@@ -721,18 +720,18 @@ std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server,
 }
 
 template <SocketStream Stream>
-std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Stream&& stream)
+std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Executor executor,
+                                                   Stream&& stream)
 {
-   auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
    return std::make_shared<ClientSession<Stream>>(client, std::move(executor), std::move(stream));
 }
 
 #define ANYHTTP_H2_SERVER(Stream)                                                                  \
    template std::shared_ptr<Session::Impl> make_server_session<Stream>(                            \
-      server::Server::Impl&, Stream&&, std::optional<Upgrade>);
+      server::Server::Impl&, Executor, Stream&&, std::optional<Upgrade>);
 #define ANYHTTP_H2_CLIENT(Stream)                                                                  \
    template std::shared_ptr<Session::Impl> make_client_session<Stream>(client::Client::Impl&,      \
-                                                                       Stream&&);
+                                                                       Executor, Stream&&);
 ANYHTTP_SERVER_STREAMS(ANYHTTP_H2_SERVER)
 ANYHTTP_CLIENT_STREAMS(ANYHTTP_H2_CLIENT)
 #undef ANYHTTP_H2_SERVER

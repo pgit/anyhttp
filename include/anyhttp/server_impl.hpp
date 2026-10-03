@@ -91,7 +91,8 @@ public:
    const std::string& alt_svc() const noexcept { return alt_svc_; }
 
    Task<void> tcp_accept_loop();
-   Task<void> handle_connection(TcpSocket socket);
+   /// Serves \p socket on \p executor, which is the connection's strand with Config::use_strand.
+   Task<void> handle_connection(Executor executor, TcpSocket socket);
 
    asio::ip::tcp::endpoint local_endpoint() const { return io::local_endpoint(acceptor_); }
 

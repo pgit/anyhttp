@@ -154,12 +154,6 @@ struct stream_traits<TcpSocket>
 {
    static TcpSocket& get_socket(TcpSocket& stream) noexcept { return stream; }
    static bool is_tls(const TcpSocket&) noexcept { return false; }
-
-   /// corosio's I/O objects know their context, not an executor: there is only one per context.
-   static Executor get_executor(TcpSocket& stream) noexcept
-   {
-      return static_cast<corosio::io_context&>(stream.context()).get_executor();
-   }
 };
 
 template <>
@@ -167,16 +161,13 @@ struct stream_traits<TlsStream>
 {
    static TcpSocket& get_socket(TlsStream& stream) noexcept { return stream.socket(); }
    static bool is_tls(const TlsStream&) noexcept { return true; }
-   static Executor get_executor(TlsStream& stream) noexcept
-   {
-      return stream_traits<TcpSocket>::get_executor(stream.socket());
-   }
 };
 
+/// Unlike ASIO's, a stream tells no executor: a corosio socket knows its context, but not the
+/// strand it is used on. The session factories are given theirs.
 template <typename Stream>
 concept SocketStream = requires(Stream& stream) {
    { stream_traits<Stream>::get_socket(stream) } -> std::same_as<TcpSocket&>;
-   { stream_traits<Stream>::get_executor(stream) } -> std::convertible_to<Executor>;
    { stream_traits<Stream>::is_tls(stream) } -> std::convertible_to<bool>;
 };
 

@@ -1052,8 +1052,8 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          mlogi("upgrading to h2c, {} bytes in buffer", buffer_.size());
          // Stream is whatever this session runs on, but never a TLS one: h2c_upgrade() takes
          // cleartext requests only, as h2 over TLS is negotiated by ALPN instead.
-         upgraded_ =
-            nghttp2::make_server_session(server(), std::move(stream_), std::move(*upgrade));
+         upgraded_ = nghttp2::make_server_session(server(), super::get_executor(),
+                                                  std::move(stream_), std::move(*upgrade));
          co_await upgraded_->do_session(std::move(buffer_));
          mlogi("h2c session done, served {} requests before upgrade", requestCounter - 1);
          co_return;
@@ -1335,25 +1335,25 @@ ANYHTTP_SERVER_STREAMS(ANYHTTP_H1_SESSION)
 // =================================================================================================
 
 template <SocketStream Stream>
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Stream&& stream)
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Executor executor,
+                                                   Stream&& stream)
 {
-   auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
    return std::make_shared<ServerSession<Stream>>(server, std::move(executor), std::move(stream));
 }
 
 template <SocketStream Stream>
-std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Stream&& stream)
+std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Executor executor,
+                                                   Stream&& stream)
 {
-   auto executor = stream_traits<Stream>::get_executor(stream); // before the stream is moved from
    return std::make_shared<ClientSession<Stream>>(client, std::move(executor), std::move(stream));
 }
 
 #define ANYHTTP_H1_SERVER(Stream)                                                                  \
    template std::shared_ptr<Session::Impl> make_server_session<Stream>(server::Server::Impl&,      \
-                                                                       Stream&&);
+                                                                       Executor, Stream&&);
 #define ANYHTTP_H1_CLIENT(Stream)                                                                  \
    template std::shared_ptr<Session::Impl> make_client_session<Stream>(client::Client::Impl&,      \
-                                                                       Stream&&);
+                                                                       Executor, Stream&&);
 ANYHTTP_SERVER_STREAMS(ANYHTTP_H1_SERVER)
 ANYHTTP_CLIENT_STREAMS(ANYHTTP_H1_CLIENT)
 #undef ANYHTTP_H1_SERVER

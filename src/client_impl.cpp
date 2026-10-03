@@ -195,11 +195,11 @@ Task<Session> Client::Impl::async_connect()
    switch (config().protocol)
    {
    case Protocol::h1:
-      impl = beast_impl::make_client_session(*this, std::move(socket));
+      impl = beast_impl::make_client_session(*this, executor_, std::move(socket));
       break;
 
    case Protocol::h2:
-      impl = nghttp2::make_client_session(*this, std::move(socket));
+      impl = nghttp2::make_client_session(*this, executor_, std::move(socket));
       break;
 
    case anyhttp::Protocol::h3:

@@ -39,26 +39,29 @@ struct Upgrade
 };
 
 //
-// The stream is moved into the session, which runs on the stream's own executor -- hence the
-// rvalue reference, which also keeps the SocketStream constraint from matching an lvalue.
+// The stream is moved into the session -- hence the rvalue reference, which also keeps the
+// SocketStream constraint from matching an lvalue. The session runs on \p executor, the
+// connection's strand if it has one: a corosio socket knows its context, not its strand.
 //
 // These are defined in src/h2_session.cpp and explicitly instantiated there for each of the
 // stream types below, so that nghttp2 is instantiated in that one place only.
 //
 
 template <SocketStream Stream>
-std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Stream&& stream,
+std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Executor executor,
+                                                   Stream&& stream,
                                                    std::optional<Upgrade> upgrade = {});
 
 template <SocketStream Stream>
-std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Stream&& stream);
+std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Executor executor,
+                                                   Stream&& stream);
 
 #define ANYHTTP_H2_SERVER(Stream)                                                                  \
    extern template std::shared_ptr<Session::Impl> make_server_session<Stream>(                     \
-      server::Server::Impl&, Stream&&, std::optional<Upgrade>);
+      server::Server::Impl&, Executor, Stream&&, std::optional<Upgrade>);
 #define ANYHTTP_H2_CLIENT(Stream)                                                                  \
    extern template std::shared_ptr<Session::Impl> make_client_session<Stream>(                     \
-      client::Client::Impl&, Stream&&);
+      client::Client::Impl&, Executor, Stream&&);
 ANYHTTP_SERVER_STREAMS(ANYHTTP_H2_SERVER)
 ANYHTTP_CLIENT_STREAMS(ANYHTTP_H2_CLIENT)
 #undef ANYHTTP_H2_SERVER

@@ -180,7 +180,7 @@ void Server::Impl::listen_tcp()
 
 // -------------------------------------------------------------------------------------------------
 
-Task<void> Server::Impl::handle_connection(TcpSocket socket)
+Task<void> Server::Impl::handle_connection(Executor executor, TcpSocket socket)
 {
    const auto prefix = anyhttp::log_prefix(Role::server, "tcp", io::remote_endpoint(socket));
 
@@ -225,15 +225,16 @@ Task<void> Server::Impl::handle_connection(TcpSocket socket)
       // buy nothing: HTTP/1.1 is what a connection without a negotiated protocol speaks anyway.
       //
       if (alpn == "h2")
-         session = nghttp2::make_server_session(*this, std::move(tls));
+         session = nghttp2::make_server_session(*this, executor, std::move(tls));
       else
-         session = beast_impl::make_server_session(*this, std::move(tls));
+         session = beast_impl::make_server_session(*this, executor, std::move(tls));
    }
 
    else if (detected == detail::Detected::h2c)
    {
       logi("[{}] new connection, h2c (prior knowledge, {} bytes buffered)", prefix, buffer.size());
-      session = nghttp2::make_server_session(*this, make_plain_server_stream(std::move(socket)));
+      session =
+         nghttp2::make_server_session(*this, executor, make_plain_server_stream(std::move(socket)));
    }
 
    //
@@ -242,7 +243,8 @@ Task<void> Server::Impl::handle_connection(TcpSocket socket)
    else
    {
       logi("[{}] new connection, h1 (no HTTP/2 client preface)", prefix);
-      session = beast_impl::make_server_session(*this, make_plain_server_stream(std::move(socket)));
+      session = beast_impl::make_server_session(*this, executor,
+                                                make_plain_server_stream(std::move(socket)));
    }
 
    //
@@ -331,7 +333,7 @@ Task<void> Server::Impl::tcp_accept_loop()
          ++sessionCounter;
       }
 
-      launch(connection_executor, handle_connection(std::move(socket)),
+      launch(connection_executor, handle_connection(connection_executor, std::move(socket)),
              [&, prefix](const std::exception_ptr& ex) mutable {
                 auto lock = std::lock_guard(session_mutex_);
                 --sessionCounter;
