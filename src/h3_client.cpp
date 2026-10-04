@@ -350,7 +350,7 @@ bool Http3ClientStream::submit_request(std::string_view method, const boost::url
    std::string method_str(method);
    std::string scheme(request_url.scheme());
    std::string target(request_url.encoded_target());
-   std::string authority(request_url.host_address());
+   std::string authority(request_url.encoded_host_and_port());
 
    auto nva = boost::container::small_vector<nghttp3_nv, 16>();
    nva.reserve(4 + std::distance(headers.begin(), headers.end()));

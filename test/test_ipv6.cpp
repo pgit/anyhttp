@@ -20,8 +20,11 @@ protected:
 
    void respond_with(std::string body)
    {
-      requestHandler = [body = std::move(body)](server::Request request,
-                                                server::Response response) -> Task<void> {
+      // The authority has to arrive intact: an IPv6 literal without its brackets is invalid, and
+      // the server only logs and ignores it.
+      requestHandler = [host = std::string(url.encoded_host()), body = std::move(body)](
+                          server::Request request, server::Response response) -> Task<void> {
+         EXPECT_EQ(request.url().encoded_host(), host);
          co_await drain(request);
          check(co_await response.submit(200, fields({{"Content-Length", body.size()}})));
          check(co_await response.write_eof(asio::buffer(body)));

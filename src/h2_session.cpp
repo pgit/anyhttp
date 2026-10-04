@@ -491,7 +491,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    std::string method_str(method);
    std::string scheme(url.scheme());
    std::string target(url.encoded_target());
-   std::string authority(url.host_address());
+   std::string authority(url.encoded_host_and_port());
 
    auto nva = boost::container::small_vector<nghttp2_nv, 16>();
    nva.reserve(4 + std::distance(headers.begin(), headers.end()));
