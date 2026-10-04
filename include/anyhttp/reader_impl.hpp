@@ -52,8 +52,9 @@ public:
    //
    virtual Task<std::tuple<error_code, size_t>> read_some(asio::mutable_buffer buffer)
    {
-      co_return co_await initiate<ReadSome>(
-         [this, buffer](ReadSomeHandler handler) { async_read_some(buffer, std::move(handler)); });
+      co_return co_await initiate<ReadSome>([this, buffer](ReadSomeHandler handler) { //
+         async_read_some(buffer, std::move(handler));
+      });
    }
 
    virtual void detach() = 0;

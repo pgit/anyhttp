@@ -65,7 +65,7 @@ using namespace std::chrono_literals;
 namespace asio = boost::asio;
 using namespace asio;
 using namespace asio::experimental::awaitable_operators;
-using tcp = ip::tcp;
+using ip::tcp;
 
 namespace rv = std::ranges::views;
 
@@ -230,7 +230,7 @@ protected:
 
 class ClientAsync : public Client
 {
-public:
+protected:
    auto token()
    {
       return [this](const std::exception_ptr& ep) {

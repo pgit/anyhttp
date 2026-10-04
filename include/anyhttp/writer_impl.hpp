@@ -49,7 +49,7 @@ public:
    /// async_write() as a coroutine, see Reader::Impl::read_some().
    virtual Task<std::tuple<error_code>> write(asio::const_buffer buffer, bool eof)
    {
-      co_return co_await initiate<Write>([this, buffer, eof](WriteHandler handler) {
+      co_return co_await initiate<Write>([this, buffer, eof](WriteHandler handler) { //
          async_write(std::move(handler), buffer, eof);
       });
    }
