@@ -5,12 +5,13 @@
 # COROSIO has to, so that the TLS library is not part of the comparison: build-openssl-release/
 # is the ASIO one (build-release/ is ASIO on AWS-LC).
 #
-# Usage: scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-t threads] [-i] [-p port]
-#                         [-u path] [-P] [-n]
+# Usage: scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-M depth] [-t threads] [-i]
+#                         [-p port] [-u path] [-P] [-n]
 #
 #   -D  duration of each run in seconds (default 10)
 #   -c  number of h2load clients (default 8)
-#   -m  max concurrent streams per client for h2 and h3 (default 10); h1 always uses 1
+#   -m  max concurrent streams per client for h2 and h3 (default 10)
+#   -M  h1 pipelining: requests in flight per connection (default 1, no pipelining)
 #   -t  threads the servers run on (default 1); h2load gets as many, up to the clients
 #   -i  independent: an I/O context and a server per thread, sharing the port (SO_REUSEPORT),
 #       instead of one context on all threads with a strand per connection
@@ -27,6 +28,7 @@ set -euo pipefail
 duration=10
 clients=8
 streams=10
+pipeline=1
 threads=1
 port=18080
 path=/
@@ -34,18 +36,19 @@ build=1
 scheme=https
 independent=()
 
-while getopts "D:c:m:t:ip:u:Pnh" opt; do
+while getopts "D:c:m:M:t:ip:u:Pnh" opt; do
    case $opt in
    D) duration=$OPTARG ;;
    c) clients=$OPTARG ;;
    m) streams=$OPTARG ;;
+   M) pipeline=$OPTARG ;;
    t) threads=$OPTARG ;;
    i) independent=(--independent) ;;
    p) port=$OPTARG ;;
    u) path=$OPTARG ;;
    P) scheme=http ;;
    n) build=0 ;;
-   *) sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+   *) sed -n '3,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
    esac
 done
 
@@ -115,7 +118,7 @@ for style in "${styles[@]}"; do
    for proto in "${protocols[@]}"; do
       args=(-D "$duration" -c "$clients" -m "$streams" -t "$h2load_threads")
       case $proto in
-      h1) args=(--h1 -D "$duration" -c "$clients" -m 1 -t "$h2load_threads") ;;
+      h1) args=(--h1 -D "$duration" -c "$clients" -m "$pipeline" -t "$h2load_threads") ;;
       h3) args+=(--h3) ;;
       esac
       log=$out/h2load-$style-$proto.log
@@ -132,7 +135,7 @@ for style in "${styles[@]}"; do
 done
 
 echo
-echo "h2load -D ${duration}s -c $clients -m $streams -t $h2load_threads (h1: -m 1)," \
+echo "h2load -D ${duration}s -c $clients -m $streams -t $h2load_threads (h1: -m $pipeline)," \
    "$scheme://127.0.0.1:$port$path, server threads: $threads${independent:+ (independent)}"
 echo
 row='%-8s %-5s %12s %10s %10s %7s %9s %9s\n'

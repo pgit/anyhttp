@@ -38,12 +38,16 @@ comparison.
 |---|---|
 | `-t N` | the servers run on N threads, h2load gets as many (up to the clients) |
 | `-i` | with `-t`: one I/O context and one server per thread instead of one shared context, see below |
+| `-M N` | h1 pipelining depth, default 1 (no pipelining), see below |
 | `-P` | plaintext HTTP/1.1 and HTTP/2 (prior knowledge), no HTTP/3 |
 | `-u path` | request path, default `/` (a small h2spec response) |
 | `-n` | don't build first |
 
-h1 always runs with `-m 1`: h2load pipelines with `--h1 -m N`, which is not what we want to
-measure.
+h1 runs with `-m 1` unless `-M` says otherwise: with `--h1`, h2load's `-m N` pipelines N requests
+per connection, which real clients hardly do. It measures fewer reads and writes per request
+rather than anything the server does concurrently, so h1 numbers taken with `-M` are not
+comparable to the others. It is a stress test: a full buffer of requests, abandoned when h2load
+stops.
 Raw h2load output and server logs stay in a temporary directory that the script prints at the end.
 
 The tables below use `-c 32` unless they say otherwise.
