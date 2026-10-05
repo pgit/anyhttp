@@ -2,12 +2,11 @@
 
 #include "anyhttp/config.hpp"
 
-#if ANYHTTP_ASIO
+#if ANYHTTP_COROSIO
+#include "anyhttp/corosio/formatter.hpp"
+#else
 #include "anyhttp/asio/formatter.hpp"
 #endif
-
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/ip/udp.hpp>
 
 #include <boost/beast/http/field.hpp>
 #include <boost/core/detail/string_view.hpp>
@@ -17,6 +16,7 @@
 
 #include <cstddef>
 #include <format>
+#include <sstream>
 #include <string_view>
 #include <thread>
 
@@ -56,22 +56,6 @@ struct std::formatter<boost::core::string_view> : public std::formatter<std::str
 };
 
 // -------------------------------------------------------------------------------------------------
-
-template <class Proto>
-struct std::formatter<boost::asio::ip::basic_endpoint<Proto>>
-{
-   constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
-
-   template <typename FormatContext>
-   auto format(const boost::asio::ip::basic_endpoint<Proto>& endpoint, FormatContext& ctx) const
-   {
-      const auto address = endpoint.address();
-      if (address.is_v6())
-         return std::format_to(ctx.out(), "[{}]:{}", address.to_string(), endpoint.port());
-      else
-         return std::format_to(ctx.out(), "{}:{}", address.to_string(), endpoint.port());
-   }
-};
 
 template <>
 struct std::formatter<boost::beast::http::field>

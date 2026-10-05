@@ -10,6 +10,7 @@
 // backends are written once, against these names.
 //
 //    Task<T>, Executor, error_code, Completion<Signature>, system_error
+//    IpAddress, TcpEndpoint, UdpEndpoint                       -- the runtime's own
 //    errc (portable error conditions), errors:: (the codes of the API contract), throw_error()
 //    last_error()                                              -- errno, as an error_code
 //    complete_immediately(), complete_later(), on_cancel()     -- parked operations

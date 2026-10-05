@@ -227,7 +227,7 @@ public:
 
    void on_request(RequestHandler&& handler);
 
-   asio::ip::tcp::endpoint local_endpoint() const;
+   TcpEndpoint local_endpoint() const;
 
 private:
    std::shared_ptr<Impl> impl;

@@ -101,6 +101,21 @@ ninja -C build -t deps | awk '/^[^ ].*: #deps/{o=$1} /nghttp2\/nghttp2.h|ngtcp2\
 Only objects in `h2/` and `h3/` of the library may appear. (Test objects may: the h2c upgrade and
 formatter tests drive nghttp2 by hand.)
 
+**Generic and protocol code include nothing from Boost.Asio but `<boost/asio/buffer.hpp>`**, which
+Beast's parser, serializer and `Fields` bring anyway, and nothing from capy or corosio. They reach
+the runtime through `anyhttp/runtime.hpp`, `anyhttp/net.hpp` and `anyhttp/formatter.hpp`, which
+include the `asio/` or `corosio/` header of the build's style. Addresses and endpoints are the
+runtime's own (`IpAddress`, `TcpEndpoint`, `UdpEndpoint`); where the two differ, `net.hpp` declares
+a function each runtime defines (`io::make_address()`, `io::to_sockaddr()`, ...). Verify in a
+COROSIO tree that no library object includes more of Asio:
+
+```
+ninja -C build-corosio -t deps | awk '/^[^ ].*: #deps/{o=$1} /boost\/asio\// && !/boost\/asio\/((buffer|is_contiguous_iterator|version)\.hpp|detail\/)/{print o}' | grep anyhttp.dir | sort -u
+```
+
+It must print nothing. (Test objects may: `test_external.cpp` runs its child processes on an ASIO
+context in both styles.)
+
 The HTTP/3 server and client share one implementation: `h3/session.*` (all ngtcp2/nghttp3
 callbacks, packet writing, timers, flow control), `h3/stream.*` (read and write paths, header
 parsing, lifecycle, the reader/writer adapters), `h3/common.*` (helpers). `h3/server.cpp` and

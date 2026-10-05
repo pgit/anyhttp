@@ -203,7 +203,7 @@ error_code close(Stream& stream) noexcept
 
 /// The peer of \p stream, if it is connected.
 template <SocketStream Stream>
-std::optional<boost::asio::ip::tcp::endpoint> remote_endpoint(Stream& stream) noexcept
+std::optional<TcpEndpoint> remote_endpoint(Stream& stream) noexcept
 {
    error_code ec;
    auto endpoint = get_socket(stream).remote_endpoint(ec);
@@ -269,13 +269,9 @@ inline TcpAcceptor make_acceptor(const Executor& executor) { return TcpAcceptor(
  * if \p reuse_port), and on an IPv6
  * endpoint for IPv4 clients, too (dual stack, if the system allows it). Throws what fails.
  */
-void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint,
-            bool reuse_port = false);
+void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port = false);
 
-inline asio::ip::tcp::endpoint local_endpoint(const TcpAcceptor& acceptor)
-{
-   return acceptor.local_endpoint();
-}
+inline TcpEndpoint local_endpoint(const TcpAcceptor& acceptor) { return acceptor.local_endpoint(); }
 
 /// Stops accepting: a pending accept() completes with an error.
 inline void close(TcpAcceptor& acceptor) noexcept
@@ -301,12 +297,12 @@ inline void no_delay(TcpSocket& socket)
 std::pair<int, int> buffer_sizes(TcpSocket& socket);
 
 /// Resolves \p host and \p port (a number): <tt>(error_code, endpoints)</tt>.
-Task<std::tuple<error_code, std::vector<asio::ip::tcp::endpoint>>>
-resolve(Executor executor, std::string host, std::string port);
+Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,
+                                                               std::string port);
 
 /// Connects \p socket to the first of \p endpoints that takes it: <tt>(error_code, endpoint)</tt>.
-Task<std::tuple<error_code, asio::ip::tcp::endpoint>>
-connect(TcpSocket& socket, std::vector<asio::ip::tcp::endpoint> endpoints);
+Task<std::tuple<error_code, TcpEndpoint>> connect(TcpSocket& socket,
+                                                  std::vector<TcpEndpoint> endpoints);
 
 inline TlsStream make_tls_stream(TcpSocket&& socket, TlsContext& context)
 {
@@ -337,7 +333,7 @@ std::string tls_info(TlsStream& stream);
 inline UdpSocket make_udp_socket(const Executor& executor) { return UdpSocket(executor); }
 
 /// Opens \p socket for the address family of \p endpoint, non-blocking.
-inline error_code open(UdpSocket& socket, const asio::ip::udp::endpoint& endpoint) noexcept
+inline error_code open(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept
 {
    error_code ec;
    socket.open(endpoint.protocol(), ec);

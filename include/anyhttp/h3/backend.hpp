@@ -11,8 +11,6 @@
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
 
-#include <boost/asio/ip/udp.hpp>
-
 #include <memory>
 #include <string>
 
@@ -42,8 +40,7 @@ public:
 
 /// Binds the UDP socket for HTTP/3 to `endpoint`, usually the address and port the TCP acceptor
 /// is already listening on, so that all three protocols share one endpoint.
-std::shared_ptr<Http3Server> make_http3_server(Server::Impl& server,
-                                               const boost::asio::ip::udp::endpoint& endpoint);
+std::shared_ptr<Http3Server> make_http3_server(Server::Impl& server, const UdpEndpoint& endpoint);
 
 // =================================================================================================
 

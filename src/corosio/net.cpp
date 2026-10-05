@@ -11,6 +11,11 @@
 #include <boost/corosio/resolver.hpp>
 #include <boost/corosio/socket_option.hpp>
 
+#include <cstring>
+#include <optional>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 
 namespace anyhttp
@@ -37,7 +42,7 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 namespace io
 {
 
-void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint, bool reuse_port)
+void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port)
 {
    const auto family = endpoint.address().is_v4() ? corosio::family::v4 : corosio::family::v6;
    if (auto ec = acceptor.open(family))
@@ -60,7 +65,7 @@ void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint, bool
       }
    }
 
-   if (auto ec = acceptor.bind(to_corosio(endpoint)))
+   if (auto ec = acceptor.bind(endpoint))
       throw std::system_error(ec, "bind");
    if (auto ec = acceptor.listen())
       throw std::system_error(ec, "listen");
@@ -76,21 +81,21 @@ std::pair<int, int> buffer_sizes(TcpSocket& socket)
    return {send, receive};
 }
 
-Task<std::tuple<error_code, std::vector<asio::ip::tcp::endpoint>>>
-resolve(Executor executor, std::string host, std::string port)
+Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,
+                                                               std::string port)
 {
    corosio::resolver resolver(executor.context());
    auto [ec, results] =
       co_await resolver.resolve(host, port, corosio::resolve_flags::numeric_service);
 
-   std::vector<asio::ip::tcp::endpoint> endpoints;
+   std::vector<TcpEndpoint> endpoints;
    for (auto&& entry : results)
-      endpoints.push_back(to_asio(entry));
+      endpoints.push_back(entry);
    co_return std::tuple{ec, std::move(endpoints)};
 }
 
-Task<std::tuple<error_code, asio::ip::tcp::endpoint>>
-connect(TcpSocket& socket, std::vector<asio::ip::tcp::endpoint> endpoints)
+Task<std::tuple<error_code, TcpEndpoint>> connect(TcpSocket& socket,
+                                                  std::vector<TcpEndpoint> endpoints)
 {
    error_code ec = make_error_code(errc::host_unreachable);
    for (const auto& endpoint : endpoints)
@@ -99,16 +104,93 @@ connect(TcpSocket& socket, std::vector<asio::ip::tcp::endpoint> endpoints)
       if ((ec =
               socket.open(endpoint.address().is_v4() ? corosio::family::v4 : corosio::family::v6)))
          continue;
-      std::tie(ec) = co_await socket.connect(to_corosio(endpoint));
+      std::tie(ec) = co_await socket.connect(endpoint);
       if (!ec)
          co_return std::tuple{error_code{}, endpoint};
    }
-   co_return std::tuple{ec, asio::ip::tcp::endpoint{}};
+   co_return std::tuple{ec, TcpEndpoint{}};
 }
 
 std::string tls_info(TlsStream& stream)
 {
    return std::format("{}, ALPN={}", stream.tls().name(), stream.tls().alpn_protocol());
+}
+
+} // namespace io
+
+// =================================================================================================
+// Addresses and endpoints, see anyhttp/net.hpp. corosio keeps the sockaddr form to itself.
+// =================================================================================================
+
+IpAddress normalize(IpAddress address)
+{
+   if (address.is_v6())
+   {
+      const auto v6 = address.to_v6();
+      if (v6.is_v4_mapped())
+         return v6.to_v4();
+   }
+   return address;
+}
+
+namespace io
+{
+
+IpAddress make_address(std::string_view text, error_code& ec) noexcept
+{
+   auto [result, address] = corosio::make_ip_address(text);
+   ec = result;
+   return address;
+}
+
+SocketAddress to_sockaddr(const UdpEndpoint& endpoint) noexcept
+{
+   SocketAddress address;
+   const auto ip = endpoint.address();
+   if (ip.is_v4())
+   {
+      sockaddr_in in{};
+      in.sin_family = AF_INET;
+      in.sin_port = htons(endpoint.port());
+      const auto bytes = ip.to_v4().to_bytes();
+      std::memcpy(&in.sin_addr, bytes.data(), bytes.size());
+      std::memcpy(&address.storage, &in, sizeof(in));
+      address.size = sizeof(in);
+   }
+   else
+   {
+      const auto v6 = ip.to_v6();
+      sockaddr_in6 in6{};
+      in6.sin6_family = AF_INET6;
+      in6.sin6_port = htons(endpoint.port());
+      const auto bytes = v6.to_bytes();
+      std::memcpy(&in6.sin6_addr, bytes.data(), bytes.size());
+      in6.sin6_scope_id = v6.scope_id();
+      std::memcpy(&address.storage, &in6, sizeof(in6));
+      address.size = sizeof(in6);
+   }
+   return address;
+}
+
+std::optional<UdpEndpoint> from_sockaddr(const sockaddr* address, socklen_t size) noexcept
+{
+   if (address->sa_family == AF_INET && size >= sizeof(sockaddr_in))
+   {
+      sockaddr_in in;
+      std::memcpy(&in, address, sizeof(in));
+      corosio::ipv4_address::bytes_type bytes;
+      std::memcpy(bytes.data(), &in.sin_addr, bytes.size());
+      return UdpEndpoint(corosio::ipv4_address(bytes), ntohs(in.sin_port));
+   }
+   if (address->sa_family == AF_INET6 && size >= sizeof(sockaddr_in6))
+   {
+      sockaddr_in6 in6;
+      std::memcpy(&in6, address, sizeof(in6));
+      corosio::ipv6_address::bytes_type bytes;
+      std::memcpy(bytes.data(), &in6.sin6_addr, bytes.size());
+      return UdpEndpoint(corosio::ipv6_address(bytes, in6.sin6_scope_id), ntohs(in6.sin6_port));
+   }
+   return std::nullopt;
 }
 
 } // namespace io

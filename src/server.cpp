@@ -108,7 +108,7 @@ void Server::on_request(RequestHandler&& handler) { impl->on_request(std::move(h
 
 Executor Server::get_executor() const noexcept { return impl->get_executor(); }
 
-asio::ip::tcp::endpoint Server::local_endpoint() const { return impl->local_endpoint(); }
+TcpEndpoint Server::local_endpoint() const { return impl->local_endpoint(); }
 
 // =================================================================================================
 

@@ -17,28 +17,32 @@ namespace anyhttp
 namespace io
 {
 
-error_code bind(UdpSocket& socket, const asio::ip::udp::endpoint& endpoint) noexcept
+error_code bind(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept
 {
-   if (::bind(socket.native_handle(), endpoint.data(), static_cast<socklen_t>(endpoint.size())))
+   const auto address = to_sockaddr(endpoint);
+   if (::bind(socket.native_handle(), address.data(), address.size))
       return last_error();
    return {};
 }
 
-error_code connect(UdpSocket& socket, const asio::ip::udp::endpoint& endpoint) noexcept
+error_code connect(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept
 {
-   if (::connect(socket.native_handle(), endpoint.data(), static_cast<socklen_t>(endpoint.size())))
+   const auto address = to_sockaddr(endpoint);
+   if (::connect(socket.native_handle(), address.data(), address.size))
       return last_error();
    return {};
 }
 
-asio::ip::udp::endpoint local_endpoint(UdpSocket& socket)
+UdpEndpoint local_endpoint(UdpSocket& socket)
 {
-   asio::ip::udp::endpoint endpoint;
-   auto size = static_cast<socklen_t>(endpoint.capacity());
-   if (::getsockname(socket.native_handle(), endpoint.data(), &size))
+   SocketAddress address;
+   address.size = sizeof(address.storage);
+   if (::getsockname(socket.native_handle(), address.data(), &address.size))
       throw_error(last_error());
-   endpoint.resize(size);
-   return endpoint;
+   auto endpoint = from_sockaddr(address.data(), address.size);
+   if (!endpoint)
+      throw_error(make_error_code(errc::address_family_not_supported));
+   return *endpoint;
 }
 
 error_code set_option(UdpSocket& socket, int level, int name, int value) noexcept

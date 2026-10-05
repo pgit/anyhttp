@@ -31,7 +31,9 @@
 #include <boost/capy/when_any.hpp>
 #include <boost/capy/write.hpp>
 #include <boost/corosio/delay.hpp>
+#include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/io_context.hpp>
+#include <boost/corosio/ip_address.hpp>
 #include <boost/corosio/wait_type.hpp>
 
 // the buffer vocabulary stays Boost.Asio's, which Beast needs anyway
@@ -86,6 +88,12 @@ template <typename T = void>
 using Task = capy::task<T>;
 
 using Executor = capy::any_executor;
+
+/// corosio has one endpoint type for TCP and UDP alike: an overload set on TcpEndpoint and
+/// UdpEndpoint, which compiles with ASIO, is a redefinition here.
+using IpAddress = corosio::ip_address;
+using TcpEndpoint = corosio::endpoint;
+using UdpEndpoint = corosio::endpoint;
 
 using std::error_code;
 

@@ -5,12 +5,32 @@
 //
 
 #include <boost/asio/cancellation_type.hpp>
+#include <boost/asio/ip/basic_endpoint.hpp>
 
 #include <format>
 #include <string_view>
 #include <utility>
 
 // =================================================================================================
+
+/// "address:port", with an IPv6 address in square brackets.
+template <class Proto>
+struct std::formatter<boost::asio::ip::basic_endpoint<Proto>>
+{
+   constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+
+   template <typename FormatContext>
+   auto format(const boost::asio::ip::basic_endpoint<Proto>& endpoint, FormatContext& ctx) const
+   {
+      const auto address = endpoint.address();
+      if (address.is_v6())
+         return std::format_to(ctx.out(), "[{}]:{}", address.to_string(), endpoint.port());
+      else
+         return std::format_to(ctx.out(), "{}:{}", address.to_string(), endpoint.port());
+   }
+};
+
+// -------------------------------------------------------------------------------------------------
 
 template <>
 struct std::formatter<boost::asio::cancellation_type> : std::formatter<std::string_view>

@@ -6,10 +6,6 @@
 #include "anyhttp/h2/backend.hpp"
 #include "anyhttp/h3/backend.hpp"
 
-#include <boost/asio/ip/address.hpp>
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/ip/udp.hpp>
-
 #include <boost/beast/core/flat_buffer.hpp>
 
 #include <spdlog/logger.h>
@@ -68,7 +64,7 @@ Server::Impl::Impl(Executor executor, Config config)
    // listen_tcp(): with port=0 the actual port is only known once the acceptor is bound.
    //
    auto tcp_ep = io::local_endpoint(acceptor_);
-   http3_ = make_http3_server(*this, asio::ip::udp::endpoint{tcp_ep.address(), tcp_ep.port()});
+   http3_ = make_http3_server(*this, UdpEndpoint{tcp_ep.address(), tcp_ep.port()});
 
    //
    // Advertise that endpoint to HTTP/1.1 and HTTP/2 clients, see Config::alt_svc_max_age. The
@@ -165,12 +161,12 @@ void Server::Impl::remove_session(const std::shared_ptr<Session::Impl>& session)
 
 void Server::Impl::listen_tcp()
 {
-   boost::system::error_code ec; // what Boost.Asio's address parser reports in, either way
-   auto address = asio::ip::make_address(config().listen_address, ec);
+   error_code ec;
+   auto address = io::make_address(config().listen_address, ec);
    if (ec)
       mlogw("error resolving '{}': {}", config().listen_address, ec.message());
 
-   io::listen(acceptor_, asio::ip::tcp::endpoint(address, config().port), config().reuse_port);
+   io::listen(acceptor_, TcpEndpoint(address, config().port), config().reuse_port);
    mlogi("TCP listening on {}", io::local_endpoint(acceptor_));
 }
 

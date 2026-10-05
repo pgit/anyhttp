@@ -28,18 +28,7 @@ std::ostream& operator<<(std::ostream& str, Protocol protocol)
 
 // -------------------------------------------------------------------------------------------------
 
-asio::ip::address normalize(asio::ip::address addr)
-{
-   if (addr.is_v6())
-   {
-      asio::ip::address_v6 v6 = addr.to_v6();
-      if (v6.is_v4_mapped())
-         return asio::ip::make_address_v4(asio::ip::v4_mapped, v6);
-   }
-   return addr;
-}
-
-asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint)
+TcpEndpoint normalize(const TcpEndpoint& endpoint)
 {
    return {normalize(endpoint.address()), endpoint.port()};
 }
@@ -55,7 +44,7 @@ std::string log_prefix(Role role)
    return colored(role, role == Role::server ? "server" : "client");
 }
 
-std::string log_prefix(Role role, std::string_view protocol, const asio::ip::address& address,
+std::string log_prefix(Role role, std::string_view protocol, const IpAddress& address,
                        unsigned short port)
 {
    const auto addr = normalize(address);
@@ -68,7 +57,7 @@ std::string log_prefix(Role role, std::string_view protocol, const asio::ip::add
 }
 
 std::string log_prefix(Role role, std::string_view protocol,
-                       const std::optional<asio::ip::tcp::endpoint>& remote)
+                       const std::optional<TcpEndpoint>& remote)
 {
    if (!remote)
       return colored(role, protocol);

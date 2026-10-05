@@ -6,7 +6,6 @@
 #include "anyhttp/h2/backend.hpp"
 #include "anyhttp/h3/backend.hpp"
 
-#include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/http/message.hpp>
 #include <boost/scope/scope_exit.hpp>

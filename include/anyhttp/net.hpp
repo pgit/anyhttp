@@ -14,10 +14,11 @@
 //    io::drain()                                             -- below
 //    UdpSocket, io::make_udp_socket(), io::open(), io::cancel(), io::close()
 //    io::bind(), io::connect(), io::local_endpoint(), io::set_option(), io::send()   -- below
+//    io::make_address(), SocketAddress, io::to_sockaddr(), io::from_sockaddr()        -- below
 //    Signal                                                  -- a wake-up for any thread
 //
-// asio/net.hpp has the documentation of each, except of those defined below. Addresses and
-// endpoints are Boost.Asio's in both runtimes: they are plain values.
+// asio/net.hpp has the documentation of each, except of those declared below. Addresses and
+// endpoints are the runtime's own, see anyhttp/runtime.hpp.
 //
 
 #include "anyhttp/common.hpp"
@@ -29,12 +30,13 @@
 #endif
 
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/ip/udp.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <optional>
+#include <string_view>
 
 #include <sys/socket.h>
 
@@ -81,19 +83,53 @@ Task<size_t> drain(Stream& stream, const Executor& executor,
 }
 
 //
+// Addresses and endpoints, as far as the runtimes differ in them. Declared here, and defined by
+// each runtime in src/asio/net.cpp and src/corosio/net.cpp.
+//
+
+/// Parses the IPv4 or IPv6 address \p text. What fails is in \p ec.
+IpAddress make_address(std::string_view text, error_code& ec) noexcept;
+
+/// Parses the IPv4 or IPv6 address \p text. Throws what fails.
+inline IpAddress make_address(std::string_view text)
+{
+   error_code ec;
+   auto address = make_address(text, ec);
+   if (ec)
+      throw_error(ec);
+   return address;
+}
+
+/// An endpoint in the form the socket API takes it: for the native handle, and for ngtcp2.
+struct SocketAddress
+{
+   sockaddr_storage storage{};
+   socklen_t size = 0;
+
+   sockaddr* data() noexcept { return reinterpret_cast<sockaddr*>(&storage); }
+   const sockaddr* data() const noexcept { return reinterpret_cast<const sockaddr*>(&storage); }
+};
+
+/// \p endpoint as the socket API takes it.
+SocketAddress to_sockaddr(const UdpEndpoint& endpoint) noexcept;
+
+/// The endpoint the socket API reported, or nothing if it is not an IPv4 or IPv6 one.
+std::optional<UdpEndpoint> from_sockaddr(const sockaddr* address, socklen_t size) noexcept;
+
+//
 // What the HTTP/3 backend does with its UdpSocket the same way in both runtimes, on the native
 // handle: neither runtime has every socket option it needs, and it sends and receives with
 // sendmsg() and recvmsg() anyway.
 //
 
 /// Binds \p socket to \p endpoint.
-error_code bind(UdpSocket& socket, const asio::ip::udp::endpoint& endpoint) noexcept;
+error_code bind(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept;
 
 /// Connects \p socket to \p endpoint: it sends there and receives from there only.
-error_code connect(UdpSocket& socket, const asio::ip::udp::endpoint& endpoint) noexcept;
+error_code connect(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept;
 
 /// The address \p socket is bound to. Throws what fails.
-asio::ip::udp::endpoint local_endpoint(UdpSocket& socket);
+UdpEndpoint local_endpoint(UdpSocket& socket);
 
 /// Sets the integer socket option \p name at \p level to \p value.
 error_code set_option(UdpSocket& socket, int level, int name, int value) noexcept;

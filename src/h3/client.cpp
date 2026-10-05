@@ -25,9 +25,6 @@
 #include "anyhttp/net.hpp"
 #include "anyhttp/session_impl.hpp"
 
-#include <boost/asio/ip/address.hpp>
-#include <boost/asio/ip/udp.hpp>
-
 #include <boost/beast/http/error.hpp>
 #include <boost/beast/http/status.hpp>
 
@@ -211,7 +208,7 @@ public:
    //
    // Connect-time setup. Returns 0 on success.
    //
-   int init(asio::ip::udp::endpoint remote, const Config& config);
+   int init(UdpEndpoint remote, const Config& config);
 
    //
    // Awaited by client::Client::Impl::async_connect() before handing the Session back to the
@@ -439,7 +436,7 @@ Http3ClientSession::~Http3ClientSession()
 
 // -------------------------------------------------------------------------------------------------
 
-int Http3ClientSession::init(asio::ip::udp::endpoint remote, const Config& config)
+int Http3ClientSession::init(UdpEndpoint remote, const Config& config)
 {
    TlsClientContext tls{config}; // may throw
 
@@ -453,9 +450,10 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote, const Config& confi
       loge("Http3ClientSession::init: connect: {}", ec.message());
       return -1;
    }
-   auto local = io::local_endpoint(socket_); // may throw
+   auto local = io::to_sockaddr(io::local_endpoint(socket_)); // may throw
+   auto peer = io::to_sockaddr(remote);
 
-   log_prefix_ = http3::log_prefix(Role::client, "h3", remote.data(), remote.size());
+   log_prefix_ = http3::log_prefix(Role::client, "h3", peer.data(), peer.size);
    mlogd("session created");
 
    scid_.datalen = 17;
@@ -482,8 +480,8 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote, const Config& confi
    fill_settings(settings, params, 30s);
 
    ngtcp2_path path{
-      {local.data(), static_cast<socklen_t>(local.size())},
-      {remote.data(), static_cast<socklen_t>(remote.size())},
+      {local.data(), local.size},
+      {peer.data(), peer.size},
       nullptr,
    };
 
@@ -505,8 +503,8 @@ int Http3ClientSession::init(asio::ip::udp::endpoint remote, const Config& confi
    //
    const std::string host = config.url.host_address();
    auto* param = SSL_get0_param(ssl_);
-   boost::system::error_code not_an_ip;
-   asio::ip::make_address(host, not_an_ip);
+   error_code not_an_ip;
+   io::make_address(host, not_an_ip);
    if (!not_an_ip ? X509_VERIFY_PARAM_set1_ip_asc(param, host.c_str()) != 1
                   : X509_VERIFY_PARAM_set1_host(param, host.data(), host.size()) != 1 ||
                        SSL_set_tlsext_host_name(ssl_, host.c_str()) != 1)
@@ -708,7 +706,7 @@ Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor, std:
       throw_error(resolved);
    if (endpoints.empty())
       throw_error(make_error_code(errc::host_unreachable));
-   const asio::ip::udp::endpoint remote{endpoints.front().address(), endpoints.front().port()};
+   const UdpEndpoint remote{endpoints.front().address(), endpoints.front().port()};
 
    auto session = std::make_shared<Http3ClientSession>(executor, config);
    if (session->init(remote, config) != 0)

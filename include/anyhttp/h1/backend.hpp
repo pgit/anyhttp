@@ -12,8 +12,6 @@
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
 
-#include <boost/asio/ip/tcp.hpp>
-
 #include <memory>
 
 namespace anyhttp::beast_impl

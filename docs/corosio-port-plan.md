@@ -275,6 +275,17 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
    With more than one thread and its budgets at their defaults, corosio posts every completion
    (no inline budget); these numbers are with that default.
 
+9. **Source layout and the Asio boundary** (2026-10-05). The protocols live in `h1/`, `h2/` and
+   `h3/`, and what belongs to one API style lives in `asio/` or `corosio/`, in both `include/anyhttp/`
+   and `src/`. The style comes from the generated `anyhttp/config.hpp` (`ab7b236`). Generic and
+   protocol code include nothing of Asio's but what Beast's parser, serializer and `Fields` bring
+   (`boost/asio/buffer.hpp`), see CLAUDE.md for the check (`1c868ad`). Addresses and endpoints
+   are the runtime's own: `IpAddress`, `TcpEndpoint` and `UdpEndpoint` are Boost.Asio's or
+   corosio's, also in `Server::local_endpoint()`. Where the two differ, `io::make_address()`,
+   `io::to_sockaddr()`, `io::from_sockaddr()` and `normalize()` are defined by each runtime.
+   Until Beast gives way to a sans-I/O HTTP library without Asio (Boost.Http), a COROSIO build
+   still needs Boost.Asio's headers, but none of its I/O.
+
 Out of scope for the port, and kept as separate commits if wanted: what lessons §9.1 lists as
 "what this project does better" in h3 (parking on `EAGAIN`, `write_aggregate_pkt`, and so on). A
 port that also changes behaviour cannot be verified against the old tests.

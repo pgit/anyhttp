@@ -4,10 +4,9 @@
 #include "anyhttp/h3/common.hpp"
 #include "anyhttp/common.hpp" // IWYU pragma: keep
 #include "anyhttp/formatter.hpp"
+#include "anyhttp/net.hpp"
 
 #include <spdlog/spdlog.h>
-
-#include <boost/asio/ip/udp.hpp>
 
 #include <array>
 #include <cassert>
@@ -133,13 +132,10 @@ ngtcp2_tstamp timestamp()
 
 std::string log_prefix(Role role, std::string_view protocol, const sockaddr* sa, socklen_t salen)
 {
-   boost::asio::ip::udp::endpoint endpoint;
-   if (salen > endpoint.capacity())
+   const auto endpoint = io::from_sockaddr(sa, salen);
+   if (!endpoint)
       return std::string(protocol);
-
-   std::memcpy(endpoint.data(), sa, salen);
-   endpoint.resize(salen);
-   return anyhttp::log_prefix(role, protocol, endpoint.address(), endpoint.port());
+   return anyhttp::log_prefix(role, protocol, endpoint->address(), endpoint->port());
 }
 
 std::string format_hex(const uint8_t* data, size_t len)

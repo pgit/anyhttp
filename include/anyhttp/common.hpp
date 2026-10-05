@@ -4,9 +4,6 @@
 #include <anyhttp/logging.hpp>
 #include <anyhttp/runtime.hpp>
 
-#include <boost/asio/ip/address.hpp>
-#include <boost/asio/ip/tcp.hpp>
-
 #include <boost/beast/http/fields.hpp>
 
 #include <boost/beast/http/fields_fwd.hpp>
@@ -162,8 +159,9 @@ Defer<F, T...> defer(F&& f, T&&... t)
    return Defer<F, T...>(std::forward<F>(f), std::forward<T>(t)...);
 }
 
-asio::ip::address normalize(asio::ip::address addr);
-asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint);
+/// \p address, or the IPv4 address an IPv4-mapped IPv6 one maps. Defined by each runtime.
+IpAddress normalize(IpAddress address);
+TcpEndpoint normalize(const TcpEndpoint& endpoint);
 
 /// Which end of a connection a session is, for the colour of its log prefix.
 enum class Role
@@ -180,12 +178,12 @@ std::string log_prefix(Role role);
  * The protocol is red for a server and green for a client, the address coloured as by "ip -c"
  * (IPv4 magenta, IPv6 blue and in square brackets).
  */
-std::string log_prefix(Role role, std::string_view protocol, const asio::ip::address& address,
+std::string log_prefix(Role role, std::string_view protocol, const IpAddress& address,
                        unsigned short port);
 
 /// As above, for the peer at \p remote. Just \p protocol without one (the socket is not connected).
 std::string log_prefix(Role role, std::string_view protocol,
-                       const std::optional<asio::ip::tcp::endpoint>& remote);
+                       const std::optional<TcpEndpoint>& remote);
 
 }; // namespace anyhttp
 

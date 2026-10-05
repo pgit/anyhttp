@@ -186,7 +186,7 @@ TEST(AsyncGetRaw, WHEN_get_THEN_request_line_says_GET)
    setup_logging();
    IoContext context;
    auto acceptor = io::make_acceptor(context.get_executor());
-   io::listen(acceptor, {asio::ip::make_address("127.0.0.1"), 0});
+   io::listen(acceptor, {io::make_address("127.0.0.1"), 0});
 
    std::string head;
    auto peer = [&]() -> Task<void> {

@@ -366,7 +366,7 @@ struct QuicBatch
 class Http3ServerImpl : public Http3Server, public std::enable_shared_from_this<Http3ServerImpl>
 {
 public:
-   Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endpoint& endpoint);
+   Http3ServerImpl(Server::Impl& parent, const UdpEndpoint& endpoint);
 
    /// For log lines that belong to no connection, see anyhttp::log_prefix().
    std::string log_prefix() const { return anyhttp::log_prefix(Role::server); }
@@ -423,7 +423,7 @@ private:
    //
    Executor executor_;
    UdpSocket socket_;
-   asio::ip::udp::endpoint local_endpoint_;
+   UdpEndpoint local_endpoint_;
 
    std::mutex mutex_;
    std::unordered_map<std::string, std::shared_ptr<Http3ServerSession>> sessions_;
@@ -939,7 +939,7 @@ void Http3ServerSession::resend_conn_close()
 // Http3ServerImpl: the UDP socket, the receive loop and the connection-ID demux.
 // =================================================================================================
 
-Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const asio::ip::udp::endpoint& endpoint)
+Http3ServerImpl::Http3ServerImpl(Server::Impl& parent, const UdpEndpoint& endpoint)
    : parent_(parent), tls_(parent.config()),
      executor_(config().use_strand ? new_strand(parent.get_executor()) : parent.get_executor()),
      socket_(io::make_udp_socket(executor_))
@@ -1304,8 +1304,9 @@ Task<void> Http3ServerImpl::udp_receive_loop()
 
       Endpoint ep{};
       ep.fd = socket_.native_handle();
-      std::memcpy(&ep.addr.su, local_endpoint_.data(), local_endpoint_.size());
-      ep.addr.len = local_endpoint_.size();
+      const auto local = io::to_sockaddr(local_endpoint_);
+      std::memcpy(&ep.addr.su, local.data(), local.size);
+      ep.addr.len = local.size;
 
       udp_on_read(ep);
    }
@@ -1313,8 +1314,7 @@ Task<void> Http3ServerImpl::udp_receive_loop()
 
 // =================================================================================================
 
-std::shared_ptr<Http3Server> make_http3_server(Server::Impl& server,
-                                               const asio::ip::udp::endpoint& endpoint)
+std::shared_ptr<Http3Server> make_http3_server(Server::Impl& server, const UdpEndpoint& endpoint)
 {
    return std::make_shared<Http3ServerImpl>(server, endpoint);
 }

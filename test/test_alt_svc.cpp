@@ -345,7 +345,7 @@ TEST_P(AltSvcFrame, WHEN_an_altsvc_frame_arrives_THEN_the_next_connection_uses_i
    // fixture's server, which is the one that can actually answer over QUIC.
    //
    auto acceptor = io::make_acceptor(context.get_executor());
-   io::listen(acceptor, {asio::ip::make_address("127.0.0.2"), 0});
+   io::listen(acceptor, {io::make_address("127.0.0.2"), 0});
    const auto port = io::local_endpoint(acceptor).port();
    auto origin = std::format("http://127.0.0.2:{}", port);
    auto value = std::format("h3=\":{}\"", server->local_endpoint().port());

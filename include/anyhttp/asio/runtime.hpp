@@ -21,6 +21,9 @@
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
+#include <boost/asio/ip/address.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ip/udp.hpp>
 #include <boost/asio/multiple_exceptions.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/steady_timer.hpp>
@@ -70,6 +73,11 @@ using Task = asio::awaitable<T>;
 
 /// What sessions, streams and their readers and writers run on.
 using Executor = asio::any_io_executor;
+
+/// The runtime's own IP address and endpoints, which the API speaks, too.
+using IpAddress = asio::ip::address;
+using TcpEndpoint = asio::ip::tcp::endpoint;
+using UdpEndpoint = asio::ip::udp::endpoint;
 
 using boost::system::error_code;
 

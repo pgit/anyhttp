@@ -94,7 +94,7 @@ public:
    /// Serves \p socket on \p executor, which is the connection's strand with Config::use_strand.
    Task<void> handle_connection(Executor executor, TcpSocket socket);
 
-   asio::ip::tcp::endpoint local_endpoint() const { return io::local_endpoint(acceptor_); }
+   TcpEndpoint local_endpoint() const { return io::local_endpoint(acceptor_); }
 
    void on_request(RequestHandler&& handler) noexcept { request_handler_ = std::move(handler); }
    const RequestHandler& request_handler() const noexcept { return request_handler_; }

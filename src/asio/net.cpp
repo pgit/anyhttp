@@ -14,6 +14,8 @@
 
 #include <openssl/ssl.h>
 
+#include <cstring>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -83,7 +85,7 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 namespace io
 {
 
-void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint, bool reuse_port)
+void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port)
 {
    acceptor.open(endpoint.protocol());
    acceptor.set_option(asio::socket_base::reuse_address(true));
@@ -118,21 +120,21 @@ std::pair<int, int> buffer_sizes(TcpSocket& socket)
    return {send.value(), receive.value()};
 }
 
-Task<std::tuple<error_code, std::vector<asio::ip::tcp::endpoint>>>
-resolve(Executor executor, std::string host, std::string port)
+Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,
+                                                               std::string port)
 {
    asio::ip::tcp::resolver resolver(executor);
    auto [ec, results] = co_await resolver.async_resolve(
       host, port, asio::ip::tcp::resolver::numeric_service, asio::as_tuple);
 
-   std::vector<asio::ip::tcp::endpoint> endpoints;
+   std::vector<TcpEndpoint> endpoints;
    for (auto&& entry : results)
       endpoints.push_back(entry.endpoint());
    co_return std::tuple{ec, std::move(endpoints)};
 }
 
-Task<std::tuple<error_code, asio::ip::tcp::endpoint>>
-connect(TcpSocket& socket, std::vector<asio::ip::tcp::endpoint> endpoints)
+Task<std::tuple<error_code, TcpEndpoint>> connect(TcpSocket& socket,
+                                                  std::vector<TcpEndpoint> endpoints)
 {
    co_return co_await asio::async_connect(socket, endpoints, asio::as_tuple);
 }
@@ -146,6 +148,50 @@ std::string_view alpn(TlsStream& stream)
 }
 
 std::string tls_info(TlsStream& stream) { return tls_handshake_info(stream.native_handle()); }
+
+} // namespace io
+
+// =================================================================================================
+// Addresses and endpoints, see anyhttp/net.hpp. An endpoint of Boost.Asio's is a sockaddr already.
+// =================================================================================================
+
+IpAddress normalize(IpAddress address)
+{
+   if (address.is_v6())
+   {
+      const auto v6 = address.to_v6();
+      if (v6.is_v4_mapped())
+         return asio::ip::make_address_v4(asio::ip::v4_mapped, v6);
+   }
+   return address;
+}
+
+namespace io
+{
+
+IpAddress make_address(std::string_view text, error_code& ec) noexcept
+{
+   return asio::ip::make_address(text, ec);
+}
+
+SocketAddress to_sockaddr(const UdpEndpoint& endpoint) noexcept
+{
+   SocketAddress address;
+   std::memcpy(&address.storage, endpoint.data(), endpoint.size());
+   address.size = static_cast<socklen_t>(endpoint.size());
+   return address;
+}
+
+std::optional<UdpEndpoint> from_sockaddr(const sockaddr* address, socklen_t size) noexcept
+{
+   UdpEndpoint endpoint;
+   if ((address->sa_family != AF_INET && address->sa_family != AF_INET6) ||
+       size > endpoint.capacity())
+      return std::nullopt;
+   std::memcpy(endpoint.data(), address, size);
+   endpoint.resize(size);
+   return endpoint;
+}
 
 } // namespace io
 

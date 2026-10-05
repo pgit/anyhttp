@@ -15,6 +15,7 @@
 #include <boost/program_options.hpp>
 
 #include <algorithm>
+#include <csignal>
 #include <expected>
 #include <iostream>
 #include <print>

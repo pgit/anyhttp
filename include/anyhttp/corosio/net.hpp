@@ -23,10 +23,6 @@
 #include <boost/corosio/tls_context.hpp>
 #include <boost/corosio/udp_socket.hpp>
 
-#include <boost/asio/ip/address.hpp>
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/ip/udp.hpp>
-
 #include <algorithm>
 #include <chrono>
 #include <concepts>
@@ -128,28 +124,6 @@ inline PlainServerStream make_plain_server_stream(TcpSocket&& socket) { return s
 
 // -------------------------------------------------------------------------------------------------
 
-/// Boost.Asio's endpoint, which the API speaks, as corosio's.
-inline corosio::endpoint to_corosio(const asio::ip::tcp::endpoint& endpoint)
-{
-   const auto address = endpoint.address();
-   if (address.is_v4())
-      return {corosio::ipv4_address(address.to_v4().to_bytes()), endpoint.port()};
-   return {corosio::ipv6_address(address.to_v6().to_bytes(), address.to_v6().scope_id()),
-           endpoint.port()};
-}
-
-/// corosio's endpoint as Boost.Asio's, which the API speaks.
-inline asio::ip::tcp::endpoint to_asio(const corosio::endpoint& endpoint)
-{
-   const auto address = endpoint.address();
-   if (address.is_v4())
-      return {asio::ip::address_v4(address.to_v4().to_bytes()), endpoint.port()};
-   const auto v6 = address.to_v6();
-   return {asio::ip::address_v6(v6.to_bytes(), v6.scope_id()), endpoint.port()};
-}
-
-// -------------------------------------------------------------------------------------------------
-
 template <typename Stream>
 struct stream_traits;
 
@@ -222,7 +196,7 @@ error_code close(Stream& stream) noexcept
 }
 
 template <SocketStream Stream>
-std::optional<asio::ip::tcp::endpoint> remote_endpoint(Stream& stream) noexcept
+std::optional<TcpEndpoint> remote_endpoint(Stream& stream) noexcept
 {
    auto& socket = get_socket(stream);
    if (!socket.is_open())
@@ -230,7 +204,7 @@ std::optional<asio::ip::tcp::endpoint> remote_endpoint(Stream& stream) noexcept
    auto endpoint = socket.remote_endpoint();
    if (endpoint.port() == 0)
       return std::nullopt; // not connected
-   return to_asio(endpoint);
+   return endpoint;
 }
 
 } // namespace io
@@ -268,13 +242,9 @@ inline TcpAcceptor make_acceptor(const Executor& executor)
    return TcpAcceptor(executor.context());
 }
 
-void listen(TcpAcceptor& acceptor, const asio::ip::tcp::endpoint& endpoint,
-            bool reuse_port = false);
+void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port = false);
 
-inline asio::ip::tcp::endpoint local_endpoint(const TcpAcceptor& acceptor)
-{
-   return to_asio(acceptor.local_endpoint());
-}
+inline TcpEndpoint local_endpoint(const TcpAcceptor& acceptor) { return acceptor.local_endpoint(); }
 
 inline void close(TcpAcceptor& acceptor) noexcept { acceptor.close(); }
 
@@ -294,11 +264,11 @@ inline void no_delay(TcpSocket& socket)
 
 std::pair<int, int> buffer_sizes(TcpSocket& socket);
 
-Task<std::tuple<error_code, std::vector<asio::ip::tcp::endpoint>>>
-resolve(Executor executor, std::string host, std::string port);
+Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,
+                                                               std::string port);
 
-Task<std::tuple<error_code, asio::ip::tcp::endpoint>>
-connect(TcpSocket& socket, std::vector<asio::ip::tcp::endpoint> endpoints);
+Task<std::tuple<error_code, TcpEndpoint>> connect(TcpSocket& socket,
+                                                  std::vector<TcpEndpoint> endpoints);
 
 inline TlsStream make_tls_stream(TcpSocket&& socket, TlsContext& context)
 {
@@ -319,7 +289,7 @@ std::string tls_info(TlsStream& stream);
 inline UdpSocket make_udp_socket(const Executor& executor) { return UdpSocket(executor.context()); }
 
 /// corosio opens every socket non-blocking.
-inline error_code open(UdpSocket& socket, const asio::ip::udp::endpoint& endpoint) noexcept
+inline error_code open(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept
 {
    return socket.open(endpoint.address().is_v6() ? corosio::family::v6 : corosio::family::v4);
 }

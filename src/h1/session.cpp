@@ -10,7 +10,6 @@
 #include "anyhttp/server.hpp"
 
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/ip/tcp.hpp>
 
 #include <boost/beast/core/buffer_traits.hpp>
 #include <boost/beast/core/detail/base64.hpp>
