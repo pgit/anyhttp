@@ -1,6 +1,6 @@
 //
 // The network half of the runtime layer, see anyhttp/net.hpp: what both runtimes do the same way,
-// on the native handle. The rest is in net_asio.cpp and net_corosio.cpp.
+// on the native handle. The rest is in asio/net.cpp and corosio/net.cpp.
 //
 
 #include "anyhttp/net.hpp"

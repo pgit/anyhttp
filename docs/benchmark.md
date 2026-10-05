@@ -1,6 +1,6 @@
 # Benchmarks
 
-What has been measured about the standalone server (`src/server_main.cpp`), how, and what came
+What has been measured about the standalone server (`src/apps/server_main.cpp`), how, and what came
 out of it. Newest findings come first. Each section says how to reproduce it; the commit named
 there has the full story.
 
@@ -295,9 +295,9 @@ without its lock. That state lives in the socket's implementation. A socket dest
 thread at that moment is freed: `do_close_socket()` pins the implementation only once
 `is_enqueued_` is set, which the reactor thread has not done yet.
 
-[`src/corosio_issue_reactor_uaf.cpp`](../src/corosio_issue_reactor_uaf.cpp) reproduces it with
-capy and corosio only: coroutines on a 4-thread context create a socket pair, write a byte and
-destroy both sockets.
+[`src/issues/corosio_issue_reactor_uaf.cpp`](../src/issues/corosio_issue_reactor_uaf.cpp)
+reproduces it with capy and corosio only: coroutines on a 4-thread context create a socket pair,
+write a byte and destroy both sockets.
 
 ```bash
 cmake --build build-corosio-asan --target corosio_issue_reactor_uaf

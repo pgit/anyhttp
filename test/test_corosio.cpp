@@ -3,6 +3,8 @@
 // (docs/corosio-port-plan.md). Should one of these break after moving a pin, it says which
 // assumption went away. Empty in an ASIO build.
 //
+#include "anyhttp/config.hpp"
+
 #if ANYHTTP_COROSIO
 
 #include <boost/beast/core/buffers_range.hpp>
@@ -183,7 +185,7 @@ TEST(Corosio, ErrorCodeInterop)
 }
 
 // =================================================================================================
-// The COROSIO half of the runtime layer (detail/runtime_corosio.hpp), without any protocol on top.
+// The COROSIO half of the runtime layer (corosio/runtime.hpp), without any protocol on top.
 // =================================================================================================
 
 namespace

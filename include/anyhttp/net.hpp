@@ -16,16 +16,16 @@
 //    io::bind(), io::connect(), io::local_endpoint(), io::set_option(), io::send()   -- below
 //    Signal                                                  -- a wake-up for any thread
 //
-// detail/net_asio.hpp has the documentation of each, except of those defined below. Addresses and
+// asio/net.hpp has the documentation of each, except of those defined below. Addresses and
 // endpoints are Boost.Asio's in both runtimes: they are plain values.
 //
 
 #include "anyhttp/common.hpp"
 
 #if ANYHTTP_COROSIO
-#include "anyhttp/detail/net_corosio.hpp"
+#include "anyhttp/corosio/net.hpp"
 #else
-#include "anyhttp/detail/net_asio.hpp"
+#include "anyhttp/asio/net.hpp"
 #endif
 
 #include <boost/asio/buffer.hpp>

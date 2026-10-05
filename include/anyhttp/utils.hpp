@@ -1,5 +1,7 @@
 #pragma once
 
+#include "anyhttp/config.hpp"
+
 #include <boost/asio/io_context.hpp>
 
 #if ANYHTTP_COROSIO

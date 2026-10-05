@@ -57,7 +57,7 @@ Ranked by how much each one threatens the approach, the most threatening first.
 | 1 | **Parked operations and their cancellation** | Backends park an `any_completion_handler<Sig>` (read, write, get_response) and complete it from engine callbacks. Cancellation is per operation, through its cancellation slot (terminal/partial/total), and is what `cancel_after` drives. | A parked `coroutine_handle` plus the `io_env` from `await_suspend`. Cancellation comes from the *chain's* `std::stop_token`, which a `std::stop_callback` observes and which may fire on any thread. There is no per-operation slot: per-operation cancellation means `when_any` or `corosio::timeout` around the one operation. | A `Completion<Sig>` type: `any_completion_handler` in ASIO, a continuation + env + result slot + `stop_callback` in COROSIO. It offers `complete(...)`, `complete_immediately(...)` and `on_cancel(fn)`. The backends' `Reader::Impl`/`Writer::Impl` virtuals take it in place of today's handler aliases. Stop maps to *terminal* cancellation, which is what the README's `async_write_eof()` rules are written for. |
 | 2 | **Completion resumes inline vs. posted** | `swap_and_invoke()` resumes the waiting coroutine inline, from inside nghttp2/nghttp3 callbacks. The recursion guards (`inside_call_read_handler_`) exist because of that. | Lessons §3.2: never resume application code inside an engine callback; `async_event::set()` posts. | In COROSIO, `Completion` posts to `env->executor`. The guards stay; they just never trigger there. Note that ASIO's `co_spawn` *also* starts inline (it `dispatch`es), so "spawn starts inline" (lessons §4.4) is not a new hazard. |
 | 3 | **Error vocabulary** | `boost::system::error_code`. The README contract is `asio::error::eof`, `http::error::partial_message`, `asio::error::would_block`/`connection_aborted`, `errc::broken_pipe`. | `std::error_code`; `capy::error::eof`, `capy::error::stream_truncated`, compared through `capy::cond::*`. | An `anyhttp::error_code` alias plus named constants per mode (`errors::eof`, `errors::truncated`, ...). Beast's own codes (`header_limit`, parser errors) cross over through Boost.System's `std::error_code` interop. Needs a test that compares through the conversion. The README gets a per-mode table. |
-| 4 | **HTTP/1.1** | `h1_session.cpp` (1.4k lines) uses `http::async_read`/`async_write`, which need an ASIO AsyncStream. | No AsyncStream exists. | Move **both** modes onto Beast's parser/serializer, driven by read/write loops on the runtime layer (spike-proven, §0). This is the one step that changes ASIO behaviour-bearing code substantially, so it comes before any capy work, with the full suite green. |
+| 4 | **HTTP/1.1** | `h1/session.cpp` (1.4k lines) uses `http::async_read`/`async_write`, which need an ASIO AsyncStream. | No AsyncStream exists. | Move **both** modes onto Beast's parser/serializer, driven by read/write loops on the runtime layer (spike-proven, §0). This is the one step that changes ASIO behaviour-bearing code substantially, so it comes before any capy work, with the full suite green. |
 | 5 | **TLS over TCP, detection** | `asio::ssl::stream`. `detect_ssl`/`detect_h2` sniff into a `flat_buffer`, which is handed to the SSL handshake or the session. | `openssl_stream` + `tls_context` (`set_alpn`, `alpn_protocol()`). Its handshake takes no pre-read bytes, and it does not build against AWS-LC. | Detection becomes a portable prefix sniff. In COROSIO, a `PrefixedStream<S>` replays the sniffed bytes beneath `openssl_stream` (lessons §9.2). Sessions already accept a pre-read `Buffer`. Spike the TLS-over-prefix stack first. |
 | 6 | **Timers** | `steady_timer`, re-armed for ngtcp2's expiry and elsewhere. | Public API: `corosio::delay` and `corosio::timeout`. A re-armable `timer` exists, but only as `corosio::detail::timer`. | The runtime layer offers a `Timer` with `expires_at`, `wait` and `cancel`. Build the COROSIO one on `detail::timer`, with a regression test, or restructure the h3 expiry loop the way lessons §3.1 does (`timeout(event.wait(), deadline)`). Decide at the h3 step. |
 | 7 | **Threads and strands** | `use_strand`, a per-connection strand, `server_main --threads`. Tests are single-threaded (`MULTITHREADED` is off). | `capy::strand` exists and corosio's `io_context` is thread-safe by default. But `async_event` is single-threaded by design, and nothing in the sibling project ran multi-threaded. | COROSIO started single-threaded. *Since 2026-10-03 it runs threaded too, see step 8:* `new_strand()` makes a `capy::strand`, and corosio resumes a coroutine after I/O through the coroutine's own executor, so a connection launched on its strand stays there. |
@@ -138,7 +138,7 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
      send loop now cancels the pending read when it ends.
 3. **HTTP/1.1 on Beast's parser and serializer**, in ASIO mode. This has the largest
    behavioural risk: h2c upgrade, chunked bodies, 431, the "max concurrent streams = 1" rules.
-   *Done 2026-09-30 (`8d11278`).* `h1_io.hpp` holds Beast's four composed operations as coroutines.
+   *Done 2026-09-30 (`8d11278`).* `h1/io.hpp` holds Beast's four composed operations as coroutines.
    The implementation interfaces have each operation in two shapes: handler (`async_*`) and
    coroutine (`read_some`, `write`, `submit`, `get_response`). A backend implements one and gets
    the other: via `initiate()` (cheap) or `launch()` (a spawn). The coroutine spelling of the API
@@ -161,7 +161,7 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
    - 5c: TLS with ALPN
    - 5d: HTTP/3
 
-   *5a and 5b done 2026-10-01 (`54b1873`..`8c54877`).* `runtime_corosio.hpp` and `net_corosio.hpp`
+   *5a and 5b done 2026-10-01 (`54b1873`..`8c54877`).* `corosio/runtime.hpp` and `corosio/net.hpp`
    exist, and the shared `test_coroutine_api.cpp` passes over corosio.
    *5c done 2026-10-01 (`325c5ad`):* the External tests (curl, h2load, nghttp, h2spec; cleartext
    and TLS with ALPN) pass in COROSIO and under ASAN, with child processes on an ASIO context of their
@@ -185,7 +185,7 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
    - `stop_after()` (COROSIO fixture) is COROSIO's `cancel_after()`.
    What is about completion tokens stays ASIO-only, inside the shared test where possible:
    `cancel_after`, cancellation slots, `detached`, immediate executors. Raw peers moved onto
-   `net.hpp` and `h1_io.hpp` (which got `h1::read()` and `h1::read_message()`).
+   `net.hpp` and `h1/io.hpp` (which got `h1::read()` and `h1::read_message()`).
    Running the shared tests on COROSIO found real bugs, most of them latent in ASIO too:
    - **h2 dropped unread body data.** A stream was erased as soon as it closed, together with the
      data it still held. ASIO's inline resumption usually kept the reader ahead; a reader that

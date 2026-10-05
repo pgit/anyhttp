@@ -2,9 +2,9 @@
 
 #include "anyhttp/detail/detect.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
-#include "anyhttp/h1_backend.hpp"
-#include "anyhttp/h2_backend.hpp"
-#include "anyhttp/h3_backend.hpp"
+#include "anyhttp/h1/backend.hpp"
+#include "anyhttp/h2/backend.hpp"
+#include "anyhttp/h3/backend.hpp"
 
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/tcp.hpp>

@@ -920,7 +920,7 @@ TEST_P(ClientAsync, WHEN_request_is_sent_THEN_response_is_received_before_body_i
 //
 // HTTP/1.1 supports pipelining: multiple requests can be made before the responses are received.
 // On the wire, requests and responses can not be interleaved, though, so the HTTP/1.1 client puts
-// them in order. See ClientSession in h1_session.hpp for the rules; HTTP/2 and HTTP/3 multiplex
+// them in order. See ClientSession in h1/session.hpp for the rules; HTTP/2 and HTTP/3 multiplex
 // requests and don't need any of them.
 //
 TEST_P(ClientAsync, WHEN_multiple_request_are_made_THEN_responses_are_received_in_order)

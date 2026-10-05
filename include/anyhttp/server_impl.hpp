@@ -56,7 +56,7 @@ public:
 // =================================================================================================
 
 //
-// The HTTP/3 half of the server, behind anyhttp/h3_backend.hpp: it owns the UDP socket and
+// The HTTP/3 half of the server, behind anyhttp/h3/backend.hpp: it owns the UDP socket and
 // everything QUIC, so that nothing of ngtcp2/nghttp3 reaches this header.
 //
 class Http3Server;

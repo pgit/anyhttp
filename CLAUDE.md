@@ -79,14 +79,18 @@ completions there run on acknowledgement, and the Release build hides the use-af
 
 ## Source layout
 
-Each protocol lives in files prefixed `h1_` (Beast/HTTP/1.1), `h2_` (nghttp2) and `h3_`
-(ngtcp2+nghttp3), in both `include/anyhttp/` and `src/`. **Only `h2_*` files may include
-`<nghttp2/*>`, only `h3_*` files `<ngtcp2/*>`/`<nghttp3/*>`.**
+Each protocol lives in a directory of its own, `h1/` (Beast/HTTP/1.1), `h2/` (nghttp2) and `h3/`
+(ngtcp2+nghttp3), in both `include/anyhttp/` and `src/`. **Only files in `h2/` may include
+`<nghttp2/*>`, only files in `h3/` `<ngtcp2/*>`/`<nghttp3/*>`.** What belongs to one API style only
+is in `asio/` or `corosio/`, again in both; the library compiles the `src/` directory of its style
+and not the other. `src/apps/` has the `server` and `client` programs, `src/issues/` standalone
+reproducers of upstream bugs. Everything else at the top level is generic.
 
 Generic code (`server_impl.*`, `client_impl.*`, `formatter.hpp`) reaches a backend only through
-`h1_backend.hpp` / `h2_backend.hpp` / `h3_backend.hpp`, which declare their entry points in terms
-of Asio types. New protocol-specific code goes in a prefixed file; when generic code needs to
-reach it, add a declaration to that backend header rather than including a protocol header.
+`h1/backend.hpp` / `h2/backend.hpp` / `h3/backend.hpp`, which declare their entry points in terms
+of the runtime layer. New protocol-specific code goes in that protocol's directory; when generic
+code needs to reach it, add a declaration to that backend header rather than including a protocol
+header.
 
 Verify the boundary with:
 
@@ -94,25 +98,30 @@ Verify the boundary with:
 ninja -C build -t deps | awk '/^[^ ].*: #deps/{o=$1} /nghttp2\/nghttp2.h|ngtcp2\/ngtcp2.h/{print o}' | sort -u
 ```
 
-Only `h2_*` and `h3_*` objects of the library may appear. (Test objects may: the h2c upgrade and
+Only objects in `h2/` and `h3/` of the library may appear. (Test objects may: the h2c upgrade and
 formatter tests drive nghttp2 by hand.)
 
-The HTTP/3 server and client share one implementation: `h3_session.*` (all ngtcp2/nghttp3
-callbacks, packet writing, timers, flow control), `h3_stream.*` (read and write paths, header
-parsing, lifecycle, the reader/writer adapters), `h3_common.*` (helpers). `h3_server.cpp` and
-`h3_client.cpp` hold only what is genuinely role-specific. Fix shared behavior in the shared
+The HTTP/3 server and client share one implementation: `h3/session.*` (all ngtcp2/nghttp3
+callbacks, packet writing, timers, flow control), `h3/stream.*` (read and write paths, header
+parsing, lifecycle, the reader/writer adapters), `h3/common.*` (helpers). `h3/server.cpp` and
+`h3/client.cpp` hold only what is genuinely role-specific. Fix shared behavior in the shared
 files.
 
 ## Conventions
 
 - clang-format is authoritative: 3-space indent, 100 columns.
 - The two API styles are ASIO and COROSIO: `ANYHTTP_ASIO`/`ANYHTTP_COROSIO`,
-  `net_asio`/`net_corosio`, `build-corosio/`. "capy" names only the library itself (`capy::task`,
+  `asio/`/`corosio/`, `build-corosio/`. "capy" names only the library itself (`capy::task`,
   `<boost/capy/...>`), the non-I/O base that corosio adds I/O to.
-- Where the two styles differ by more than a few lines, each gets a file of its own, `*_asio.*`
-  and `*_corosio.*`, with the same definitions in the same order, so that the pair can be read side
-  by side: `detail/runtime_*.hpp`, `detail/net_*.hpp`, `src/net_*.cpp`, `test/test_fixtures_*.hpp`.
-  What both share stays in the file without the suffix. Keep the order when adding to either.
+- Where the two styles differ by more than a few lines, each gets a file of its own, of the same
+  name in `asio/` and `corosio/`, with the same definitions in the same order, so that the pair can
+  be read side by side: `runtime.hpp`, `net.hpp`, `src/*/net.cpp`. What both share stays in the
+  generic file of that name (`anyhttp/runtime.hpp`, which selects one of the two, `anyhttp/net.hpp`,
+  `src/net.cpp`). The test fixtures follow the old pattern, `test/test_fixtures_*.hpp`. Keep the
+  order when adding to either.
+- The style comes from the generated `anyhttp/config.hpp` (`cmake/config.hpp.in`), not from a
+  compile definition: a file that tests `ANYHTTP_ASIO`/`ANYHTTP_COROSIO` must include it (or
+  `anyhttp/runtime.hpp`) first, or the test is silently false.
 - Test `.cpp` files put `using namespace testing;` after the includes and use `HasSubstr`,
   `Values`, `Not` unqualified. Never in `test_fixtures.hpp` (it would leak), and not in
   `test_external.cpp`, whose own `Args` alias collides with gmock's.

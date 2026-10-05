@@ -123,7 +123,7 @@ endif()
 #
 # API style and I/O runtime, one per build tree: ASIO (completion tokens, on Boost.Asio) or COROSIO
 # (coroutines only, on capy/corosio). The code tests ANYHTTP_ASIO or ANYHTTP_COROSIO, exactly one of
-# which is 1. See docs/corosio-port-plan.md.
+# which is 1, from the generated anyhttp/config.hpp. See docs/corosio-port-plan.md.
 #
 set(ANYHTTP_API ASIO CACHE STRING "API style and I/O runtime: ASIO or COROSIO")
 set_property(CACHE ANYHTTP_API PROPERTY STRINGS ASIO COROSIO)
@@ -162,7 +162,7 @@ elseif (ANYHTTP_API STREQUAL "COROSIO")
 else()
     message(FATAL_ERROR "ANYHTTP_API must be ASIO or COROSIO, not '${ANYHTTP_API}'")
 endif()
-add_compile_definitions(ANYHTTP_ASIO=${ANYHTTP_ASIO} ANYHTTP_COROSIO=${ANYHTTP_COROSIO})
+configure_file(cmake/config.hpp.in ${CMAKE_BINARY_DIR}/include/anyhttp/config.hpp @ONLY)
 
 # --------------------------------------------------------------------------------------------------
 

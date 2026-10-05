@@ -1,5 +1,5 @@
 #include <anyhttp/formatter.hpp>
-#include <anyhttp/h2_common.hpp> // the nghttp2_nv formatter lives with the rest of the h2 glue
+#include <anyhttp/h2/common.hpp> // the nghttp2_nv formatter lives with the rest of the h2 glue
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/http/field.hpp>

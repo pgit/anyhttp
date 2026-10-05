@@ -19,24 +19,17 @@
 //    Event, Timer
 //    io::read_some(), io::write(), io::peek(), io::receive(), io::wait_readable()
 //
-// detail/runtime_asio.hpp has the documentation of each.
+// asio/runtime.hpp has the documentation of each.
 //
 
-#if !defined(ANYHTTP_ASIO) && !defined(ANYHTTP_COROSIO)
-#define ANYHTTP_ASIO 1
-#endif
-#ifndef ANYHTTP_ASIO
-#define ANYHTTP_ASIO (!ANYHTTP_COROSIO)
-#endif
-#ifndef ANYHTTP_COROSIO
-#define ANYHTTP_COROSIO (!ANYHTTP_ASIO)
-#endif
+#include "anyhttp/config.hpp"
+
 #if ANYHTTP_ASIO == ANYHTTP_COROSIO
 #error "exactly one of ANYHTTP_ASIO and ANYHTTP_COROSIO has to be 1"
 #endif
 
 #if ANYHTTP_COROSIO
-#include "anyhttp/detail/runtime_corosio.hpp"
+#include "anyhttp/corosio/runtime.hpp"
 #else
-#include "anyhttp/detail/runtime_asio.hpp"
+#include "anyhttp/asio/runtime.hpp"
 #endif
