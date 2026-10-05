@@ -6,7 +6,7 @@
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/http.hpp>
 
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
 #include <boost/asio/ssl/host_name_verification.hpp>
 #endif
 

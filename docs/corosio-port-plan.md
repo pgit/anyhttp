@@ -26,7 +26,7 @@ A standalone spike (capy `a372a6b`, corosio `6a3eed4`, both `develop`) establish
 ## 1. Shape of the dual build
 
 - **One switch per build tree**: `-DANYHTTP_API=ASIO|COROSIO` (default ASIO) defines
-  `ANYHTTP_COROSIO=0|1`. A binary is one or the other, never both. The COROSIO tree is `build-corosio/`.
+  `ANYHTTP_ASIO=1|0` and `ANYHTTP_COROSIO=0|1`. A binary is one or the other, never both. The COROSIO tree is `build-corosio/`.
 - **COROSIO means corosio all the way down**: its reactor, sockets, timers and TLS; `capy::task`;
   results as `io_result` tuples. Boost.Asio *headers* stay, because Beast needs asio's buffer
   and error types (capy's `buffers/asio.hpp` bridges the buffers). No `io_context`, socket,

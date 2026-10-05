@@ -4,7 +4,7 @@
 //
 #include "anyhttp/runtime.hpp"
 
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
 
 #include "anyhttp/detail/any_async_stream_impl.hpp"
 
@@ -61,4 +61,4 @@ template any_async_stream make_any_async_stream<SslStream>(SslStream&&);
 
 } // namespace anyhttp
 
-#endif // !ANYHTTP_COROSIO
+#endif // ANYHTTP_ASIO

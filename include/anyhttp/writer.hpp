@@ -60,7 +60,7 @@ public:
    /// Announces the length of the outgoing body, before its header is submitted.
    void content_length(std::optional<size_t> content_length);
 
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
    /**
     * Writes \p buffer as part of the outgoing body, which stays open for more.
     *
@@ -142,7 +142,7 @@ protected:
    Impl& pimpl() const noexcept { return *impl_; }
 
 private:
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
    //
    // Binding an executor to the initiating function lets tokens that need one -- the timer behind
    // cancel_after -- find it here, with the token's own executor taking precedence as usual. A

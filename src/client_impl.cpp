@@ -97,7 +97,7 @@ std::optional<Client::Impl::AlternativeService> Client::Impl::alt_svc() const
 
 //
 //
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
 void Client::Impl::async_connect(ConnectHandler handler)
 {
    //

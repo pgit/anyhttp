@@ -64,7 +64,7 @@ public:
    /// What the incoming message announced as its body length, if it announced one.
    std::optional<size_t> content_length() const noexcept;
 
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
    /**
     * Reads a part of the incoming body.
     *
@@ -149,7 +149,7 @@ protected:
    Impl& pimpl() const noexcept { return *impl_; }
 
 private:
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
    void async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler);
 #endif
 

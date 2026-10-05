@@ -68,7 +68,7 @@ Task<std::tuple<error_code>> Response::submit(unsigned int status_code, Fields h
    return pimpl().submit(status_code, std::move(headers));
 }
 
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
 void Response::async_submit_any(StatusHandler&& handler, unsigned int status_code,
                                 const Fields& headers)
 {

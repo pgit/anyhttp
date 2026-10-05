@@ -62,7 +62,7 @@ public:
 
    Executor get_executor() const noexcept { return executor_; }
 
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
    void async_connect(ConnectHandler handler);
 #endif
 

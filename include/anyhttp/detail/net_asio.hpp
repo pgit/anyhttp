@@ -39,6 +39,32 @@ namespace anyhttp
 
 // =================================================================================================
 
+using TcpSocket = asio::ip::tcp::socket;
+using TcpAcceptor = asio::ip::tcp::acceptor;
+using TlsContext = asio::ssl::context;
+using TlsStream = asio::ssl::stream<TcpSocket>;
+using UdpSocket = asio::ip::udp::socket;
+
+/// What the server serves cleartext HTTP/1.1 and h2c over: for ASIO, the type-erased stream,
+/// which keeps it exercised.
+using PlainServerStream = any_async_stream;
+
+inline PlainServerStream make_plain_server_stream(TcpSocket&& socket)
+{
+   return make_any_async_stream(std::move(socket));
+}
+
+//
+// The stream types the backends instantiate their session factories for, as X-macros: the
+// factory templates are defined in one source file per backend and explicitly instantiated there,
+// and these keep the lists out of the backends.
+//
+#define ANYHTTP_SERVER_STREAMS(X)                                                                  \
+   X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream) X(::anyhttp::any_async_stream)
+#define ANYHTTP_CLIENT_STREAMS(X) X(::anyhttp::TcpSocket)
+
+// -------------------------------------------------------------------------------------------------
+
 /**
  * Specialized below for every stream type a session can be instantiated with. The primary template
  * is left undefined on purpose, so that \c SocketStream rejects anything else.
@@ -222,32 +248,6 @@ static_assert(SocketStream<boost::asio::ssl::stream<boost::asio::ip::tcp::socket
 static_assert(SocketStream<boost::beast::tcp_stream>);
 static_assert(SocketStream<any_async_stream>);
 static_assert(!SocketStream<boost::asio::ip::tcp::socket&>); // rvalues only, see above
-
-// =================================================================================================
-
-using TcpSocket = asio::ip::tcp::socket;
-using TcpAcceptor = asio::ip::tcp::acceptor;
-using TlsContext = asio::ssl::context;
-using TlsStream = asio::ssl::stream<TcpSocket>;
-using UdpSocket = asio::ip::udp::socket;
-
-/// What the server serves cleartext HTTP/1.1 and h2c over: for ASIO, the type-erased stream,
-/// which keeps it exercised.
-using PlainServerStream = any_async_stream;
-
-inline PlainServerStream make_plain_server_stream(TcpSocket&& socket)
-{
-   return make_any_async_stream(std::move(socket));
-}
-
-//
-// The stream types the backends instantiate their session factories for, as X-macros: the
-// factory templates are defined in one source file per backend and explicitly instantiated there,
-// and these keep the lists out of the backends.
-//
-#define ANYHTTP_SERVER_STREAMS(X)                                                                  \
-   X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream) X(::anyhttp::any_async_stream)
-#define ANYHTTP_CLIENT_STREAMS(X) X(::anyhttp::TcpSocket)
 
 // -------------------------------------------------------------------------------------------------
 

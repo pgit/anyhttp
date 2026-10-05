@@ -16,6 +16,7 @@
 #include <boost/corosio/ip_address.hpp>
 #include <boost/corosio/openssl_stream.hpp>
 #include <boost/corosio/shutdown_type.hpp>
+#include <boost/corosio/socket_option.hpp>
 #include <boost/corosio/tcp_acceptor.hpp>
 #include <boost/corosio/tcp_socket.hpp>
 #include <boost/corosio/timeout.hpp>
@@ -35,6 +36,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -185,27 +187,7 @@ bool is_tls(const Stream& stream) noexcept
    return stream_traits<Stream>::is_tls(stream);
 }
 
-/// Sends the TLS "close_notify", waiting for the peer's for two seconds at most.
-template <SocketStream Stream>
-Task<error_code> async_teardown(Stream& stream)
-{
-   if constexpr (std::same_as<Stream, TlsStream>)
-   {
-      auto [ec] = co_await corosio::timeout(stream.tls().shutdown(), std::chrono::seconds(2));
-      co_return ec;
-   }
-   else
-      co_return error_code{};
-}
-
-static_assert(SocketStream<TcpSocket>);
-static_assert(SocketStream<TlsStream>);
-
 // -------------------------------------------------------------------------------------------------
-
-/// The server's TLS context, see detail/net_asio.hpp. corosio prefers our order for ALPN.
-TlsContext make_server_tls_context(const std::string& certificate_chain,
-                                   const std::string& private_key);
 
 namespace io
 {
@@ -251,6 +233,35 @@ std::optional<asio::ip::tcp::endpoint> remote_endpoint(Stream& stream) noexcept
    return to_asio(endpoint);
 }
 
+} // namespace io
+
+// -------------------------------------------------------------------------------------------------
+
+/// Sends the TLS "close_notify", waiting for the peer's for two seconds at most.
+template <SocketStream Stream>
+Task<error_code> async_teardown(Stream& stream)
+{
+   if constexpr (std::same_as<Stream, TlsStream>)
+   {
+      auto [ec] = co_await corosio::timeout(stream.tls().shutdown(), std::chrono::seconds(2));
+      co_return ec;
+   }
+   else
+      co_return error_code{};
+}
+
+static_assert(SocketStream<TcpSocket>);
+static_assert(SocketStream<TlsStream>);
+
+// -------------------------------------------------------------------------------------------------
+
+/// The server's TLS context, see detail/net_asio.hpp. corosio prefers our order for ALPN.
+TlsContext make_server_tls_context(const std::string& certificate_chain,
+                                   const std::string& private_key);
+
+namespace io
+{
+
 inline TcpSocket make_socket(const Executor& executor) { return TcpSocket(executor.context()); }
 inline TcpAcceptor make_acceptor(const Executor& executor)
 {
@@ -269,7 +280,18 @@ inline void close(TcpAcceptor& acceptor) noexcept { acceptor.close(); }
 
 inline auto accept(TcpAcceptor& acceptor, TcpSocket& socket) { return acceptor.accept(socket); }
 
-void no_delay(TcpSocket& socket);
+/// corosio's set_option() throws, but as with ASIO, a failure here is not worth an error.
+inline void no_delay(TcpSocket& socket)
+{
+   try
+   {
+      socket.set_option(corosio::socket_option::no_delay(true));
+   }
+   catch (const std::system_error&)
+   {
+   }
+}
+
 std::pair<int, int> buffer_sizes(TcpSocket& socket);
 
 Task<std::tuple<error_code, std::vector<asio::ip::tcp::endpoint>>>

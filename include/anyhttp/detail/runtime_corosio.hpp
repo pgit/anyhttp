@@ -55,6 +55,25 @@
 
 #include <sys/socket.h>
 
+/// The error code of what \p ptr holds, as thrown by the runtime.
+inline std::error_code code(const std::exception_ptr& ptr)
+{
+   if (!ptr)
+      return {};
+   try
+   {
+      std::rethrow_exception(ptr);
+   }
+   catch (const std::system_error& ex)
+   {
+      return ex.code();
+   }
+   catch (const boost::system::system_error& ex)
+   {
+      return ex.code();
+   }
+}
+
 namespace anyhttp
 {
 namespace asio = boost::asio;
@@ -70,13 +89,7 @@ using Executor = capy::any_executor;
 
 using std::error_code;
 
-/// Whether the runtime supports running a server or client on several threads (with strands).
-inline constexpr bool multithreaded_runtime = true;
-
-/// What the runtime throws an error_code as.
-using system_error = std::system_error;
-
-// -------------------------------------------------------------------------------------------------
+// =================================================================================================
 
 /// Portable error conditions, see detail/runtime_asio.hpp.
 using errc = std::errc;
@@ -94,6 +107,12 @@ inline const error_code already_started =
 inline const error_code header_limit =
    boost::system::error_code(boost::beast::http::error::header_limit);
 } // namespace errors
+
+/// Whether the runtime supports running a server or client on several threads (with strands).
+inline constexpr bool multithreaded_runtime = true;
+
+/// What the runtime throws an error_code as.
+using system_error = std::system_error;
 
 [[noreturn]] inline void throw_error(const error_code& ec) { throw std::system_error(ec); }
 
@@ -198,8 +217,6 @@ private:
    State* state_ = nullptr;
 };
 
-// =================================================================================================
-
 template <typename Handler, typename... Args>
 inline void complete_immediately(Handler&& handler, const Executor&, Args&&... args)
 {
@@ -299,16 +316,71 @@ auto initiate(Init&& init)
    return detail::Initiation<Signature, std::decay_t<Init>>(std::forward<Init>(init));
 }
 
-// -------------------------------------------------------------------------------------------------
-
-/// Calls \p function from \p executor's queue, after whatever is running now has returned.
-template <typename F>
-inline void run_later(const Executor& executor, F&& function);
-
 /// Starts \p task on \p executor, detached: nobody waits for it, and what it throws is dropped.
 inline void launch(const Executor& executor, Task<void> task)
 {
    capy::run_async(executor, []() noexcept {}, [](std::exception_ptr) noexcept {})(std::move(task));
+}
+
+/// Starts \p task on \p executor and calls \p on_done with what it threw, if anything.
+template <typename F>
+inline void launch(const Executor& executor, Task<void> task, F&& on_done)
+{
+   auto done = std::make_shared<std::decay_t<F>>(std::forward<F>(on_done));
+   capy::run_async(
+      executor, [done]() noexcept { (*done)(std::exception_ptr{}); },
+      [done](std::exception_ptr ep) noexcept { (*done)(ep); })(std::move(task));
+}
+
+/**
+ * Runs \p task as the operation \p handler stands for. The caller's stop token becomes the task's,
+ * so cancelling the caller cancels the task.
+ */
+template <typename... T>
+inline void launch(const Executor& executor, Task<std::tuple<error_code, T...>> task,
+                   Completion<void(error_code, T...)>&& handler)
+{
+   std::stop_token token;
+   if (auto* state = handler.state())
+      token = state->env->stop_token;
+
+   auto shared = std::make_shared<Completion<void(error_code, T...)>>(std::move(handler));
+   capy::run_async(
+      executor, token,
+      [shared](std::tuple<error_code, T...> result) noexcept {
+         std::apply(std::move(*shared), std::move(result));
+      },
+      [shared](std::exception_ptr ep) noexcept { std::move (*shared)(code(ep), T{}...); })(
+      std::move(task));
+}
+
+// -------------------------------------------------------------------------------------------------
+
+/// Lets whatever else is ready to run on the caller's executor run first.
+struct YieldNow
+{
+   capy::continuation continuation;
+
+   bool await_ready() const noexcept { return false; }
+   std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, const capy::io_env* env)
+   {
+      continuation.h = h;
+      env->executor.post(continuation);
+      return std::noop_coroutine();
+   }
+   void await_resume() const noexcept {}
+};
+
+inline YieldNow yield_now() { return {}; }
+
+/// Calls \p function from \p executor's queue, after whatever is running now has returned.
+template <typename F>
+inline void run_later(const Executor& executor, F&& function)
+{
+   launch(executor, [](std::decay_t<F> function) -> Task<void> {
+      co_await yield_now();
+      function();
+   }(std::forward<F>(function)));
 }
 
 /**
@@ -357,90 +429,6 @@ inline Executor new_strand(const Executor& executor)
 {
    auto& context = static_cast<corosio::io_context&>(executor.context());
    return Executor(detail::Strand(context.get_executor()));
-}
-
-/// Starts \p task on \p executor and calls \p on_done with what it threw, if anything.
-template <typename F>
-inline void launch(const Executor& executor, Task<void> task, F&& on_done)
-{
-   auto done = std::make_shared<std::decay_t<F>>(std::forward<F>(on_done));
-   capy::run_async(
-      executor, [done]() noexcept { (*done)(std::exception_ptr{}); },
-      [done](std::exception_ptr ep) noexcept { (*done)(ep); })(std::move(task));
-}
-
-} // namespace anyhttp
-
-/// The error code of what \p ptr holds, as thrown by the runtime.
-inline std::error_code code(const std::exception_ptr& ptr)
-{
-   if (!ptr)
-      return {};
-   try
-   {
-      std::rethrow_exception(ptr);
-   }
-   catch (const std::system_error& ex)
-   {
-      return ex.code();
-   }
-   catch (const boost::system::system_error& ex)
-   {
-      return ex.code();
-   }
-}
-
-namespace anyhttp
-{
-
-/**
- * Runs \p task as the operation \p handler stands for. The caller's stop token becomes the task's,
- * so cancelling the caller cancels the task.
- */
-template <typename... T>
-inline void launch(const Executor& executor, Task<std::tuple<error_code, T...>> task,
-                   Completion<void(error_code, T...)>&& handler)
-{
-   std::stop_token token;
-   if (auto* state = handler.state())
-      token = state->env->stop_token;
-
-   auto shared = std::make_shared<Completion<void(error_code, T...)>>(std::move(handler));
-   capy::run_async(
-      executor, token,
-      [shared](std::tuple<error_code, T...> result) noexcept {
-         std::apply(std::move(*shared), std::move(result));
-      },
-      [shared](std::exception_ptr ep) noexcept { std::move (*shared)(code(ep), T{}...); })(
-      std::move(task));
-}
-
-// -------------------------------------------------------------------------------------------------
-
-/// Lets whatever else is ready to run on the caller's executor run first.
-struct YieldNow
-{
-   capy::continuation continuation;
-
-   bool await_ready() const noexcept { return false; }
-   std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, const capy::io_env* env)
-   {
-      continuation.h = h;
-      env->executor.post(continuation);
-      return std::noop_coroutine();
-   }
-   void await_resume() const noexcept {}
-};
-
-inline YieldNow yield_now() { return {}; }
-
-template <typename F>
-inline void run_later(const Executor& executor, F&& function)
-{
-   launch(executor, [](std::decay_t<F> function) -> Task<void> {
-      co_await yield_now();
-      function();
-   }(std::forward<F>(function)));
 }
 
 /// Waits for \p duration to pass, or until cancelled (errors::canceled).
@@ -612,24 +600,6 @@ auto write(Stream& stream, const ConstBufferSequence& buffers)
    return capy::write(stream, capy::from_asio(buffers));
 }
 
-/// Receives a datagram into \p buffer, on a connected datagram socket. A coroutine, unlike
-/// read_some(): corosio's datagram operations do not copy their buffer sequence, as its stream
-/// operations do, but point to it, so it has to outlive the operation.
-template <typename Socket>
-Task<std::tuple<error_code, size_t>> receive(Socket& socket, asio::mutable_buffer buffer)
-{
-   const capy::mutable_buffer buffers(buffer.data(), buffer.size());
-   auto [ec, n] = co_await socket.recv(buffers);
-   co_return std::tuple{ec, n};
-}
-
-/// Waits until \p socket has something to read, for a caller that reads it by hand.
-template <typename Socket>
-auto wait_readable(Socket& socket)
-{
-   return socket.wait(corosio::wait_type::read);
-}
-
 /// Peeks at what has arrived on \p socket, without taking it. corosio has no flags for its
 /// receive operations, so this waits for readiness and peeks at the native socket.
 template <typename Socket>
@@ -648,6 +618,24 @@ Task<std::tuple<error_code, size_t>> peek(Socket& socket, asio::mutable_buffer b
       if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
          co_return std::tuple{last_error(), size_t{0}};
    }
+}
+
+/// Receives a datagram into \p buffer, on a connected datagram socket. A coroutine, unlike
+/// read_some(): corosio's datagram operations do not copy their buffer sequence, as its stream
+/// operations do, but point to it, so it has to outlive the operation.
+template <typename Socket>
+Task<std::tuple<error_code, size_t>> receive(Socket& socket, asio::mutable_buffer buffer)
+{
+   const capy::mutable_buffer buffers(buffer.data(), buffer.size());
+   auto [ec, n] = co_await socket.recv(buffers);
+   co_return std::tuple{ec, n};
+}
+
+/// Waits until \p socket has something to read, for a caller that reads it by hand.
+template <typename Socket>
+auto wait_readable(Socket& socket)
+{
+   return socket.wait(corosio::wait_type::read);
 }
 
 } // namespace io

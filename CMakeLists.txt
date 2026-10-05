@@ -122,13 +122,16 @@ endif()
 
 #
 # API style and I/O runtime, one per build tree: ASIO (completion tokens, on Boost.Asio) or COROSIO
-# (coroutines only, on capy/corosio). The code tests ANYHTTP_COROSIO. See docs/corosio-port-plan.md.
+# (coroutines only, on capy/corosio). The code tests ANYHTTP_ASIO or ANYHTTP_COROSIO, exactly one of
+# which is 1. See docs/corosio-port-plan.md.
 #
 set(ANYHTTP_API ASIO CACHE STRING "API style and I/O runtime: ASIO or COROSIO")
 set_property(CACHE ANYHTTP_API PROPERTY STRINGS ASIO COROSIO)
 if (ANYHTTP_API STREQUAL "ASIO")
+    set(ANYHTTP_ASIO 1)
     set(ANYHTTP_COROSIO 0)
 elseif (ANYHTTP_API STREQUAL "COROSIO")
+    set(ANYHTTP_ASIO 0)
     set(ANYHTTP_COROSIO 1)
 
     # corosio's openssl_stream uses the zero-copy BIO pair API (BIO_nwrite0), which AWS-LC lacks
@@ -159,7 +162,7 @@ elseif (ANYHTTP_API STREQUAL "COROSIO")
 else()
     message(FATAL_ERROR "ANYHTTP_API must be ASIO or COROSIO, not '${ANYHTTP_API}'")
 endif()
-add_compile_definitions(ANYHTTP_COROSIO=${ANYHTTP_COROSIO})
+add_compile_definitions(ANYHTTP_ASIO=${ANYHTTP_ASIO} ANYHTTP_COROSIO=${ANYHTTP_COROSIO})
 
 # --------------------------------------------------------------------------------------------------
 

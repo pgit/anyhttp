@@ -807,7 +807,7 @@ TEST_P(ClientAsync, Recursion)
       auto s1 = stack_remaining_bytes().value();
       EXPECT_EQ(s0, s1);
 
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
       // however, ASIO allows us to control this behavior using "immediate executors"
       auto ex = co_await this_coro::executor;
       co_await response.async_read_some(asio::buffer(empty), bind_immediate_executor(ex));

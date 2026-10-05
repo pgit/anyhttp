@@ -64,8 +64,6 @@ namespace anyhttp
 {
 namespace asio = boost::asio;
 
-// =================================================================================================
-
 /// A coroutine, as the runtime runs it.
 template <typename T = void>
 using Task = asio::awaitable<T>;
@@ -74,14 +72,6 @@ using Task = asio::awaitable<T>;
 using Executor = asio::any_io_executor;
 
 using boost::system::error_code;
-
-/**
- * An operation that has been started and not completed yet, waiting to be completed with a
- * \p Signature of <tt>void(error_code, ...)</tt>. The protocol backends park these and complete
- * them from their engines' callbacks.
- */
-template <typename Signature>
-using Completion = asio::any_completion_handler<Signature>;
 
 // =================================================================================================
 
@@ -140,6 +130,14 @@ using system_error = boost::system::system_error;
 inline error_code last_error() noexcept { return {errno, boost::system::system_category()}; }
 
 // =================================================================================================
+
+/**
+ * An operation that has been started and not completed yet, waiting to be completed with a
+ * \p Signature of <tt>void(error_code, ...)</tt>. The protocol backends park these and complete
+ * them from their engines' callbacks.
+ */
+template <typename Signature>
+using Completion = asio::any_completion_handler<Signature>;
 
 //
 // Completing a parked operation. Invoking a Completion directly resumes its caller right there,
@@ -201,23 +199,27 @@ inline void on_cancel(Completion<Signature>& handler, F&& on_cancel)
 
 // -------------------------------------------------------------------------------------------------
 
-/// Calls \p function from \p executor's queue, after whatever is running now has returned.
-template <typename F>
-inline void run_later(const Executor& executor, F&& function)
+/**
+ * Starts an operation that completes a <tt>Completion<Signature></tt>, and waits for it, yielding
+ * the completion's arguments as a tuple:
+ *
+ * \code
+ * auto [ec, n] = co_await initiate<ReadSome>([&](Completion<ReadSome> handler) {
+ *    impl.async_read_some(buffer, std::move(handler));
+ * });
+ * \endcode
+ *
+ * The initiating function runs when the operation is awaited, so it may capture by reference.
+ */
+template <typename Signature, typename Init>
+auto initiate(Init&& init)
 {
-   asio::post(executor, std::forward<F>(function));
+   return asio::async_initiate<const asio::as_tuple_t<asio::deferred_t>&, Signature>(
+      [init = std::forward<Init>(init)](Completion<Signature> handler) mutable {
+         init(std::move(handler));
+      },
+      asio::as_tuple(asio::deferred));
 }
-
-/// Calls \p function on \p executor: right away if the caller runs on it already, later if not.
-template <typename F>
-inline void dispatch_to(const Executor& executor, F&& function)
-{
-   asio::dispatch(executor, std::forward<F>(function));
-}
-
-/// A new strand on \p executor, for a connection that has to be serialized against itself
-/// while the io_context runs on several threads (\c server::Config::use_strand).
-inline Executor new_strand(const Executor& executor) { return asio::make_strand(executor); }
 
 /// Starts \p task on \p executor, detached: nobody waits for it, and what it throws is dropped.
 inline void launch(const Executor& executor, Task<void> task)
@@ -265,27 +267,28 @@ inline void launch(const Executor& executor, Task<std::tuple<error_code, T...>> 
                               })));
 }
 
-/**
- * Starts an operation that completes a <tt>Completion<Signature></tt>, and waits for it, yielding
- * the completion's arguments as a tuple:
- *
- * \code
- * auto [ec, n] = co_await initiate<ReadSome>([&](Completion<ReadSome> handler) {
- *    impl.async_read_some(buffer, std::move(handler));
- * });
- * \endcode
- *
- * The initiating function runs when the operation is awaited, so it may capture by reference.
- */
-template <typename Signature, typename Init>
-auto initiate(Init&& init)
+// -------------------------------------------------------------------------------------------------
+
+/// Lets whatever else is ready to run on the caller's executor run first.
+inline auto yield_now() { return asio::post(asio::deferred); }
+
+/// Calls \p function from \p executor's queue, after whatever is running now has returned.
+template <typename F>
+inline void run_later(const Executor& executor, F&& function)
 {
-   return asio::async_initiate<const asio::as_tuple_t<asio::deferred_t>&, Signature>(
-      [init = std::forward<Init>(init)](Completion<Signature> handler) mutable {
-         init(std::move(handler));
-      },
-      asio::as_tuple(asio::deferred));
+   asio::post(executor, std::forward<F>(function));
 }
+
+/// Calls \p function on \p executor: right away if the caller runs on it already, later if not.
+template <typename F>
+inline void dispatch_to(const Executor& executor, F&& function)
+{
+   asio::dispatch(executor, std::forward<F>(function));
+}
+
+/// A new strand on \p executor, for a connection that has to be serialized against itself
+/// while the io_context runs on several threads (\c server::Config::use_strand).
+inline Executor new_strand(const Executor& executor) { return asio::make_strand(executor); }
 
 /// Waits for \p duration to pass. Cancelling the wait completes it early, with the error code
 /// the runtime's timers report for that.
@@ -296,9 +299,6 @@ inline Task<error_code> delay(std::chrono::steady_clock::duration duration)
    auto [ec] = co_await timer.async_wait(asio::as_tuple);
    co_return ec;
 }
-
-/// Lets whatever else is ready to run on the caller's executor run first.
-inline auto yield_now() { return asio::post(asio::deferred); }
 
 /**
  * Runs \p a and \p b concurrently, until both are done, and yields what they return: nothing,
@@ -458,6 +458,23 @@ auto read_some(Stream& stream, asio::mutable_buffer buffer)
    return stream.async_read_some(buffer, asio::as_tuple);
 }
 
+/// Writes all of \p buffers, unless an error comes first: <tt>(error_code, size_t)</tt>.
+template <typename Stream, typename ConstBufferSequence>
+auto write(Stream& stream, const ConstBufferSequence& buffers)
+{
+   //
+   // As few writes as the stream takes: async_write()'s default completion condition, transfer_all,
+   // would split them into 64 KiB each. A large HTTP/1.1 header then takes several round trips
+   // through the reactor, and a server that rejects it early catches the client in the middle.
+   //
+   return asio::async_write(
+      stream, buffers,
+      [](const error_code& ec, size_t) -> size_t {
+         return ec ? 0 : std::numeric_limits<size_t>::max();
+      },
+      asio::as_tuple);
+}
+
 /// Peeks at what has arrived on \p socket, without taking it: <tt>(error_code, size_t)</tt>.
 template <typename Socket>
 auto peek(Socket& socket, asio::mutable_buffer buffer)
@@ -479,23 +496,6 @@ template <typename Socket>
 auto wait_readable(Socket& socket)
 {
    return socket.async_wait(Socket::wait_read, asio::as_tuple);
-}
-
-/// Writes all of \p buffers, unless an error comes first: <tt>(error_code, size_t)</tt>.
-template <typename Stream, typename ConstBufferSequence>
-auto write(Stream& stream, const ConstBufferSequence& buffers)
-{
-   //
-   // As few writes as the stream takes: async_write()'s default completion condition, transfer_all,
-   // would split them into 64 KiB each. A large HTTP/1.1 header then takes several round trips
-   // through the reactor, and a server that rejects it early catches the client in the middle.
-   //
-   return asio::async_write(
-      stream, buffers,
-      [](const error_code& ec, size_t) -> size_t {
-         return ec ? 0 : std::numeric_limits<size_t>::max();
-      },
-      asio::as_tuple);
 }
 
 } // namespace io

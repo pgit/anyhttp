@@ -1,72 +1,21 @@
 #pragma once
 
 //
-// The fixtures of test_fixtures.hpp for the COROSIO runtime: the same names and members, on a
-// corosio::io_context. Shared tests use only what both have. MULTITHREADED (defined here, or on
-// the compiler's command line) runs it on several threads, with a strand per connection.
+// The fixtures of test_fixtures.hpp for the COROSIO runtime, on a corosio::io_context.
+// test_fixtures_asio.hpp has the same names and members, in the same order. MULTITHREADED (defined
+// here, or on the compiler's command line) runs the tests on several threads, with a strand per
+// connection.
 //
-#include "anyhttp/client.hpp"
-#include "anyhttp/formatter.hpp" // IWYU pragma: keep
-#include "anyhttp/request_handlers.hpp"
-#include "anyhttp/server.hpp"
-#include "anyhttp/session.hpp"
-#include "anyhttp/utils.hpp"
-
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/this_coro.hpp>
 #include <boost/corosio/io_context.hpp>
 
-#include <boost/beast/http/error.hpp>
-#include <boost/url/url.hpp>
-
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
-#include <spdlog/spdlog.h>
-
-#include <chrono>
-#include <functional>
-#include <optional>
-#include <ranges>
 #include <stop_token>
-#include <string>
-#include <thread>
-#include <vector>
-
-using namespace std::string_view_literals;
-using namespace std::chrono_literals;
-
-namespace rv = std::ranges::views;
-
-using namespace anyhttp;
 
 /// The context the tests run their servers and clients on.
 using IoContext = boost::corosio::io_context;
 
 // =================================================================================================
-
-/// Returns HTTP11, HTTP2 or HTTP3 depending on the protocol.
-static std::string NameGenerator(const testing::TestParamInfo<anyhttp::Protocol>& info)
-{
-   return to_string(info.param);
-}
-
-/// The protocols the parametrized shared tests run with.
-inline std::vector<anyhttp::Protocol> protocols()
-{
-   return {anyhttp::Protocol::h1, anyhttp::Protocol::h2, anyhttp::Protocol::h3};
-}
-
-static void setup_logging()
-{
-#if defined(GITHUB_ACTIONS)
-   spdlog::set_level(spdlog::level::warn);
-#elif defined(NDEBUG)
-   spdlog::set_level(spdlog::level::info);
-#else
-   spdlog::set_level(spdlog::level::debug);
-#endif
-}
 
 /**
  * COROSIO's spelling of ASIO's cancel_after(): awaits \p task, which is requested to stop after
@@ -83,11 +32,11 @@ Task<T> stop_after(std::chrono::duration<Rep, Period> timeout, Task<T> task)
 
 // =================================================================================================
 
-//
-// Server fixture with some default request handlers, see test_fixtures.hpp.
-//
 // #define MULTITHREADED
 
+//
+// Server fixture with some default request handlers, see test_fixtures_asio.hpp.
+//
 class Server : public testing::TestWithParam<anyhttp::Protocol>
 {
 protected:

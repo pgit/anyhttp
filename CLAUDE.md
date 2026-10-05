@@ -14,11 +14,12 @@ and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.jso
 `build-corosio/` is the COROSIO API style (`-DANYHTTP_API=COROSIO -DTLS_LIBRARY=OpenSSL`, see
 [docs/corosio-port-plan.md](docs/corosio-port-plan.md)); capy and corosio are FetchContent'd at
 pinned SHAs. Both styles build the same library sources and test files; what belongs to one style
-only is guarded with `ANYHTTP_COROSIO`. So is the `server` program; the `client` program is
-ASIO-only so far. `build-corosio-asan/` is its ASAN tree, `build-corosio-release/` its Release
-tree (benchmark COROSIO with it). COROSIO needs OpenSSL, so compare it against
-`build-openssl-release/` (ASIO, OpenSSL, Release), not `build-release/`: `scripts/bench.sh` runs
-the two side by side (`-P` for plaintext, `-t` for server threads).
+only is guarded with `ANYHTTP_ASIO` or `ANYHTTP_COROSIO` (exactly one of them is 1). So is the
+`server` program; the `client` program is ASIO-only so far. `build-corosio-asan/` is its ASAN
+tree, `build-corosio-release/` its Release tree (benchmark COROSIO with it). COROSIO needs
+OpenSSL, so compare it against `build-openssl-release/` (ASIO, OpenSSL, Release), not
+`build-release/`: `scripts/bench.sh` runs the two side by side (`-P` for plaintext, `-t` for
+server threads).
 
 `build-corosio-tsan/` is COROSIO under TSAN with `-DMULTITHREADED` in `CMAKE_CXX_FLAGS`: the
 fixtures run the tests on all cores, a strand per connection. Expect reports inside corosio's
@@ -105,9 +106,13 @@ files.
 ## Conventions
 
 - clang-format is authoritative: 3-space indent, 100 columns.
-- The two API styles are ASIO and COROSIO: `ANYHTTP_COROSIO`, `net_asio`/`net_corosio`,
-  `build-corosio/`. "capy" names only the library itself (`capy::task`, `<boost/capy/...>`), the
-  non-I/O base that corosio adds I/O to.
+- The two API styles are ASIO and COROSIO: `ANYHTTP_ASIO`/`ANYHTTP_COROSIO`,
+  `net_asio`/`net_corosio`, `build-corosio/`. "capy" names only the library itself (`capy::task`,
+  `<boost/capy/...>`), the non-I/O base that corosio adds I/O to.
+- Where the two styles differ by more than a few lines, each gets a file of its own, `*_asio.*`
+  and `*_corosio.*`, with the same definitions in the same order, so that the pair can be read side
+  by side: `detail/runtime_*.hpp`, `detail/net_*.hpp`, `src/net_*.cpp`, `test/test_fixtures_*.hpp`.
+  What both share stays in the file without the suffix. Keep the order when adding to either.
 - Test `.cpp` files put `using namespace testing;` after the includes and use `HasSubstr`,
   `Values`, `Not` unqualified. Never in `test_fixtures.hpp` (it would leak), and not in
   `test_external.cpp`, whose own `Args` alias collides with gmock's.

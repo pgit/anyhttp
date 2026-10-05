@@ -386,7 +386,7 @@ TEST_P(ExternalTLS, h2load) { h2load(100, 4, 3); }
 // its own strand. For HTTP/3 this is the regression test for concurrent access to a single
 // ngtcp2_conn, which used to crash right away.
 //
-#if !ANYHTTP_COROSIO // there is only one thread with COROSIO
+#if ANYHTTP_ASIO // there is only one thread with COROSIO
 class ExternalTLSThreaded : public ExternalTLS
 {
 protected:

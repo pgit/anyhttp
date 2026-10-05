@@ -50,7 +50,7 @@ Session::~Session() { reset(); }
 
 Executor Session::get_executor() const noexcept { return impl->get_executor(); }
 
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
 void Session::async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
 {
    impl->async_submit(std::move(handler), "POST", std::move(url), headers);
@@ -151,7 +151,7 @@ Task<std::tuple<error_code, client::Message>> Session::get(boost::urls::url url,
 #endif
 }
 
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
 void Session::async_get_any(GetHandler&& handler, boost::urls::url url, const Fields& headers)
 {
    launch(get_executor(), get_message(impl, std::move(url), headers), std::move(handler));

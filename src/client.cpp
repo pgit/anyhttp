@@ -50,7 +50,7 @@ Task<std::tuple<error_code, Response>> Request::get_response()
    return *this ? pimpl().get_response() : no_request();
 }
 
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
 void Request::async_get_response_any(Request::GetResponseHandler&& handler)
 {
    if (*this)
@@ -118,7 +118,7 @@ Task<std::tuple<error_code, Session>> Client::connect()
    }
 }
 
-#if !ANYHTTP_COROSIO
+#if ANYHTTP_ASIO
 void Client::async_connect_any(ConnectHandler&& handler)
 {
    impl->async_connect(std::move(handler));
