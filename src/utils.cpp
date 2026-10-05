@@ -1,63 +1,35 @@
 #include "anyhttp/utils.hpp"
 
-#include <boost/asio/ip/tcp.hpp>
+#include <cerrno>
+#include <system_error>
 
-#include <chrono>
-#include <print>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 // =================================================================================================
 
-namespace
+unsigned short get_unused_port()
 {
+   const int fd = ::socket(AF_INET6, SOCK_STREAM, 0);
+   if (fd < 0)
+      throw std::system_error(errno, std::generic_category(), "socket");
 
-template <typename IoContext>
-size_t run_one_by_one(IoContext& context)
-{
-#if defined(GITHUB_ACTIONS) || defined(NDEBUG)
-   return context.run();
-#else
-   size_t i = 0;
-   using namespace std::chrono;
-   auto t0 = steady_clock::now();
-   for (i = 0; context.run_one(); ++i)
+   sockaddr_in6 address{};
+   address.sin6_family = AF_INET6;
+   address.sin6_addr = in6addr_loopback;
+   socklen_t size = sizeof(address);
+   if (::bind(fd, reinterpret_cast<sockaddr*>(&address), size) != 0 ||
+       ::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &size) != 0)
    {
-      auto t1 = steady_clock::now();
-      auto dt = duration_cast<milliseconds>(t1 - t0);
-      t0 = t1;
-      // clang-format off
-      if (dt < 10ms)
-         std::println("--- {} ------------------------------------------------------------------------", i);
-      else
-         std::println("\x1b[1;31m--- {} ({}) ----------------------------------------------------------------\x1b[0m", i, dt);
-      // clang-format on
+      const int error = errno;
+      ::close(fd);
+      throw std::system_error(error, std::generic_category(), "get_unused_port");
    }
-   return i;
-#endif
-}
 
-} // namespace
-
-size_t run(boost::asio::io_context& context) { return run_one_by_one(context); }
-
-#if ANYHTTP_COROSIO
-size_t run(boost::corosio::io_context& context) { return run_one_by_one(context); }
-#endif
-
-// =================================================================================================
-
-unsigned short get_unused_port(boost::asio::io_context& io)
-{
-   using namespace boost::asio::ip;
-
-   tcp::acceptor acc(io);
-   acc.open(tcp::v6());
-   acc.bind({address_v6::loopback(), 0});
-
-   auto port = acc.local_endpoint().port();
-
-   acc.close(); // release immediately
-
-   return port;
+   ::close(fd); // release immediately
+   return ntohs(address.sin6_port);
 }
 
 // =================================================================================================

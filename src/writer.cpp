@@ -1,7 +1,6 @@
 #include "anyhttp/writer_impl.hpp"
 
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/error.hpp>
 
 namespace anyhttp
 {

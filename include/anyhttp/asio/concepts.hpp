@@ -1,6 +1,5 @@
 #pragma once
 
-#include <boost/asio/async_result.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/system/error_code.hpp>
 

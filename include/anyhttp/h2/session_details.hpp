@@ -10,10 +10,7 @@
 #include "anyhttp/literals.hpp"
 #include "anyhttp/net.hpp"
 
-#include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/ssl/stream.hpp>
-#include <boost/asio/this_coro.hpp>
 #include <boost/beast/core/static_buffer.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>

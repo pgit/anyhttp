@@ -1,6 +1,5 @@
 #include "anyhttp/h1/session.hpp"
 
-#include "anyhttp/asio/any_async_stream.hpp"
 #include "anyhttp/common.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
 #include "anyhttp/h1/backend.hpp"
@@ -10,15 +9,13 @@
 #include "anyhttp/net.hpp"
 #include "anyhttp/server.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
-#include <boost/beast/core.hpp>
 #include <boost/beast/core/buffer_traits.hpp>
 #include <boost/beast/core/detail/base64.hpp>
 #include <boost/beast/core/error.hpp>
-#include <boost/beast/core/stream_traits.hpp>
+#include <boost/beast/core/string.hpp>
 #include <boost/beast/http/basic_parser.hpp>
 #include <boost/beast/http/buffer_body.hpp>
 #include <boost/beast/http/empty_body.hpp>
@@ -26,7 +23,6 @@
 #include <boost/beast/http/parser.hpp>
 #include <boost/beast/http/rfc7230.hpp>
 #include <boost/beast/http/serializer.hpp>
-#include <boost/beast/ssl/ssl_stream.hpp>
 #include <boost/beast/version.hpp>
 
 #include <boost/system/detail/errc.hpp>

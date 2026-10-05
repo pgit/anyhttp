@@ -9,7 +9,6 @@
 #include "anyhttp/literals.hpp"
 #include "anyhttp/tls.hpp"
 
-#include <boost/asio/post.hpp>
 #include <boost/system/detail/errc.hpp>
 
 #include <openssl/rand.h>

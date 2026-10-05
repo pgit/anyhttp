@@ -8,6 +8,8 @@
 #include <boost/capy/concept/mutable_buffer_sequence.hpp>
 #include <boost/capy/concept/read_stream.hpp>
 #else
+#include "anyhttp/asio/concepts.hpp"
+
 #include <boost/asio/associated_executor.hpp>
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/bind_executor.hpp>

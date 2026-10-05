@@ -18,7 +18,10 @@ namespace bp = boost::process::v2;
 
 #if ANYHTTP_COROSIO
 // test_fixtures.hpp brings these in for ASIO; the child processes need Boost.Asio either way
+#include "anyhttp/asio/formatter.hpp"
+
 #include <boost/asio/as_tuple.hpp>
+#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>

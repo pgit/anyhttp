@@ -1,6 +1,11 @@
 #pragma once
 
-#include <boost/asio/cancellation_type.hpp>
+#include "anyhttp/config.hpp"
+
+#if ANYHTTP_ASIO
+#include "anyhttp/asio/formatter.hpp"
+#endif
+
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ip/udp.hpp>
 
@@ -122,41 +127,3 @@ struct std::formatter<anyhttp::Truncated> : std::formatter<std::string_view>
                             value.text.substr(0, value.max_size), value.text.size());
    }
 };
-
-// =================================================================================================
-
-template <>
-struct std::formatter<boost::asio::cancellation_type> : std::formatter<std::string_view>
-{
-   auto format(boost::asio::cancellation_type type, auto& ctx) const
-   {
-      using enum boost::asio::cancellation_type;
-
-      if (type == none)
-         return std::formatter<std::string_view>::format("none", ctx);
-
-      if (type == all)
-         return std::formatter<std::string_view>::format("all", ctx);
-
-      bool first = true;
-      auto append = [&](boost::asio::cancellation_type flag, std::string_view name) {
-         if ((type & flag) == flag)
-         {
-            std::format_to(ctx.out(), "{}{}", first ? "" : "|", name);
-            first = false;
-            type = type & ~flag;
-         }
-      };
-
-      append(terminal, "terminal");
-      append(partial, "partial");
-      append(total, "total");
-
-      if (type != none)
-         std::format_to(ctx.out(), "{}0x{:x}", first ? "" : "|", to_underlying(type));
-
-      return ctx.out();
-   }
-};
-
-// =================================================================================================

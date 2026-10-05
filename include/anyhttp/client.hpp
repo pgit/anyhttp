@@ -4,7 +4,6 @@
 #include "reader.hpp"
 #include "writer.hpp"
 
-#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/buffer.hpp>
 
 #include <boost/beast/http/message.hpp>

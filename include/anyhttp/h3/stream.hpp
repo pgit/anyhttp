@@ -4,9 +4,6 @@
 #include "anyhttp/reader_impl.hpp"
 #include "anyhttp/writer_impl.hpp"
 
-#include <boost/asio/any_completion_executor.hpp>
-#include <boost/asio/associated_cancellation_slot.hpp>
-#include <boost/asio/associated_immediate_executor.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/beast/http/error.hpp>
 #include <boost/url/url.hpp>

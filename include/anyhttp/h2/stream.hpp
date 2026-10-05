@@ -7,9 +7,7 @@
 
 #include "nghttp2/nghttp2.h"
 
-#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/error.hpp>
 #include <boost/beast/http/error.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>

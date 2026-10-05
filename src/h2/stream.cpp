@@ -9,13 +9,7 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 
-#include <boost/asio/associated_executor.hpp>
-#include <boost/asio/associated_immediate_executor.hpp>
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/detached.hpp>
-#include <boost/asio/error.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
-#include <boost/asio/this_coro.hpp>
 
 #include <boost/beast/http/error.hpp>
 #include <boost/beast/http/status.hpp>
@@ -29,8 +23,6 @@
 
 #include <ranges>
 #include <utility>
-
-using namespace boost::asio::experimental::awaitable_operators;
 
 namespace anyhttp::nghttp2
 {

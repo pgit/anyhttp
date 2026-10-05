@@ -13,7 +13,6 @@
 #include "anyhttp/session_impl.hpp"
 
 #include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/ssl/stream.hpp>
 #include <boost/url/url.hpp>
 
 #include <memory>

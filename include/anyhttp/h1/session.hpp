@@ -6,10 +6,8 @@
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/buffer.hpp>
 
-#include <boost/beast/core.hpp>
 #include <boost/beast/http/buffer_body.hpp>
 #include <boost/beast/http/parser.hpp>
 #include <boost/beast/http/serializer.hpp>

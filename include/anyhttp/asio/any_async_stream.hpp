@@ -2,11 +2,12 @@
 
 //
 // The type-erased async stream as its users see it. The implementation behind it is only forward
-// declared here: it lives in anyhttp/asio/any_async_stream_impl.hpp, which src/
-// asio/any_async_stream_impl.cpp is the only place to include -- and to instantiate.
+// declared here: it lives in anyhttp/asio/any_async_stream_impl.hpp, which
+// src/asio/any_async_stream_impl.cpp is the only place to include -- and to instantiate.
 //
 
 #include <anyhttp/asio/buffer_array.hpp>
+#include <anyhttp/asio/concepts.hpp>
 
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/any_io_executor.hpp>

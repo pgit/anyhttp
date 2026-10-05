@@ -2,8 +2,6 @@
 
 #include "anyhttp/session_impl.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
-
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>

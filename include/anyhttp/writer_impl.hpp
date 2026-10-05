@@ -3,7 +3,6 @@
 #include "common.hpp"
 #include "writer.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/buffer.hpp>
 
 #include <memory>

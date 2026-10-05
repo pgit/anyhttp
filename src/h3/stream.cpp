@@ -8,7 +8,6 @@
 #include "anyhttp/h3/common.hpp"
 #include "anyhttp/h3/session.hpp"
 
-#include <boost/asio/post.hpp>
 #include <boost/beast/http/error.hpp>
 #include <boost/system/detail/errc.hpp>
 

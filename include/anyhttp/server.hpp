@@ -4,11 +4,6 @@
 #include "reader.hpp"
 #include "writer.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/awaitable.hpp>
-#include <boost/asio/bind_executor.hpp>
-#include <boost/asio/co_spawn.hpp>
-
 #include <boost/lexical_cast/try_lexical_convert.hpp>
 
 #include <boost/url/urls.hpp>

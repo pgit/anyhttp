@@ -3,7 +3,6 @@
 #include "client.hpp"
 #include "common.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
 #include <boost/url.hpp>
 
 namespace anyhttp

@@ -10,10 +10,7 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 
-#include <boost/asio/basic_stream_socket.hpp>
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
-#include <boost/asio/ssl/stream.hpp>
 
 #include <boost/beast/core/static_buffer.hpp>
 #include <boost/beast/http/error.hpp>

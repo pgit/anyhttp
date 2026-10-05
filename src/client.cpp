@@ -4,7 +4,6 @@
 #include "anyhttp/session.hpp"
 
 #include <boost/asio/buffer.hpp>
-#include <boost/asio/error.hpp>
 
 #include <utility>
 

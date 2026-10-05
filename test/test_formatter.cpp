@@ -132,8 +132,10 @@ TEST(FormatterTest, HttpFieldUserAgent)
 }
 
 // =================================================================================================
-// Test boost::asio::cancellation_type formatter
+// Test boost::asio::cancellation_type formatter (ASIO only)
 // =================================================================================================
+
+#if ANYHTTP_ASIO
 
 TEST(FormatterTest, CancellationTypeNone)
 {
@@ -184,6 +186,8 @@ TEST(FormatterTest, CancellationTypeMultipleCombined)
    auto formatted = std::format("{}", ct);
    EXPECT_EQ(formatted, "terminal|total");
 }
+
+#endif // ANYHTTP_ASIO
 
 // =================================================================================================
 // Test nghttp2_nv formatter

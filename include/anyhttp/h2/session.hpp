@@ -7,10 +7,8 @@
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
-#include <boost/beast/core/stream_traits.hpp>
 
 #include <map>
 #include <optional>

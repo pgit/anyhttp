@@ -48,8 +48,7 @@ TEST_F(ClientConnect, WHEN_unknown_host_THEN_completes_with_host_not_found_event
 
 TEST_F(ClientConnect, WHEN_wrong_port_THEN_completes_with_connection_refused)
 {
-   boost::asio::io_context io;
-   auto port = get_unused_port(io);
+   auto port = get_unused_port();
    EXPECT_EQ(connect(boost::urls::url("http://localhost").set_port_number(port)),
              errc::connection_refused);
 }
