@@ -971,13 +971,12 @@ static std::optional<nghttp2::Upgrade> h2c_upgrade(std::string_view log_prefix,
  * handler. After the request has been completed, and if the connection can be kept open, it starts
  * waiting again.
  *
- * But that is only the simplified description: In reality, for pipelining support, the server
- * session may still be writing the response of a previous request when a new one arrives. The
- * queues of request and responses are processed independently of each other.
+ * Requests are served one at a time, also when the client pipelines them: those that follow wait in
+ * the buffer, and the next one is read only after the handler of the previous one has returned, so
+ * the responses go out in order. A response the handler has not completed by then is detached, and
+ * writing to it fails with \c connection_aborted.
  *
- * And even without pipelining, for structuring concurrency, we want to clean up existing request
- * and response objects when the sessions ends.
- *
+ * Requests and responses that outlive the session are detached as well, see ~BeastSession().
  */
 template <typename Stream>
 Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
@@ -1122,10 +1121,10 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       // Unlike HTTP2, the request handler is not co_spawn()ed as a separate thread of execution,
       // because HTTP/1.1 does not do multiplexing.
       //
-      // TODO: If we really want to attempt this, for pipelining, reading new requests and
-      //       serializing responses needs to be decoupled. Then, we would have a queue of
-      //       incoming requests and and another one of outgoing responses, which could make
-      //       progress independently (at least to a certain degree).
+      // TODO: Pipelined requests could be served concurrently, as long as their responses still go
+      //       out in order. That needs reading requests and writing responses to be decoupled: a
+      //       queue of incoming requests, and one of outgoing responses that are written in turn
+      //       while later ones are already being produced.
       //
       server::Request request_wrapper(std::move(reader));
       server::Response response_wrapper(std::move(writer));
@@ -1202,18 +1201,11 @@ Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    // stream_.expires_after(5s);
 
    //
-   // Even in HTTP/1.1, where the current request and the current response's serializers take
-   // control over everything that is sent and received, we want to retain some control here,
-   // on session level.
-   //
-   // For example, for allowing submission of multiple requests, this would be the place to take
-   // text next request out of the submission queue and start writing it's headers.
-   //
-   // For pipelining support, we need to have a queue of pending responses and read into the
-   // serializer of the front element.
-   //
-   // But even for cancellation only, when the client is destroyed while there is still a pending
-   // request, we need to have a way to inform the request that the session is gone.
+   // Nothing to do here: in HTTP/1.1, each request writes itself and each response reads itself,
+   // and the session only keeps them in order (see ClientSession). Pipelining needs no queue
+   // either, as a request is written as a whole before the next one may be submitted, and
+   // responses are read in the order of their requests. Requests and responses that outlive the
+   // session are detached, see ~BeastSession().
    //
 
    //
