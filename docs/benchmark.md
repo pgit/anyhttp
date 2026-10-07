@@ -12,6 +12,7 @@ never against a number in this file.
 ## Contents
 
 - [How to measure](#how-to-measure)
+- [HTTP/2: nghttpd vs anyhttp](#http2-nghttpd-vs-anyhttp)
 - [Threads: one shared context or one context per thread](#threads-one-shared-context-or-one-context-per-thread)
 - [ASIO vs COROSIO](#asio-vs-corosio)
 - [Earlier findings](#earlier-findings)
@@ -81,7 +82,8 @@ The tables below use `-c 32` unless they say otherwise.
 
 - `perf record -g -p PID` works, but sees **user space only**.
 - `gdb -p` and `strace -p` fail. `strace -c -f` and valgrind/callgrind work when they *launch* the
-  server.
+  server. `callgrind_control -z` and `-d` confine callgrind's counts to one load run, see
+  [nghttpd vs anyhttp](#http2-nghttpd-vs-anyhttp).
 - `/proc/PID/stat` fields 14 and 15 (utime, stime) before and after a run give user and system CPU
   per request without disturbing anything:
 
@@ -98,6 +100,134 @@ The tables below use `-c 32` unless they say otherwise.
 - For a gap that depends on scheduling, temporary atomic counters (wake-ups, flushes, packets,
   datagrams, timer arms) dumped at shutdown and compared per request with `-c 1 -m 1` found more
   than any profile did (see [ASIO vs COROSIO](#asio-vs-corosio)).
+
+---------------------------------------------------------------------------------------------------
+
+## HTTP/2: nghttpd vs anyhttp
+
+*2026-10-07, measured at `d445bdf`.* nghttpd, which `bench.sh` runs as the HTTP/2 reference,
+serves twice as many requests as either API style: `bench.sh -D 5 -c 32` gave 555k req/s against
+284k (ASIO) and 273k (COROSIO), on one thread each, with the same nghttp2 and OpenSSL. Nothing has
+been changed yet; this is where the time goes.
+
+### Results
+
+`h2load -D 5 -c 32 -m 10 -t 1` on `/`, two rounds each, CPU per request in µs, user + system
+(`/proc/PID/stat`):
+
+| | TLS req/s | TLS CPU | cleartext req/s | cleartext CPU |
+|---|---|---|---|---|
+| ASIO | 273k-283k | 3.2 + 0.3-0.4 | 259k-318k | 2.8-3.4 + 0.4 |
+| COROSIO | 272k-282k | 3.2 + 0.3-0.4 | 291k-320k | 2.8-3.0 + 0.3-0.5 |
+| nghttpd | 549k-554k | 1.2 + 0.6 | 586k-593k | 1.0 + 0.7 |
+
+Every server keeps its one core busy. The gap is all user time, about 2 µs per request; anyhttp
+spends *less* time in the kernel than nghttpd.
+
+Instructions per request (callgrind, cleartext, 20,000 requests after a warm-up), exclusive cost
+grouped by where it is spent. The grouping goes by function and library name, so a few hundred
+instructions may sit in a neighbouring row:
+
+| | ASIO | nghttpd |
+|---|---|---|
+| total | 32.2k | 10.6k |
+| nghttp2 | 6.1k | 6.6k |
+| malloc/free | 6.5k | 0.8k |
+| `std::format` | 6.3k | |
+| ASIO machinery | 3.7k | |
+| server code (anyhttp; nghttpd and libev) | 2.7k | 2.7k |
+| Boost.URL | 2.6k | |
+| Beast fields | 1.4k | |
+| libc++ (`shared_ptr`, strings, `dynamic_cast`) | 0.9k | |
+| libc (`memcpy`, syscall wrappers) and other | 1.9k | 0.6k |
+
+COROSIO, by `perf` share of user time: malloc/free 21%, `std::format` 13%, capy/corosio 12%,
+nghttp2 15%, Boost.URL 5%, Beast 3.5%. The same shape, so the cost lies in the generic code and
+the HTTP/2 backend, not in the API style.
+
+### Where it goes
+
+**Allocations.** anyhttp calls `malloc()` 25.7 times per request, nghttpd 9 times. Per request:
+
+- 4.1 from nghttp2 itself, as many as in nghttpd.
+- 7.7 where ASIO's recycling allocator misses its cache and falls back to `aligned_alloc()`, out of
+  12.3 allocations through it: 5.1 coroutine frames, 3.7 completion handlers, 3.4 posted
+  functions. A request has five frames -- the `co_spawn()` wrapper, `handle_request()`,
+  `hello_world()`, `Response::Impl::submit()` and `Writer::Impl::write()` -- nested deeper than
+  the two blocks per tag the per-thread cache keeps (`BOOST_ASIO_RECYCLING_ALLOCATOR_CACHE_SIZE`),
+  so four of them miss.
+- 4 in `NGHttp2Stream::on_request()`: the reader and the writer, created with `make_unique()` and
+  held by `Request` and `Response` in a `shared_ptr`, which adds a control block to each.
+- 3 for the stream: `make_shared()`, its node in the session's `std::map`, its `log_prefix_`.
+- 3 in Boost.URL, which grows the request URL as `on_header_callback()` sets scheme, authority
+  and path.
+- 2 Beast field elements (`user-agent` in, `Content-Length` out) and the `Date` string. The last
+  0.9 are scattered.
+
+glibc is also slower per call: 85-130 instructions per `malloc()` and about 110 per `free()`,
+where nghttpd's jemalloc needs 30-40. Preloading jemalloc into the ASIO server
+(`LD_PRELOAD=/lib/x86_64-linux-gnu/libjemalloc.so.2`) gave 259k-268k req/s against 239k-246k
+without, 0.35 µs less user time per request (cleartext, three interleaved rounds).
+
+**`std::format`**, four calls per request:
+
+- `format_http_date()`, for the `Date` header of every response: 5.3k instructions, a sixth of
+  the request -- `std::format()` with seven arguments, `gmtime_r()` and a heap string. nghttpd
+  formats its `Date` by hand, also once per response, in 295. (Compare `7528604` below.)
+- `log_prefix_` in the `NGHttp2Stream` constructor: 0.7k, used only for logging.
+- the `:status` value in `NGHttp2Writer::async_submit()`: 0.4k.
+- the handler's `Content-Length`, through `FieldValue`: 0.4k.
+
+**Boost.URL**, 2.6k. `on_header_callback()` builds a `boost::urls::url` from `:scheme`,
+`:authority` and `:path`: `set_encoded_authority()` parses `127.0.0.1:18080` down to the IPv4
+octets, and `:path` is parsed as a relative reference before it is copied in. nghttpd keeps the
+values as nghttp2 hands them over.
+
+**Coroutines and their wrappers**, the ASIO, anyhttp and libc++ rows: 7.3k against 2.7k for all
+of nghttpd's own code. nghttpd submits the response from its frame callback, inside
+`nghttp2_session_mem_recv2()`, and nghttp2 pulls the body through the data callback. anyhttp
+`co_spawn()`s the handler, which here is two nested coroutines, and every operation (`submit()`,
+`write_eof()`) adds a coroutine frame and an `any_completion_handler` from `initiate()`. The
+writer is resumed from inside nghttp2's data callback, and the stream's end is posted
+(`close_stream()`).
+
+### What it means
+
+- **Not TLS, not nghttp2, not syscalls.** Cleartext shows the same gap, nghttp2 costs the same on
+  both sides, and anyhttp needs less kernel time per request than nghttpd.
+- **About a third is cheap to remove** (an estimate from the instruction counts, not measured):
+  `Date` formatted once per second, `log_prefix_` built only when logging, integers formatted
+  without `std::format`, and a URL built lazily or without re-parsing what nghttp2 has already
+  validated take 9-10k of the 32k instructions.
+- **Fewer allocations** take another 2-3k: a larger recycling cache (one compile definition),
+  fewer frames and handlers per request, the reader and writer allocated together with their
+  control blocks. jemalloc would cheapen the rest.
+- **What remains is the price of the coroutine API**: five frames and several type-erased handlers
+  per request. Closing that part of the gap would mean changing those layers, not tuning them.
+
+### Reproduce
+
+```bash
+scripts/bench.sh -D 5 -c 32        # the gap, nghttpd's h2 row against ASIO and COROSIO
+scripts/bench.sh -D 5 -c 32 -P     # cleartext
+```
+
+Instructions and call counts per request, cleartext:
+
+```bash
+valgrind --tool=callgrind --callgrind-out-file=cg.out build-openssl-release/src/server -p 18080 &
+pid=$!                                                   # wait until it listens
+h2load -n 2000 -c 32 -m 10 http://127.0.0.1:18080/       # warm-up
+callgrind_control -z $pid
+h2load -n 20000 -c 32 -m 10 http://127.0.0.1:18080/
+callgrind_control -d $pid                                # writes cg.out.1
+kill -TERM $pid
+callgrind_annotate --inclusive=yes --threshold=100 cg.out.1                # cost per function
+callgrind_annotate --tree=caller --inclusive=yes --threshold=100 cg.out.1  # callers, call counts
+```
+
+Divide by 20,000. For nghttpd, launch `nghttpd -n 1 -w 20 -W 20 -d htdocs --no-tls 18080` instead,
+with "Hello, World!" in `htdocs/index.html`.
 
 ---------------------------------------------------------------------------------------------------
 
