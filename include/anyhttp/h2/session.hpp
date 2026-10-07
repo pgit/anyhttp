@@ -73,6 +73,13 @@ public:
    // it has run out of data to send.
    Event send_ready_;
 
+   // Set by `recv_loop()` when it ends: nothing more comes in, so the send loop ends as soon as it
+   // has run out of data to send, whether nghttp2 still wants to read or not.
+   bool recv_done_ = false;
+
+   // Set once a GOAWAY of ours has gone out, see recv_loop().
+   bool goaway_sent_ = false;
+
    void start_write();
 
    // ----------------------------------------------------------------------------------------------

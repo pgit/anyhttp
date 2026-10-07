@@ -123,7 +123,9 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
       //
       else if (nread == 0)
       {
-         if (nghttp2_session_want_write(session) && nghttp2_session_want_read(session))
+         if (recv_done_)
+            break; // the receive loop has ended, and with it the session
+         else if (nghttp2_session_want_write(session) && nghttp2_session_want_read(session))
             mylogd("send loop: session still wants to read and write");
          else if (nghttp2_session_want_write(session))
             mylogd("send loop: session still wants to write");
@@ -169,15 +171,13 @@ Task<void> NGHttp2SessionImpl<Stream>::recv_loop()
 {
    buffer_.reserve(64_k);
 
-   unsigned int reason = NGHTTP2_NO_ERROR;
    while (nghttp2_session_want_read(session) || nghttp2_session_want_write(session))
    {
       auto free = buffer_.capacity() - buffer_.size();
       auto [ec, n] = co_await io::read_some(stream_, buffer_.prepare(free));
       if (ec)
       {
-         mylogd("read: {}, terminating session", ec.message());
-         reason = NGHTTP2_STREAM_CLOSED;
+         mylogd("read: {}, ending session", ec.message());
          break;
       }
       buffer_.commit(n);
@@ -186,7 +186,21 @@ Task<void> NGHttp2SessionImpl<Stream>::recv_loop()
       start_write();
    }
 
-   nghttp2_session_terminate_session(session, reason);
+   //
+   // Nothing more comes in: either nghttp2 is done -- a GOAWAY has gone one way or the other, and
+   // no stream is left -- or the read failed, mostly because the peer has closed the connection.
+   // "Endpoints SHOULD always send a GOAWAY frame before closing a connection" (RFC 9113, section
+   // 6.8), so send one, unless we have already. Not one with an error code: if the peer ended the
+   // connection, it did nothing wrong. It is followed by the TLS "close_notify" and the FIN, see
+   // do_session().
+   //
+   // A peer that waits for our end of the connection after its own sees that as a clean end. Many
+   // do not (h2load, curl and nghttp among them): they close their socket right after their
+   // GOAWAY, and answer whatever still arrives, this GOAWAY or the "close_notify", with an RST.
+   //
+   if (!goaway_sent_)
+      nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
+   recv_done_ = true;
    start_write();
 
    mlogi("recv loop: done, served {} requests", request_counter_);
