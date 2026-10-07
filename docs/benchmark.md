@@ -24,7 +24,7 @@ never against a number in this file.
 ### `scripts/bench.sh`
 
 ```
-scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-t threads] [-i] [-p port] [-u path] [-P] [-n]
+scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-t threads] [-i] [-p port] [-u path] [-P] [-n] [-N] [-v]
 ```
 
 It builds and starts the server of `build-openssl-release/` (ASIO) and `build-corosio-release/`
@@ -34,6 +34,12 @@ Both trees use OpenSSL, because COROSIO has to; `build-release/` is ASIO on AWS-
 faster on its own (see [TLS library](#tls-library-aws-lc-vs-openssl)) and would skew the
 comparison.
 
+nghttpd, if it is on the PATH, adds an HTTP/2 row and its ratio to ASIO as a reference: the same
+nghttp2 and OpenSSL without anyhttp around them. It serves files from a document root that matches
+the server program on `/` ("Hello, World!") and `/test/*`; other paths are 404s there and show up
+as failed. With `-t N` it runs N workers, each an event loop to which the accepting thread hands
+connections round robin, which is closer to `-i` than to a shared context.
+
 | option | meaning |
 |---|---|
 | `-t N` | the servers run on N threads, h2load gets as many (up to the clients) |
@@ -42,6 +48,8 @@ comparison.
 | `-P` | plaintext HTTP/1.1 and HTTP/2 (prior knowledge), no HTTP/3 |
 | `-u path` | request path, default `/` ("Hello, World!", nothing else) |
 | `-n` | don't build first |
+| `-N` | leave out nghttpd |
+| `-v` | print the command line that starts each server |
 
 h1 runs with `-m 1` unless `-M` says otherwise: with `--h1`, h2load's `-m N` pipelines N requests
 per connection, which real clients hardly do. It measures fewer reads and writes per request
