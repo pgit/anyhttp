@@ -8,7 +8,6 @@
 //
 
 #include "anyhttp/client_impl.hpp"
-#include "anyhttp/net.hpp"
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
 

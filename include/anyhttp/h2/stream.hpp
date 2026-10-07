@@ -112,22 +112,19 @@ public:
    using Buffer = std::vector<uint8_t>;
    std::deque<Buffer> pending_read_buffers_;
 
-   inline Buffer make_buffer(asio::const_buffer buffer)
+   Buffer make_buffer(asio::const_buffer buffer)
    {
-      return Buffer(static_cast<const uint8_t*>(buffer.data()),
-                    static_cast<const uint8_t*>(buffer.data()) + asio::buffer_size(buffer));
+      return {static_cast<const uint8_t*>(buffer.data()),
+              static_cast<const uint8_t*>(buffer.data()) + asio::buffer_size(buffer)};
    }
 
-   static inline bool is_empty(asio::const_buffer buffer) { return asio::buffer_size(buffer) == 0; }
+   static bool is_empty(asio::const_buffer buffer) { return asio::buffer_size(buffer) == 0; }
 
    /**
     * Returns true if all data has been read by the user.
     * This is true if there was an EOF flag and all buffers have been consumed.
     */
-   inline bool reading_finished() const
-   {
-      return !reader || eof_received && is_empty(read_buffer_);
-   }
+   bool reading_finished() const { return !reader || eof_received && is_empty(read_buffer_); }
 
    /**
     * Returns the number of bytes left to read. This is the remaining part of the first buffer

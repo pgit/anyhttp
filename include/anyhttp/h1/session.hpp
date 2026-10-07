@@ -87,7 +87,7 @@ private:
 class ServerSessionBase
 {
 public:
-   inline ServerSessionBase(server::Server::Impl& parent) : server_(&parent) {}
+   explicit ServerSessionBase(server::Server::Impl& parent) : server_(&parent) {}
    server::Server::Impl& server()
    {
       assert(server_);
@@ -129,7 +129,7 @@ private:
 class ClientSessionBase
 {
 public:
-   inline ClientSessionBase(client::Client::Impl& parent) : client_(&parent) {}
+   explicit ClientSessionBase(client::Client::Impl& parent) : client_(&parent) {}
    client::Client::Impl& client()
    {
       assert(client_);
