@@ -79,8 +79,8 @@ default).
 ## What a clean end looks like
 
 Each side sends its GOAWAY, its close_notify (TLS only) and its FIN, and keeps reading until the
-peer's FIN before it closes the socket. The server does that (`ServerSession::do_session()`), and
-with a client that does the same, a TLS connection ends:
+peer's FIN before it closes the socket. The server does that (`ServerSession::do_session()`, tested
+in `test/test_connection_end.cpp`), and with a client that does the same, a TLS connection ends:
 
 ```
 client  GOAWAY, close_notify, FIN
