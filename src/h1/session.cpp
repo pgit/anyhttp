@@ -560,6 +560,15 @@ public:
 
       submit_headers(headers);
 
+      //
+      // A response that says "close" is the last one on the connection, whether the client asked
+      // for it or the handler decided so (RFC 9112, section 9.6): the session ends after it, and
+      // whatever the client has pipelined behind this request goes unserved. Latched here, as the
+      // response may be gone by the time the handler returns.
+      //
+      if (!message.keep_alive())
+         session->closed_ = true;
+
       if (message.find(http::field::server) == message.end())
          message.set(http::field::server, "anyhttp");
 
@@ -1101,9 +1110,8 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
       //
       // A client that asked for the connection to end -- or one speaking HTTP/1.0, which has no
-      // persistent connections unless it asks for one -- gets one last response, and that response
-      // has to say that it is the last one (RFC 9112, section 9.6): without it, the client can not
-      // tell the end of the connection from one that was lost mid-message.
+      // persistent connections unless it asks for one -- gets one last response. A request handler
+      // is not allowed to sidestep this by keeping the connection alive.
       //
       if (need_eof)
          response.keep_alive(false);
@@ -1145,22 +1153,14 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       mlogd("request handler finished (size={} capacity={})", buffer_.size(), buffer_.capacity());
 
       //
-      // Honor 'Connection: close'
+      // Honor 'Connection: close', even if the handler has not responded at all. A response that
+      // says "close" ends the session, too, see ResponseWriter::submit().
       //
       if (need_eof)
       {
          mlogd("request needs EOF, closing connection");
          break;
       }
-
-      /*
-      // FIXME: this is UB as request/response may be deleted already
-      if (response.need_eof())
-      {
-         mlogd("response needs EOF, closing connection");
-         break;
-      }
-         */
    }
 
    mlogi("closing stream, served {} requests", requestCounter);

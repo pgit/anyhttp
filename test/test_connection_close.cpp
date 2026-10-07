@@ -58,18 +58,32 @@ protected:
       co_return response;
    }
 
-   /// Reads what follows the last response, which must be the end of the stream and nothing else.
+   /**
+    * Reads what follows the last response, which must be the end of the stream and nothing else.
+    * Gives up after a while: a server that does not end the connection must fail a test, not hang
+    * it.
+    */
    template <typename Stream>
    Task<error_code> read_eof(Stream& socket)
    {
       EXPECT_EQ(buffer_.size(), 0) << "unread data left over from the response";
 
       std::array<char, 64> buffer;
+      Timer timer(context.get_executor());
+      timer.arm(5s, [&socket] { io::cancel(socket); });
       auto [ec, n] = co_await io::read_some(socket, asio::buffer(buffer));
+      timer.cancel();
       if (!ec)
          ADD_FAILURE() << std::format("{} bytes after the last response: '{}'", n,
                                       std::string_view(buffer.data(), n));
       co_return ec;
+   }
+
+   /// A GET of /custom as it goes over the wire, with \p fields added to its header, for
+   /// pipelining requests by writing several of them at once.
+   std::string raw_get(std::string_view fields = {})
+   {
+      return std::format("GET /custom HTTP/1.1\r\nHost: 127.0.0.2:{}\r\n{}\r\n", port(), fields);
    }
 
    /// Runs \p task to completion, then stops the server.
@@ -151,6 +165,59 @@ TEST_F(ConnectionClose, WHEN_request_is_http_1_0_THEN_stream_ends_after_the_resp
       EXPECT_EQ(response.result_int(), 200);
       EXPECT_FALSE(response.keep_alive());
       EXPECT_EQ(co_await read_eof(socket), errors::eof);
+   }());
+}
+
+//
+// The response with "close" is the last one, even with more requests already on their way: the
+// server must not process them (RFC 9112, section 9.6). Pipelined, they are in the server's
+// buffer by the time it is done with the first one.
+//
+TEST_F(ConnectionClose, WHEN_requests_follow_one_that_asks_to_close_THEN_they_are_not_served)
+{
+   std::atomic<int> served = 0;
+   requestHandler = [&](server::Request request, server::Response response) -> Task<void> {
+      ++served;
+      check(co_await response.submit(200, fields({{"Content-Length", 0}})));
+   };
+
+   run([&]() -> Task<void> {
+      auto socket = co_await connect();
+      check(co_await io::write(socket, asio::buffer(raw_get("Connection: close\r\n") + raw_get())));
+
+      Response response;
+      check(co_await h1::read_message(socket, buffer_, response));
+      EXPECT_EQ(response.result_int(), 200);
+      EXPECT_FALSE(response.keep_alive());
+      EXPECT_EQ(co_await read_eof(socket), errors::eof);
+      EXPECT_EQ(served, 1);
+   }());
+}
+
+//
+// The server may end the connection on its own, too: a request handler can say "close" in its
+// response. The same rules apply as when the client asked for it -- the connection ends after that
+// response, and the requests behind it are not served.
+//
+TEST_F(ConnectionClose, WHEN_handler_says_close_THEN_stream_ends_and_the_rest_is_not_served)
+{
+   std::atomic<int> served = 0;
+   requestHandler = [&](server::Request request, server::Response response) -> Task<void> {
+      ++served;
+      check(
+         co_await response.submit(200, fields({{"Content-Length", 0}, {"Connection", "close"}})));
+   };
+
+   run([&]() -> Task<void> {
+      auto socket = co_await connect();
+      check(co_await io::write(socket, asio::buffer(raw_get() + raw_get())));
+
+      Response response;
+      check(co_await h1::read_message(socket, buffer_, response));
+      EXPECT_EQ(response.result_int(), 200);
+      EXPECT_FALSE(response.keep_alive());
+      EXPECT_EQ(co_await read_eof(socket), errors::eof);
+      EXPECT_EQ(served, 1);
    }());
 }
 
