@@ -205,6 +205,8 @@ inline Task<void> generate(server::Request request, server::Response response)
 
 // -------------------------------------------------------------------------------------------------
 
+/// Responds with "Hello, World!" and nothing else, as cheaply as the API allows.
+Task<void> hello_world(server::Response response);
 Task<void> h2spec(server::Request request, server::Response response);
 
 // =================================================================================================

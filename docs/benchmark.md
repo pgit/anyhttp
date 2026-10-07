@@ -40,7 +40,7 @@ comparison.
 | `-i` | with `-t`: one I/O context and one server per thread instead of one shared context, see below |
 | `-M N` | h1 pipelining depth, default 1 (no pipelining), see below |
 | `-P` | plaintext HTTP/1.1 and HTTP/2 (prior knowledge), no HTTP/3 |
-| `-u path` | request path, default `/` (a small h2spec response) |
+| `-u path` | request path, default `/` ("Hello, World!", nothing else) |
 | `-n` | don't build first |
 
 h1 runs with `-m 1` unless `-M` says otherwise: with `--h1`, h2load's `-m N` pipelines N requests

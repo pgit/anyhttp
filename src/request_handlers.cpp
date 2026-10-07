@@ -283,6 +283,13 @@ Task<void> send_eof(Writer& writer)
       throw_error(ec);
 }
 
+Task<void> hello_world(server::Response response)
+{
+   constexpr auto hello = "Hello, World!\n"sv;
+   if (auto [ec] = co_await response.submit(200, fields({{"Content-Length", hello.size()}})); !ec)
+      co_await response.write_eof(asio::buffer(hello));
+}
+
 Task<void> h2spec(server::Request request, server::Response response)
 {
    co_await yield(10); // FIXME: without this, one more testcase fails

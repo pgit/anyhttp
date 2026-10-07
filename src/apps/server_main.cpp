@@ -196,7 +196,9 @@ static Task<void> handle_request(server::Request request, server::Response respo
       if (auto [ec] = co_await response.submit(200, {}); !ec)
          co_await response.write_eof();
    }
-   else if (path == "/" || path == "/h2spec")
+   else if (path == "/")
+      co_await hello_world(std::move(response));
+   else if (path == "/h2spec")
       co_await h2spec(std::move(request), std::move(response));
    else
       co_await not_found(std::move(response));
