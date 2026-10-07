@@ -234,4 +234,5 @@ For now, this section contains just a set of random links collected during devel
 * [Beast Example using Type Erasure](https://www.boost.org/doc/libs/develop/boost/beast/http/message_generator.hpp)
 * [asio-grpc](https://github.com/Tradias/asio-grpc)
 * [Development container](docs/devcontainer.md) -- how the build environment is put together
+* [Capturing traffic](docs/capture.md) -- tcpdump and tshark, decrypting TLS and QUIC with a key log
 * [cpp-devcontainer](https://github.com/pgit/cpp-devcontainer) -- the generic C++ base image it builds on
