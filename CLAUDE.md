@@ -28,9 +28,13 @@ event for it (see the port plan, step 8); a report with an anyhttp frame at the 
 ours. A few tests set up their own server or client on the bare context and are not
 thread-aware.
 
+`scripts/configure.sh` configures all of these trees, or the ones named, with their options (`-b`
+builds them too); `scripts/bench.sh` configures its two when they are missing. Name the compiler
+when configuring a tree by hand: `cc` and `c++` are GCC on this host.
+
 ```
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --parallel
+scripts/configure.sh build
+cmake --build build
 build/test/test_all
 ```
 

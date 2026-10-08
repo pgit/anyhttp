@@ -24,7 +24,8 @@
 #   -p  port (default 18080)
 #   -u  request path (default /)
 #   -P  plaintext: HTTP/1.1 and HTTP/2 (prior knowledge) without TLS; no HTTP/3
-#   -n  don't build the servers first
+#   -n  don't build the servers first (otherwise a missing tree is configured with
+#       scripts/configure.sh)
 #   -N  leave out nghttpd
 #   -v  print the command line that starts each server
 #
@@ -80,11 +81,19 @@ if ((nghttpd)); then
    fi
 fi
 
-if ((build)); then
-   for style in "${styles[@]}"; do
-      cmake --build "${trees[$style]}" --target server >/dev/null
-   done
-fi
+for style in "${styles[@]}"; do
+   tree=${trees[$style]}
+   if ((build)); then
+      if [[ ! -e $tree/CMakeCache.txt ]]; then
+         echo "configuring $tree/ (scripts/configure.sh)" >&2
+         scripts/configure.sh "$tree" >/dev/null
+      fi
+      cmake --build "$tree" --target server >/dev/null
+   elif [[ ! -x $tree/src/server ]]; then
+      echo "error: $tree/src/server does not exist, run without -n" >&2
+      exit 1
+   fi
+done
 
 out=$(mktemp -d -t anyhttp-bench.XXXXXX)
 server_pid=

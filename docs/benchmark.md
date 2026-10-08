@@ -29,8 +29,9 @@ scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-t threads] [-i] [-p po
 ```
 
 It builds and starts the server of `build-openssl-release/` (ASIO) and `build-corosio-release/`
-(COROSIO) one after the other, runs h2load over HTTP/1.1, HTTP/2 and HTTP/3 against each, and
-prints a table of req/s, MB/s, failures and median/p99 latency, plus COROSIO/ASIO per protocol.
+(COROSIO) one after the other, configuring a missing tree with `scripts/configure.sh`, runs h2load
+over HTTP/1.1, HTTP/2 and HTTP/3 against each, and prints a table of req/s, MB/s, failures and
+median/p99 latency, plus COROSIO/ASIO per protocol.
 Both trees use OpenSSL, because COROSIO has to; `build-release/` is ASIO on AWS-LC, which is
 faster on its own (see [TLS library](#tls-library-aws-lc-vs-openssl)) and would skew the
 comparison.
