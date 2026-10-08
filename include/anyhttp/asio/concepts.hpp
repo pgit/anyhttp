@@ -1,0 +1,43 @@
+#pragma once
+
+#include <boost/asio/buffer.hpp>
+#include <boost/system/error_code.hpp>
+
+#include <concepts>
+#include <functional>
+
+namespace anyhttp
+{
+
+template <typename T>
+concept ConstBufferSequence = boost::asio::is_const_buffer_sequence<T>::value;
+
+template <typename T>
+concept MutableBufferSequence = boost::asio::is_mutable_buffer_sequence<T>::value;
+
+//
+// https://think-async.com/Asio/asio-1.38.2/doc/asio/reference/AsyncReadStream.html
+// https://think-async.com/Asio/asio-1.38.2/doc/asio/reference/AsyncWriteStream.html
+//
+
+template <typename T>
+concept AsyncStream =
+   requires(T stream, boost::asio::mutable_buffer buffer, boost::asio::const_buffer const_buffer,
+            boost::system::error_code ec,
+            std::function<void(boost::system::error_code, std::size_t)> handler) {
+      // async_read_some
+      { stream.async_read_some(buffer, handler) } -> std::same_as<void>;
+
+      // async_write_some
+      { stream.async_write_some(const_buffer, handler) } -> std::same_as<void>;
+   };
+
+template <typename T>
+concept AsyncReadStream =
+   requires(T& stream, boost::asio::mutable_buffer buffer,
+            std::function<void(boost::system::error_code, std::size_t)> handler) {
+      stream.get_executor();
+      stream.async_read_some(buffer, handler);
+   };
+
+} // namespace anyhttp

@@ -1,8 +1,12 @@
 #include "test_fixtures.hpp"
 
+#include "anyhttp/h1/io.hpp"
+#include "anyhttp/net.hpp"
+
 #include <boost/beast/core/detail/base64.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/http.hpp>
+#include <boost/scope/scope_exit.hpp>
 
 #include <nghttp2/nghttp2.h>
 
@@ -15,6 +19,8 @@
 #include <vector>
 
 using namespace testing;
+
+namespace h1 = anyhttp::beast_impl::h1;
 
 // =================================================================================================
 
@@ -57,13 +63,12 @@ protected:
 
    /// Upgrades a GET for the first target and sends GETs for the others as HTTP/2 streams.
    /// \p fields go along with the upgrade request.
-   awaitable<Responses> upgrade(std::vector<std::string> targets,
-                                boost::beast::http::fields fields = {})
+   Task<Responses> upgrade(std::vector<std::string> targets, boost::beast::http::fields fields = {})
    {
       namespace http = boost::beast::http;
 
-      tcp::socket socket(co_await this_coro::executor);
-      co_await socket.async_connect(server->local_endpoint());
+      auto socket = io::make_socket(context.get_executor());
+      check(co_await io::connect(socket, {server->local_endpoint()}));
       const auto authority = std::format("127.0.0.2:{}", server->local_endpoint().port());
 
       Responses responses;
@@ -118,11 +123,11 @@ protected:
       request.set(http::field::connection, "Upgrade, HTTP2-Settings");
       request.set(http::field::upgrade, "h2c");
       request.set("HTTP2-Settings", base64url({settings.data(), size_t(len)}));
-      co_await http::async_write(socket, request);
+      check(co_await h1::write_message(socket, request));
 
       boost::beast::flat_buffer buffer;
       http::response_parser<http::empty_body> parser;
-      co_await http::async_read_header(socket, buffer, parser);
+      check(co_await h1::read_header(socket, buffer, parser));
       EXPECT_EQ(parser.get().result(), http::status::switching_protocols);
       if (parser.get().result() != http::status::switching_protocols)
          co_return responses;
@@ -145,7 +150,7 @@ protected:
          EXPECT_GT(id, 0) << nghttp2_strerror(id);
       }
 
-      auto recv = [&](const_buffer data) {
+      auto recv = [&](asio::const_buffer data) {
          auto n = nghttp2_session_mem_recv2(session, static_cast<const uint8_t*>(data.data()),
                                             data.size());
          EXPECT_EQ(n, data.size()) << nghttp2_strerror(n);
@@ -157,7 +162,7 @@ protected:
       };
 
       std::string out; // nghttp2 starts with the client magic by itself
-      auto send = [&]() -> awaitable<void> {
+      auto send = [&]() -> Task<void> {
          const uint8_t* data;
          while (auto n = nghttp2_session_mem_send2(session, &data))
          {
@@ -167,7 +172,7 @@ protected:
             out.append(reinterpret_cast<const char*>(data), n);
          }
          if (!out.empty())
-            co_await asio::async_write(socket, asio::buffer(out));
+            check(co_await io::write(socket, asio::buffer(out)));
          out.clear();
       };
 
@@ -175,7 +180,7 @@ protected:
       std::array<uint8_t, 16384> data;
       for (co_await send(); !done(); co_await send())
       {
-         auto [ec, n] = co_await socket.async_read_some(asio::buffer(data), as_tuple);
+         auto [ec, n] = co_await io::read_some(socket, asio::buffer(data));
          EXPECT_FALSE(ec) << ec.message();
          if (ec)
             break;
@@ -184,42 +189,41 @@ protected:
 
       nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);
       co_await send();
-      boost::system::error_code ignored; // the server may have closed the connection already
-      socket.shutdown(tcp::socket::shutdown_send, ignored);
+      io::shutdown(socket, io::Shutdown::send); // the server may have closed the connection already
       co_return responses;
    }
 
    /// Sends a single HTTP/1.1 request and reads the response.
-   awaitable<Http11Response> http11(Request request)
+   Task<Http11Response> http11(Request request)
    {
       namespace http = boost::beast::http;
 
-      tcp::socket socket(co_await this_coro::executor);
-      co_await socket.async_connect(server->local_endpoint());
+      auto socket = io::make_socket(context.get_executor());
+      check(co_await io::connect(socket, {server->local_endpoint()}));
 
       request.set(http::field::host, std::format("127.0.0.2:{}", server->local_endpoint().port()));
       request.prepare_payload();
-      co_await http::async_write(socket, request);
+      check(co_await h1::write_message(socket, request));
 
       boost::beast::flat_buffer buffer;
       Http11Response response;
-      co_await http::async_read(socket, buffer, response);
-      boost::system::error_code ignored; // the server may have closed the connection already
-      socket.shutdown(tcp::socket::shutdown_send, ignored);
+      check(co_await h1::read_message(socket, buffer, response));
+      io::shutdown(socket, io::Shutdown::send); // the server may have closed the connection already
       co_return response;
    }
 
    /// Runs \p task to completion, stops the server and returns the result.
    template <typename T>
-   T run(awaitable<T> task)
+   T run(Task<T> task)
    {
       T result;
-      co_spawn(context, std::move(task), [&](const std::exception_ptr& ep, T value) {
-         if (ep)
-            ADD_FAILURE() << what(ep);
-         result = std::move(value);
-         server.reset();
-      });
+      auto store = [](Task<T> task, T& result) -> Task<void> { result = co_await std::move(task); };
+      launch(context.get_executor(), store(std::move(task), result),
+             [this](const std::exception_ptr& ep) {
+                if (ep)
+                   ADD_FAILURE() << what(ep);
+                server.reset();
+             });
       Server::run();
       return result;
    }

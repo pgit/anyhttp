@@ -1,8 +1,12 @@
 #pragma once
 
-#include <boost/asio/cancellation_type.hpp>
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/ip/udp.hpp>
+#include "anyhttp/config.hpp"
+
+#if ANYHTTP_COROSIO
+#include "anyhttp/corosio/formatter.hpp"
+#else
+#include "anyhttp/asio/formatter.hpp"
+#endif
 
 #include <boost/beast/http/field.hpp>
 #include <boost/core/detail/string_view.hpp>
@@ -12,6 +16,7 @@
 
 #include <cstddef>
 #include <format>
+#include <sstream>
 #include <string_view>
 #include <thread>
 
@@ -51,22 +56,6 @@ struct std::formatter<boost::core::string_view> : public std::formatter<std::str
 };
 
 // -------------------------------------------------------------------------------------------------
-
-template <class Proto>
-struct std::formatter<boost::asio::ip::basic_endpoint<Proto>>
-{
-   constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
-
-   template <typename FormatContext>
-   auto format(const boost::asio::ip::basic_endpoint<Proto>& endpoint, FormatContext& ctx) const
-   {
-      const auto address = endpoint.address();
-      if (address.is_v6())
-         return std::format_to(ctx.out(), "[{}]:{}", address.to_string(), endpoint.port());
-      else
-         return std::format_to(ctx.out(), "{}:{}", address.to_string(), endpoint.port());
-   }
-};
 
 template <>
 struct std::formatter<boost::beast::http::field>
@@ -122,41 +111,3 @@ struct std::formatter<anyhttp::Truncated> : std::formatter<std::string_view>
                             value.text.substr(0, value.max_size), value.text.size());
    }
 };
-
-// =================================================================================================
-
-template <>
-struct std::formatter<boost::asio::cancellation_type> : std::formatter<std::string_view>
-{
-   auto format(boost::asio::cancellation_type type, auto& ctx) const
-   {
-      using enum boost::asio::cancellation_type;
-
-      if (type == none)
-         return std::formatter<std::string_view>::format("none", ctx);
-
-      if (type == all)
-         return std::formatter<std::string_view>::format("all", ctx);
-
-      bool first = true;
-      auto append = [&](boost::asio::cancellation_type flag, std::string_view name) {
-         if ((type & flag) == flag)
-         {
-            std::format_to(ctx.out(), "{}{}", first ? "" : "|", name);
-            first = false;
-            type = type & ~flag;
-         }
-      };
-
-      append(terminal, "terminal");
-      append(partial, "partial");
-      append(total, "total");
-
-      if (type != none)
-         std::format_to(ctx.out(), "{}0x{:x}", first ? "" : "|", to_underlying(type));
-
-      return ctx.out();
-   }
-};
-
-// =================================================================================================

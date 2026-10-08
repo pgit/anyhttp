@@ -2,11 +2,16 @@
 
 #include "common.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/buffer.hpp>
+
+#if ANYHTTP_COROSIO
+#include <boost/capy/concept/const_buffer_sequence.hpp>
+#include <boost/capy/concept/write_stream.hpp>
+#else
 #include <boost/asio/associated_executor.hpp>
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/bind_executor.hpp>
-#include <boost/asio/buffer.hpp>
+#endif
 
 #include <memory>
 #include <optional>
@@ -33,7 +38,7 @@ public:
    /// be written to. Only code that implements or narrows one needs to see it.
    class Impl;
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
 
    explicit Writer(std::shared_ptr<Impl> impl) noexcept;
    Writer(Writer&&) noexcept;
@@ -55,6 +60,7 @@ public:
    /// Announces the length of the outgoing body, before its header is submitted.
    void content_length(std::optional<size_t> content_length);
 
+#if ANYHTTP_ASIO
    /**
     * Writes \p buffer as part of the outgoing body, which stays open for more.
     *
@@ -98,12 +104,45 @@ public:
    {
       return async_write_eof(asio::const_buffer{}, std::forward<CompletionToken>(token));
    }
+#endif
+
+   //
+   // The coroutine spelling of the operation(s) above, which both runtimes have: no completion
+   // token, the result as a tuple, and errors reported, never thrown. Code that has to compile
+   // with either runtime -- the library's own request handlers, the shared tests -- uses this.
+   //
+
+   /// Writes \p buffer as part of the body: <tt>auto [ec] = co_await writer.write(buffer);</tt>
+   Task<std::tuple<error_code>> write(asio::const_buffer buffer);
+
+   /// Writes \p buffer, if any, and ends the body: <tt>auto [ec] = co_await
+   /// writer.write_eof();</tt>
+   Task<std::tuple<error_code>> write_eof(asio::const_buffer buffer = {});
+
+#if ANYHTTP_COROSIO
+   /**
+    * Writes the first non-empty buffer of \p buffers as part of the body, and yields its size:
+    * this is what makes a Writer a \c capy::WriteStream. The body stays open, as with write().
+    */
+   template <capy::ConstBufferSequence Buffers>
+   Task<std::tuple<error_code, size_t>> write_some(Buffers buffers)
+   {
+      for (auto it = capy::begin(buffers); it != capy::end(buffers); ++it)
+         if (capy::const_buffer buffer = *it; buffer.size() > 0)
+         {
+            auto [ec] = co_await write(asio::const_buffer(buffer.data(), buffer.size()));
+            co_return std::tuple{ec, ec ? size_t{0} : buffer.size()};
+         }
+      co_return std::tuple{error_code{}, size_t{0}};
+   }
+#endif
 
 protected:
    /// The implementation, for the derived handle to narrow to its own \c Impl. Never null.
    Impl& pimpl() const noexcept { return *impl_; }
 
 private:
+#if ANYHTTP_ASIO
    //
    // Binding an executor to the initiating function lets tokens that need one -- the timer behind
    // cancel_after -- find it here, with the token's own executor taking precedence as usual. A
@@ -113,15 +152,21 @@ private:
    // executor at all, so an empty one here is never used.
    //
    template <typename CompletionToken>
-   auto write_executor(const CompletionToken& token) const noexcept
+   asio::associated_executor_t<CompletionToken, executor_type>
+   write_executor(const CompletionToken& token) const noexcept
    {
       return asio::get_associated_executor(token, get_executor());
    }
 
    void async_write_any(WriteHandler&& handler, asio::const_buffer buffer, bool eof);
+#endif
 
    std::shared_ptr<Impl> impl_;
 };
+
+#if ANYHTTP_COROSIO
+static_assert(capy::WriteStream<Writer>);
+#endif
 
 // =================================================================================================
 

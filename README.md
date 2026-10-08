@@ -3,80 +3,120 @@
 [![Build and run tests](https://github.com/pgit/anyhttp/actions/workflows/release.yml/badge.svg)](https://github.com/pgit/anyhttp/actions/workflows/release.yml)
 [![Coverage](https://img.shields.io/badge/coverage-report-blue)](https://pgit.github.io/anyhttp/coverage/)
 
-Low-level C++ HTTP client and server library, based on ASIO and its asynchronous model.
+Low-level C++23 HTTP client and server library, in one of two API styles, chosen at configure time:
+
+* **ASIO**, on Boost.Asio: every operation is an ASIO asynchronous operation and takes any
+  completion token.
+* **COROSIO**, on [capy](https://github.com/cppalliance/capy) and
+  [corosio](https://github.com/cppalliance/corosio): coroutines only.
 
 ** THIS REPOSITORY IS PURELY EXPERIMENTAL **
 
-It supports HTTP/1.x, HTTP/2 and HTTP/3 behind a common, type-erasing interface, hence the *any* int the name.
+It supports HTTP/1.x, HTTP/2 and HTTP/3 behind a common, type-erasing interface, hence the *any* in the name.
 
 None of those protocols are implemented from scratch. Instead, it is a wrapper around the following well-established libraries:
 
-* Boost Beast
+* Boost Beast (its parser and serializer)
 * nghttp2
 * ngtcp2/nghttp3
+
+## API styles
+
+|  | ASIO | COROSIO |
+|---|---|---|
+| CMake | `-DANYHTTP_API=ASIO` (default) | `-DANYHTTP_API=COROSIO -DTLS_LIBRARY=OpenSSL` |
+| `Task<T>` | `asio::awaitable<T>` | `capy::task<T>` |
+| `Executor` | `asio::any_io_executor` | `capy::any_executor` |
+| `error_code` | `boost::system::error_code` | `std::error_code` |
+| `TcpEndpoint`, `UdpEndpoint` | `asio::ip::tcp::endpoint`, `asio::ip::udp::endpoint` | `corosio::endpoint` |
+| Operations | `async_x(..., token)` and `x()` | `x()` |
+| TLS | AWS-LC (default) or OpenSSL 3.5+ | OpenSSL 3.5+ |
+| Programs | `server`, `client` | `server` |
+
+Both styles have every operation as a coroutine -- `read_some`, `write`, `write_eof`, `submit`,
+`get_response`, `connect`, `get` -- that yields a tuple and reports errors instead of throwing.
+This README uses that spelling. Buffers are Boost.Asio's in both, headers are Beast's `Fields`, URLs
+Boost.URL's.
+
+Where the two runtimes spell an error differently, `anyhttp::errors` names it:
+
+| `errors::` | ASIO | COROSIO |
+|---|---|---|
+| `eof` | `asio::error::eof` | `capy::error::eof` |
+| `partial_message` | `beast::http::error::partial_message` | `capy::error::stream_truncated` |
+| `canceled` | `errc::operation_canceled` | `capy::error::canceled` |
+| `would_block` | `asio::error::would_block` | `errc::operation_would_block` |
+| `connection_aborted` | `asio::error::connection_aborted` | `errc::connection_aborted` |
+| `header_limit` | `beast::http::error::header_limit` | the same |
+
+Anything else compares against `errc::` (`boost::system::errc` or `std::errc`), with one exception:
+a host that does not resolve is `netdb_errors::host_not_found` in ASIO and
+`errc::no_such_device_or_address` in COROSIO.
 
 ## Synopsis
 ### Server
 ```C++
-awaitable<void> echo(server::Request request, server::Response response)
+Task<void> echo(server::Request request, server::Response response)
 {
    if (request.content_length())
       response.content_length(request.content_length().value());
 
-   co_await response.async_submit(200, {});
+   if (auto [ec] = co_await response.submit(200, {}); ec)
+      co_return;
 
    std::array<uint8_t, 64 * 1024> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await request.async_read_some(asio::buffer(buffer), as_tuple);
-      if (ec == asio::error::eof)
+      auto [ec, n] = co_await request.read_some(asio::buffer(buffer));
+      if (ec == errors::eof)
          break;
       if (ec)
-         throw boost::system::system_error(ec);
+         co_return;
 
-      co_await response.async_write(asio::buffer(buffer, n));
+      if (auto [write_ec] = co_await response.write(asio::buffer(buffer, n)); write_ec)
+         co_return;
    }
 
-   co_await response.async_write_eof();
+   co_await response.write_eof();
 }
 ```
 
-The end of an incoming body is reported the way ASIO reports it everywhere else: `asio::error::eof`
-with zero bytes. A body cut short -- a reset stream, a connection that went away mid-message --
-completes with `http::error::partial_message` instead, so the two stay distinguishable.
+The end of an incoming body is reported the way the runtime reports it everywhere else:
+`errors::eof` with zero bytes. A body cut short -- a reset stream, a connection that went away
+mid-message -- completes with `errors::partial_message` instead, so the two stay distinguishable.
 
-The end of an *outgoing* body is stated explicitly, with `async_write_eof()`. It takes a buffer of
+The end of an *outgoing* body is stated explicitly, with `write_eof()`. It takes a buffer of
 its own, so the last of the body and the end of it go out together -- one DATA frame with
 END_STREAM, one QUIC STREAM frame with FIN, one last chunk -- instead of costing a second, empty
 write:
 
 ```C++
-   co_await response.async_submit(200, fields({{"Content-Length", body.size()}}));
-   co_await response.async_write_eof(asio::buffer(body));
+   co_await response.submit(200, fields({{"Content-Length", body.size()}}));
+   co_await response.write_eof(asio::buffer(body));
 ```
 ### Client
 ```c++
-awaitable<void> do_session(Client& client, boost::urls::url url)
+Task<void> do_session(client::Client& client, boost::urls::url url)
 {
-   auto session = co_await client.async_connect();
-   auto request = co_await session.async_submit(url, {});
-   auto response = co_await request.async_get_response();   
+   auto [ec1, session] = co_await client.connect();
+   auto [ec2, request] = co_await session.submit(url, {});
+   auto [ec3] = co_await request.write_eof();
+   auto [ec4, response] = co_await request.get_response();
 }
 ```
 
-A plain GET needs none of those four steps spelled out. `async_get()` does the whole request as one
+A plain GET needs none of those four steps spelled out. `get()` does the whole request as one
 operation and hands back the response as a plain Beast message -- status, fields and the body as a
 `std::string`:
 
 ```c++
-   auto session = co_await client.async_connect();
-   auto message = co_await session.async_get(url);
+   auto [ec, message] = co_await session.get(url);
    std::println("{}: {} bytes", message.result_int(), message.body().size());
 ```
 
 The convenience is paid for with memory, as the body is buffered in full: anything that wants to
 look at the body while it arrives, or to send a body of its own, still goes through
-`async_submit()`.
+`submit()`.
 
 # Class Hierarchy
 
@@ -84,9 +124,16 @@ look at the body while it arrives, or to send a body of its own, still goes thro
 
 # Implementation
 
-The asynchronous operations exposed by server and client are [ASIO asynchronous operations](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/asynchronous_operations.html). As such, they support a range of [completion tokens](https://think-async.com/Asio/asio-1.30.2/doc/asio/overview/model/completion_tokens.html) like [use_awaitable](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/use_awaitable.html) or plain callbacks.
+Both styles build the same library and protocol sources; only a thin runtime layer
+(`anyhttp/runtime.hpp` and `anyhttp/net.hpp`, implemented in `asio/` and `corosio/`) differs. See
+[docs/corosio-port-plan.md](docs/corosio-port-plan.md).
+
+In ASIO, the operations exposed by server and client are [ASIO asynchronous operations](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/asynchronous_operations.html). As such, they support a range of [completion tokens](https://think-async.com/Asio/asio-1.30.2/doc/asio/overview/model/completion_tokens.html) like [use_awaitable](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/use_awaitable.html) or plain callbacks.
 
 The implementation is hidden behind [any_completion_handler](https://www.boost.org/doc/libs/1_86_0/doc/html/boost_asio/reference/any_completion_handler.html) so that it can be compiled separately.
+
+In COROSIO, they are capy coroutines, cancelled through the awaiting chain's `std::stop_token`.
+`Reader` and `Writer` model `capy::ReadStream` and `capy::WriteStream`.
 
 This work is partly inspired by [asio-grpc](https://github.com/Tradias/asio-grpc), which takes the idea even one step further and also supports the upcoming sender/receiver model of execution.
 
@@ -99,9 +146,9 @@ one is *stated*.
 
 ### Reading
 
-`async_read_some()` completes with `asio::error::eof` and zero bytes at the end of the body, and
+`read_some()` completes with `errors::eof` and zero bytes at the end of the body, and
 keeps reporting that for every read after it -- there is no state in which a finished body starts
-looking unfinished again. A body cut short completes with `http::error::partial_message` instead:
+looking unfinished again. A body cut short completes with `errors::partial_message` instead:
 the two are the whole difference between "the peer is done" and "the peer is gone", and neither
 degrades into the other.
 
@@ -110,8 +157,8 @@ about the body. It is not a way to poll for the end.
 
 ### Writing
 
-`async_write_eof()` ends the body, with or without a buffer of its own (see [Server](#server)
-above). `async_write({})` is a no-op: it succeeds and leaves the body open.
+`write_eof()` ends the body, with or without a buffer of its own (see [Server](#server)
+above). `write({})` is a no-op: it succeeds and leaves the body open.
 
 That an empty write means nothing is deliberate. Generic code that forwards whatever it just read
 will hand over an empty buffer eventually, and a message that ends by accident is a bug that only
@@ -123,7 +170,7 @@ All three protocols answer in the same order, whatever the state of the connecti
 
 1. An empty non-EOF write succeeds -- always, even after the body has ended.
 2. Once the body has ended, writing data fails with `errc::broken_pipe`, whether it comes
-   through `async_write()` or `async_write_eof(buffer)`. Ending an already ended body without data
+   through `write()` or `write_eof(buffer)`. Ending an already ended body without data
    succeeds: it is idempotent.
 3. Only then do the errors of a closed or cancelled stream apply. Their codes differ per protocol
    (`connection_aborted` for HTTP/1.1 and HTTP/2, `connection_reset` for HTTP/3).
@@ -134,9 +181,9 @@ one (`partial_message`), without touching the connection that is gone.
 
 ### Cancellation
 
-Cancelling `async_write_eof()` does not take the end of the body back. The end is declared the
+Cancelling `write_eof()` does not take the end of the body back. The end is declared the
 moment the operation starts, and no protocol can un-send a FIN; cancellation detaches the handler,
-and issuing `async_write_eof()` again adopts the end that is already on its way rather than
+and issuing `write_eof()` again adopts the end that is already on its way rather than
 failing. Intent and delivery are tracked separately for exactly this reason.
 
 ## Concurrent Requests
@@ -147,17 +194,17 @@ HTTP/2 and HTTP/3 multiplex requests: each one is a stream of its own, and strea
 
 A request is *complete* when all of it -- header and body -- has been written to the connection:
 
-* A request **without a body** is complete as soon as `async_submit()` has succeeded. Whether a request has a body is a matter of its framing only ([RFC 9112, section 6.3](https://www.rfc-editor.org/rfc/rfc9112#section-6.3)), never of its method: it has none without `Transfer-Encoding` and with a `Content-Length` of zero or none. As the HTTP/1.1 client sends every request without `Content-Length` chunked, that means `Content-Length: 0`.
-* **Any other request** is complete when `async_write_eof()` has succeeded -- even if all of a `Content-Length` has been written before. The body of a request without one is ended implicitly: `async_write_eof()` is an idempotent no-op on it, and writing data fails with `broken_pipe`.
+* A request **without a body** is complete as soon as `submit()` has succeeded. Whether a request has a body is a matter of its framing only ([RFC 9112, section 6.3](https://www.rfc-editor.org/rfc/rfc9112#section-6.3)), never of its method: it has none without `Transfer-Encoding` and with a `Content-Length` of zero or none. As the HTTP/1.1 client sends every request without `Content-Length` chunked, that means `Content-Length: 0`.
+* **Any other request** is complete when `write_eof()` has succeeded -- even if all of a `Content-Length` has been written before. The body of a request without one is ended implicitly: `write_eof()` is an idempotent no-op on it, and writing data fails with `broken_pipe`.
 
 A response is *complete* when it has been read to its end.
 
 ### Rules for HTTP/1.1
 
-1. `async_submit()` fails with `asio::error::would_block` while the previous request is not complete.
-2. `async_get_response()` fails with `asio::error::would_block` while the responses to earlier requests have not been read completely -- otherwise, it would read one of those.
-3. When a request can not be completed -- a write fails, or it is released before it is complete -- the connection is stuck in the middle of a message: every later `async_submit()` fails with `asio::error::connection_aborted`.
-4. When a response can not be read completely -- it is released before its end, or its request is released without asking for it -- every later `async_get_response()` fails with `asio::error::connection_aborted`.
+1. `submit()` fails with `errors::would_block` while the previous request is not complete.
+2. `get_response()` fails with `errors::would_block` while the responses to earlier requests have not been read completely -- otherwise, it would read one of those.
+3. When a request can not be completed -- a write fails, or it is released before it is complete -- the connection is stuck in the middle of a message: every later `submit()` fails with `errors::connection_aborted`.
+4. When a response can not be read completely -- it is released before its end, or its request is released without asking for it -- every later `get_response()` fails with `errors::connection_aborted`.
 
 Pipelining is still possible: complete requests can be sent before any of their responses have been read.
 
@@ -199,8 +246,8 @@ over `client::Config::protocol`:
 ```c++
    client::Client client(executor, {.url = url, .protocol = Protocol::h2, .follow_alt_svc = true});
 
-   auto first = co_await client.async_connect();  // HTTP/2, and learns about the alternative
-   auto second = co_await client.async_connect(); // HTTP/3
+   auto [ec1, first] = co_await client.connect();  // HTTP/2, and learns about the alternative
+   auto [ec2, second] = co_await client.connect(); // HTTP/3
 ```
 
 The session that learns about the alternative keeps speaking what it speaks -- a connection in the
@@ -234,4 +281,5 @@ For now, this section contains just a set of random links collected during devel
 * [Beast Example using Type Erasure](https://www.boost.org/doc/libs/develop/boost/beast/http/message_generator.hpp)
 * [asio-grpc](https://github.com/Tradias/asio-grpc)
 * [Development container](docs/devcontainer.md) -- how the build environment is put together
+* [Capturing traffic](docs/capture.md) -- tcpdump and tshark, decrypting TLS and QUIC with a key log
 * [cpp-devcontainer](https://github.com/pgit/cpp-devcontainer) -- the generic C++ base image it builds on

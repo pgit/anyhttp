@@ -1,0 +1,1019 @@
+#include "anyhttp/h2/stream.hpp"
+
+#include "anyhttp/client.hpp"
+#include "anyhttp/common.hpp"
+#include "anyhttp/formatter.hpp" // IWYU pragma: keep
+#include "anyhttp/h2/common.hpp"
+#include "anyhttp/h2/session.hpp"
+#include "anyhttp/request_handlers.hpp" // IWYU pragma: keep
+
+#include <boost/algorithm/string/predicate.hpp>
+
+#include <boost/asio/buffer.hpp>
+
+#include <boost/beast/http/error.hpp>
+#include <boost/beast/http/status.hpp>
+
+#include <boost/system/detail/errc.hpp>
+#include <boost/system/errc.hpp>
+
+#include <boost/container/small_vector.hpp>
+
+#include <nghttp2/nghttp2.h>
+
+#include <ranges>
+#include <utility>
+
+namespace anyhttp::nghttp2
+{
+
+// =================================================================================================
+
+template <typename Base>
+NGHttp2Reader<Base>::NGHttp2Reader(NGHttp2Stream& stream)
+   : stream(&stream), executor(stream.get_executor())
+{
+   stream.reader = this;
+}
+
+template <typename Base>
+NGHttp2Reader<Base>::~NGHttp2Reader()
+{
+   if (stream)
+   {
+      stream->reader = nullptr;
+      stream->delete_reader();
+   }
+}
+
+template <typename Base>
+void NGHttp2Reader<Base>::detach()
+{
+   //
+   // The stream is going away first (session teardown, or the stream close outliving this
+   // exchange). Remember how the body stood, so that reads issued from now on keep answering per
+   // the Reader contract: a body that was read to its clean end keeps reporting \c eof, anything
+   // else is a truncation.
+   //
+   assert(stream);
+   detached_ec = stream->reading_finished() ? errors::eof : errors::partial_message;
+   detached_log_prefix = stream->log_prefix_;
+   detached_fields = std::move(stream->fields); // the stream is being destroyed
+   stream = nullptr;
+}
+
+template <typename Base>
+std::string NGHttp2Reader<Base>::log_prefix() const
+{
+   return stream ? stream->log_prefix_ : detached_log_prefix;
+}
+
+// -------------------------------------------------------------------------------------------------
+
+template <typename Base>
+Executor NGHttp2Reader<Base>::get_executor() const noexcept
+{
+   return executor;
+}
+
+template <typename Base>
+const Fields& NGHttp2Reader<Base>::fields() const
+{
+   return stream ? stream->fields : detached_fields;
+}
+
+template <typename Base>
+std::optional<size_t> NGHttp2Reader<Base>::content_length() const noexcept
+{
+   if (!stream)
+      return std::nullopt;
+   assert(stream);
+   return stream->content_length;
+}
+
+template <typename Base>
+void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
+                                          ReadSomeHandler&& handler)
+{
+   //
+   // An empty buffer is not a request to read anything: complete right away, without looking at
+   // whether the body has ended or the stream is even still there -- as ASIO does for a
+   // zero-length read.
+   //
+   if (asio::buffer_size(buffer) == 0)
+   {
+      complete_immediately(std::move(handler), get_executor(), error_code{}, size_t{0});
+      return;
+   }
+
+   //
+   // The stream is gone; detach() latched how the body stood at that point, so a cleanly finished
+   // body keeps reporting eof (as the Reader contract requires) and a truncated one keeps
+   // reporting partial_message.
+   //
+   if (!stream)
+   {
+      // Reading on after a cleanly finished body is part of the contract, not worth a warning.
+      if (detached_ec == errors::eof)
+         mlogd("async_read_some: stream already gone ({})", detached_ec.message());
+      else
+         mlogw("async_read_some: stream already gone ({})", detached_ec.message());
+      complete_immediately(std::move(handler), get_executor(), detached_ec, size_t{0});
+      return;
+   }
+
+#if 1
+   on_cancel(handler, [this] {
+      logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m", stream->log_prefix_, "cancelled");
+      if (stream->read_handler_)
+         complete_later(std::move(stream->read_handler_), get_executor(), errors::canceled, 0);
+   });
+#endif
+
+   assert(!stream->read_handler_);
+   logd("[{}] async_read_some:", stream->log_prefix_);
+   stream->read_handler_buffer_ = buffer;
+   stream->read_handler_ = std::move(handler);
+   stream->call_read_handler();
+}
+
+// =================================================================================================
+
+namespace
+{
+
+//
+// The two roles a reader can be in. Everything above is the same for both; what they add is the
+// half of the incoming message that only their role has -- a request line, or a status code.
+// Like the fields, it is moved out of the stream on detach(): a handler may well look at the
+// request line only after the session is gone, e.g. when it first runs during shutdown.
+//
+
+class NGHttp2RequestReader final : public NGHttp2Reader<server::Request::Impl>
+{
+public:
+   using NGHttp2Reader<server::Request::Impl>::NGHttp2Reader;
+
+   std::string_view method() const noexcept override
+   {
+      return stream ? stream->method : detached_method;
+   }
+
+   boost::url_view url() const override { return stream ? stream->url : detached_url; }
+
+   void detach() override
+   {
+      assert(stream);
+      detached_method = std::move(stream->method);
+      detached_url = std::move(stream->url);
+      NGHttp2Reader::detach();
+   }
+
+private:
+   std::string detached_method;
+   boost::urls::url detached_url;
+};
+
+class NGHttp2ResponseReader final : public NGHttp2Reader<client::Response::Impl>
+{
+public:
+   using NGHttp2Reader<client::Response::Impl>::NGHttp2Reader;
+
+   unsigned int status_code() const noexcept override
+   {
+      return stream ? stream->status_code.value_or(0) : detached_status_code;
+   }
+
+   void detach() override
+   {
+      assert(stream);
+      detached_status_code = stream->status_code.value_or(0);
+      NGHttp2Reader::detach();
+   }
+
+private:
+   unsigned int detached_status_code = 0;
+};
+
+} // namespace
+
+// =================================================================================================
+
+template <typename Base>
+NGHttp2Writer<Base>::NGHttp2Writer(NGHttp2Stream& stream)
+   : stream(&stream), executor(stream.get_executor())
+{
+   stream.writer = this;
+}
+
+template <typename Base>
+NGHttp2Writer<Base>::~NGHttp2Writer()
+{
+   if (stream)
+   {
+      stream->writer = nullptr;
+      stream->delete_writer();
+   }
+}
+
+template <typename Base>
+void NGHttp2Writer<Base>::detach()
+{
+   // remember whether the body was cleanly ended, so writes issued after this still answer
+   // per the Writer contract -- see async_write() above
+   assert(stream);
+   detached_eof_submitted = stream->eof_submitted;
+   detached_log_prefix = stream->log_prefix_;
+   stream = nullptr;
+}
+
+template <typename Base>
+std::string NGHttp2Writer<Base>::log_prefix() const
+{
+   return stream ? stream->log_prefix_ : detached_log_prefix;
+}
+
+// -------------------------------------------------------------------------------------------------
+
+template <typename Base>
+Executor NGHttp2Writer<Base>::get_executor() const noexcept
+{
+   return executor;
+}
+
+template <typename Base>
+void NGHttp2Writer<Base>::content_length(std::optional<size_t> content_length)
+{
+   content_length_ = content_length;
+}
+
+template <typename Base>
+void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int status_code,
+                                       const Fields& headers)
+{
+   if (!stream)
+   {
+      mlogw("async_submit: stream already gone");
+      std::move(handler)(errors::connection_aborted);
+      return;
+   }
+
+   using namespace boost::beast::http;
+   logd("[{}] {} {}", stream->log_prefix_, status_code,
+        obsolete_reason(int_to_status(status_code)));
+
+   const std::string status_code_str = std::format("{}", status_code);
+   const std::string date = format_http_date(std::chrono::system_clock::now());
+
+   auto nva = boost::container::small_vector<nghttp2_nv, 16>();
+   nva.reserve(4 + std::distance(headers.begin(), headers.end()));
+   nva.push_back(make_nv_ls(":status", status_code_str));
+   nva.push_back(make_nv_ls("date", date));
+
+   //
+   // Point the client at our HTTP/3 endpoint, see server::Config::alt_svc_max_age. Only a server
+   // session has one of these, and a handler that names the field itself gets its way: HTTP/2
+   // would happily carry both, which is not what "Alt-Svc" means.
+   //
+   if (const auto& alt_svc = stream->parent.alt_svc_; !alt_svc.empty() && !headers.count("alt-svc"))
+      nva.push_back(make_nv_ls("alt-svc", alt_svc));
+
+   for (auto&& item : headers)
+   {
+      if (item.name_string().starts_with(':'))
+         logw("[{}] async_submit: invalid header '{}'", stream->log_prefix_, item.name_string());
+
+      nva.push_back(make_nv_ls(item.name_string(), item.value()));
+   }
+
+   std::string length_str;
+   if (content_length_)
+   {
+      length_str = std::format("{}", *content_length_);
+      nva.push_back(make_nv_ls("content-length", length_str));
+   }
+
+   for (auto nv : nva)
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->log_prefix_, truncated(name_of(nv)),
+           truncated(value_of(nv)));
+
+   // TODO: If we already know that there is no body, don't set a producer.
+   nghttp2_data_provider2 prd;
+   prd.source.ptr = stream;
+   prd.read_callback = [](nghttp2_session*, int32_t stream_id, uint8_t* buf, size_t length,
+                          uint32_t* data_flags, nghttp2_data_source* source, void*) -> ssize_t {
+      auto stream = static_cast<NGHttp2Stream*>(source->ptr);
+      assert(stream);
+      assert(stream->id == stream_id);
+      return stream->producer_callback(buf, length, data_flags);
+   };
+
+   nghttp2_submit_response2(stream->parent.session, stream->id, nva.data(), nva.size(), &prd);
+   stream->parent.start_write();
+
+   std::move(handler)(error_code{});
+}
+
+template <typename Base>
+void NGHttp2Writer<Base>::async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof)
+{
+   if (stream)
+   {
+      stream->async_write(std::move(handler), buffer, eof);
+      return;
+   }
+
+   //
+   // The stream is gone, but the entry ladder of the Writer contract still applies, answered
+   // from the state detach() latched: an empty non-EOF write stays a free no-op, a body that was
+   // cleanly ended keeps answering as such -- bare re-end idempotent, data broken_pipe -- and
+   // only a stream that vanished mid-body is a connection error.
+   //
+   const bool empty = asio::buffer_size(buffer) == 0;
+   error_code ec;
+   if (empty && !eof)
+      ec = {};
+   else if (detached_eof_submitted)
+      ec = empty ? error_code{} : make_error_code(errc::broken_pipe);
+   else
+   {
+      mlogw("async_write: stream already gone");
+      ec = errors::connection_aborted;
+   }
+   complete_immediately(std::move(handler), executor, ec);
+}
+
+template <typename Base>
+void NGHttp2Writer<Base>::async_get_response(client::Request::GetResponseHandler&& handler)
+{
+   if (!stream)
+   {
+      mlogw("async_get_response: stream already gone");
+      std::move(handler)(errors::connection_aborted, client::Response{nullptr});
+   }
+   else
+      stream->async_get_response(std::move(handler));
+}
+
+// =================================================================================================
+
+NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int id_)
+   : parent(parent), id(id_), log_prefix_(std::format("{}.{}", parent.log_prefix(), id_))
+{
+   mlogd("\x1b[1;33mStream: ctor\x1b[0m");
+}
+
+size_t NGHttp2Stream::read_buffers_size() const
+{
+   return asio::buffer_size(read_buffer_) + // remaining part of first buffer
+          std::ranges::fold_left( // sum of all other buffers
+             pending_read_buffers_ | //
+                std::views::drop(1) |
+                std::views::transform([](const auto& buffer) { return buffer.size(); }),
+             size_t{0}, std::plus{});
+}
+
+void NGHttp2Stream::call_read_handler(asio::const_buffer view)
+{
+   Defer finish_close([this] { finish_deferred_close(); });
+
+   //
+   // If there is no pending read handler we can invoke now, we have to buffer the data until there
+   // is. The amount of data that is buffered is limitted by the window size. If that is exceeded
+   // by a malicious peer, nghttp2 will generate a stream or connection error (typically
+   // NGHTTP2_ERR_FLOW_CONTROL internally) and send a RST_STREAM or GOAWAY frame to the peer.
+   //
+   if (!read_handler_)
+   {
+      if (!is_empty(view))
+      {
+         pending_read_buffers_.emplace_back(make_buffer(view));
+         if (pending_read_buffers_.size() == 1)
+            read_buffer_ = asio::buffer(pending_read_buffers_.front());
+      }
+      mlogd("read_callback: no pending read handler... ({} buffers and {} bytes pending)",
+            pending_read_buffers_.size(), read_buffers_size());
+      return;
+   }
+
+   //
+   // Avoid recursion. In this function, we invoke the read handler, which may resume a
+   // user-provided coroutine. That coroutine is likely to call async_read_some() again,
+   // resulting in another call to this function.
+   //
+   // This is an expected scenario in ASIO, similar to using dispatch() instead of post()
+   // -- although ASIO also has some countermeasures against recursion I think.
+   //
+   // FIXME: Check if we are not supposed to post() here, anyway!
+   //
+   if (inside_call_read_handler_)
+   {
+      mlogd("read_callback: avoided recursion, returning...");
+      return;
+   }
+
+   Defer no_recurse([&]() { inside_call_read_handler_ = false; });
+   inside_call_read_handler_ = true;
+
+   //
+   // If there is no pending data to write, we can start writing the new view right away.
+   //
+   if (pending_read_buffers_.empty())
+      std::swap(read_buffer_, view); // view is empty after this
+
+   //
+   // Try to deliver as many buffers as possible. As long as the consumer installs a new read
+   // handler after handling a buffer, this loop can continue.
+   //
+   // FIXME: Do we need to limit recursion here? Probably not, as this is limitted by the number
+   //        of stored buffers, and they are limitted by the window size.
+   //
+   size_t count = 0, consumed = 0;
+   while (read_handler_ && !is_empty(read_buffer_))
+   {
+      size_t copied = asio::buffer_copy(read_handler_buffer_, read_buffer_);
+      count++, consumed += copied;
+      bytesRead += copied;
+      read_buffer_ += copied;
+
+      if (count == 1)
+         mlogd("read_callback: calling read handler with {} bytes... (buf={})", copied,
+               asio::buffer_size(read_buffer_));
+      else
+         mlogd("read_callback: calling read handler with {} bytes... (#{} in a row, buf={})",
+               copied, count, asio::buffer_size(read_buffer_));
+
+      //
+      // swap_and_invoke() moves the read handler into a local variable before invoking it,
+      // allowing a new read handler to be set. This is what we call 'respawning' here, when a
+      // new handler is set immediately.
+      //
+      swap_and_invoke(read_handler_, error_code{}, copied);
+
+      if (read_handler_)
+         mlogd("read_callback: calling handler with {} bytes... done,"
+               " RESPAWNED ({} buffers pending)",
+               copied, pending_read_buffers_.size());
+      else
+         mlogd("read_callback: calling handler with {} bytes... done", copied);
+
+      //
+      // Advance to next stored buffer. If there is none, start writing the view that has been
+      // passed to this function.
+      //
+      if (is_empty(read_buffer_))
+      {
+         if (!pending_read_buffers_.empty())
+            pending_read_buffers_.pop_front();
+
+         if (!pending_read_buffers_.empty())
+            read_buffer_ = asio::buffer(pending_read_buffers_.front());
+         else
+            std::swap(read_buffer_, view); // clear view so that we don't write it twice
+      }
+   }
+
+   //
+   // To apply back pressure, the stream is consumed AFTER the handler is invoked. As always, this
+   // is accompanied by a start_write() because this might un-block flow control.
+   //
+   // Note that nghttp2 may delay emitting WINDOW_UPDATE frame if only a few bytes have been
+   // consumed. Because of this, it is not possible to have exact control over backpressure.
+   //
+   // https://github.com/nghttp2/nghttp2/blob/a60e00c6285b5dd6a1aee80f70bce77d0c198288/lib/nghttp2_helper.c#L248
+   //
+   if (consumed)
+   {
+      nghttp2_session_consume_stream(parent.session, id, consumed);
+      mlogd("consumed {} bytes, windows sizes: local {} / remote {}", consumed,
+            nghttp2_session_get_stream_local_window_size(parent.session, id),
+            nghttp2_session_get_stream_remote_window_size(parent.session, id));
+      parent.start_write();
+   }
+
+   mlogd("read_callback: finished, {} buffers pending, eof_received={}",
+         pending_read_buffers_.size(), eof_received);
+
+   //
+   // Buffer remaining data from 'view' passed into this function.
+   //
+   if (!is_empty(read_buffer_))
+   {
+      assert(!read_handler_);
+      if (pending_read_buffers_.empty())
+      {
+         auto& buffer = pending_read_buffers_.emplace_back(make_buffer(read_buffer_));
+         read_buffer_ = asio::buffer(buffer);
+      }
+      else if (!is_empty(view))
+      {
+         pending_read_buffers_.emplace_back(make_buffer(view));
+      }
+   }
+
+   //
+   // No data left and the peer is done: report the end of the body the way ASIO does everywhere
+   // else. Keep reporting it for as long as reads keep being issued -- a handler may re-arm from
+   // within, and every read past the end of a body ends the same way.
+   //
+   else if (eof_received)
+   {
+      while (read_handler_)
+      {
+         mlogd("read_callback: delivering EOF...");
+         swap_and_invoke(read_handler_, errors::eof, 0);
+         //
+         // At this point, in testcases like "IgnoreRequest", the stream may already have been
+         // deleted. This is because invoking the read handler eventually continues a coroutine,
+         // which might drop request and response and by extension, the stream.
+         //
+         // To avoid this, deleting the stream is post()ed in on_stream_close_callback()
+         //
+         mlogd("read_callback: delivering EOF... done");
+      }
+      return;
+   }
+
+   //
+   // If there is no further user-provided read handler to call, we can return for now. When the
+   // user calls async_read_some() again,
+   // The rest of this function is about delivering EOF or error codes.
+   //
+   if (!read_handler_)
+      return;
+
+#if 1
+   if (reading_finished() || closed)
+      swap_and_invoke(read_handler_, errors::partial_message, 0);
+#else
+   if (reading_finished())
+   {
+      error_code ec; //  = errors::eof;
+      if (content_length && bytesRead < *content_length)
+      {
+         mlogw("read_callback: EOF after {} bytes total,"
+               " which less than advertised content length of {}",
+               bytesRead, *content_length);
+         ec = errors::partial_message;
+      }
+
+      swap_and_invoke(read_handler_, ec, 0);
+   }
+   else if (closed)
+   {
+      assert(pending_read_buffers_.empty());
+      // assert(!is_reading_finished);
+      mlogw("call_handler_loop: read after close");
+      swap_and_invoke(read_handler_, error_code{}, 0);
+      assert(!read_handler_); // FIXME -- but what if the user sets a new handler anyway?
+   }
+#endif
+}
+
+void NGHttp2Stream::on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len)
+{
+   assert(id == id_);
+   assert(!eof_received);
+   assert(len); // for EOF, on_eof() is called instead
+
+   mlogd("read callback: {} bytes...", len);
+
+   nghttp2_session_consume_connection(session, len);
+
+   //
+   // We try to invoke the read handler directly with the new buffer view. Only if there is no
+   // pending read handler that can be invoked immediately, the data will be copied into a buffer.
+   //
+   call_read_handler(asio::const_buffer(data, len));
+}
+
+void NGHttp2Stream::on_eof(nghttp2_session* session, int32_t id_)
+{
+   assert(id == id_);
+   assert(!eof_received);
+
+   mlogd("read callback: EOF");
+
+   eof_received = true;
+   call_read_handler({/* empty buffer */});
+}
+
+NGHttp2Stream::~NGHttp2Stream()
+{
+   mlogd("\x1b[33mStream: dtor... \x1b[0m");
+   if (reader)
+   {
+      mlogd("Stream: dtor... detaching reader");
+      reader->detach();
+   }
+   if (writer)
+   {
+      mlogd("Stream: dtor... detaching writer");
+      writer->detach();
+   }
+   if (response_handler)
+   {
+      mlogw("Stream: dtor... cancelling async_get_response()");
+      swap_and_invoke(response_handler, errors::canceled, client::Response{nullptr});
+   }
+   if (read_handler_)
+   {
+      mlogw("Stream: dtor... cancelling async_read_some()");
+      swap_and_invoke(read_handler_, errors::partial_message, bytesRead);
+   }
+   if (write_handler)
+   {
+      mlogw("Stream: dtor... cancelling async_write()");
+      swap_and_invoke(write_handler, errors::canceled);
+   }
+
+   mlogd("\x1b[33mStream: dtor... done\x1b[0m");
+}
+
+// =================================================================================================
+
+void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer, bool eof)
+{
+   const bool empty = buffer.size() == 0;
+
+   //
+   // The protocol-independent entry ladder, in the order the Writer contract in common.hpp
+   // prescribes: a zero-length non-EOF write is a free no-op wherever the body stands; after the
+   // body has been ended, data has no body left to belong to -- through either entry point --
+   // while a bare re-end is answered by how far the end has actually gotten.
+   //
+   if (empty && !eof)
+   {
+      complete_immediately(std::move(handler), get_executor(), error_code{});
+      return;
+   }
+
+   if (eof_requested)
+   {
+      if (!empty)
+      {
+         mloge("async_write: body has already been ended");
+         complete_immediately(std::move(handler), get_executor(),
+                              make_error_code(errc::broken_pipe));
+         return;
+      }
+
+      //
+      // A bare re-end. If nghttp2 already knows about the end, there is nothing left to do. If
+      // not -- a cancelled async_write_eof() leaves the intent standing but takes its handler
+      // away, so the flag never reached the producer callback -- fall through to the normal path
+      // below: the re-issued write picks up where the cancelled one left off, which is what lets
+      // an upload be ended once the peer's flow control window reopens.
+      //
+      if (eof_submitted)
+      {
+         complete_immediately(std::move(handler), get_executor(), error_code{});
+         return;
+      }
+   }
+
+   //
+   // The same code as a write that was parked when the stream closed, see close_stream(): which
+   // of the two a writer gets is only a matter of whether it was resumed before the RST_STREAM
+   // was read.
+   //
+   if (closed)
+   {
+      mlogw("async_write: stream already closed");
+      complete_immediately(std::move(handler), get_executor(),
+                           make_error_code(errc::connection_reset));
+      return;
+   }
+
+   assert(!write_handler);
+
+   mlogd("async_write: buffer={} eof={} is_deferred={}", buffer.size(), eof, is_deferred);
+
+   write_buffer = buffer;
+   eof_requested |= eof;
+   write_handler = std::move(handler);
+
+   on_cancel(write_handler, [this] {
+      mlogd("async_write: \x1b[1;31m{}\x1b[0m", "cancelled");
+      // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
+      if (write_handler)
+         complete_later(std::move(write_handler), get_executor(), errors::canceled);
+   });
+
+   resume();
+}
+
+// -------------------------------------------------------------------------------------------------
+
+void NGHttp2Stream::resume()
+{
+   if (is_deferred)
+   {
+      mlogd("async_write: resuming stream ({} bytes to write)", write_buffer.size());
+
+      //
+      // It is important to reset the deferred state BEFORE resuming, because it may result in
+      // an immediate call to the read callback.
+      //
+      is_deferred = false;
+      nghttp2_session_resume_data(parent.session, id);
+      parent.start_write();
+   }
+}
+
+// =================================================================================================
+
+void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& handler)
+{
+   mlogd("async_get_response:");
+
+   assert(!response_handler);
+   if (response_delivered)
+   {
+      auto ec = errors::already_started;
+      mlogw("async_get_response: \x1b[1;31m{}\x1b[0m", what(ec));
+      complete_immediately(std::move(handler), get_executor(), ec, client::Response{nullptr});
+      return;
+   }
+
+   on_cancel(handler, [this] {
+      mlogd("async_get_response: \x1b[1;31m{}\x1b[0m", "cancelled");
+      if (response_handler)
+         complete_later(std::move(response_handler), get_executor(), errors::canceled,
+                        client::Response{nullptr});
+   });
+
+   response_handler = std::move(handler);
+   deliver_response();
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// NOTE: The read callback of a nghttp2 data source is a write callback from our perspective.
+// https://nghttp2.org/documentation/types.html#c.nghttp2_data_source_read_callback2
+//
+ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* data_flags)
+{
+   if (closed)
+   {
+      mlogd("write callback: stream closed");
+      return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+   }
+
+   assert(!is_deferred);
+   assert(!eof_submitted);
+   mlogd("write callback (buffer size={} bytes)", length);
+
+   if (!write_handler)
+   {
+      mlogd("write callback: nothing to send, DEFERRING");
+      is_deferred = true;
+      return NGHTTP2_ERR_DEFERRED;
+   }
+
+   size_t copied = 0;
+   if (write_buffer.size())
+   {
+      //
+      // TODO: we might be able to avoid copying by using NGHTTP2_DATA_FLAG_NO_COPY. This
+      // will make nghttp2 call nghttp2_send_data_callback, which must emit a single, full
+      // DATA frame.
+      //
+      copied = asio::buffer_copy(boost::asio::buffer(buf, length), write_buffer);
+
+      mlogd("write callback: copied {} bytes", copied);
+      write_buffer += copied;
+      if (write_buffer.size() == 0)
+      {
+         //
+         // The last bytes of a write that ends the body carry END_STREAM themselves: setting the
+         // flag on this very DATA frame is what spares an async_write_eof() with a payload the
+         // extra, empty frame -- and the extra round trip through this callback -- that ending a
+         // body used to cost.
+         //
+         if (eof_requested)
+         {
+            mlogd("write callback: EOF along with the last {} bytes", copied);
+            eof_submitted = true;
+            *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+         }
+
+         mlogd("write callback: running handler...");
+         swap_and_invoke(write_handler, error_code{});
+         if (write_handler)
+            mlogd("write callback: running handler... done -- RESPAWNED");
+         else
+            mlogd("write callback: running handler... done");
+      }
+
+      mlogd("write callback: {} bytes left", write_buffer.size());
+   }
+   else
+   {
+      // an empty write is only ever accepted as the end of the body, see async_write()
+      assert(eof_requested);
+      mlogd("write callback: EOF");
+      eof_submitted = true;
+      *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+      swap_and_invoke(write_handler, error_code{});
+   }
+
+   return copied;
+}
+
+void NGHttp2Stream::log_received_headers()
+{
+   for (const auto& [name, value] : received_headers)
+      mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(name), truncated(value));
+   received_headers.clear();
+}
+
+void NGHttp2Stream::on_response()
+{
+   //
+   // A response with too large a header section is of no use: fail it, and stop the server from
+   // sending its body. The stream is kept until the failure has been delivered, see close_stream().
+   //
+   if (header_limit_exceeded)
+   {
+      response_error = errors::header_limit;
+      nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_CANCEL);
+   }
+   else
+      has_response = true;
+
+   deliver_response();
+}
+
+void NGHttp2Stream::deliver_response()
+{
+   if (!has_response && !response_error)
+   {
+      mlogd("deliver_response: no response, yet");
+   }
+   else if (!response_handler)
+   {
+      mlogd("deliver_response: not waiting for a response, yet");
+   }
+   else if (response_error)
+   {
+      mlogw("deliver_response: {}", what(response_error));
+      response_delivered = true;
+      swap_and_invoke(response_handler, response_error, client::Response{nullptr});
+
+      // the stream may have been kept around just for this, see close_stream()
+      if (closed)
+         parent.close_stream(id);
+   }
+   else
+   {
+      response_delivered = true;
+      auto impl = client::Response{std::make_unique<NGHttp2ResponseReader>(*this)};
+      swap_and_invoke(response_handler, error_code{}, std::move(impl));
+   }
+}
+
+// -------------------------------------------------------------------------------------------------
+
+void NGHttp2Stream::on_request()
+{
+   //
+   // An incoming new request should be put into a queue of the server session. From there,
+   // new requests can then be retrieved asynchronously by the user.
+   //
+   // Setup of request and response should happen before that, too.
+   //
+   // TODO: Implement request queue. Until then, separate preparation of request/response from
+   //       the actual handling.
+   //
+   server::Request request(std::make_unique<NGHttp2RequestReader>(*this));
+   server::Response response(std::make_unique<NGHttp2Writer<server::Response::Impl>>(*this));
+
+   auto& server = dynamic_cast<ServerReference&>(parent).server();
+   if (header_limit_exceeded)
+      launch(get_executor(), header_fields_too_large(std::move(request), std::move(response)));
+   else if (auto& handler = server.request_handler())
+      launch(get_executor(), handler(std::move(request), std::move(response)));
+   else
+   {
+      mloge("on_request: no request handler!");
+      launch(get_executor(), not_found(std::move(response)));
+   }
+}
+
+Executor NGHttp2Stream::get_executor() const noexcept { return parent.get_executor(); }
+
+// =================================================================================================
+
+/**
+ * This function is called if the "Request" (on the server side) is deleted. This means that we no
+ * we no longer want to to read DATA from the peer. However, we might still might want to deliver a
+ * response, like a 404. But if we reset the stream too early, this is stopped as well.
+ *
+ * The key is to NOT close the stream early, but rely on NGHTTP/2 flow control to eventually stop
+ * any incoming DATA frames. The closing of the stream is delayed until after the response has been
+ * delivered.
+ *
+ * On the client side, the same mechanism is applied.
+ */
+void NGHttp2Stream::delete_reader()
+{
+   mlogd("delete_reader");
+
+   assert(!read_handler_);
+
+   if (closed)
+      mlogd("delete_reader: stream already closed");
+   else if (reading_finished())
+      mlogd("delete_reader: reading finished");
+   else if (size_t pending = read_buffers_size())
+   {
+      mlogw("delete_reader: reading not finished, discarding {} pending bytes in {} buffers",
+            pending, pending_read_buffers_.size());
+
+      // Don't re-open the stream window here, or the peer will resume sending data to us.
+      read_buffer_ = asio::const_buffer{};
+      pending_read_buffers_.clear();
+   }
+
+   reader = nullptr;
+   maybe_close_stream();
+   finish_deferred_close();
+}
+
+void NGHttp2Stream::delete_writer()
+{
+   mlogd("delete_writer");
+
+   //
+   // If the writer is deleted before it has delivered all data, we have to close the stream
+   // so that it does not hang around. There are a few design options:
+   //
+   // 1) Resetting the stream when the writer is deleted also means that we may not complete
+   //    reading either. This is because there is no way to "half-close" to sending side with
+   //    nghttp2.
+   // 2) We could just leave the stream open and close it only when the reader has finished as well.
+   //
+   // Option 1) is preferred because it "fails early" and doesn't leave the sending side hanging
+   // around, possibly causing timeouts. The user still has the option to keep the sending side
+   // open if desired.
+   //
+   // For normal operation, the sender has to be end()ed anyway.
+   //
+   if (closed)
+      mlogd("delete_writer: stream already closed");
+   else if (eof_submitted)
+      mlogd("delete_writer: writing finished");
+   /*
+   else
+   {
+      mlogw("delete_writer: not done yet, submitting RST with STREAM_CLOSED");
+      nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_CANCEL);
+      parent.start_write();
+   }
+   */
+
+   writer = nullptr;
+   maybe_close_stream();
+}
+
+/**
+ * Finishes what close_stream() put off once the reader has taken the rest of the body, or is gone.
+ * Not while a read is pending -- call_read_handler() still has the end of the body to deliver to
+ * it -- and not from a nested call_read_handler(), which leaves that to the outer one.
+ */
+void NGHttp2Stream::finish_deferred_close()
+{
+   if (close_deferred && reading_finished() && !read_handler_ && !inside_call_read_handler_)
+   {
+      close_deferred = false;
+      parent.close_stream(id);
+   }
+}
+
+void NGHttp2Stream::maybe_close_stream()
+{
+   if (closed)
+      mlogd("cleanup_stream: stream already closed");
+   else if (writer)
+      mlogd("cleanup_stream: still writing");
+   else if (!eof_submitted || (!eof_received && !reader))
+   {
+      mlogi("cleanup_stream: not reading or writing any more, "
+            "submitting RST with STREAM_CLOSED");
+
+      // submitting RST will lead to on_stream_close_callback(), eventually
+      nghttp2_submit_rst_stream(parent.session, NGHTTP2_FLAG_NONE, id, NGHTTP2_STREAM_CLOSED);
+      parent.start_write();
+   }
+}
+
+// =================================================================================================
+
+template class NGHttp2Reader<client::Response::Impl>;
+template class NGHttp2Reader<server::Request::Impl>;
+template class NGHttp2Writer<client::Request::Impl>;
+template class NGHttp2Writer<server::Response::Impl>;
+
+} // namespace anyhttp::nghttp2

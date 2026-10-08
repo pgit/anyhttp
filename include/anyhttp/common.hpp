@@ -1,16 +1,8 @@
 #pragma once
 
 #include <anyhttp/common.hpp>
-#include <anyhttp/concepts.hpp>
 #include <anyhttp/logging.hpp>
-
-#include <boost/asio/any_completion_handler.hpp>
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/associated_immediate_executor.hpp>
-#include <boost/asio/awaitable.hpp>
-#include <boost/asio/deferred.hpp>
-#include <boost/asio/ip/address.hpp>
-#include <boost/asio/ip/tcp.hpp>
+#include <anyhttp/runtime.hpp>
 
 #include <boost/beast/http/fields.hpp>
 
@@ -30,11 +22,6 @@
 
 namespace anyhttp
 {
-namespace asio = boost::asio;
-using asio::awaitable;
-
-using error_code = boost::system::error_code;
-
 // =================================================================================================
 
 enum class Protocol
@@ -114,19 +101,21 @@ inline Fields fields(std::initializer_list<std::pair<std::string_view, FieldValu
 
 // =================================================================================================
 
-using ReadSome = void(boost::system::error_code, size_t);
-using ReadSomeHandler = asio::any_completion_handler<ReadSome>;
+using ReadSome = void(error_code, size_t);
+using ReadSomeHandler = Completion<ReadSome>;
 
-using WriteSome = void(boost::system::error_code, size_t);
-using WriteSomeHandler = asio::any_completion_handler<WriteSome>;
+using WriteSome = void(error_code, size_t);
+using WriteSomeHandler = Completion<WriteSome>;
 
-using Write = void(boost::system::error_code);
-using WriteHandler = asio::any_completion_handler<Write>;
+using Write = void(error_code);
+using WriteHandler = Completion<Write>;
 
-using Status = void(boost::system::error_code);
-using StatusHandler = asio::any_completion_handler<Status>;
+using Status = void(error_code);
+using StatusHandler = Completion<Status>;
 
-using DefaultCompletionToken = asio::default_completion_token_t<asio::any_io_executor>;
+#if ANYHTTP_ASIO
+using DefaultCompletionToken = asio::default_completion_token_t<Executor>;
+#endif
 
 // =================================================================================================
 
@@ -137,35 +126,10 @@ using DefaultCompletionToken = asio::default_completion_token_t<asio::any_io_exe
  * This also ensures that the callback is destroyed after invocation.
  */
 template <typename F, typename... Args>
-   requires std::invocable<F, Args...>
+   requires std::invocable<std::remove_cvref_t<F>, Args...>
 inline void swap_and_invoke(F&& function, Args&&... args)
 {
    std::exchange(function, nullptr)(std::forward<Args>(args)...);
-}
-
-// =================================================================================================
-
-/**
- * Completes \p handler without doing any I/O, through its associated immediate executor (with
- * \p fallback standing in when the handler has none). This is the one way an operation that has
- * nothing asynchronous left to do may finish: invoking the handler straight from the initiating
- * function would surprise callers that rely on the ASIO guarantee of not being re-entered.
- *
- * A handler that is empty (an \c any_completion_handler detached by cancellation) is quietly
- * dropped -- there is nobody left to tell.
- */
-template <typename Handler, typename... Args>
-inline void complete_immediately(Handler&& handler, const asio::any_io_executor& fallback,
-                                 Args&&... args)
-{
-   if (!handler)
-      return;
-
-   asio::any_completion_executor ex = asio::get_associated_immediate_executor(handler, fallback);
-   ex.execute([handler = std::forward<Handler>(handler),
-               ... args = std::forward<Args>(args)]() mutable { //
-      std::move(handler)(std::move(args)...);
-   });
 }
 
 // =================================================================================================
@@ -195,8 +159,9 @@ Defer<F, T...> defer(F&& f, T&&... t)
    return Defer<F, T...>(std::forward<F>(f), std::forward<T>(t)...);
 }
 
-asio::ip::address normalize(asio::ip::address addr);
-asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint);
+/// \p address, or the IPv4 address an IPv4-mapped IPv6 one maps. Defined by each runtime.
+IpAddress normalize(IpAddress address);
+TcpEndpoint normalize(const TcpEndpoint& endpoint);
 
 /// Which end of a connection a session is, for the colour of its log prefix.
 enum class Role
@@ -213,18 +178,16 @@ std::string log_prefix(Role role);
  * The protocol is red for a server and green for a client, the address coloured as by "ip -c"
  * (IPv4 magenta, IPv6 blue and in square brackets).
  */
-std::string log_prefix(Role role, std::string_view protocol, const asio::ip::address& address,
+std::string log_prefix(Role role, std::string_view protocol, const IpAddress& address,
                        unsigned short port);
 
-/// As above, for the peer of \p socket. Just \p protocol if the socket is not connected.
+/// As above, for the peer at \p remote. Just \p protocol without one (the socket is not connected).
 std::string log_prefix(Role role, std::string_view protocol,
-                       const asio::basic_socket<asio::ip::tcp, asio::any_io_executor>& socket);
+                       const std::optional<TcpEndpoint>& remote);
 
 }; // namespace anyhttp
 
 // -------------------------------------------------------------------------------------------------
-
-boost::system::error_code code(const std::exception_ptr& ptr);
 
 /// Get error message from exception pointer, as used in the completion signature of \c co_spawn().
 std::string what(const std::exception_ptr& ptr);
@@ -232,8 +195,8 @@ std::string what(const std::exception_ptr& ptr);
 /// Get error message from a boost::system_error, as thrown by boost ASIO if not caught.
 std::string what(const boost::system::system_error& ex);
 
-/// Get error message from \c boost::system::error_code, used by ASIO.
-std::string what(const boost::system::error_code& ec);
+/// Get error message from an \c anyhttp::error_code, as reported by the runtime.
+std::string what(const anyhttp::error_code& ec);
 
 // -------------------------------------------------------------------------------------------------
 

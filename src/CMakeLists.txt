@@ -11,15 +11,16 @@ pkg_check_modules(NGHTTP3             REQUIRED IMPORTED_TARGET libnghttp3)
 pkg_check_modules(NGTCP2_CRYPTO          REQUIRED IMPORTED_TARGET ${NGTCP2_CRYPTO_MODULE})
 
 #
-# lib -- the protocol backends are the h1_*, h2_* and h3_* sources; only the h2_* ones use
-# nghttp2 and only the h3_* ones ngtcp2/nghttp3, everything else is protocol-agnostic.
+# lib -- the protocol backends are in h1/, h2/ and h3/; only h2/ uses nghttp2 and only h3/
+# ngtcp2/nghttp3. What differs between the API styles is in asio/ or corosio/, and only the one of
+# this build tree is compiled. Everything at the top level is protocol- and runtime-agnostic.
 #
+string(TOLOWER ${ANYHTTP_API} anyhttp_runtime)
 add_library(anyhttp)
-file(GLOB anyhttp_sources CONFIGURE_DEPENDS *.cpp)
-list(FILTER anyhttp_sources EXCLUDE REGEX "_main\.cpp$")
-list(FILTER anyhttp_sources EXCLUDE REGEX "_issue_[0-9]+\.cpp$")
+file(GLOB anyhttp_sources CONFIGURE_DEPENDS
+     *.cpp h1/*.cpp h2/*.cpp h3/*.cpp ${anyhttp_runtime}/*.cpp)
 target_sources(anyhttp PRIVATE ${anyhttp_sources})
-target_include_directories(anyhttp PUBLIC ../include)
+target_include_directories(anyhttp PUBLIC ../include ${CMAKE_BINARY_DIR}/include)
 
 target_include_directories(anyhttp PRIVATE "/opt/nghttp3/build/include")
 target_link_libraries(anyhttp PRIVATE Threads::Threads)
@@ -34,23 +35,39 @@ target_link_libraries(anyhttp PRIVATE PkgConfig::NGTCP2_CRYPTO PkgConfig::NGTCP2
 # which needs it.
 target_link_libraries(anyhttp PUBLIC ${TLS_TARGET})
 
+if (ANYHTTP_COROSIO)
+    target_link_libraries(anyhttp PUBLIC Boost::corosio Boost::corosio_openssl)
+endif()
+
 #
 # server
 #
 add_executable(server)
-target_sources(server PRIVATE "server_main.cpp")
+target_sources(server PRIVATE "apps/server_main.cpp")
 target_link_libraries(server PRIVATE anyhttp)
 target_link_libraries(server PRIVATE Boost::program_options)
+
+if (ANYHTTP_COROSIO)
+    #
+    # corosio_issue_reactor_uaf: the reactor's use-after-free with several threads, standalone
+    #
+    add_executable(corosio_issue_reactor_uaf)
+    target_sources(corosio_issue_reactor_uaf PRIVATE "issues/corosio_issue_reactor_uaf.cpp")
+    target_link_libraries(corosio_issue_reactor_uaf PRIVATE Boost::corosio Threads::Threads)
+
+    # the client program comes with the rest of the port
+    return()
+endif()
 
 #
 # client
 #
 add_executable(client)
-target_sources(client PRIVATE "client_main.cpp")
+target_sources(client PRIVATE "apps/client_main.cpp")
 target_link_libraries(client PRIVATE anyhttp)
 
 #
 # beast_issue_3032
 #
 add_executable(beast_issue_3032)
-target_sources(beast_issue_3032 PRIVATE "beast_issue_3032.cpp")
+target_sources(beast_issue_3032 PRIVATE "issues/beast_issue_3032.cpp")

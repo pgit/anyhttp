@@ -20,25 +20,25 @@ protected:
 
    void respond_with(std::string body)
    {
-      requestHandler = [body = std::move(body)](server::Request request,
-                                                server::Response response) -> awaitable<void> {
+      // The authority has to arrive intact: an IPv6 literal without its brackets is invalid, and
+      // the server only logs and ignores it.
+      requestHandler = [host = std::string(url.encoded_host()), body = std::move(body)](
+                          server::Request request, server::Response response) -> Task<void> {
+         EXPECT_EQ(request.url().encoded_host(), host);
          co_await drain(request);
-         co_await response.async_submit(200, fields({{"Content-Length", body.size()}}));
-         co_await response.async_write_eof(asio::buffer(body));
+         check(co_await response.submit(200, fields({{"Content-Length", body.size()}})));
+         check(co_await response.write_eof(asio::buffer(body)));
       };
    }
 };
 
-INSTANTIATE_TEST_SUITE_P(IPv6, IPv6,
-                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
-                                anyhttp::Protocol::h3),
-                         NameGenerator);
+INSTANTIATE_TEST_SUITE_P(IPv6, IPv6, ValuesIn(protocols()), NameGenerator);
 
 TEST_P(IPv6, WHEN_server_listens_on_ipv6_loopback_THEN_get_succeeds)
 {
    respond_with("Hello, IPv6!");
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto message = co_await session.async_get(url);
+   clientSession = [this](Session session) -> Task<void> {
+      auto message = check(co_await session.get(url));
       EXPECT_EQ(message.result(), http::status::ok);
       EXPECT_EQ(message.body(), "Hello, IPv6!");
    };
@@ -59,16 +59,13 @@ protected:
    void configure_server(server::Config& config) override { config.listen_address = "::"; }
 };
 
-INSTANTIATE_TEST_SUITE_P(DualStack, DualStack,
-                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
-                                anyhttp::Protocol::h3),
-                         NameGenerator);
+INSTANTIATE_TEST_SUITE_P(DualStack, DualStack, ValuesIn(protocols()), NameGenerator);
 
 TEST_P(DualStack, WHEN_ipv6_server_is_reached_over_ipv4_THEN_get_succeeds)
 {
    respond_with("Hello, IPv4!");
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto message = co_await session.async_get(url);
+   clientSession = [this](Session session) -> Task<void> {
+      auto message = check(co_await session.get(url));
       EXPECT_EQ(message.result(), http::status::ok);
       EXPECT_EQ(message.body(), "Hello, IPv4!");
    };
@@ -90,15 +87,13 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(DualStackSecondaryAddress, DualStackSecondaryAddress,
-                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2,
-                                anyhttp::Protocol::h3),
-                         NameGenerator);
+                         ValuesIn(protocols()), NameGenerator);
 
 TEST_P(DualStackSecondaryAddress, WHEN_server_is_reached_on_a_secondary_address_THEN_get_succeeds)
 {
    respond_with("Hello, 127.0.0.2!");
-   clientSession = [this](Session session) -> awaitable<void> {
-      auto message = co_await session.async_get(url);
+   clientSession = [this](Session session) -> Task<void> {
+      auto message = check(co_await session.get(url));
       EXPECT_EQ(message.result(), http::status::ok);
       EXPECT_EQ(message.body(), "Hello, 127.0.0.2!");
    };

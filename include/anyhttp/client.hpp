@@ -4,7 +4,6 @@
 #include "reader.hpp"
 #include "writer.hpp"
 
-#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/buffer.hpp>
 
 #include <boost/beast/http/message.hpp>
@@ -102,6 +101,7 @@ class Request : public Writer
 {
 public:
    class Impl;
+   Request();
    explicit Request(std::unique_ptr<Impl> impl);
    Request(Request&& other) noexcept;
    Request& operator=(Request&& other) noexcept;
@@ -109,8 +109,8 @@ public:
    ~Request();
 
 public:
-   using GetResponse = void(boost::system::error_code, Response);
-   using GetResponseHandler = asio::any_completion_handler<GetResponse>;
+   using GetResponse = void(error_code, Response);
+   using GetResponseHandler = Completion<GetResponse>;
 
    /**
     * Waits for the response to this request, until its header has been received.
@@ -122,6 +122,7 @@ public:
     * its end, or its request was released without asking for it -- getting any later response
     * fails with \c asio::error::connection_aborted. See README.md, "Concurrent Requests".
     */
+#if ANYHTTP_ASIO
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken = DefaultCompletionToken>
    auto async_get_response(CompletionToken&& token = CompletionToken())
    {
@@ -133,9 +134,16 @@ public:
                              }),
          token);
    }
+#endif
+
+   /// \c async_get_response() as a coroutine:
+   /// <tt>auto [ec, response] = co_await request.get_response();</tt>
+   Task<std::tuple<error_code, Response>> get_response();
 
 private:
+#if ANYHTTP_ASIO
    void async_get_response_any(GetResponseHandler&& handler);
+#endif
 
    /// Hides Writer::pimpl(), narrowing it to the implementation this handle was built from.
    Impl& pimpl() const noexcept;
@@ -145,19 +153,19 @@ private:
 
 // =================================================================================================
 
-using Connect = void(boost::system::error_code, Session);
-using ConnectHandler = asio::any_completion_handler<Connect>;
+using Connect = void(error_code, Session);
+using ConnectHandler = Completion<Connect>;
 
 class Client
 {
 public:
    class Impl;
-   Client(asio::any_io_executor executor, Config config);
+   Client(Executor executor, Config config);
    Client(Client&& other) noexcept;
    Client& operator=(Client&& other) noexcept;
    ~Client();
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
    executor_type get_executor() const noexcept;
 
    /**
@@ -169,6 +177,7 @@ public:
     * so the users executor is not blocked, but this still means that the operation cannot be
     * interrupted.
     */
+#if ANYHTTP_ASIO
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken = DefaultCompletionToken>
    auto async_connect(CompletionToken&& token = CompletionToken())
    {
@@ -177,9 +186,15 @@ public:
          bind_executor(executor, [&](auto&& handler) { async_connect_any(std::move(handler)); }),
          token);
    }
+#endif
+
+   /// \c async_connect() as a coroutine: <tt>auto [ec, session] = co_await client.connect();</tt>
+   Task<std::tuple<error_code, Session>> connect();
 
 private:
+#if ANYHTTP_ASIO
    void async_connect_any(ConnectHandler&& handler);
+#endif
    std::shared_ptr<Impl> impl;
 };
 

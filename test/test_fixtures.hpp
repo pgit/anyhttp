@@ -1,7 +1,8 @@
 #pragma once
 
 //
-// Fixtures and helpers shared by the test_*.cpp files.
+// Fixtures and helpers shared by the test_*.cpp files. The fixtures themselves -- Server, Client
+// and ClientAsync -- are runtime-specific, in test_fixtures_asio.hpp and test_fixtures_corosio.hpp.
 //
 #include "anyhttp/client.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
@@ -10,59 +11,26 @@
 #include "anyhttp/session.hpp"
 #include "anyhttp/utils.hpp"
 
-#include <boost/asio/as_tuple.hpp>
-#include <boost/asio/bind_cancellation_slot.hpp>
-#include <boost/asio/bind_immediate_executor.hpp>
-#include <boost/asio/buffer.hpp>
-#include <boost/asio/cancel_after.hpp>
-#include <boost/asio/cancellation_signal.hpp>
-#include <boost/asio/co_spawn.hpp>
-#include <boost/asio/detached.hpp>
-#include <boost/asio/executor_work_guard.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
-#include <boost/asio/experimental/promise.hpp>
-#include <boost/asio/experimental/use_promise.hpp>
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/read.hpp>
-#include <boost/asio/read_until.hpp>
-#include <boost/asio/readable_pipe.hpp>
-#include <boost/asio/strand.hpp>
-#include <boost/asio/this_coro.hpp>
-#include <boost/asio/use_awaitable.hpp>
-#include <boost/asio/write.hpp>
-
-#include <boost/beast/core/error.hpp>
 #include <boost/beast/http/error.hpp>
-
-#include <boost/system/detail/errc.hpp>
-#include <boost/system/detail/error_code.hpp>
-#include <boost/system/system_error.hpp>
-
-#include <boost/scope/scope_exit.hpp>
-
 #include <boost/url/url.hpp>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <spdlog/common.h>
+#include <spdlog/spdlog.h>
 
 #include <chrono>
-#include <cstddef>
+#include <exception>
 #include <functional>
 #include <optional>
 #include <ranges>
+#include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 using namespace std::string_view_literals;
 using namespace std::chrono_literals;
-
-namespace asio = boost::asio;
-using namespace asio;
-using namespace asio::experimental::awaitable_operators;
-using tcp = ip::tcp;
 
 namespace rv = std::ranges::views;
 
@@ -70,10 +38,16 @@ using namespace anyhttp;
 
 // =================================================================================================
 
-/// Returns HTTP11 or HTTP/2 depending on the protocol.
+/// Returns HTTP11, HTTP2 or HTTP3 depending on the protocol.
 static std::string NameGenerator(const testing::TestParamInfo<anyhttp::Protocol>& info)
 {
    return to_string(info.param);
+}
+
+/// The protocols the parametrized shared tests run with.
+inline std::vector<anyhttp::Protocol> protocols()
+{
+   return {anyhttp::Protocol::h1, anyhttp::Protocol::h2, anyhttp::Protocol::h3};
 }
 
 static void setup_logging()
@@ -89,185 +63,43 @@ static void setup_logging()
 
 // =================================================================================================
 
-// #define MULTITHREADED
-
-//
-// Server fixture with some default request handlers.
-//
-// Although the server itself supports all protocols at runtime, this is a parametrized fixture
-// for use by the clients.
-//
-class Server : public testing::TestWithParam<anyhttp::Protocol>
-{
-protected:
-   //
-   // Number of threads run() will run the io_context on. More than one makes the server put
-   // every connection on its own strand, see below.
-   //
-   virtual size_t threads() const
-   {
-#if defined(MULTITHREADED)
-      return std::max(2u, std::thread::hardware_concurrency());
+#if ANYHTTP_COROSIO
+#include "test_fixtures_corosio.hpp"
 #else
-      return 1;
+#include "test_fixtures_asio.hpp"
 #endif
-   }
-
-   void SetUp() override
-   {
-      setup_logging();
-
-      auto config = server::Config{.listen_address = "127.0.0.2", .port = 0};
-      config.use_strand = threads() > 1;
-      configure_server(config);
-
-      //
-      // The main server acceptor loop does not need to run on a strand. Instead, a per-connection
-      // strand is created after accepting a new connection.
-      //
-      server.emplace(context.get_executor(), config);
-      server->on_request(
-         [this](server::Request request, server::Response response) -> awaitable<void> {
-            logd("{} ({})", request.url().path(), request.url().buffer());
-
-            if (auto delay = request.get_param_as<std::chrono::milliseconds::rep>("delay"))
-               co_await sleep(std::chrono::milliseconds{*delay});
-
-            if (request.url().path() == "/echo")
-               co_await echo(std::move(request), std::move(response));
-            else if (request.url().path() == "/eat_request")
-               co_await eat_request(std::move(request), std::move(response));
-            else if (request.url().path() == "/discard")
-               co_return;
-            else if (request.url().path() == "/h2spec")
-               co_await h2spec(std::move(request), std::move(response));
-            else if (request.url().path() == "/dump")
-               co_await dump(std::move(request), std::move(response));
-            else if (request.url().path() == "/dump space")
-               co_await dump(std::move(request), std::move(response));
-            else if (request.url().path() == "/detach")
-               co_await detach(std::move(request), std::move(response));
-            else if (request.url().path().starts_with("/custom"))
-               co_await requestHandler(std::move(request), std::move(response));
-            else
-               co_await not_found(std::move(request), std::move(response));
-         });
-   }
-
-   void run()
-   {
-      const size_t n = threads();
-      if (n <= 1)
-      {
-         ::run(context);
-         return;
-      }
-
-      //
-      // The extra threads use context.run() directly: the per-operation logging of ::run() is
-      // meant for single-threaded debugging and would just interleave into noise here.
-      //
-      auto pool =
-         rv::iota(size_t{1}, n) |
-         rv::transform([this](size_t) { return std::jthread([this] { context.run(); }); }) |
-         std::ranges::to<std::vector>();
-
-      context.run();
-   }
-
-   /// Lets a derived fixture adjust the server configuration before the server is created.
-   virtual void configure_server(server::Config&) {}
-
-   /// Returns listening port of the server.
-   auto port() const noexcept { return server->local_endpoint().port(); }
-
-protected:
-   boost::asio::io_context context;
-   std::optional<server::Server> server;
-   std::function<awaitable<void>(server::Request request, server::Response response)>
-      requestHandler;
-};
 
 // =================================================================================================
-
-class Client : public Server
-{
-protected:
-   void SetUp() override
-   {
-      Server::SetUp();
-      url.set_port_number(server->local_endpoint().port());
-      client::Config config{.url = url, .protocol = GetParam(), .tls_ca_file = "pki/out/root.pem"};
-      configure_client(config);
-#if defined(MULTITHREADED)
-      client.emplace(make_strand(context.get_executor()), config);
-#else
-      client.emplace(context.get_executor(), config);
-#endif
-   }
-
-   /// Lets a derived fixture adjust the client configuration before the client is created.
-   virtual void configure_client(client::Config&) {}
-
-protected:
-   boost::urls::url url{"http://127.0.0.2/custom"};
-   std::optional<client::Client> client;
-};
-
-// -------------------------------------------------------------------------------------------------
-
-class ClientAsync : public Client
-{
-public:
-   auto token()
-   {
-      return [this](const std::exception_ptr& ep) {
-         auto ec = code(ep);
-         if (ec)
-            logw("[{}] completed with \x1b[1;31m{}\x1b[0m", anyhttp::log_prefix(Role::client),
-                 what(ec));
-         else
-            logi("[{}] completed successfully", anyhttp::log_prefix(Role::client));
-
-         on_complete(ec);
-
-         logd("[{}] stopping", anyhttp::log_prefix(Role::server));
-         server.reset();
-         work.reset();
-      };
-   }
-
-   MOCK_METHOD(void, on_complete, (boost::system::error_code ec), ());
-   static constexpr auto Success = boost::system::error_code{};
-
-   void SetUp() override
-   {
-      Client::SetUp();
-
-      //
-      // Spawn the testcase coroutine on the client's executor so that access to it is serialized.
-      //
-      co_spawn(
-         client->get_executor(),
-         [this]() -> awaitable<void> {
-            if (clientSession)
-            {
-               auto session = co_await client->async_connect();
-               co_await clientSession(std::move(session));
-            }
-         },
-         token());
-   }
-
-   void TearDown() override
-   {
-      EXPECT_CALL(*this, on_complete(boost::system::error_code{}));
-      run();
-   }
-
-public:
-   decltype(boost::asio::make_work_guard(context)) work = boost::asio::make_work_guard(context);
-   std::function<awaitable<void>(Session session)> clientSession;
-};
-
+// Shared by both runtimes
 // =================================================================================================
+
+/**
+ * The value of an operation's result, throwing its error -- what ASIO's default completion token
+ * does, for the tests written in the coroutine spelling both runtimes have:
+ * <tt>auto request = check(co_await session.submit(url));</tt>
+ */
+template <typename... T>
+auto check(std::tuple<error_code, T...>&& result)
+{
+   if (auto& ec = std::get<0>(result))
+      throw_error(ec);
+   if constexpr (sizeof...(T) == 1)
+      return std::move(std::get<1>(result));
+   else if constexpr (sizeof...(T) > 1)
+      return std::apply([](auto&&, auto&&... rest) { return std::tuple{std::move(rest)...}; },
+                        std::move(result));
+}
+
+/// Awaits \p task and yields what it threw, if anything.
+inline Task<std::exception_ptr> caught(Task<void> task)
+{
+   try
+   {
+      co_await std::move(task);
+   }
+   catch (...)
+   {
+      co_return std::current_exception();
+   }
+   co_return nullptr;
+}

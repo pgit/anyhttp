@@ -28,18 +28,7 @@ std::ostream& operator<<(std::ostream& str, Protocol protocol)
 
 // -------------------------------------------------------------------------------------------------
 
-asio::ip::address normalize(asio::ip::address addr)
-{
-   if (addr.is_v6())
-   {
-      asio::ip::address_v6 v6 = addr.to_v6();
-      if (v6.is_v4_mapped())
-         return asio::ip::make_address_v4(asio::ip::v4_mapped, v6);
-   }
-   return addr;
-}
-
-asio::ip::tcp::endpoint normalize(const asio::ip::tcp::endpoint& endpoint)
+TcpEndpoint normalize(const TcpEndpoint& endpoint)
 {
    return {normalize(endpoint.address()), endpoint.port()};
 }
@@ -55,7 +44,7 @@ std::string log_prefix(Role role)
    return colored(role, role == Role::server ? "server" : "client");
 }
 
-std::string log_prefix(Role role, std::string_view protocol, const asio::ip::address& address,
+std::string log_prefix(Role role, std::string_view protocol, const IpAddress& address,
                        unsigned short port)
 {
    const auto addr = normalize(address);
@@ -68,42 +57,19 @@ std::string log_prefix(Role role, std::string_view protocol, const asio::ip::add
 }
 
 std::string log_prefix(Role role, std::string_view protocol,
-                       const asio::basic_socket<asio::ip::tcp, asio::any_io_executor>& socket)
+                       const std::optional<TcpEndpoint>& remote)
 {
-   boost::system::error_code ec;
-   auto remote = socket.remote_endpoint(ec);
-   if (ec)
+   if (!remote)
       return colored(role, protocol);
 
-   return log_prefix(role, protocol, remote.address(), remote.port());
+   return log_prefix(role, protocol, remote->address(), remote->port());
 }
 
 }; // namespace anyhttp
 
 // =================================================================================================
 
-boost::system::error_code code(const std::exception_ptr& ptr)
-{
-   if (!ptr)
-      return {};
-   else
-   {
-      try
-      {
-         std::rethrow_exception(ptr);
-      }
-      catch (boost::asio::multiple_exceptions& mex)
-      {
-         return code(mex.first_exception());
-      }
-      catch (boost::system::system_error& ex)
-      {
-         return ex.code();
-      }
-   }
-}
-
-std::string what(const boost::system::error_code& ec) { return ec.message(); }
+std::string what(const anyhttp::error_code& ec) { return ec.message(); }
 std::string what(const boost::system::system_error& ex) { return what(ex.code()); }
 std::string what(const std::exception_ptr& ptr)
 {

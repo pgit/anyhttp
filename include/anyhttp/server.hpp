@@ -4,11 +4,6 @@
 #include "reader.hpp"
 #include "writer.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/awaitable.hpp>
-#include <boost/asio/bind_executor.hpp>
-#include <boost/asio/co_spawn.hpp>
-
 #include <boost/lexical_cast/try_lexical_convert.hpp>
 
 #include <boost/url/urls.hpp>
@@ -28,6 +23,16 @@ struct Config
    std::string listen_address = "::";
    uint16_t port = 8080;
    bool use_strand = false;
+
+   //
+   // Bind the TCP acceptor and the HTTP/3 UDP socket with SO_REUSEPORT, so that several servers,
+   // each on an executor of its own, can listen on the same port and the kernel spreads the load
+   // over them: new TCP connections, and UDP datagrams by their address and port. A QUIC
+   // connection whose client address changes (migration, NAT rebinding) lands on another server
+   // then, which does not know it. All of them have to be bound before traffic arrives -- each one
+   // that joins reshuffles where the datagrams go.
+   //
+   bool reuse_port = false;
 
    //
    // The server's certificate chain and private key, as PEM files, for TLS over TCP and for
@@ -176,6 +181,7 @@ public:
    /**
     * Sends the response header, which opens the body for writing.
     */
+#if ANYHTTP_ASIO
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Status) CompletionToken = DefaultCompletionToken>
    auto async_submit(unsigned int status_code, const Fields& headers,
                      CompletionToken&& token = CompletionToken())
@@ -189,9 +195,15 @@ public:
                              }),
          token, status_code, headers);
    }
+#endif
+
+   /// \c async_submit() as a coroutine: <tt>auto [ec] = co_await response.submit(200, {});</tt>
+   Task<std::tuple<error_code>> submit(unsigned int status_code, Fields headers);
 
 private:
+#if ANYHTTP_ASIO
    void async_submit_any(StatusHandler&& handler, unsigned int status_code, const Fields& headers);
+#endif
 
    /// Hides Writer::pimpl(), narrowing it to the implementation this handle was built from.
    Impl& pimpl() const noexcept;
@@ -199,23 +211,23 @@ private:
 
 // =================================================================================================
 
-using RequestHandler = std::function<asio::awaitable<void>(Request, Response)>;
+using RequestHandler = std::function<Task<void>(Request, Response)>;
 
 class Server
 {
 public:
    class Impl;
-   Server(asio::any_io_executor executor, Config config);
+   Server(Executor executor, Config config);
    Server(Server&& other) noexcept;
    Server& operator=(Server&& other) noexcept;
    ~Server();
 
-   using executor_type = asio::any_io_executor;
+   using executor_type = Executor;
    executor_type get_executor() const noexcept;
 
    void on_request(RequestHandler&& handler);
 
-   asio::ip::tcp::endpoint local_endpoint() const;
+   TcpEndpoint local_endpoint() const;
 
 private:
    std::shared_ptr<Impl> impl;

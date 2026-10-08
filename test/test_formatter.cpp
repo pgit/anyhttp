@@ -1,7 +1,7 @@
 #include <anyhttp/formatter.hpp>
-#include <anyhttp/h2_common.hpp> // the nghttp2_nv formatter lives with the rest of the h2 glue
+#include <anyhttp/h2/common.hpp> // the nghttp2_nv formatter lives with the rest of the h2 glue
+#include <anyhttp/net.hpp>
 
-#include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/http/field.hpp>
 #include <boost/core/detail/string_view.hpp>
 #include <boost/url/authority_view.hpp>
@@ -71,37 +71,33 @@ TEST(FormatterTest, BoostStringViewEmpty)
 }
 
 // =================================================================================================
-// Test boost::asio::ip::tcp::endpoint formatter
+// Test the endpoint formatter, for the runtime's own endpoints
 // =================================================================================================
 
 TEST(FormatterTest, EndpointIPv4)
 {
-   auto addr = boost::asio::ip::make_address_v4("192.168.1.1");
-   boost::asio::ip::tcp::endpoint endpoint(addr, 8080);
+   anyhttp::TcpEndpoint endpoint(anyhttp::io::make_address("192.168.1.1"), 8080);
    auto formatted = std::format("{}", endpoint);
    EXPECT_EQ(formatted, "192.168.1.1:8080");
 }
 
 TEST(FormatterTest, EndpointIPv6)
 {
-   auto addr = boost::asio::ip::make_address_v6("::1");
-   boost::asio::ip::tcp::endpoint endpoint(addr, 9090);
+   anyhttp::TcpEndpoint endpoint(anyhttp::io::make_address("::1"), 9090);
    auto formatted = std::format("{}", endpoint);
    EXPECT_EQ(formatted, "[::1]:9090");
 }
 
 TEST(FormatterTest, EndpointUDP)
 {
-   auto addr = boost::asio::ip::make_address_v6("::1");
-   boost::asio::ip::udp::endpoint endpoint(addr, 9090);
+   anyhttp::UdpEndpoint endpoint(anyhttp::io::make_address("::1"), 9090);
    auto formatted = std::format("{}", endpoint);
    EXPECT_EQ(formatted, "[::1]:9090");
 }
 
 TEST(FormatterTest, EndpointIPv6Full)
 {
-   auto addr = boost::asio::ip::make_address_v6("2001:db8::1");
-   boost::asio::ip::tcp::endpoint endpoint(addr, 443);
+   anyhttp::TcpEndpoint endpoint(anyhttp::io::make_address("2001:db8::1"), 443);
    auto formatted = std::format("{}", endpoint);
    EXPECT_EQ(formatted, "[2001:db8::1]:443");
 }
@@ -132,8 +128,10 @@ TEST(FormatterTest, HttpFieldUserAgent)
 }
 
 // =================================================================================================
-// Test boost::asio::cancellation_type formatter
+// Test boost::asio::cancellation_type formatter (ASIO only)
 // =================================================================================================
+
+#if ANYHTTP_ASIO
 
 TEST(FormatterTest, CancellationTypeNone)
 {
@@ -184,6 +182,8 @@ TEST(FormatterTest, CancellationTypeMultipleCombined)
    auto formatted = std::format("{}", ct);
    EXPECT_EQ(formatted, "terminal|total");
 }
+
+#endif // ANYHTTP_ASIO
 
 // =================================================================================================
 // Test nghttp2_nv formatter
