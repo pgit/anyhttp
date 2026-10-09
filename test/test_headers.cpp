@@ -189,6 +189,28 @@ TEST_P(Headers, WHEN_complex_url_is_submitted_THEN_is_provided_to_request_handle
    };
 }
 
+// -------------------------------------------------------------------------------------------------
+
+TEST_P(Headers, WHEN_response_is_sent_THEN_it_carries_the_date)
+{
+   using namespace std::chrono;
+   const auto before = floor<seconds>(system_clock::now());
+
+   requestHandler = [](server::Request request, server::Response response) -> Task<void> {
+      co_await drain(request);
+      check(co_await response.submit(200, fields({{"Content-Length", 0}})));
+      check(co_await response.write_eof());
+   };
+
+   clientSession = [this, before](Session session) -> Task<void> {
+      auto message = check(co_await session.get(url, {}));
+      std::vector<std::string> expected;
+      for (auto time = before; time <= system_clock::now(); time += 1s)
+         expected.emplace_back(format_http_date(time));
+      EXPECT_THAT(values_of(message, "date"), ElementsAre(AnyOfArray(expected)));
+   };
+}
+
 // =================================================================================================
 
 //
@@ -351,4 +373,38 @@ TEST_P(HeaderLimits, WHEN_response_is_rejected_THEN_session_serves_next_request)
       EXPECT_EQ(co_await request(session, {}, 100), 200);
       EXPECT_EQ(handled, 2);
    };
+}
+
+// =================================================================================================
+
+static std::string formatted(std::chrono::system_clock::time_point time)
+{
+   return std::string(format_http_date(time));
+}
+
+TEST(HttpDate, WHEN_time_is_formatted_THEN_is_imf_fixdate)
+{
+   using namespace std::chrono;
+   EXPECT_EQ(formatted(sys_days{1994y / November / 6} + 8h + 49min + 37s),
+             "Sun, 06 Nov 1994 08:49:37 GMT"); // the example in RFC 9110, section 5.6.7
+   EXPECT_EQ(formatted(sys_seconds{}), "Thu, 01 Jan 1970 00:00:00 GMT");
+   EXPECT_EQ(formatted(sys_days{2000y / February / 29} + 23h + 59min + 59s + 999ms),
+             "Tue, 29 Feb 2000 23:59:59 GMT");
+   EXPECT_EQ(formatted(sys_seconds{} - 500ms), "Wed, 31 Dec 1969 23:59:59 GMT");
+}
+
+TEST(HttpDate, WHEN_year_has_no_four_digits_THEN_is_clamped)
+{
+   using namespace std::chrono;
+   EXPECT_EQ(formatted(sys_days{year{12345} / January / 1}), "Fri, 31 Dec 9999 23:59:59 GMT");
+   EXPECT_EQ(formatted(sys_days{year{-1} / December / 31}), "Sat, 01 Jan 0000 00:00:00 GMT");
+}
+
+TEST(HttpDate, WHEN_current_time_is_formatted_THEN_matches_the_clock)
+{
+   using namespace std::chrono;
+   const auto before = formatted(system_clock::now());
+   const auto now = std::string(http_date_now());
+   const auto after = formatted(system_clock::now());
+   EXPECT_THAT(now, AnyOf(before, after));
 }

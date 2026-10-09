@@ -12,6 +12,7 @@
 #include <boost/url/authority_view.hpp>
 #include <boost/url/pct_string_view.hpp>
 
+#include <array>
 #include <chrono>
 #include <format>
 #include <iostream>
@@ -68,6 +69,11 @@ public:
    {
       if constexpr (std::convertible_to<const T&, std::string_view>)
          view = value;
+      else if constexpr (std::integral<T> && !std::same_as<T, bool> && !std::same_as<T, char>)
+      {
+         buffer = std::to_string(value); // as std::format() would, without parsing a format
+         view = buffer;
+      }
       else
       {
          buffer = std::format("{}", value);
@@ -200,7 +206,21 @@ std::string what(const anyhttp::error_code& ec);
 
 // -------------------------------------------------------------------------------------------------
 
-/// Format according to HTTP date spec (RFC 7231)
-std::string format_http_date(std::chrono::system_clock::time_point tp);
+/**
+ * An HTTP date, "Sun, 06 Nov 1994 08:49:37 GMT" (IMF-fixdate, RFC 9110, section 5.6.7). It has a
+ * fixed length, so it is kept in a buffer of its own rather than on the heap: every response
+ * carries one.
+ */
+struct HttpDate
+{
+   std::array<char, 29> chars;
+   operator std::string_view() const noexcept { return {chars.data(), chars.size()}; }
+};
+
+/// Formats \p tp as an HTTP date, clamped to the years 0000 to 9999 the format has room for.
+HttpDate format_http_date(std::chrono::system_clock::time_point tp);
+
+/// The current time as an HTTP date, for the \c Date header of a response.
+HttpDate http_date_now();
 
 // =================================================================================================
