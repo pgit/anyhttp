@@ -62,19 +62,13 @@ protected:
       work_.reset();
       processes_thread_.join();
    }
+#endif
 
-   /// Stops the server from the thread of the child processes: posted to the server's thread.
+   /// Stops the server, posted to its executor.
    void stop_server()
    {
       run_later(server->get_executor(), [this] { server.reset(); });
    }
-#else
-   /// Stops the server, posted to its executor.
-   void stop_server()
-   {
-      asio::post(server->get_executor(), [this] { server.reset(); });
-   }
-#endif
 
    auto split_lines(std::string_view lines)
    {
