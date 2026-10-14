@@ -1,6 +1,6 @@
 //
 // corosio: heap-use-after-free in the epoll reactor with more than one thread in run() (not filed
-// yet; corosio 6a3eed46).
+// yet; corosio 6a3eed46, still in 0a387cb).
 //
 // epoll_scheduler::run_task() takes each event's reactor_descriptor_state* from epoll_wait() and
 // calls add_ready_events() on it, then sets is_enqueued_, without holding the descriptor's mutex.

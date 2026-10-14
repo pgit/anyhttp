@@ -249,7 +249,7 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
      closes and frees the socket meanwhile; `close_socket()` pins the impl through `impl_ref_`
      only once `is_enqueued_` is set, which the reactor thread has not done yet. TSAN reports it
      as `heap-use-after-free` in `add_ready_events()`/`invoke_deferred_io()` and as data races on
-     `operator delete`, almost all of the reports (unchanged on upstream `develop`, 2026-10-02).
+     `operator delete`, almost all of the reports (still there in corosio `0a387cb`, 2026-10-14).
      The full suite under ASAN, threaded, stays clean: the window is narrow. Not filed yet.
    - TSAN also reports the `enabled` flag of a descriptor's mutex, written by
      `register_descriptor()` and read by the thread that gets its first event: ordered by
@@ -261,8 +261,9 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
      closing the connection then loses it. Open question whether the h3 client should flush
      first.
    - Tests that set up their own server or client on the bare context (`AltSvcFrame`,
-     `DualStackSecondaryAddress`), share a `static` generator (`YieldFuzz`) or a log sink are not
-     thread-aware.
+     `DualStackSecondaryAddress`, `Server.StopAfterMove`), wait for a `Signal` there
+     (`WHEN_server_session_is_gone_THEN_*`), share a `static` generator (`YieldFuzz`) or a log sink
+     are not thread-aware.
 
    TLS, `scripts/bench.sh -c 32 -t N` (h2load threads as many), req/s, COROSIO vs ASIO on OpenSSL:
 
