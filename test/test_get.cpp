@@ -6,6 +6,7 @@
 
 #include <spdlog/sinks/ringbuffer_sink.h>
 
+#include <memory>
 #include <string>
 
 using namespace testing;
@@ -21,6 +22,14 @@ namespace http = boost::beast::http;
 class AsyncGet : public ClientAsync
 {
 protected:
+   void TearDown() override
+   {
+      ClientAsync::TearDown();
+      // only now that every thread has stopped: the logger's sinks are a plain vector
+      if (log_sink)
+         std::erase(spdlog::default_logger_raw()->sinks(), log_sink);
+   }
+
    /// Installs a request handler that drains the request and responds 200 with \p body.
    void respond_with(std::string body)
    {
@@ -32,6 +41,9 @@ protected:
          check(co_await response.write_eof(asio::buffer(body)));
       };
    }
+
+   /// A sink the test added to the default logger, which TearDown() takes off again.
+   std::shared_ptr<spdlog::sinks::sink> log_sink;
 };
 
 INSTANTIATE_TEST_SUITE_P(AsyncGet, AsyncGet, ValuesIn(protocols()), NameGenerator);
@@ -58,15 +70,14 @@ TEST_P(AsyncGet, WHEN_get_THEN_message_has_status_fields_and_body)
 TEST_P(AsyncGet, WHEN_logging_at_info_THEN_tls_handshake_is_summarized)
 {
    auto sink = std::make_shared<spdlog::sinks::ringbuffer_sink_mt>(256);
-   auto& sinks = spdlog::default_logger_raw()->sinks();
-   sinks.push_back(sink);
+   log_sink = sink;
+   spdlog::default_logger_raw()->sinks().push_back(sink);
    spdlog::set_level(spdlog::level::info);
 
    respond_with("Hello, World!");
-   clientSession = [this, sink, &sinks](Session session) -> Task<void> {
+   clientSession = [this, sink](Session session) -> Task<void> {
       auto message = check(co_await session.get(url));
       EXPECT_EQ(message.body(), "Hello, World!");
-      std::erase(sinks, sink);
 
       auto handshake = HasSubstr("TLSv1.3, cipher=");
       if (GetParam() == anyhttp::Protocol::h3)
