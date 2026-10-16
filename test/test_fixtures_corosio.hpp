@@ -6,11 +6,14 @@
 // here, or on the compiler's command line) runs the tests on several threads, with a strand per
 // connection.
 //
-#include <boost/capy/ex/run.hpp>
-#include <boost/capy/ex/this_coro.hpp>
+#include <boost/capy/io_task.hpp>
+#include <boost/capy/when_all.hpp>
+#include <boost/corosio/delay.hpp>
 #include <boost/corosio/io_context.hpp>
 
-#include <stop_token>
+#include <system_error>
+#include <type_traits>
+#include <variant>
 
 /// The context the tests run their servers and clients on.
 using IoContext = boost::corosio::io_context;
@@ -20,14 +23,31 @@ using IoContext = boost::corosio::io_context;
 /**
  * COROSIO's spelling of ASIO's cancel_after(): awaits \p task, which is requested to stop after
  * \p timeout. The request reaches only the task, not the coroutine that awaits it.
+ *
+ * The task and the timer are siblings in when_all(), which stops the others when one returns an
+ * error: the timer does when it expires, the task's side always, to end the timer. So the timer
+ * has finished when this returns. A detached one (a Timer) would not, and would then run on the
+ * caller's executor after the caller is gone: this_coro::executor only borrows it.
  */
 template <typename T, typename Rep, typename Period>
 Task<T> stop_after(std::chrono::duration<Rep, Period> timeout, Task<T> task)
 {
-   std::stop_source stop;
-   Timer timer(co_await boost::capy::this_coro::executor);
-   timer.arm(timeout, [&stop] { stop.request_stop(); });
-   co_return co_await boost::capy::run(stop.get_token())(std::move(task));
+   const auto canceled = std::make_error_code(std::errc::operation_canceled);
+   std::optional<std::conditional_t<std::is_void_v<T>, std::monostate, T>> result;
+   auto run_task = [&]() -> boost::capy::io_task<> {
+      if constexpr (std::is_void_v<T>)
+         co_await std::move(task);
+      else
+         result.emplace(co_await std::move(task));
+      co_return {canceled};
+   };
+   auto run_timer = [&]() -> boost::capy::io_task<> {
+      auto [ec] = co_await boost::corosio::delay(timeout);
+      co_return {ec ? ec : canceled};
+   };
+   co_await boost::capy::when_all(run_task(), run_timer());
+   if constexpr (!std::is_void_v<T>)
+      co_return std::move(*result);
 }
 
 // =================================================================================================
