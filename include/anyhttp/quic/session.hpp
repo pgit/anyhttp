@@ -107,6 +107,19 @@ public:
    //
    void stop_reading(int64_t stream_id, uint64_t app_error_code);
 
+   //
+   // Abort just our write direction (RESET_STREAM), leaving the peer's to flow on. HTTP/3 never
+   // does that, plain streams do when their Writer gives up.
+   //
+   void reset_writing(int64_t stream_id, uint64_t app_error_code);
+
+   //
+   // Closes the connection on the application's behalf: CONNECTION_CLOSE with `app_error_code`,
+   // and every stream still open fails. Can be called from anywhere; it does its work on the
+   // session's executor.
+   //
+   void close_connection(uint64_t app_error_code);
+
    /// The application error code the connection is closed with, see QuicApplication.
    void set_application_error(uint64_t app_error_code);
 
@@ -166,6 +179,8 @@ public:
    static int cb_extend_max_streams_bidi(ngtcp2_conn*, uint64_t max_streams, void* user);
    static int cb_stream_stop_sending(ngtcp2_conn*, int64_t stream_id, uint64_t app_error_code,
                                      void* user, void*);
+   static int cb_recv_stop_sending(ngtcp2_conn*, int64_t stream_id, uint64_t app_error_code,
+                                   void* user, void*);
    static int cb_stream_reset(ngtcp2_conn*, int64_t stream_id, uint64_t final_size,
                               uint64_t app_error_code, void* user, void*);
    static int cb_extend_max_stream_data(ngtcp2_conn*, int64_t stream_id, uint64_t max_data,

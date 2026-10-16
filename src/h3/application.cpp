@@ -184,7 +184,7 @@ int Http3Application::stream_reset(int64_t stream_id, uint64_t /*app_error_code*
    return 0;
 }
 
-int Http3Application::stop_sending(int64_t stream_id, uint64_t /*app_error_code*/)
+int Http3Application::stream_stop_sending(int64_t stream_id, uint64_t /*app_error_code*/)
 {
    if (auto rv = nghttp3_conn_shutdown_stream_read(h3_, stream_id); rv != 0)
    {
@@ -229,8 +229,14 @@ ngtcp2_ssize Http3Application::next_stream_data(int64_t& stream_id, bool& fin,
    return sveccnt;
 }
 
-int Http3Application::on_stream_data_written(int64_t stream_id, size_t n)
+int Http3Application::on_stream_data_written(int64_t stream_id, size_t n, bool /*fin*/)
 {
+   //
+   // nghttp3 keeps track of its FIN itself, and has never been told about a packet that carries
+   // nothing of a stream but the FIN.
+   //
+   if (n == 0)
+      return 0;
    if (auto rv = nghttp3_conn_add_write_offset(h3_, stream_id, n); rv != 0)
    {
       mloge("nghttp3_conn_add_write_offset: {}", nghttp3_strerror(rv));

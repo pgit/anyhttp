@@ -103,6 +103,7 @@ protected:
    // QuicStream
    //
    void on_writable() override;
+   void reset_writing() override;
    uint64_t reset_error_code() const noexcept override { return NGHTTP3_H3_REQUEST_CANCELLED; }
    uint64_t stop_sending_error_code() const noexcept override { return NGHTTP3_H3_NO_ERROR; }
 
@@ -123,27 +124,16 @@ public:
 // =================================================================================================
 // Http3Reader / Http3Writer: adapters plugging an Http3Stream into the anyhttp Reader/Writer
 // interfaces. The same pair serves both roles -- server::Request/server::Response and
-// client::Response/client::Request are the same two halves seen from the other end.
+// client::Response/client::Request are the same two halves seen from the other end. What they add
+// to the QUIC stream's adapters is the header section.
 // =================================================================================================
 
 template <typename Interface>
-class Http3Reader : public Interface
+class Http3Reader : public quic::QuicReader<Interface, Http3Stream>
 {
 public:
-   explicit Http3Reader(Http3Stream& s) : stream(&s), executor(s.get_executor())
-   {
-      s.reader = this;
-   }
-   ~Http3Reader() override
-   {
-      if (stream)
-      {
-         stream->reader = nullptr;
-         stream->delete_reader();
-      }
-   }
-
-   Executor get_executor() const noexcept override { return executor; }
+   using quic::QuicReader<Interface, Http3Stream>::QuicReader;
+   using quic::QuicReader<Interface, Http3Stream>::stream;
 
    std::optional<size_t> content_length() const noexcept override
    {
@@ -152,122 +142,29 @@ public:
 
    const Fields& fields() const override { return stream ? stream->fields : detached_fields; }
 
-   void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) override
-   {
-      //
-      // An empty buffer is not a request to read anything: complete right away, without looking
-      // at whether the body has ended or the stream is even still there -- as ASIO does for a
-      // zero-length read.
-      //
-      if (asio::buffer_size(buffer) == 0)
-      {
-         complete_immediately(std::move(handler), executor, error_code{}, size_t{0});
-         return;
-      }
-
-      //
-      // The stream is gone; detach() latched how the body stood at that point, so a cleanly
-      // finished body keeps reporting eof (as the Reader contract requires) and a truncated one
-      // keeps reporting partial_message.
-      //
-      if (!stream)
-      {
-         complete_immediately(std::move(handler), executor, detached_ec, size_t{0});
-         return;
-      }
-
-      on_cancel(handler, [this] {
-         if (stream && stream->read_handler)
-            complete_later(std::move(stream->read_handler), stream->get_executor(),
-                           errors::canceled, size_t{0});
-      });
-
-      assert(!stream->read_handler);
-      stream->read_handler = std::move(handler);
-      stream->read_handler_buffer = buffer;
-      stream->call_read_handler();
-   }
-
    void detach() override
    {
-      //
-      // The stream is going away first (session teardown outliving this exchange). Remember how
-      // the body stood, so that reads issued from now on keep answering per the Reader contract.
-      //
       assert(stream);
-      detached_ec = stream->reading_finished() ? errors::eof : errors::partial_message;
-      detached_log_prefix = stream->log_prefix();
       detached_fields = std::move(stream->fields); // the stream is being destroyed
-      stream = nullptr;
+      quic::QuicReader<Interface, Http3Stream>::detach();
    }
 
-   std::string log_prefix() const override
-   {
-      return stream ? stream->log_prefix() : detached_log_prefix;
-   }
-
-   Http3Stream* stream;
-   Executor executor; // kept as a copy so a detached reader can still complete
-   std::string detached_log_prefix; // latched by detach()
-
-   /// What a read past detach() reports: eof for a body read to its clean end, else truncation.
-   error_code detached_ec{errors::partial_message};
    Fields detached_fields; // moved out of the stream by detach(), so fields() outlives it
 };
 
 // -------------------------------------------------------------------------------------------------
 
 template <typename Base>
-class Http3Writer : public Base
+class Http3Writer : public quic::QuicWriter<Base, Http3Stream>
 {
 public:
-   explicit Http3Writer(Http3Stream& s) : stream(&s), executor(s.get_executor())
-   {
-      s.writer = this;
-   }
-   ~Http3Writer() override
-   {
-      if (stream)
-      {
-         stream->writer = nullptr;
-         stream->delete_writer();
-      }
-   }
-
-   Executor get_executor() const noexcept override { return executor; }
+   using quic::QuicWriter<Base, Http3Stream>::QuicWriter;
+   using quic::QuicWriter<Base, Http3Stream>::stream;
 
    void content_length(std::optional<size_t> len) override
    {
       assert(stream);
       stream->response_content_length = len;
-   }
-
-   void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) override
-   {
-      if (stream)
-      {
-         // everything -- including a write against a stream ngtcp2 has already torn down -- is
-         // start_write()'s to decide, so that ending a body twice and writing past its end are
-         // answered the same way whatever became of the stream since
-         stream->start_write(std::move(handler), buffer, eof);
-         return;
-      }
-
-      //
-      // The stream itself is gone, but the entry ladder of the Writer contract still applies,
-      // answered from the state detach() latched: an empty non-EOF write stays a free no-op, a
-      // body that was cleanly ended keeps answering as such -- bare re-end idempotent, data
-      // broken_pipe -- and only a stream that vanished mid-body is a connection error.
-      //
-      const bool empty = asio::buffer_size(buffer) == 0;
-      error_code ec;
-      if (empty && !eof)
-         ec = {};
-      else if (detached_body_ended)
-         ec = empty ? error_code{} : make_error_code(errc::broken_pipe);
-      else
-         ec = make_error_code(errc::connection_reset);
-      complete_immediately(std::move(handler), executor, ec);
    }
 
    void async_submit(StatusHandler&& handler, unsigned int status_code, const Fields& fields)
@@ -280,26 +177,6 @@ public:
       stream->submit_response(status_code, fields);
       std::move(handler)(error_code{});
    }
-
-   void detach() override
-   {
-      // remember whether the body was cleanly ended -- intent accepted *and* the FIN handed to
-      // nghttp3 -- so writes issued after this still answer per the Writer contract
-      assert(stream);
-      detached_body_ended = stream->eof_submitted && stream->fin_offered;
-      detached_log_prefix = stream->log_prefix();
-      stream = nullptr;
-   }
-
-   std::string log_prefix() const override
-   {
-      return stream ? stream->log_prefix() : detached_log_prefix;
-   }
-
-   Http3Stream* stream;
-   Executor executor; // kept as a copy so a detached writer can still complete
-   std::string detached_log_prefix; // latched by detach()
-   bool detached_body_ended = false; // latched by detach(), see there
 };
 
 // =================================================================================================

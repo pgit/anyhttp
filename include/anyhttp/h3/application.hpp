@@ -45,10 +45,10 @@ public:
    int acked_stream_data(int64_t id, uint64_t offset, uint64_t len) override;
    int stream_close(int64_t id, uint32_t flags, uint64_t app_error_code) override;
    int stream_reset(int64_t id, uint64_t app_error_code) override;
-   int stop_sending(int64_t id, uint64_t app_error_code) override;
+   int stream_stop_sending(int64_t id, uint64_t app_error_code) override;
    int extend_max_stream_data(int64_t id) override;
    ngtcp2_ssize next_stream_data(int64_t& id, bool& fin, std::span<ngtcp2_vec> vec) override;
-   int on_stream_data_written(int64_t id, size_t n) override;
+   int on_stream_data_written(int64_t id, size_t n, bool fin) override;
    void on_stream_blocked(int64_t id) override;
    void on_stream_shut_wr(int64_t id) override;
 

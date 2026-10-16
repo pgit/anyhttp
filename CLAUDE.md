@@ -130,8 +130,11 @@ QUIC and HTTP/3 are two layers, and each shares one implementation between serve
 demux, closing period) and `quic/client.cpp` (connected socket) hold only what is genuinely
 role-specific. What runs on a connection is a `QuicApplication` (`quic/application.hpp`), picked
 by ALPN. HTTP/3 is one: `h3/application.*` (all nghttp3 callbacks, nghttp3 as the write
-scheduler), `h3/stream.*` (read and write paths, header parsing, lifecycle, the reader/writer
-adapters), and again `h3/server.cpp` and `h3/client.cpp` for the roles. Fix shared behavior in the
+scheduler), `h3/stream.*` (header parsing, the nghttp3 data reader, the reader/writer adapters'
+header section), and again `h3/server.cpp` and `h3/client.cpp` for the roles. Plain QUIC streams
+(public API `anyhttp/quic.hpp`, tests `test_quic.cpp`) are the other: `quic/streams.*` (the
+application, with its round-robin write scheduler) and `quic/connection.cpp` (the handles). The
+read and write paths and the lifecycle of both are `QuicStream`'s. Fix shared behavior in the
 shared files.
 
 ## Conventions

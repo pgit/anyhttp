@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -141,7 +142,9 @@ public:
    //
    Reader::Impl* reader = nullptr; // the reading adapter, while attached
    Writer::Impl* writer = nullptr; // the writing adapter, while attached
-   bool closed = false;
+   bool closed = false; // both directions are over, ngtcp2 is done with the stream
+   bool read_aborted = false; // the incoming body will not be complete, see abort_reading()
+   bool write_aborted = false; // the outgoing body can't go on, see abort_writing()
 
    //
    // Data flow into user land (incoming body).
@@ -186,6 +189,17 @@ public:
    virtual void delete_writer();
    void maybe_close();
 
+   //
+   // One direction ends early, for protocols that let the two go separate ways (plain streams;
+   // HTTP/3 aborts the whole exchange instead). abort_reading(): the peer reset its side, or we
+   // stopped reading -- what is buffered is dropped, and reads report partial_message.
+   // abort_writing(): the peer asked us to stop (ngtcp2 has answered with RESET_STREAM), or we
+   // reset our side -- a write in progress completes with `ec`, every later one with
+   // connection_reset.
+   //
+   void abort_reading();
+   void abort_writing(error_code ec);
+
 protected:
    //
    // Detaches the reader and writer adapters and fails what they have pending. The destructor of
@@ -201,6 +215,10 @@ protected:
    virtual void on_failed(error_code ec) { (void)ec; }
    /// There is something new to send: tell the scheduler (and wake the write loop).
    virtual void on_writable() = 0;
+   /// Cuts the outgoing body short with RESET_STREAM and marks it dead, completing nothing: what
+   /// a cancelled zero-copy write and a writer gone before the end come down to. HTTP/3 resets
+   /// the whole stream instead.
+   virtual void reset_writing();
    /// The application error code for RESET_STREAM when a body is cut short.
    virtual uint64_t reset_error_code() const noexcept = 0;
    /// The application error code for STOP_SENDING when the reader goes away early.
@@ -209,6 +227,168 @@ protected:
 private:
    void bind_write_cancellation(WriteHandler& handler, uint64_t token); // arms cancellation
    void finish_active_write(); // completes the active write and releases the caller's buffer
+};
+
+// =================================================================================================
+// QuicReader / QuicWriter: adapters plugging a QuicStream into the anyhttp Reader/Writer
+// interfaces, for both roles and every protocol. HTTP/3 derives from them what it adds on top --
+// the fields, the content length, the request or status line.
+// =================================================================================================
+
+template <typename Interface, typename Stream = QuicStream>
+class QuicReader : public Interface
+{
+public:
+   explicit QuicReader(Stream& s) : stream(&s), stream_id(s.id), executor(s.get_executor())
+   {
+      s.reader = this;
+   }
+   ~QuicReader() override
+   {
+      if (stream)
+      {
+         stream->reader = nullptr;
+         stream->delete_reader();
+      }
+   }
+
+   Executor get_executor() const noexcept override { return executor; }
+
+   std::optional<size_t> content_length() const noexcept override { return std::nullopt; }
+
+   void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) override
+   {
+      //
+      // An empty buffer is not a request to read anything: complete right away, without looking
+      // at whether the body has ended or the stream is even still there -- as ASIO does for a
+      // zero-length read.
+      //
+      if (asio::buffer_size(buffer) == 0)
+      {
+         complete_immediately(std::move(handler), executor, error_code{}, size_t{0});
+         return;
+      }
+
+      //
+      // The stream is gone; detach() latched how the body stood at that point, so a cleanly
+      // finished body keeps reporting eof (as the Reader contract requires) and a truncated one
+      // keeps reporting partial_message.
+      //
+      if (!stream)
+      {
+         complete_immediately(std::move(handler), executor, detached_ec, size_t{0});
+         return;
+      }
+
+      on_cancel(handler, [this] {
+         if (stream && stream->read_handler)
+            complete_later(std::move(stream->read_handler), stream->get_executor(),
+                           errors::canceled, size_t{0});
+      });
+
+      assert(!stream->read_handler);
+      stream->read_handler = std::move(handler);
+      stream->read_handler_buffer = buffer;
+      stream->call_read_handler();
+   }
+
+   void detach() override
+   {
+      //
+      // The stream is going away first (session teardown outliving this exchange). Remember how
+      // the body stood, so that reads issued from now on keep answering per the Reader contract.
+      //
+      assert(stream);
+      detached_ec = stream->reading_finished() ? errors::eof : errors::partial_message;
+      detached_log_prefix = stream->log_prefix();
+      stream = nullptr;
+   }
+
+   std::string log_prefix() const override
+   {
+      return stream ? stream->log_prefix() : detached_log_prefix;
+   }
+
+   Stream* stream;
+   int64_t stream_id;
+   Executor executor; // kept as a copy so a detached reader can still complete
+   std::string detached_log_prefix; // latched by detach()
+
+   /// What a read past detach() reports: eof for a body read to its clean end, else truncation.
+   error_code detached_ec{errors::partial_message};
+};
+
+// -------------------------------------------------------------------------------------------------
+
+template <typename Interface, typename Stream = QuicStream>
+class QuicWriter : public Interface
+{
+public:
+   explicit QuicWriter(Stream& s) : stream(&s), stream_id(s.id), executor(s.get_executor())
+   {
+      s.writer = this;
+   }
+   ~QuicWriter() override
+   {
+      if (stream)
+      {
+         stream->writer = nullptr;
+         stream->delete_writer();
+      }
+   }
+
+   Executor get_executor() const noexcept override { return executor; }
+
+   void content_length(std::optional<size_t>) override {}
+
+   void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) override
+   {
+      if (stream)
+      {
+         // everything -- including a write against a stream ngtcp2 has already torn down -- is
+         // start_write()'s to decide, so that ending a body twice and writing past its end are
+         // answered the same way whatever became of the stream since
+         stream->start_write(std::move(handler), buffer, eof);
+         return;
+      }
+
+      //
+      // The stream itself is gone, but the entry ladder of the Writer contract still applies,
+      // answered from the state detach() latched: an empty non-EOF write stays a free no-op, a
+      // body that was cleanly ended keeps answering as such -- bare re-end idempotent, data
+      // broken_pipe -- and only a stream that vanished mid-body is a connection error.
+      //
+      const bool empty = asio::buffer_size(buffer) == 0;
+      error_code ec;
+      if (empty && !eof)
+         ec = {};
+      else if (detached_body_ended)
+         ec = empty ? error_code{} : make_error_code(errc::broken_pipe);
+      else
+         ec = make_error_code(errc::connection_reset);
+      complete_immediately(std::move(handler), executor, ec);
+   }
+
+   void detach() override
+   {
+      // remember whether the body was cleanly ended -- intent accepted *and* the FIN handed
+      // over -- so writes issued after this still answer per the Writer contract
+      assert(stream);
+      detached_body_ended = stream->eof_submitted && stream->fin_offered;
+      detached_log_prefix = stream->log_prefix();
+      stream = nullptr;
+   }
+
+   std::string log_prefix() const override
+   {
+      return stream ? stream->log_prefix() : detached_log_prefix;
+   }
+
+   Stream* stream;
+   int64_t stream_id;
+   Executor executor; // kept as a copy so a detached writer can still complete
+   std::string detached_log_prefix; // latched by detach()
+   bool detached_body_ended = false; // latched by detach(), see there
 };
 
 // =================================================================================================

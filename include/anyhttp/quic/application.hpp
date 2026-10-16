@@ -57,14 +57,30 @@ public:
    /// Creates the stream object for a stream the peer opened or that we are opening.
    virtual std::shared_ptr<QuicStream> make_stream(int64_t id) = 0;
 
+   /// The connection is over, or being torn down: nothing more will happen on it.
+   virtual void on_closed(error_code ec) { (void)ec; }
+
    //
-   // ngtcp2's stream callbacks, see ngtcp2_callbacks.
+   // ngtcp2's stream callbacks, see ngtcp2_callbacks. Of the two about STOP_SENDING,
+   // stream_stop_sending() is about our side: we stopped reading. recv_stop_sending() is the
+   // peer asking us to stop writing, which ngtcp2 has already answered with RESET_STREAM.
    //
+   virtual int stream_open(int64_t id)
+   {
+      (void)id;
+      return 0;
+   }
    virtual int recv_stream_data(int64_t id, std::span<const uint8_t> data, bool fin) = 0;
    virtual int acked_stream_data(int64_t id, uint64_t offset, uint64_t len) = 0;
    virtual int stream_close(int64_t id, uint32_t flags, uint64_t app_error_code) = 0;
    virtual int stream_reset(int64_t id, uint64_t app_error_code) = 0;
-   virtual int stop_sending(int64_t id, uint64_t app_error_code) = 0;
+   virtual int stream_stop_sending(int64_t id, uint64_t app_error_code) = 0;
+   virtual int recv_stop_sending(int64_t id, uint64_t app_error_code)
+   {
+      (void)id;
+      (void)app_error_code;
+      return 0;
+   }
    virtual int extend_max_stream_data(int64_t id) = 0;
 
    //
@@ -74,11 +90,13 @@ public:
    // next_stream_data() picks the stream to write next and points `vec` at its data, returning
    // how many entries it used: 0 with `id` < 0 if there is nothing to write, a negative value to
    // fail the connection. ngtcp2 then reports back what became of it: how many of those bytes went
-   // into a packet (on_stream_data_written()), or that the stream has to wait for credit
-   // (on_stream_blocked()) or can't be written any more (on_stream_shut_wr()).
+   // into a packet, and whether the FIN went with them (on_stream_data_written(), which may well
+   // be 0 bytes and the FIN), or that the stream has to wait for credit (on_stream_blocked()) or
+   // can't be written any more (on_stream_shut_wr()). Nothing is reported for a stream that got
+   // nothing into the packet: it is simply asked again.
    //
    virtual ngtcp2_ssize next_stream_data(int64_t& id, bool& fin, std::span<ngtcp2_vec> vec) = 0;
-   virtual int on_stream_data_written(int64_t id, size_t n) = 0;
+   virtual int on_stream_data_written(int64_t id, size_t n, bool fin) = 0;
    virtual void on_stream_blocked(int64_t id) = 0;
    virtual void on_stream_shut_wr(int64_t id) = 0;
 

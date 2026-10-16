@@ -166,7 +166,7 @@ void QuicStream::call_read_handler()
          continue;
       }
 
-      if (closed)
+      if (closed || read_aborted)
       {
          //
          // The stream died before the body was complete, and this read was issued after that --
@@ -237,7 +237,7 @@ void QuicStream::start_write(WriteHandler&& handler, asio::const_buffer buffer, 
       // the stream died with the FIN still owed, it will never go out -- that is a reset, not a
       // harmless no-op.
       //
-      if (write_active && write_is_eof && !closed)
+      if (write_active && write_is_eof && !closed && !write_aborted)
       {
          assert(!write_handler); // only a detached FIN may be adopted, never a live handler
          mlogd("start_write: FIN already pending, adopting handler");
@@ -246,12 +246,13 @@ void QuicStream::start_write(WriteHandler&& handler, asio::const_buffer buffer, 
          return;
       }
 
-      complete_immediately(closed && !fin_offered ? make_error_code(errc::connection_reset)
-                                                  : error_code{});
+      const bool dead = closed || write_aborted;
+      complete_immediately(dead && !fin_offered ? make_error_code(errc::connection_reset)
+                                                : error_code{});
       return;
    }
 
-   if (closed)
+   if (closed || write_aborted)
    {
       mlogw("start_write: stream already closed");
       complete_immediately(make_error_code(errc::connection_reset));
@@ -337,12 +338,11 @@ void QuicStream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
          // already, leaves nothing behind and lets the stream carry on unharmed: what was not
          // handed over is simply no longer there to send.
          //
-         if (tx_offered > tx_acked && !closed)
+         if (tx_offered > tx_acked && !closed && !write_aborted)
          {
             mlogw("async_write: cancelled with {} bytes unacknowledged, resetting stream",
                   tx_offered - tx_acked);
-            session.reset_stream(id, reset_error_code());
-            closed = true;
+            reset_writing();
          }
          tx_queued = tx_offered;
       }
@@ -378,7 +378,7 @@ void QuicStream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
 size_t QuicStream::pending_data(uint64_t from, std::span<ngtcp2_vec> vec, bool& fin)
 {
    fin = false;
-   if (vec.empty())
+   if (vec.empty() || closed || write_aborted)
       return 0;
 
    const size_t total = asio::buffer_size(write_source);
@@ -597,7 +597,7 @@ void QuicStream::delete_reader()
    // we are still writing to flow normally -- HTTP/2 has to submit a full RST_STREAM here for
    // lack of a half-close.
    //
-   if (!eof_received && !closed)
+   if (!eof_received && !closed && !read_aborted)
    {
       mlogd("delete_reader: body not read to end, sending STOP_SENDING");
       session.stop_reading(id, stop_sending_error_code());
@@ -615,10 +615,10 @@ void QuicStream::delete_writer()
    auto self = shared_from_this();
 
    //
-   // Nothing to finalize on a stream ngtcp2 has already torn down (peer reset it, or we did):
-   // there is nothing left to reset.
+   // Nothing to finalize on a stream ngtcp2 has already torn down (peer reset it, or we did),
+   // or whose sending side is: there is nothing left to reset.
    //
-   if (closed)
+   if (closed || write_aborted)
    {
       mlogd("delete_writer: stream already closed");
       maybe_close();
@@ -630,16 +630,54 @@ void QuicStream::delete_writer()
       //
       // The writer was dropped without ever ending the body (write_eof()), so wherever it stopped
       // is not where it was meant to stop. Sending a FIN here would present that partial body to
-      // the peer as a complete one -- reset the stream instead, the way the HTTP/2 side submits
-      // RST_STREAM once its writer is gone with no EOF submitted, and fail the local read the
-      // same way nghttp2's stream close does, with partial_message.
+      // the peer as a complete one -- reset our side instead. The peer's side is the reader's
+      // business.
       //
       mlogw("delete_writer: body never ended, resetting stream");
-      session.reset_stream(id, reset_error_code());
-      fail(errors::partial_message);
+      reset_writing();
+      abort_writing(make_error_code(errc::connection_reset));
    }
 
    maybe_close();
+}
+
+void QuicStream::reset_writing()
+{
+   session.reset_writing(id, reset_error_code());
+   write_aborted = true;
+}
+
+void QuicStream::abort_reading()
+{
+   //
+   // A body that has arrived in full is not affected: ngtcp2 reports no reset after the FIN, and
+   // what of it is buffered is still the reader's.
+   //
+   if (eof_received || read_aborted)
+      return;
+
+   read_aborted = true;
+   pending_read.clear();
+   read_head = {};
+   incoming = {};
+   call_read_handler(); // reports the truncation to a read waiting for more
+}
+
+void QuicStream::abort_writing(error_code ec)
+{
+   write_aborted = true;
+   if (!write_active)
+      return;
+
+   //
+   // ngtcp2 has dropped what it had of the stream and won't read from it again, so the caller's
+   // buffer is free -- in ZeroCopy as much as in Staged mode. Posted, as this is reached from
+   // inside ngtcp2.
+   //
+   write_active = false;
+   write_source = {};
+   if (write_handler)
+      complete_later(std::move(write_handler), get_executor(), ec);
 }
 
 void QuicStream::maybe_close()

@@ -20,6 +20,7 @@
 #include <cstring>
 #include <format> // IWYU pragma: keep
 #include <stdexcept>
+#include <utility>
 
 using namespace std::chrono_literals;
 using namespace boost::asio;
@@ -53,10 +54,26 @@ QuicSession::~QuicSession()
 #endif
 }
 
-void QuicSession::clear_streams() { streams_.clear(); }
+void QuicSession::clear_streams()
+{
+   if (application_)
+      application_->on_closed(errors::connection_aborted);
+
+   //
+   // Destroying a stream completes what is pending on it, which resumes the application right
+   // there -- and that may reach back into the session, to look up a stream or to fail them all.
+   // Take the streams out of the map before destroying them, so that it finds the map empty
+   // rather than half destroyed.
+   //
+   auto streams = std::exchange(streams_, {});
+   streams.clear();
+}
 
 void QuicSession::fail_streams(error_code ec)
 {
+   if (application_)
+      application_->on_closed(ec);
+
    //
    // Streams may erase themselves from streams_ as a side effect of fail() (via maybe_close()),
    // so snapshot first.
@@ -112,6 +129,30 @@ void QuicSession::stop_reading(int64_t stream_id, uint64_t app_error_code)
       return;
    ngtcp2_conn_shutdown_stream_read(conn_, 0, stream_id, app_error_code);
    wake_write();
+}
+
+void QuicSession::reset_writing(int64_t stream_id, uint64_t app_error_code)
+{
+   if (!conn_)
+      return;
+   ngtcp2_conn_shutdown_stream_write(conn_, 0, stream_id, app_error_code);
+   wake_write();
+}
+
+void QuicSession::close_connection(uint64_t app_error_code)
+{
+   //
+   // Posted, never run inline: this is what dropping a Connection handle does, and that happens
+   // in all sorts of places -- in the middle of tearing the session down, say, when a stream's
+   // destructor resumes the coroutine that held the handle.
+   //
+   run_later(get_executor(), [self = weak_from_this(), app_error_code] {
+      auto session = std::static_pointer_cast<QuicSession>(self.lock());
+      if (!session || session->closed_ || !session->conn_)
+         return;
+      session->set_application_error(app_error_code);
+      session->handle_error(0);
+   });
 }
 
 void QuicSession::set_application_error(uint64_t app_error_code)
@@ -209,6 +250,17 @@ ngtcp2_ssize QuicSession::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uint
             return NGTCP2_ERR_CALLBACK_FAILURE; // the application has set last_error_
       }
 
+      //
+      // The FIN goes out with the last of the data, so only if all of it went into the packet.
+      //
+      size_t datalen = 0;
+      for (const auto& v : std::span{vec}.first(static_cast<size_t>(sveccnt)))
+         datalen += v.len;
+      auto written = [&](ngtcp2_ssize n) {
+         return application_->on_stream_data_written(stream_id, static_cast<size_t>(n),
+                                                     fin && static_cast<size_t>(n) == datalen);
+      };
+
       ngtcp2_ssize ndatalen;
       uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE | NGTCP2_WRITE_STREAM_FLAG_PADDING;
       if (fin)
@@ -248,8 +300,7 @@ ngtcp2_ssize QuicSession::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uint
             }
             return 0;
          case NGTCP2_ERR_WRITE_MORE:
-            if (stream_id >= 0 && ndatalen > 0 &&
-                application_->on_stream_data_written(stream_id, static_cast<size_t>(ndatalen)) != 0)
+            if (stream_id >= 0 && ndatalen >= 0 && written(ndatalen) != 0)
                return NGTCP2_ERR_CALLBACK_FAILURE;
             continue;
          default:
@@ -259,8 +310,7 @@ ngtcp2_ssize QuicSession::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uint
          }
       }
 
-      if (ndatalen > 0 && stream_id >= 0 &&
-          application_->on_stream_data_written(stream_id, static_cast<size_t>(ndatalen)) != 0)
+      if (stream_id >= 0 && ndatalen >= 0 && written(ndatalen) != 0)
          return NGTCP2_ERR_CALLBACK_FAILURE;
 
       return nwrite;
@@ -418,6 +468,7 @@ void QuicSession::fill_callbacks(ngtcp2_callbacks& callbacks)
    callbacks.remove_connection_id = &QuicSession::cb_remove_connection_id;
    callbacks.update_key = ngtcp2_crypto_update_key_cb;
    callbacks.stream_stop_sending = &QuicSession::cb_stream_stop_sending;
+   callbacks.recv_stop_sending = &QuicSession::cb_recv_stop_sending;
    callbacks.stream_reset = &QuicSession::cb_stream_reset;
    callbacks.extend_max_stream_data = &QuicSession::cb_extend_max_stream_data;
    callbacks.extend_max_local_streams_bidi = &QuicSession::cb_extend_max_streams_bidi;
@@ -625,7 +676,13 @@ int QuicSession::cb_acked_stream_data_offset(ngtcp2_conn*, int64_t stream_id, ui
    return self->application_->acked_stream_data(stream_id, offset, datalen);
 }
 
-int QuicSession::cb_stream_open(ngtcp2_conn*, int64_t /*stream_id*/, void* /*user*/) { return 0; }
+int QuicSession::cb_stream_open(ngtcp2_conn*, int64_t stream_id, void* user)
+{
+   auto self = static_cast<QuicSession*>(user);
+   if (!self->application_ready_)
+      return 0;
+   return self->application_->stream_open(stream_id);
+}
 
 int QuicSession::cb_stream_close(ngtcp2_conn*, uint32_t flags, int64_t stream_id,
                                  uint64_t app_error_code, void* user, void*)
@@ -672,7 +729,16 @@ int QuicSession::cb_stream_stop_sending(ngtcp2_conn*, int64_t stream_id, uint64_
    auto self = static_cast<QuicSession*>(user);
    if (!self->application_ready_)
       return 0;
-   return self->application_->stop_sending(stream_id, app_error_code);
+   return self->application_->stream_stop_sending(stream_id, app_error_code);
+}
+
+int QuicSession::cb_recv_stop_sending(ngtcp2_conn*, int64_t stream_id, uint64_t app_error_code,
+                                      void* user, void*)
+{
+   auto self = static_cast<QuicSession*>(user);
+   if (!self->application_ready_)
+      return 0;
+   return self->application_->recv_stop_sending(stream_id, app_error_code);
 }
 
 int QuicSession::cb_stream_reset(ngtcp2_conn*, int64_t stream_id, uint64_t /*final_size*/,

@@ -379,9 +379,10 @@ private:
    Server::Impl& parent_;
 
    //
-   // What add_application() registered, in the order of the server's preference. Not guarded:
-   // complete before start(), and only read after.
+   // What add_application() registered, in the order of the server's preference. Read by the ALPN
+   // callback on the sessions' strands.
    //
+   std::mutex applications_mutex_;
    std::vector<std::pair<std::string, quic::ApplicationFactory>> applications_;
 
    TlsServerContext tls_;
@@ -408,7 +409,7 @@ QuicServerSession::QuicServerSession(QuicServerImpl& server, Endpoint ep, Addres
                                                   : server.get_executor()),
      server_(server), ep_(ep), remote_(remote), no_gso_(server.config().disable_gso)
 {
-   log_prefix_ = quic::log_prefix(Role::server, "h3", &remote_.su.sa, remote_.len);
+   log_prefix_ = quic::log_prefix(Role::server, "quic", &remote_.su.sa, remote_.len); // until ALPN
 
    //
    // Own a dup() of the shared UDP fd rather than borrowing the server's. Sends happen from this
@@ -523,6 +524,7 @@ bool QuicServerSession::select_application(std::string_view alpn,
       return alpn == alpn_;
 
    alpn_ = alpn;
+   log_prefix_ = quic::log_prefix(Role::server, alpn_, &remote_.su.sa, remote_.len);
    set_application(factory(*this));
    return true;
 }
@@ -825,6 +827,13 @@ QuicServerImpl::QuicServerImpl(Server::Impl& parent, const UdpEndpoint& endpoint
 void QuicServerImpl::add_application(std::string alpn, quic::ApplicationFactory factory)
 {
    assert(!alpn.empty() && alpn.size() < 256);
+   auto lock = std::lock_guard(applications_mutex_);
+   for (auto& [registered, registered_factory] : applications_)
+      if (registered == alpn)
+      {
+         registered_factory = std::move(factory);
+         return;
+      }
    applications_.emplace_back(std::move(alpn), std::move(factory));
 }
 
@@ -841,21 +850,36 @@ int QuicServerImpl::alpn_select_cb(SSL* ssl, const unsigned char** out, unsigned
    if (!session)
       return SSL_TLSEXT_ERR_ALERT_FATAL;
 
-   for (const auto& [alpn, factory] : self.applications_)
+   //
+   // Pick under the lock, make the application outside of it: the factory is the user's code as
+   // much as ours.
+   //
+   std::span<const unsigned char> chosen;
+   quic::ApplicationFactory factory;
    {
-      for (auto s = std::span{in, inlen}; !s.empty() && s[0] < s.size(); s = s.subspan(s[0] + 1))
+      auto lock = std::lock_guard(self.applications_mutex_);
+      for (const auto& [alpn, registered_factory] : self.applications_)
       {
-         const auto offered = std::string_view{reinterpret_cast<const char*>(&s[1]), s[0]};
-         if (offered != alpn)
-            continue;
-         if (!session->select_application(offered, factory))
-            return SSL_TLSEXT_ERR_ALERT_FATAL;
-         *out = &s[1];
-         *outlen = s[0];
-         return SSL_TLSEXT_ERR_OK;
+         for (auto s = std::span{in, inlen}; !s.empty() && s[0] < s.size(); s = s.subspan(s[0] + 1))
+         {
+            if (std::string_view{reinterpret_cast<const char*>(&s[1]), s[0]} == alpn)
+            {
+               chosen = s.subspan(1, s[0]);
+               factory = registered_factory;
+               break;
+            }
+         }
+         if (!chosen.empty())
+            break;
       }
    }
-   return SSL_TLSEXT_ERR_ALERT_FATAL;
+
+   const auto alpn = std::string_view{reinterpret_cast<const char*>(chosen.data()), chosen.size()};
+   if (chosen.empty() || !session->select_application(alpn, factory))
+      return SSL_TLSEXT_ERR_ALERT_FATAL;
+   *out = chosen.data();
+   *outlen = static_cast<unsigned char>(chosen.size());
+   return SSL_TLSEXT_ERR_OK;
 }
 
 void QuicServerImpl::start()

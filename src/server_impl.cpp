@@ -80,6 +80,16 @@ Server::Impl::Impl(Executor executor, Config config)
    }
 }
 
+void Server::Impl::on_quic(quic::Config config, quic::ConnectionHandler handler)
+{
+   if (config.alpn.empty() || config.alpn.size() > 255)
+      throw std::invalid_argument(std::format("on_quic: invalid ALPN '{}'", config.alpn));
+   mlogi("serving plain QUIC streams for ALPN '{}'", config.alpn);
+   auto alpn = config.alpn;
+   quic_->add_application(std::move(alpn),
+                          quic::make_stream_application(std::move(config), std::move(handler)));
+}
+
 // -------------------------------------------------------------------------------------------------
 
 /**

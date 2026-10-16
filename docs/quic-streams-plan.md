@@ -2,7 +2,8 @@
 
 The goal: QUIC streams as a byte-stream API of their own, with an ALPN chosen by the user and no
 HTTP semantics, on the same ngtcp2 transport that carries HTTP/3 today. Planned 2026-10-16,
-against ngtcp2 1.25.0. Nothing is implemented yet.
+against ngtcp2 1.25.0, and built the same day on the `quic-streams` branch, steps 1 to 5. §7 has
+where the result differs from the plan, and what is left.
 
 ---------------------------------------------------------------------------------------------------
 
@@ -135,12 +136,12 @@ Both API styles, like the rest: coroutines in both, `async_*` with completion to
 
 ## 5. Open decisions
 
-| # | Question | Leaning |
+| # | Question | Decided |
 |---|---|---|
-| 1 | Unidirectional streams in the first version? | Bidi first. Uni fits later as a Writer-only / Reader-only stream. |
-| 2 | Same port as HTTP/3, or a listener of its own? | Same port, dispatched by ALPN: the demux and closing period are most of today's `h3/server.cpp`. |
-| 3 | Error code when a Writer is dropped without `write_eof()` | A `quic::Config` default. HTTP/3 keeps `H3_REQUEST_CANCELLED`. |
-| 4 | What a write reports after the peer's STOP_SENDING | `broken_pipe` (TCP's EPIPE), or `connection_reset` (what HTTP/3 reports for a dead stream). |
+| 1 | Unidirectional streams in the first version? | Bidi only: `initial_max_streams_uni` is 0. Uni fits later as a Writer-only / Reader-only stream. |
+| 2 | Same port as HTTP/3, or a listener of its own? | Same port, dispatched by ALPN (`Server::on_quic()`). |
+| 3 | Error code when a Writer is dropped without `write_eof()` | `quic::Config::reset_error_code`, default 0; STOP_SENDING for a dropped Reader has `stop_sending_error_code`. HTTP/3 keeps `H3_REQUEST_CANCELLED` / `H3_NO_ERROR`. |
+| 4 | What a write reports after the peer's STOP_SENDING | `connection_reset`, as HTTP/3 does for a dead stream: `broken_pipe` already means "after your own end" in the Writer contract. |
 | 5 | Out of scope for now | DATAGRAM (RFC 9221), 0-RTT, connection migration. |
 
 ---------------------------------------------------------------------------------------------------
@@ -161,3 +162,50 @@ Each step leaves both API styles building and the full suite green.
    `would_block`, cancellation in both write modes, a ZeroCopy write completing on its ack.
    No outside plain-QUIC peer is installed. ngtcp2's `h09` examples (hq-interop) could be built
    next to `osslclient`/`osslserver` for one.
+
+---------------------------------------------------------------------------------------------------
+
+## 7. As built
+
+The shape is §2's. Where the details came out differently:
+
+- **Two STOP_SENDING callbacks.** ngtcp2's `stream_stop_sending` is about *our* read side (we
+  called `ngtcp2_conn_shutdown_stream_read()`); the peer's STOP_SENDING arrives through
+  `recv_stop_sending`, which was not installed before. `QuicApplication` has both, named after
+  them. Also new: `stream_open` (a stream the peer opened -- implicitly opened ones get no call,
+  so the first callback for an unknown remote ID creates the stream too) and `on_closed()`.
+- **`stream_close`, not `stream_close2`.** One code, "set or not", is all the mapping needs: a
+  stream that was reset either way fails what is pending with `connection_reset`.
+- **The bare FIN is reported.** `write_pkt()` hands `on_stream_data_written()` zero-byte writes and
+  whether the FIN went with them, as ngtcp2's examples do (`ndatalen >= 0`). HTTP/3 ignores both.
+- **Half-close in `QuicStream`:** `abort_reading()` / `abort_writing()` and the `read_aborted` /
+  `write_aborted` flags, next to `closed` (both directions over). HTTP/3 doesn't use them and
+  keeps aborting the whole exchange: `reset_writing()` and `delete_writer()` are virtual, and
+  `Http3Stream` overrides them with what it did before.
+- **Adapters.** `QuicReader<Interface, Stream>` / `QuicWriter<...>` are the generic halves of what
+  were `Http3Reader` / `Http3Writer`; those now derive from them and add the header section. A
+  plain stream's handle is one of each.
+- **The server's connection handler is posted**, not started inside `on_ready()`: that runs inside
+  ngtcp2, before the session counts as ready.
+- **Teardown re-entrancy.** Destroying a stream completes its handlers inline, which may drop the
+  `Connection` handle, which closes the connection. `clear_streams()` therefore moves the map out
+  before destroying it, and `close_connection()` always posts (ASIO showed it as a double free).
+- **API spelling.** `Stream::reset_stream(code)` rather than `reset(code)`: `reset()` already
+  releases a handle, on both of its bases. `open_stream()` is synchronous and returns the tuple
+  directly; `accept_stream()` and `quic::connect()` are operations, with completion tokens in ASIO.
+  The server's side is `Server::on_quic(config, handler)`, with the ALPN in the config.
+- **Log prefixes.** A server session is `quic:` until the ALPN is chosen, then the ALPN; the
+  handshake line says "<alpn> over QUIC"; "session destroyed" counts streams, not requests.
+
+Tests: `test/test_quic.cpp`, every case in both write modes, plus the completion token spelling in
+ASIO -- echo, large bodies over several streams, half-close, reset → `partial_message`, a write
+after STOP_SENDING, a dropped Writer, a slow reader holding the writer back, `open_stream()` at the
+limit, server-initiated streams, connection close, cancellation, an unknown ALPN, HTTP/3 next to
+plain streams on one port.
+
+Left open:
+- Unidirectional streams, DATAGRAM, 0-RTT, migration (§5).
+- An outside peer: ngtcp2's `h09` examples (hq-interop) could be built for interop tests.
+- The `client` and `server` programs have no plain QUIC mode.
+- A zero-copy write cancelled while nothing is unacknowledged leaves the stream alive -- a
+  shorter body -- which is right, but makes "cancel resets the stream" hard to test on loopback.

@@ -218,17 +218,38 @@ bool Http3Stream::submit_headers(std::span<const nghttp3_nv> nva, bool is_reques
 // Lifecycle
 // =================================================================================================
 
+void Http3Stream::reset_writing()
+{
+   //
+   // An HTTP/3 message cut short is an exchange that failed: both directions go, as with HTTP/2's
+   // RST_STREAM.
+   //
+   session.reset_stream(id, reset_error_code());
+   closed = true;
+}
+
 void Http3Stream::delete_writer()
 {
    //
-   // On a stream ngtcp2 has already torn down (peer reset it, or we did), there is nothing to
-   // finalize, see QuicStream::delete_writer(): submitting anything would leave nghttp3 holding
-   // data for a stream that no longer exists, which it would then offer for sending forever.
+   // The teardown paths below can run handlers that drop the last reference to this stream,
+   // erasing it from the session -- keep it alive until this function returns.
    //
-   if (!closed && !headers_submitted)
-   {
-      auto self = shared_from_this(); // maybe_close() may erase this stream from the session
+   auto self = shared_from_this();
 
+   //
+   // Nothing to finalize on a stream ngtcp2 has already torn down (peer reset it, or we did):
+   // there is nothing left to reset, and submitting anything would leave nghttp3 holding data for
+   // a stream that no longer exists, which it would then offer for sending forever.
+   //
+   if (closed)
+   {
+      mlogd("delete_writer: stream already closed");
+      maybe_close();
+      return;
+   }
+
+   if (!headers_submitted)
+   {
       //
       // The handler never even started its message (a server handler that returned, or whose
       // request was reset, before calling response.async_submit()). There is no HEADERS frame for
@@ -247,7 +268,21 @@ void Http3Stream::delete_writer()
       return;
    }
 
-   QuicStream::delete_writer();
+   if (!eof_submitted)
+   {
+      //
+      // The Request/Response was dropped without ever ending the body (async_write({})), so
+      // wherever it stopped is not where it was meant to stop. Sending a FIN here would present
+      // that partial message to the peer as a complete one -- reset the stream instead, the way
+      // the HTTP/2 side submits RST_STREAM once its writer is gone with no EOF submitted, and fail
+      // the local read the same way nghttp2's stream close does, with partial_message.
+      //
+      mlogw("delete_writer: body never ended, resetting stream");
+      session.reset_stream(id, reset_error_code());
+      fail(errors::partial_message);
+   }
+
+   maybe_close();
 }
 
 // =================================================================================================

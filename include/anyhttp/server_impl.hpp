@@ -97,6 +97,9 @@ public:
    TcpEndpoint local_endpoint() const { return io::local_endpoint(acceptor_); }
 
    void on_request(RequestHandler&& handler) noexcept { request_handler_ = std::move(handler); }
+
+   /// Registers plain QUIC streams for an ALPN, see Server::on_quic().
+   void on_quic(quic::Config config, quic::ConnectionHandler handler);
    const RequestHandler& request_handler() const noexcept { return request_handler_; }
 
    //

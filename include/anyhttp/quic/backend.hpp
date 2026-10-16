@@ -7,6 +7,7 @@
 // connection to the application registered for the ALPN it negotiates.
 //
 
+#include "anyhttp/quic.hpp"
 #include "anyhttp/server_impl.hpp"
 
 #include <functional>
@@ -21,6 +22,9 @@ class QuicSession;
 
 /// Makes the protocol running on top of `session`, see QuicApplication.
 using ApplicationFactory = std::function<std::unique_ptr<QuicApplication>(QuicSession& session)>;
+
+/// Plain streams for QuicServer::add_application(): each connection goes to `handler`.
+ApplicationFactory make_stream_application(Config config, ConnectionHandler handler);
 
 } // namespace anyhttp::quic
 
@@ -42,8 +46,9 @@ public:
    virtual ~QuicServer() = default;
 
    //
-   // Serves connections that negotiate `alpn` with what `factory` makes. The order of the calls is
-   // the server's preference, should a client offer more than one. Only before start().
+   // Serves connections that negotiate `alpn` with what `factory` makes, from the next connection
+   // on, replacing what was registered for it before. The order of the calls is the server's
+   // preference, should a client offer more than one.
    //
    virtual void add_application(std::string alpn, quic::ApplicationFactory factory) = 0;
 
