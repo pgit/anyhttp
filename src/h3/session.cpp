@@ -27,8 +27,8 @@ namespace anyhttp::http3
 
 // =================================================================================================
 
-Http3Session::Http3Session(Executor executor)
-   : executor_(std::move(executor)), timer_(executor_), tx_buf_(64_k)
+Http3Session::Http3Session(const Executor& executor) // NOLINT(performance-unnecessary-value-param)
+   : executor_(executor), timer_(executor_), tx_buf_(64_k)
 {
    ngtcp2_ccerr_default(&last_error_);
 }

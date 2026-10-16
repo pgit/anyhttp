@@ -49,7 +49,7 @@ class Http3Stream;
 class Http3Session : public Session::Impl
 {
 public:
-   explicit Http3Session(Executor executor);
+   explicit Http3Session(const Executor& executor);
    ~Http3Session() override;
 
    //

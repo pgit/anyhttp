@@ -574,7 +574,8 @@ public:
             on_expiry();
       };
       capy::run_async(
-         executor_, stop_->get_token(), []() noexcept {}, [](std::exception_ptr) noexcept {})(
+         executor_, stop_->get_token(), []() noexcept {},
+         [](const std::exception_ptr&) noexcept {})(
          wait(std::chrono::duration_cast<std::chrono::steady_clock::duration>(delay),
               std::function<void()>(std::forward<F>(on_expiry))));
    }

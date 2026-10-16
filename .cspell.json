@@ -5,6 +5,7 @@
         "anyhttp",
         "ASAN",
         "ASIO",
+        "AWSLC",
         "boringssl",
         "callgrind",
         "capy",
