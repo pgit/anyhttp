@@ -20,6 +20,8 @@ link_libraries(Boost::atomic Boost::url Boost::filesystem Boost::process)
 file(GLOB SRC_FILES test_*.cpp)
 
 add_executable(test_all ${SRC_FILES})
+# not a test: lets TSAN see weak_ptr's synchronization, see there
+target_sources(test_all PRIVATE tsan_libcxx.cpp)
 target_link_libraries(test_all PRIVATE GTest::gtest_main GTest::gmock)
 target_link_libraries(test_all PRIVATE spdlog::spdlog_header_only)
 

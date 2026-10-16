@@ -76,7 +76,11 @@ expect 3 extra skips.
 TSAN is the same recipe with `-fsanitize=thread` and runs clean without suppressions. AWS-LC is
 uninstrumented, but linked statically into the executable, so `called_from_lib:` cannot match it:
 should a report ever show *both* stacks inside the TLS library, suppress it with `race:` on the
-AWS-LC function instead. One with an anyhttp frame near the racing access is real.
+AWS-LC function instead. One with an anyhttp frame near the racing access is real. libc++ (the
+system's `libc++.so.1`) is uninstrumented too and keeps `weak_ptr`'s `__release_weak()` out of
+line, so the last `weak_ptr` dropped on another thread than the object's destructor ran on shows as
+a race on `operator delete` in `__on_zero_shared_weak`, anyhttp frames and all;
+[test/tsan_libcxx.cpp](test/tsan_libcxx.cpp) gives `test_all` an instrumented copy.
 
 Anything touching lifetimes on the HTTP/3 write path belongs under ASAN before it is committed --
 completions there run on acknowledgement, and the Release build hides the use-after-frees.

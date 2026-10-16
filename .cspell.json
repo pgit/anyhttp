@@ -30,6 +30,7 @@
         "IWYU",
         "jemalloc",
         "libcrypto",
+        "LIBCXX",
         "linearisation",
         "linearise",
         "logd",
