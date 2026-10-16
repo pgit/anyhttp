@@ -12,7 +12,6 @@
 
 #include <nghttp3/nghttp3.h>
 
-#include <deque>
 #include <memory>
 #include <optional>
 #include <span>
@@ -27,47 +26,19 @@ class Http3Application;
 // =================================================================================================
 
 //
-// How a stream hands the caller's async_write() buffer down to nghttp3.
-//
-enum class WriteMode
-{
-   //
-   // Point the nghttp3_vec straight into the caller's buffer: the body is never copied on its way
-   // to the nghttp3/ngtcp2 boundary, however large it is -- the mmap()ed file of serve_file()
-   // travels from the page cache into QUIC packets without an intermediate byte. What that costs
-   // is *when* the write completes: ngtcp2 keeps pointing into that memory for as long as the
-   // bytes may still have to be retransmitted, so the handler -- which releases the buffer -- can
-   // only run once they are acknowledged (nghttp3's acked_stream_data callback). Cancelling a
-   // write with unacknowledged bytes therefore has to reset the stream, there being no way to
-   // un-offer memory ngtcp2 may still read from.
-   //
-   ZeroCopy,
-
-   //
-   // Copy through a bounded, stream-owned staging buffer (write_chunk, <= kWriteChunkSize),
-   // refilled as nghttp3 drains it. That costs a copy but completes a write as soon as the bytes
-   // are handed over, and makes cancellation instantaneous: nothing points into the caller's
-   // buffer, so the un-copied remainder is simply abandoned and the *stream survives* -- which is
-   // what lets a cancelled write be followed by another one on the same stream.
-   //
-   Staged
-};
-
-// =================================================================================================
-
-//
-// One HTTP/3 request/response exchange: a bidirectional stream that can be read from and written
-// to. Both roles use this same class; what differs is only which half of the exchange travels in
-// which direction -- the server reads a request and writes a response, the client writes a request
-// and reads a response -- so everything below is phrased as the *incoming* and the *outgoing*
-// message, and the handful of genuinely role-specific steps (which pseudo-headers to parse, what
-// to do once the incoming headers are complete, how the outgoing headers are submitted) are
-// virtual hooks implemented by Http3ServerStream / Http3ClientStream.
+// One HTTP/3 request/response exchange: a QUIC stream (which has the body, both ways) with the
+// header sections on top, and nghttp3 between it and ngtcp2. Both roles use this same class; what
+// differs is only which half of the exchange travels in which direction -- the server reads a
+// request and writes a response, the client writes a request and reads a response -- so
+// everything below is phrased as the *incoming* and the *outgoing* message, and the handful of
+// genuinely role-specific steps (which pseudo-headers to parse, what to do once the incoming
+// headers are complete, how the outgoing headers are submitted) are virtual hooks implemented by
+// Http3ServerStream / Http3ClientStream.
 //
 class Http3Stream : public quic::QuicStream
 {
 public:
-   Http3Stream(Http3Application& application, int64_t id, WriteMode write_mode);
+   Http3Stream(Http3Application& application, int64_t id, quic::WriteMode write_mode);
    ~Http3Stream() override;
 
    Http3Application& application;
@@ -106,83 +77,15 @@ public:
    bool headers_submitted = false;
 
    //
-   // Incoming body. What nghttp3 delivers is parked here only if no reader was waiting for it.
+   // Outgoing body, as nghttp3 sees it. It takes each piece of data once and keeps it, and would
+   // take a repeated offer as *additional*, distinct stream bytes -- duplicating the body on the
+   // wire -- so data_reader() offers from tx_offered on, and a repeat call gets
+   // NGHTTP3_ERR_WOULDBLOCK. What it reports back is counted in body bytes for acknowledgements,
+   // but including its framing for what went into packets, see on_write_offered().
    //
-   std::deque<std::vector<uint8_t>> pending_read;
-   asio::const_buffer read_head; // view of pending_read.front() not yet delivered
-   asio::const_buffer incoming; // chunk on_data_chunk() is delivering, not yet taken
-   bool eof_received = false;
-   ReadSomeHandler read_handler;
-   asio::mutable_buffer read_handler_buffer;
-   bool call_read_handler_active = false; // re-entrancy guard, see call_read_handler()
-
-   //
-   // Outgoing body. Only one async_write() may be active at a time -- callers must wait for its
-   // handler before issuing another (same contract as e.g. Beast) -- so this is flat per-stream
-   // state rather than a queue of pending writes.
-   //
-   // write_source is the caller's buffer, referenced, not copied, the way asio::async_write
-   // generally requires: it must stay valid until write_handler fires. write_offered tracks how
-   // much of it has been handed to nghttp3, which may ask again before any of it goes out and
-   // would take a repeated offer as *additional*, distinct stream bytes -- duplicating the body on
-   // the wire -- so a repeat call gets NGHTTP3_ERR_WOULDBLOCK instead.
-   //
-   // What completes the write depends on write_mode: bytes acknowledged (write_acked) in
-   // ZeroCopy, bytes copied out and handed over (write_source_copied / write_confirmed) in
-   // Staged. See WriteMode.
-   //
-   const WriteMode write_mode;
-   bool write_active = false;
-   asio::const_buffer write_source;
-   size_t write_offered = 0;
-   size_t write_acked = 0; // ZeroCopy: reported by nghttp3's acked_stream_data
-   size_t write_source_copied = 0; // Staged: how much of write_source went into a chunk
-   std::vector<uint8_t> write_chunk; // Staged: the staging buffer itself
-   size_t write_confirmed = 0; // Staged: how much of write_chunk ngtcp2 has taken
-   std::vector<std::vector<uint8_t>> in_flight_writes; // Staged: retired chunks, kept alive for
-                                                       // the stream's lifetime because ngtcp2 may
-                                                       // still retransmit from them
-   //
-   // Whether the active write ends the body. data_reader() then hands nghttp3
-   // NGHTTP3_DATA_FLAG_EOF along with the write's last bytes -- one QUIC STREAM frame carrying
-   // both the tail of the body and the FIN -- rather than needing a write of its own for it.
-   //
-   bool write_is_eof = false;
-   WriteHandler write_handler;
-   uint64_t write_token = 0;
-   uint64_t next_write_token = 1;
-   bool eof_submitted = false; // user ended the body via async_write_eof()
-   bool fin_offered = false; // ... and data_reader() has handed the FIN flag to nghttp3; between
-                             // the two lies a cancelled async_write_eof(), which rolls
-                             // eof_submitted back when the FIN is still owed
-
-   //
-   // Lifecycle.
-   //
-   Reader::Impl* reader = nullptr; // the Http3Reader, while attached
-   Writer::Impl* writer = nullptr; // the Http3Writer, while attached
-   bool closed = false;
-
-   //
-   // Data flow into user land (incoming body).
-   //
-   void on_data_chunk(const uint8_t* data, size_t len);
-   void on_eof();
-   void call_read_handler();
-
-   /// True once the peer ended the body and every byte of it has been delivered to the reader.
-   bool reading_finished() const noexcept
-   {
-      return eof_received && read_head.size() == 0 && incoming.size() == 0;
-   }
-
-   //
-   // Data flow from user land back to nghttp3 (outgoing body).
-   //
-   void start_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof);
    nghttp3_ssize data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t* pflags);
-   void on_write_acked(size_t n); // ZeroCopy: nghttp3 acked_stream_data
-   void on_write_offered(size_t n); // Staged: bytes ngtcp2 committed to a packet
+   void on_write_acked(size_t n); // nghttp3 acked_stream_data
+   void on_write_offered(size_t n); // bytes ngtcp2 committed to a packet
 
    //
    // Headers.
@@ -193,16 +96,16 @@ public:
    /// Hands an assembled header block to nghttp3, as a request (client) or response (server).
    bool submit_headers(std::span<const nghttp3_nv> nva, bool is_request);
 
-   //
-   // Called when the stream dies before its exchange completed, and from either the reader's or
-   // the writer's destructor.
-   //
-   void fail(error_code ec) override;
-   void delete_reader();
-   void delete_writer();
-   void maybe_close();
+   void delete_writer() override;
 
 protected:
+   //
+   // QuicStream
+   //
+   void on_writable() override;
+   uint64_t reset_error_code() const noexcept override { return NGHTTP3_H3_REQUEST_CANCELLED; }
+   uint64_t stop_sending_error_code() const noexcept override { return NGHTTP3_H3_NO_ERROR; }
+
    //
    // Role-specific pieces. Everything else above is shared verbatim between server and client.
    //
@@ -210,17 +113,11 @@ protected:
    virtual void on_pseudo_header(std::string_view name, std::string_view value) = 0;
    /// The incoming header block is complete: dispatch the request (server) / response (client).
    virtual void on_headers_complete() = 0;
-   /// The stream failed or closed early; fail whatever else the role has pending.
-   virtual void on_failed(error_code ec) { (void)ec; }
 
 public:
    /// Submit the outgoing response headers. A no-op on the client, whose request headers went out
-   /// with the stream itself, see Http3ClientSession::async_submit().
+   /// with the stream itself, see Http3ClientApplication::async_submit().
    virtual void submit_response(unsigned int status_code, const Fields& fields) = 0;
-
-private:
-   void bind_write_cancellation(WriteHandler& handler, uint64_t token); // arms cancellation
-   void finish_active_write(); // completes the active write and releases the caller's buffer
 };
 
 // =================================================================================================

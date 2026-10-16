@@ -129,7 +129,7 @@ private:
 // -------------------------------------------------------------------------------------------------
 
 Http3ServerStream::Http3ServerStream(Http3ServerApplication& app, int64_t stream_id)
-   : http3::Http3Stream(app, stream_id, http3::WriteMode::ZeroCopy)
+   : http3::Http3Stream(app, stream_id, quic::WriteMode::ZeroCopy)
 {
 }
 

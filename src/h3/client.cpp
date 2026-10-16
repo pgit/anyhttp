@@ -176,7 +176,7 @@ private:
 // -------------------------------------------------------------------------------------------------
 
 Http3ClientStream::Http3ClientStream(Http3ClientApplication& app, int64_t stream_id)
-   : http3::Http3Stream(app, stream_id, http3::WriteMode::Staged)
+   : http3::Http3Stream(app, stream_id, quic::WriteMode::Staged)
 {
 }
 
