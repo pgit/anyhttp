@@ -21,6 +21,10 @@
 // the stale event lands on the next socket allocated at the same address, whose write then never
 // completes. With one thread ("corosio_issue_reactor_uaf 1") it always completes.
 //
+// It is not specific to local sockets: reactor_socket_service is the base of the TCP, UDP and
+// local socket services alike, and the same loop over a tcp_acceptor and tcp_socket on the
+// loopback reports the same use-after-free and stalls the same way.
+//
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/task.hpp>
