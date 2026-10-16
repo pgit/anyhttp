@@ -5,8 +5,9 @@
 //
 #include "anyhttp/h3/stream.hpp"
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
+#include "anyhttp/h3/application.hpp"
 #include "anyhttp/h3/common.hpp"
-#include "anyhttp/h3/session.hpp"
+#include "anyhttp/quic/session.hpp"
 
 #include <boost/beast/http/error.hpp>
 #include <boost/system/detail/errc.hpp>
@@ -20,10 +21,9 @@ namespace anyhttp::http3
 
 // =================================================================================================
 
-Http3Stream::Http3Stream(Http3Session& s, int64_t stream_id, WriteMode mode)
-   : id(stream_id), session(s), write_mode(mode)
+Http3Stream::Http3Stream(Http3Application& app, int64_t stream_id, WriteMode mode)
+   : QuicStream(app.session(), stream_id), application(app), write_mode(mode)
 {
-   log_prefix_ = std::format("{}.{}", session.log_prefix(), id);
    mlogd("\x1b[1;33mStream: ctor\x1b[0m");
 }
 
@@ -45,8 +45,6 @@ Http3Stream::~Http3Stream()
       swap_and_invoke(write_handler, make_error_code(errc::connection_reset));
    mlogd("\x1b[33mStream: dtor... done\x1b[0m");
 }
-
-Executor Http3Stream::get_executor() const noexcept { return session.get_executor(); }
 
 // =================================================================================================
 // Incoming body
@@ -179,7 +177,7 @@ void Http3Stream::call_read_handler()
 
    //
    // Grant the peer more send credit only for what was actually delivered to the app -- see
-   // Http3Session::consume_stream() for why this must not happen any earlier.
+   // QuicSession::consume_stream() for why this must not happen any earlier.
    //
    session.consume_stream(id, consumed);
 }
@@ -278,7 +276,7 @@ void Http3Stream::start_write(WriteHandler&& handler, asio::const_buffer buffer,
    write_token = token;
    write_handler = std::move(handler);
 
-   if (auto h3 = session.h3())
+   if (auto h3 = application.h3())
       nghttp3_conn_resume_stream(h3, id);
    session.wake_write();
 }
@@ -407,7 +405,7 @@ nghttp3_ssize Http3Stream::data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t
       // Hand out what is left of the caller's buffer, by reference and in one go: a nghttp3_vec
       // is just a pointer and a length, so there is nothing to be gained from slicing it up, and
       // nghttp3 gets to frame the whole thing as a single DATA frame. It picks up the rest by
-      // itself as packets are filled -- see Http3Session::write_pkt(), which keeps feeding the
+      // itself as packets are filled -- see QuicSession::write_pkt(), which keeps feeding the
       // same vec to ngtcp2_conn_writev_stream() and advances nghttp3 by whatever went into the
       // packet.
       //
@@ -452,7 +450,7 @@ nghttp3_ssize Http3Stream::data_reader(nghttp3_vec* vec, size_t veccnt, uint32_t
       const size_t remaining = total - write_source_copied;
       if (remaining > 0)
       {
-         const size_t take = std::min(remaining, kWriteChunkSize);
+         const size_t take = std::min(remaining, quic::kWriteChunkSize);
          auto* src = static_cast<const uint8_t*>(write_source.data()) + write_source_copied;
          write_chunk.assign(src, src + take);
          write_source_copied += take;
@@ -558,7 +556,7 @@ void Http3Stream::on_write_offered(size_t n)
    // stream. Without this, any single async_write() larger than kWriteChunkSize stalls here
    // forever, with the body truncated and no FIN.
    //
-   if (auto h3 = session.h3())
+   if (auto h3 = application.h3())
       nghttp3_conn_resume_stream(h3, id);
    session.wake_write();
 }
@@ -611,9 +609,9 @@ void Http3Stream::on_header(std::string_view name, std::string_view value)
       return;
 
    header_size += header_field_size(name, value);
-   if (header_size > session.max_header_size())
+   if (header_size > application.max_header_size())
    {
-      mlogw("header section exceeds {} bytes, ignoring the rest", session.max_header_size());
+      mlogw("header section exceeds {} bytes, ignoring the rest", application.max_header_size());
       header_limit_exceeded = true;
       received_headers.clear();
       return;
@@ -664,7 +662,7 @@ nghttp3_ssize stream_read_data(nghttp3_conn*, int64_t /*stream_id*/, nghttp3_vec
 
 bool Http3Stream::submit_headers(std::span<const nghttp3_nv> nva, bool is_request)
 {
-   auto* h3 = session.h3();
+   auto* h3 = application.h3();
    if (!h3)
    {
       mloge("submit_headers: HTTP/3 layer is gone");
@@ -763,7 +761,7 @@ void Http3Stream::delete_reader()
    //
    // The application dropped its side of the exchange without reading the body to its end (e.g.
    // not_found(), which never looks at the request). Stream-level flow control credit is only
-   // granted as the application actually reads (see Http3Session::consume_stream()), so a peer
+   // granted as the application actually reads (see QuicSession::consume_stream()), so a peer
    // with more body to send would stall forever against a window that will now never reopen.
    // Tell it to stop instead: STOP_SENDING half-closes only our read direction, leaving whatever
    // we are still writing to flow normally -- HTTP/2 has to submit a full RST_STREAM here for

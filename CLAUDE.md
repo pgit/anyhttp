@@ -83,15 +83,17 @@ completions there run on acknowledgement, and the Release build hides the use-af
 
 ## Source layout
 
-Each protocol lives in a directory of its own, `h1/` (Beast/HTTP/1.1), `h2/` (nghttp2) and `h3/`
-(ngtcp2+nghttp3), in both `include/anyhttp/` and `src/`. **Only files in `h2/` may include
-`<nghttp2/*>`, only files in `h3/` `<ngtcp2/*>`/`<nghttp3/*>`.** What belongs to one API style only
+Each protocol lives in a directory of its own, `h1/` (Beast/HTTP/1.1), `h2/` (nghttp2), `quic/`
+(ngtcp2) and `h3/` (nghttp3, on top of `quic/`), in both `include/anyhttp/` and `src/`. **Only
+files in `h2/` may include `<nghttp2/*>`, only files in `quic/` and `h3/` `<ngtcp2/*>`, only files
+in `h3/` `<nghttp3/*>`.** What belongs to one API style only
 is in `asio/` or `corosio/`, again in both; the library compiles the `src/` directory of its style
 and not the other. `src/apps/` has the `server` and `client` programs, `src/issues/` standalone
 reproducers of upstream bugs. Everything else at the top level is generic.
 
 Generic code (`server_impl.*`, `client_impl.*`, `formatter.hpp`) reaches a backend only through
-`h1/backend.hpp` / `h2/backend.hpp` / `h3/backend.hpp`, which declare their entry points in terms
+`h1/backend.hpp` / `h2/backend.hpp` / `quic/backend.hpp` / `h3/backend.hpp`, which declare their
+entry points in terms
 of the runtime layer. New protocol-specific code goes in that protocol's directory; when generic
 code needs to reach it, add a declaration to that backend header rather than including a protocol
 header.
@@ -100,10 +102,12 @@ Verify the boundary with:
 
 ```
 ninja -C build -t deps | awk '/^[^ ].*: #deps/{o=$1} /nghttp2\/nghttp2.h|ngtcp2\/ngtcp2.h/{print o}' | sort -u
+ninja -C build -t deps | awk '/^[^ ].*: #deps/{o=$1} /nghttp3\/nghttp3.h/{print o}' | sort -u
 ```
 
-Only objects in `h2/` and `h3/` of the library may appear. (Test objects may: the h2c upgrade and
-formatter tests drive nghttp2 by hand.)
+Only objects in `h2/`, `quic/` and `h3/` of the library may appear in the first list, only objects
+in `h3/` in the second: that is what proves the QUIC transport has no HTTP in it. (Test objects
+may: the h2c upgrade and formatter tests drive nghttp2 by hand.)
 
 **Generic and protocol code include nothing from Boost.Asio but `<boost/asio/buffer.hpp>`**, which
 Beast's parser, serializer and `Fields` bring anyway, and nothing from capy or corosio. They reach
@@ -120,11 +124,15 @@ ninja -C build-corosio -t deps | awk '/^[^ ].*: #deps/{o=$1} /boost\/asio\// && 
 It must print nothing. (Test objects may: `test_external.cpp` runs its child processes on an ASIO
 context in both styles.)
 
-The HTTP/3 server and client share one implementation: `h3/session.*` (all ngtcp2/nghttp3
-callbacks, packet writing, timers, flow control), `h3/stream.*` (read and write paths, header
-parsing, lifecycle, the reader/writer adapters), `h3/common.*` (helpers). `h3/server.cpp` and
-`h3/client.cpp` hold only what is genuinely role-specific. Fix shared behavior in the shared
-files.
+QUIC and HTTP/3 are two layers, and each shares one implementation between server and client.
+`quic/session.*` has all ngtcp2 callbacks, packet writing, timers and connection flow control,
+`quic/stream.*` what every stream has, `quic/common.*` helpers; `quic/server.cpp` (UDP socket, CID
+demux, closing period) and `quic/client.cpp` (connected socket) hold only what is genuinely
+role-specific. What runs on a connection is a `QuicApplication` (`quic/application.hpp`), picked
+by ALPN. HTTP/3 is one: `h3/application.*` (all nghttp3 callbacks, nghttp3 as the write
+scheduler), `h3/stream.*` (read and write paths, header parsing, lifecycle, the reader/writer
+adapters), and again `h3/server.cpp` and `h3/client.cpp` for the roles. Fix shared behavior in the
+shared files.
 
 ## Conventions
 
@@ -165,7 +173,7 @@ get local issuer certificate".
 `ngtcp2_crypto_boringssl`. `-DTLS_LIBRARY=OpenSSL` switches to the system OpenSSL (3.5+) and
 `ngtcp2_crypto_ossl`; `build-openssl/` is that tree. The code picks its variant from the TLS
 headers (`OPENSSL_IS_AWSLC` / `OPENSSL_IS_BORINGSSL`), and the `#if`s are confined to
-`Http3Session::configure_tls_context()` / `setup_tls()` and `tls.cpp` -- keep it that way.
+`QuicSession::configure_tls_context()` / `setup_tls()` and `tls.cpp` -- keep it that way.
 After adding a dependency, check `ldd` of an AWS-LC build shows no `libssl.so.3` /
 `libcrypto.so.3` -- a shared OpenSSL would interpose the executable's AWS-LC symbols. `curl`,
 `osslclient` and `osslserver` are OpenSSL builds and are useful for interop testing.

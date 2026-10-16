@@ -5,6 +5,7 @@
 #include "anyhttp/h1/backend.hpp"
 #include "anyhttp/h2/backend.hpp"
 #include "anyhttp/h3/backend.hpp"
+#include "anyhttp/quic/backend.hpp"
 
 #include <boost/beast/core/flat_buffer.hpp>
 
@@ -64,14 +65,15 @@ Server::Impl::Impl(Executor executor, Config config)
    // listen_tcp(): with port=0 the actual port is only known once the acceptor is bound.
    //
    auto tcp_ep = io::local_endpoint(acceptor_);
-   http3_ = make_http3_server(*this, UdpEndpoint{tcp_ep.address(), tcp_ep.port()});
+   quic_ = make_quic_server(*this, UdpEndpoint{tcp_ep.address(), tcp_ep.port()});
+   quic_->add_application("h3", make_http3_application(*this));
 
    //
    // Advertise that endpoint to HTTP/1.1 and HTTP/2 clients, see Config::alt_svc_max_age. The
    // alt-authority carries the port alone: an empty host in one means the host of the origin
    // itself, which is exactly where HTTP/3 is, one transport over.
    //
-   if (http3_ && config_.alt_svc_max_age > 0s)
+   if (quic_ && config_.alt_svc_max_age > 0s)
    {
       alt_svc_ = std::format("h3=\":{}\"; ma={}", tcp_ep.port(), config_.alt_svc_max_age.count());
       mlogi("advertising '{}'", alt_svc_);
@@ -101,8 +103,8 @@ void Server::Impl::start()
                 logi("[{}] TCP accept loop: done", self->log_prefix());
           });
 
-   if (http3_)
-      http3_->start();
+   if (quic_)
+      quic_->start();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -128,8 +130,8 @@ void Server::Impl::destroy()
          destroy_on_its_executor(session);
    }
 
-   if (http3_)
-      http3_->destroy();
+   if (quic_)
+      quic_->destroy();
 }
 
 // -------------------------------------------------------------------------------------------------

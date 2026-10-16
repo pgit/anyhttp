@@ -1,6 +1,7 @@
 #pragma once
 
 #include "anyhttp/common.hpp"
+#include "anyhttp/quic/stream.hpp"
 #include "anyhttp/reader_impl.hpp"
 #include "anyhttp/writer_impl.hpp"
 
@@ -21,7 +22,7 @@
 namespace anyhttp::http3
 {
 
-class Http3Session;
+class Http3Application;
 
 // =================================================================================================
 
@@ -63,15 +64,13 @@ enum class WriteMode
 // to do once the incoming headers are complete, how the outgoing headers are submitted) are
 // virtual hooks implemented by Http3ServerStream / Http3ClientStream.
 //
-class Http3Stream : public std::enable_shared_from_this<Http3Stream>
+class Http3Stream : public quic::QuicStream
 {
 public:
-   Http3Stream(Http3Session& session, int64_t id, WriteMode write_mode);
-   virtual ~Http3Stream();
+   Http3Stream(Http3Application& application, int64_t id, WriteMode write_mode);
+   ~Http3Stream() override;
 
-   int64_t id;
-   Http3Session& session;
-   std::string log_prefix_;
+   Http3Application& application;
 
    //
    // Incoming message (request on the server, response on the client), populated by the nghttp3
@@ -164,9 +163,6 @@ public:
    Writer::Impl* writer = nullptr; // the Http3Writer, while attached
    bool closed = false;
 
-   Executor get_executor() const noexcept;
-   const std::string& log_prefix() const noexcept { return log_prefix_; }
-
    //
    // Data flow into user land (incoming body).
    //
@@ -201,7 +197,7 @@ public:
    // Called when the stream dies before its exchange completed, and from either the reader's or
    // the writer's destructor.
    //
-   void fail(error_code ec);
+   void fail(error_code ec) override;
    void delete_reader();
    void delete_writer();
    void maybe_close();
