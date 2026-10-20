@@ -50,7 +50,7 @@ timers and TLS. There are no completion tokens: everything is a coroutine.
 | ASIO / anyhttp | capy / corosio | Notes |
 |---|---|---|
 | `asio::awaitable<T>` | `capy::task<T>` | |
-| operation completing `(ec, n)` | `capy::io_task<T...>` → `io_result`, a `std::tuple<error_code, T...>` | Destructure it: `auto [ec, n] = co_await ...`. No exceptions on the I/O path. |
+| operation completing `(ec, n)` | `capy::task<capy::results<T...>>` → `results`, a `std::tuple<error_code, T...>` | Destructure it: `auto [ec, n] = co_await ...`. No exceptions on the I/O path. |
 | `co_spawn(ex, t, handler)` | `capy::run_async(ex, [stop_token], on_done, on_error)(t)` | It starts **inline**, not posted (§4.4). |
 | completion tokens, `any_completion_handler` | none | The API becomes coroutine-only. anyhttp's callback and `use_awaitable` flexibility does not carry over. |
 | cancellation slots | a `std::stop_token` that flows down the coroutine chain | `co_await capy::this_coro::stop_token` reads it. |
@@ -329,7 +329,7 @@ Each of these cost real debugging time. The symptom column is what you will actu
 
 | Trap | Symptom | Fix |
 |---|---|---|
-| `async_mutex::lock()` returns `io_result<>` and leaves the mutex **held** | the second caller blocks forever at 0% CPU | `auto [ec, guard] = co_await m.scoped_lock();` |
+| `async_mutex::lock()` returns `results<>` and leaves the mutex **held** | the second caller blocks forever at 0% CPU | `auto [ec, guard] = co_await m.scoped_lock();` |
 | An event is cleared after the operation that raced its `set()` | a silent hang under load | `clear()` at the top of the loop (§3.1) |
 | A capturing coroutine lambda is invoked as a temporary, `[&]() -> task<> {...}()` | captures dangle after the first suspension | use free coroutine functions with parameters (`12d343f`) |
 | `corosio::timeout()` on a composite operation | the value you get back is default-constructed, so progress is lost | report progress through an out-parameter (`count_into`, `send_into`) |
@@ -451,7 +451,7 @@ h2c upgrade, Alt-Svc, a completion-token API, and multiple threads. Here is how 
   whether pulling in Beast headers drags in more ASIO than buffer types. anyhttp's "max concurrent
   streams = 1" and `would_block` rules live above this layer and carry over unchanged.
 - **Completion tokens.** They do not carry over. The public API becomes coroutine-only
-  (`io_task<...>`). If callback users matter, one `run_async` adapter at the edge is the whole
+  (`task<results<...>>`). If callback users matter, one `run_async` adapter at the edge is the whole
   bridge.
 - **Threads.** Everything here depends on being single-threaded. `TaskGroup::count_` is not
   atomic, and `async_event` posts to its own executor. **Not tried:** the shape that keeps every

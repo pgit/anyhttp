@@ -19,13 +19,12 @@
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/any_executor.hpp>
 #include <boost/capy/ex/async_event.hpp>
-#include <boost/capy/ex/io_env.hpp>
+#include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/strand.hpp>
 #include <boost/capy/ex/this_coro.hpp>
-#include <boost/capy/io_result.hpp>
-#include <boost/capy/io_task.hpp>
+#include <boost/capy/results.hpp>
 #include <boost/capy/task.hpp>
 #include <boost/capy/when_all.hpp>
 #include <boost/capy/when_any.hpp>
@@ -140,7 +139,7 @@ template <typename... Args>
 struct CompletionState
 {
    capy::continuation continuation;
-   const capy::io_env* env = nullptr;
+   const capy::await_context* env = nullptr;
    std::optional<std::tuple<error_code, Args...>> result;
    std::optional<std::stop_callback<std::function<void()>>> on_stop;
    bool starting = false; // the operation is being started, see Initiation::await_suspend()
@@ -268,7 +267,7 @@ public:
    explicit Initiation(Init init) : init_(std::move(init)) {}
 
    //
-   // IoAwaitable wants the awaitable movable, and moving it is only ever done before it is
+   // ContextAwaitable wants the awaitable movable, and moving it is only ever done before it is
    // awaited, while its state is still empty: that has a stop_callback, which does not move.
    //
    Initiation(Initiation&& other) noexcept(std::is_nothrow_move_constructible_v<Init>)
@@ -278,7 +277,7 @@ public:
 
    bool await_ready() const noexcept { return false; }
 
-   std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, const capy::io_env* env)
+   std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, const capy::await_context* env)
    {
       state_.continuation.h = h;
       state_.env = env;
@@ -370,7 +369,7 @@ struct YieldNow
    capy::continuation continuation;
 
    bool await_ready() const noexcept { return false; }
-   std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, const capy::io_env* env)
+   std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, const capy::await_context* env)
    {
       continuation.h = h;
       env->executor.post(continuation);
@@ -458,11 +457,11 @@ template <typename T>
 using value_t = std::conditional_t<std::is_void_v<T>, std::monostate, T>;
 
 /**
- * \p task as what capy::when_all() and capy::when_any() take, an operation with an io_result,
+ * \p task as what capy::when_all() and capy::when_any() take, an operation with a results tuple,
  * keeping its value. What it throws passes through.
  */
 template <typename T>
-capy::io_task<> as_io(Task<T> task, std::optional<value_t<T>>& result)
+capy::task<capy::results<>> as_io(Task<T> task, std::optional<value_t<T>>& result)
 {
    if constexpr (std::is_void_v<T>)
    {
@@ -471,7 +470,7 @@ capy::io_task<> as_io(Task<T> task, std::optional<value_t<T>>& result)
    }
    else
       result.emplace(co_await std::move(task));
-   co_return capy::io_result<>{};
+   co_return capy::results<>{};
 }
 } // namespace detail
 

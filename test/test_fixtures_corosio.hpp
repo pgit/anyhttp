@@ -6,7 +6,8 @@
 // here, or on the compiler's command line) runs the tests on several threads, with a strand per
 // connection.
 //
-#include <boost/capy/io_task.hpp>
+#include <boost/capy/results.hpp>
+#include <boost/capy/task.hpp>
 #include <boost/capy/when_all.hpp>
 #include <boost/corosio/delay.hpp>
 #include <boost/corosio/io_context.hpp>
@@ -34,14 +35,14 @@ Task<T> stop_after(std::chrono::duration<Rep, Period> timeout, Task<T> task)
 {
    const auto canceled = std::make_error_code(std::errc::operation_canceled);
    std::optional<std::conditional_t<std::is_void_v<T>, std::monostate, T>> result;
-   auto run_task = [&]() -> boost::capy::io_task<> {
+   auto run_task = [&]() -> boost::capy::task<boost::capy::results<>> {
       if constexpr (std::is_void_v<T>)
          co_await std::move(task);
       else
          result.emplace(co_await std::move(task));
       co_return {canceled};
    };
-   auto run_timer = [&]() -> boost::capy::io_task<> {
+   auto run_timer = [&]() -> boost::capy::task<boost::capy::results<>> {
       auto [ec] = co_await boost::corosio::delay(timeout);
       co_return {ec ? ec : canceled};
    };
