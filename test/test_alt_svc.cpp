@@ -360,10 +360,12 @@ TEST_P(AltSvcFrame, WHEN_an_altsvc_frame_arrives_THEN_the_next_connection_uses_i
 
    boost::urls::url target{"http://127.0.0.2/echo"};
    target.set_port_number(port);
-   client::Client client(context.get_executor(), {.url = target,
-                                                  .protocol = Protocol::h2,
-                                                  .follow_alt_svc = true,
-                                                  .tls_ca_file = "pki/out/root.pem"});
+   // on several threads, the client needs a strand, as the fixture's client has
+   auto executor = threads() > 1 ? new_strand(context.get_executor()) : context.get_executor();
+   client::Client client(executor, {.url = target,
+                                    .protocol = Protocol::h2,
+                                    .follow_alt_svc = true,
+                                    .tls_ca_file = "pki/out/root.pem"});
 
    auto client_main = [&]() -> Task<void> {
       //
@@ -378,7 +380,7 @@ TEST_P(AltSvcFrame, WHEN_an_altsvc_frame_arrives_THEN_the_next_connection_uses_i
       EXPECT_EQ(second.result_int(), 200);
       EXPECT_TRUE(served_over_http3(second)) << "the second connection is not HTTP/3";
    };
-   launch(context.get_executor(), client_main(), [&](const std::exception_ptr& ex) {
+   launch(client.get_executor(), client_main(), [&](const std::exception_ptr& ex) {
       EXPECT_FALSE(ex) << what(ex);
       io::close(acceptor);
       server.reset();

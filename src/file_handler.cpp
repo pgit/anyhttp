@@ -257,7 +257,7 @@ public:
          return std::unexpected(mapped.error());
 
       // Read mtime() before the move, rather than relying on argument evaluation order.
-      auto last_modified = format_http_date(mapped->mtime());
+      auto last_modified = std::string(format_http_date(mapped->mtime()));
       auto entry = std::make_shared<const CachedFile>(
          *resolved, std::move(*mapped), std::move(last_modified), content_type(*resolved));
       insert(request_path, entry);

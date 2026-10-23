@@ -108,8 +108,8 @@ The tables below use `-c 32` unless they say otherwise.
 
 *2026-10-07, measured at `d445bdf`.* nghttpd, which `bench.sh` runs as the HTTP/2 reference,
 serves twice as many requests as either API style: `bench.sh -D 5 -c 32` gave 555k req/s against
-284k (ASIO) and 273k (COROSIO), on one thread each, with the same nghttp2 and OpenSSL. Nothing has
-been changed yet; this is where the time goes.
+284k (ASIO) and 273k (COROSIO), on one thread each, with the same nghttp2 and OpenSSL. This is
+where the time goes; [Done since](#done-since) lists what has been fixed.
 
 ### Results
 
@@ -205,6 +205,15 @@ writer is resumed from inside nghttp2's data callback, and the stream's end is p
   control blocks. jemalloc would cheapen the rest.
 - **What remains is the price of the coroutine API**: five frames and several type-erased handlers
   per request. Closing that part of the gap would mean changing those layers, not tuning them.
+
+### Done since
+
+- **`std::format` off the request path** (2026-10-09): the `Date` formatted by hand into a
+  fixed-size buffer (295 instructions, as in nghttpd); `:status` and integer header values through
+  `std::to_string()`; the stream's log prefix built only when a line is logged. 32.1k → 25.3k
+  instructions and 25.6 → 23.6 `malloc()`s per request, `std::format` 5.4k → 0 (callgrind as
+  below). Cleartext, six interleaved rounds of `h2load -D 5 -c 32 -m 10 -t 1` against the parent
+  commit: 318k-325k → 379k-385k req/s, 3.1 → 2.6 µs CPU per request (user + system).
 
 ### Reproduce
 

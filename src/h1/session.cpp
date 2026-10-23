@@ -556,7 +556,7 @@ public:
       message.result(status_code);
 
       if (message.find(http::field::date) == message.end())
-         message.set(http::field::date, format_http_date(std::chrono::system_clock::now()));
+         message.set(http::field::date, std::string_view(http_date_now()));
 
       submit_headers(headers);
 

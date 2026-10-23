@@ -56,10 +56,10 @@ public:
 // =================================================================================================
 
 //
-// The HTTP/3 half of the server, behind anyhttp/h3/backend.hpp: it owns the UDP socket and
+// The QUIC half of the server, behind anyhttp/quic/backend.hpp: it owns the UDP socket and
 // everything QUIC, so that nothing of ngtcp2/nghttp3 reaches this header.
 //
-class Http3Server;
+class QuicServer;
 
 class Server::Impl : public std::enable_shared_from_this<Server::Impl>
 {
@@ -97,6 +97,9 @@ public:
    TcpEndpoint local_endpoint() const { return io::local_endpoint(acceptor_); }
 
    void on_request(RequestHandler&& handler) noexcept { request_handler_ = std::move(handler); }
+
+   /// Registers plain QUIC streams for an ALPN, see Server::on_quic().
+   void on_quic(quic::Config config, quic::ConnectionHandler handler);
    const RequestHandler& request_handler() const noexcept { return request_handler_; }
 
    //
@@ -119,7 +122,7 @@ private:
    std::mutex session_mutex_;
    std::set<std::shared_ptr<Session::Impl>> sessions_;
 
-   std::shared_ptr<Http3Server> http3_;
+   std::shared_ptr<QuicServer> quic_;
 
    RequestHandler request_handler_;
    bool destroyed_ = false;

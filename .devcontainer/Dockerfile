@@ -10,7 +10,7 @@ FROM docker.io/psedoc/anyhttp:0.30
 # install some more interactive utils in the devcontainer
 #
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
-    apt-get -y install iputils-ping tmux btop valgrind && \
+    apt-get -y install iputils-ping tmux btop valgrind gh && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

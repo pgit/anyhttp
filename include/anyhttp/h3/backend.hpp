@@ -1,13 +1,14 @@
 #pragma once
 
 //
-// The HTTP/3 backend as seen from the generic server and client. ngtcp2 and nghttp3 stay behind
-// this header, inside h3/: on the server side as an opaque Http3Server owning the
-// shared UDP socket, its receive loop and the QUIC connection-ID demux (src/h3/server.cpp), on
-// the client side as a single coroutine that establishes a QUIC connection and hands back the
-// session running on it (src/h3/client.cpp).
+// The HTTP/3 backend as seen from the generic server and client. nghttp3 stays behind this
+// header, inside h3/: on the server side as the application the QUIC server runs for connections
+// that negotiate "h3" (see anyhttp/quic/backend.hpp), on the client side as a single coroutine
+// that establishes a QUIC connection and hands back the session running on it
+// (src/h3/client.cpp).
 //
 
+#include "anyhttp/quic/backend.hpp"
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
 
@@ -19,28 +20,8 @@ namespace anyhttp::server
 
 // =================================================================================================
 
-//
-// The server's HTTP/3 half: one UDP socket shared by all QUIC connections, the receive loop
-// de-multiplexing datagrams onto them by connection ID, and the connections themselves.
-//
-// Sessions register with the owning Server::Impl just like the TCP-based ones, so they
-// take part in server-wide shutdown.
-//
-class Http3Server
-{
-public:
-   virtual ~Http3Server() = default;
-
-   /// Starts the UDP receive loop.
-   virtual void start() = 0;
-
-   /// Closes the socket and tears down all QUIC connections, each sending a CONNECTION_CLOSE.
-   virtual void destroy() = 0;
-};
-
-/// Binds the UDP socket for HTTP/3 to `endpoint`, usually the address and port the TCP acceptor
-/// is already listening on, so that all three protocols share one endpoint.
-std::shared_ptr<Http3Server> make_http3_server(Server::Impl& server, const UdpEndpoint& endpoint);
+/// HTTP/3 for QuicServer::add_application(): its requests go to the request handler of `server`.
+quic::ApplicationFactory make_http3_application(Server::Impl& server);
 
 // =================================================================================================
 

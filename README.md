@@ -12,7 +12,7 @@ Low-level C++23 HTTP client and server library, in one of two API styles, chosen
 
 ** THIS REPOSITORY IS PURELY EXPERIMENTAL **
 
-It supports HTTP/1.x, HTTP/2 and HTTP/3 behind a common, type-erasing interface, hence the *any* in the name.
+It supports HTTP/1.x, HTTP/2 and HTTP/3 behind a common, type-erasing interface, hence the *any* in the name -- and plain QUIC streams next to HTTP/3, for protocols of your own.
 
 None of those protocols are implemented from scratch. Instead, it is a wrapper around the following well-established libraries:
 
@@ -117,6 +117,37 @@ operation and hands back the response as a plain Beast message -- status, fields
 The convenience is paid for with memory, as the body is buffered in full: anything that wants to
 look at the body while it arrives, or to send a body of its own, still goes through
 `submit()`.
+
+### Plain QUIC streams
+QUIC streams without HTTP in them -- for a protocol of your own, told apart by its ALPN -- run on
+the UDP port HTTP/3 is on. A `quic::Stream` is a `Reader` and a `Writer` at once:
+
+```c++
+server.on_quic({.alpn = "echo"}, [](quic::Connection connection) -> Task<void> {
+   for (;;)
+   {
+      auto [ec, stream] = co_await connection.accept_stream();
+      if (ec)
+         co_return; // the connection is over
+      launch(connection.get_executor(), echo(std::move(stream)));
+   }
+});
+```
+```c++
+   auto [ec1, connection] = co_await quic::connect(executor, "localhost", "8080",
+                                                   {.alpn = "echo", .tls_ca_file = "root.pem"});
+   auto [ec2, stream] = connection.open_stream();
+   auto [ec3] = co_await stream.write_eof(asio::buffer("hello", 5));
+   auto [ec4, n] = co_await stream.read_some(asio::buffer(buffer));
+```
+
+The ends map onto the Reader/Writer contract below: a FIN is `write_eof()` on one side and
+`errors::eof` on the other, a stream its writer gave up on (`reset_stream()`, or a Writer dropped
+before the end) reads as `errors::partial_message`, and writing to a peer that asked us to stop
+(`stop_sending()`) fails with `errc::connection_reset`. The two directions are independent. Opening
+a stream never waits: at the peer's limit, `open_stream()` fails with `errors::would_block`. A
+connection is closed when its handle goes away -- on the server, when the handler returns. See
+[anyhttp/quic.hpp](include/anyhttp/quic.hpp) and [docs/quic-streams-plan.md](docs/quic-streams-plan.md).
 
 # Class Hierarchy
 

@@ -290,9 +290,9 @@ static int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame*
       assert(stream);
       using namespace boost::beast::http;
       if (frame->headers.cat == NGHTTP2_HCAT_REQUEST)
-         logd("[{}] {} {}", stream->log_prefix_, stream->method, stream->url.buffer());
+         logd("[{}] {} {}", stream->log_prefix(), stream->method, stream->url.buffer());
       else if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE && stream->status_code)
-         logd("[{}] {} {}", stream->log_prefix_, *stream->status_code,
+         logd("[{}] {} {}", stream->log_prefix(), *stream->status_code,
               obsolete_reason(int_to_status(*stream->status_code)));
       stream->log_received_headers();
 
@@ -504,14 +504,14 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    {
       if (item.name_string().starts_with(':'))
          logw("[{}] async_submit: invalid header '{}': setting pseudo headers is not allowed",
-              stream->log_prefix_, item.name_string());
+              stream->log_prefix(), item.name_string());
 
       nva.push_back(make_nv_ls(item.name_string(), item.value()));
    }
 
-   logd("[{}] {} {}", stream->log_prefix_, method_str, url.buffer());
+   logd("[{}] {} {}", stream->log_prefix(), method_str, url.buffer());
    for (auto nv : nva)
-      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->log_prefix_, truncated(name_of(nv)),
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->log_prefix(), truncated(name_of(nv)),
            truncated(value_of(nv)));
 
    //
@@ -542,10 +542,9 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    }
 
    stream->id = id;
-   stream->log_prefix_ = std::format("{}.{}", log_prefix(), id);
    last_id_ = id;
 
-   logd("[{}] submit: new stream ID: {}", stream->log_prefix_, id);
+   logd("[{}] submit: new stream ID: {}", stream->log_prefix(), id);
    streams_.emplace(id, stream);
    complete_later(std::move(handler), get_executor(), error_code{},
                   client::Request{std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)});
