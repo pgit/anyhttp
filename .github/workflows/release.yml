@@ -10,117 +10,91 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# The image has both GCC and clang, and 'c++' is GCC. Coverage needs clang, and the other jobs
-# should build what the devcontainer's build/ builds -- except 'gcc', which overrides this to
-# build with GCC and libstdc++, like the devcontainer's build-gcc/.
+# The image has both GCC and clang, and 'c++' is GCC. Coverage needs clang; the matrix job picks its
+# compiler per leg and defaults to clang, which brings libc++ with it (USE_LIBCXX in CMakeLists.txt).
 env:
   CC: clang
   CXX: clang++
 
 jobs:
-  release:
-    name: RelWithDebInfo
-    runs-on: ubuntu-latest
-    container:
-      image: docker.io/psedoc/anyhttp:0.30
-    
-    steps:
-    - &checkout
-      name: Checkout code
-      uses: actions/checkout@v7
-      
-    - name: Configure CMake
-      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-      
-    - &build
-      name: Build
-      run: cmake --build build --parallel
-      
-    - name: Run tests (if available)
-      run: |
-        build/test/test_all
-
-  gcc:
-    name: GCC
+  #
+  # Both API styles in all three flavors, on OpenSSL: COROSIO needs it (corosio's openssl_stream
+  # uses a zero-copy BIO API that AWS-LC lacks), so it is the baseline rather than the default
+  # AWS-LC. The legs after the product each isolate one variable the product holds fixed -- the
+  # standard library, the TLS library -- so that a red job names its own cause. COROSIO TSAN is
+  # the single-threaded one: -DMULTITHREADED still hangs on the h3 session teardown tests.
+  #
+  build:
+    name: ${{ matrix.api }} ${{ matrix.flavor }}
     runs-on: ubuntu-latest
     container:
       image: docker.io/psedoc/anyhttp:0.30
     env:
-      CC: gcc
-      CXX: g++
+      CC: ${{ matrix.cc || 'clang' }}
+      CXX: ${{ matrix.cxx || 'clang++' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [ASIO, COROSIO]
+        flavor: [RelWithDebInfo, ASAN, TSAN]
+        include:
+          # Flags per flavor, merged into the leg of each API style.
+          - flavor: RelWithDebInfo
+            cmake: -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          - flavor: ASAN
+            cmake: -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
+            opts: ASAN_OPTIONS=detect_leaks=1
+          - flavor: TSAN
+            cmake: -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
+            opts: TSAN_OPTIONS=report_signal_unsafe=0
+          # Legs of their own: GCC and libstdc++ for both styles, and the other TLS library.
+          - api: ASIO
+            flavor: GCC
+            cc: gcc
+            cxx: g++
+            cmake: -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          - api: COROSIO
+            flavor: GCC
+            cc: gcc
+            cxx: g++
+            cmake: -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          - api: ASIO
+            flavor: AWS-LC
+            tls: AWS-LC
+            cmake: -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
     steps:
-      - *checkout
+      - &checkout
+        name: Checkout code
+        uses: actions/checkout@v7
 
-      - name: Configure CMake with GCC
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - name: Configure CMake
+        run: >
+          cmake -S . -B build -G Ninja
+          -DANYHTTP_API=${{ matrix.api }}
+          -DTLS_LIBRARY=${{ matrix.tls || 'OpenSSL' }}
+          ${{ matrix.cmake }}
 
-      - *build
-
-      - name: Run tests (if available)
-        run: |
-          build/test/test_all
-
-  openssl:
-    name: OpenSSL
-    runs-on: ubuntu-latest
-    container:
-      image: docker.io/psedoc/anyhttp:0.30
-
-    steps:
-      - *checkout
-
-      - name: Configure CMake with OpenSSL
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTLS_LIBRARY=OpenSSL
-
-      - *build
+      - &build
+        name: Build
+        run: cmake --build build --parallel
 
       - name: Check that OpenSSL is linked
+        if: matrix.tls != 'AWS-LC'
         run: |
           ldd build/test/test_all | tee ldd.txt
           grep -q 'libssl\.so\.3' ldd.txt && grep -q 'libngtcp2_crypto_ossl' ldd.txt
 
-      - name: Run tests (if available)
+      # A shared OpenSSL would interpose the executable's statically linked AWS-LC symbols.
+      - name: Check that no shared OpenSSL is linked
+        if: matrix.tls == 'AWS-LC'
         run: |
-          build/test/test_all
+          ldd build/test/test_all | tee ldd.txt
+          ! grep -qE 'lib(ssl|crypto)\.so\.3' ldd.txt
 
-  asan:
-    name: ASAN
-    runs-on: ubuntu-latest
-    container:
-      image: docker.io/psedoc/anyhttp:0.30
-
-    steps:
-      - *checkout
-
-      - name: Configure CMake with ASAN
-        run: |
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
-
-      - *build
-
-      - name: Run tests (if available)
-        run: |
-          ASAN_OPTIONS=detect_leaks=1 build/test/test_all
-
-  tsan:
-    name: TSAN
-    runs-on: ubuntu-latest
-    container:
-      image: docker.io/psedoc/anyhttp:0.30
-
-    steps:
-      - *checkout
-
-      - name: Configure CMake with TSAN
-        run: |
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
-
-      - *build
-
-      - name: Run tests (if available)
-        run: |
-          TSAN_OPTIONS=report_signal_unsafe=0 build/test/test_all
+      - name: Run tests
+        run: env ${{ matrix.opts }} build/test/test_all
 
   coverage:
     name: Coverage
