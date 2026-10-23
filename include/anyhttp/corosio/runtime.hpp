@@ -569,7 +569,9 @@ public:
       auto wait = [](std::chrono::steady_clock::duration delay,
                      std::function<void()> on_expiry) -> Task<void> {
          auto [ec] = co_await corosio::delay(delay);
-         if (!ec && !(co_await capy::this_coro::stop_token).stop_requested())
+         // Hoisted out of the condition: GCC cannot parse a co_await inside a member call.
+         const std::stop_token token = co_await capy::this_coro::stop_token;
+         if (!ec && !token.stop_requested())
             on_expiry();
       };
       capy::run_async(
