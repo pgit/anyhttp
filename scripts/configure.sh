@@ -12,6 +12,7 @@
 #   build-openssl-release  clang, OpenSSL, Release: the ASIO tree bench.sh compares COROSIO with
 #   build-corosio          COROSIO (clang, OpenSSL), Debug
 #   build-corosio-release  COROSIO, Release
+#   build-corosio-gcc      COROSIO, GCC, libstdc++, Debug
 #   build-corosio-asan     COROSIO, RelWithDebInfo, AddressSanitizer
 #   build-corosio-tsan     COROSIO, RelWithDebInfo, ThreadSanitizer, tests on all cores
 #
@@ -36,7 +37,7 @@ shift $((OPTIND - 1))
 cd "$(dirname "$0")/.."
 
 all=(build build-release build-gcc build-asan build-tsan build-openssl build-openssl-release
-   build-corosio build-corosio-release build-corosio-asan build-corosio-tsan)
+   build-corosio build-corosio-release build-corosio-gcc build-corosio-asan build-corosio-tsan)
 
 # cc and c++ are GCC on this host
 clang=(-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++)
@@ -63,6 +64,8 @@ options() {
    build-openssl-release) args=("${clang[@]}" "${openssl[@]}" -DCMAKE_BUILD_TYPE=Release) ;;
    build-corosio) args=("${clang[@]}" "${corosio[@]}" -DCMAKE_BUILD_TYPE=Debug) ;;
    build-corosio-release) args=("${clang[@]}" "${corosio[@]}" -DCMAKE_BUILD_TYPE=Release) ;;
+   build-corosio-gcc) args=(-DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ "${corosio[@]}"
+      -DCMAKE_BUILD_TYPE=Debug) ;;
    build-corosio-asan) args=("${clang[@]}" "${corosio[@]}") && sanitize address ;;
    build-corosio-tsan) args=("${clang[@]}" "${corosio[@]}") && sanitize thread -DMULTITHREADED ;;
    *)

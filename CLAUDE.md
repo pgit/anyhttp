@@ -16,9 +16,11 @@ and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.jso
 pinned SHAs. Both styles build the same library sources and test files; what belongs to one style
 only is guarded with `ANYHTTP_ASIO` or `ANYHTTP_COROSIO` (exactly one of them is 1). So is the
 `server` program; the `client` program is ASIO-only so far. `build-corosio-asan/` is its ASAN
-tree, `build-corosio-release/` its Release tree (benchmark COROSIO with it). COROSIO needs
-OpenSSL, so compare it against `build-openssl-release/` (ASIO, OpenSSL, Release), not
-`build-release/`: `scripts/bench.sh` runs the two side by side (`-P` for plaintext, `-t` for
+tree, `build-corosio-release/` its Release tree (benchmark COROSIO with it) and
+`build-corosio-gcc/` its GCC one -- capy and corosio do build against libstdc++, but GCC is
+pickier about coroutine expressions than clang, so keep a `co_await` out of any larger expression.
+COROSIO needs OpenSSL, so compare it against `build-openssl-release/` (ASIO, OpenSSL, Release),
+not `build-release/`: `scripts/bench.sh` runs the two side by side (`-P` for plaintext, `-t` for
 server threads).
 
 `build-corosio-tsan/` is COROSIO under TSAN with `-DMULTITHREADED` in `CMAKE_CXX_FLAGS`: the
