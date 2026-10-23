@@ -396,8 +396,24 @@ TEST(HttpDate, WHEN_time_is_formatted_THEN_is_imf_fixdate)
 TEST(HttpDate, WHEN_year_has_no_four_digits_THEN_is_clamped)
 {
    using namespace std::chrono;
-   EXPECT_EQ(formatted(sys_days{year{12345} / January / 1}), "Fri, 31 Dec 9999 23:59:59 GMT");
-   EXPECT_EQ(formatted(sys_days{year{-1} / December / 31}), "Sat, 01 Jan 0000 00:00:00 GMT");
+
+   //
+   // system_clock's resolution is implementation-defined, and only a clock coarse enough to reach
+   // past the four digits of the format has anything for the clamp to do: libc++ counts
+   // microseconds and spans +/- 292,000 years, libstdc++ counts nanoseconds and spans 1677 to
+   // 2262, where the conversions below would overflow before format_http_date() sees them.
+   //
+   constexpr bool representable =
+      floor<days>(system_clock::time_point::max()) > sys_days{year{9999} / December / 31} &&
+      floor<days>(system_clock::time_point::min()) < sys_days{year{0} / January / 1};
+
+   if constexpr (!representable)
+      GTEST_SKIP() << "system_clock cannot represent a year outside 0000 to 9999";
+   else
+   {
+      EXPECT_EQ(formatted(sys_days{year{12345} / January / 1}), "Fri, 31 Dec 9999 23:59:59 GMT");
+      EXPECT_EQ(formatted(sys_days{year{-1} / December / 31}), "Sat, 01 Jan 0000 00:00:00 GMT");
+   }
 }
 
 TEST(HttpDate, WHEN_current_time_is_formatted_THEN_matches_the_clock)
