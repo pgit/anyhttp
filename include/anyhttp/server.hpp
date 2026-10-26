@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.hpp" // IWYU pragma: keep
+#include "quic.hpp"
 #include "reader.hpp"
 #include "writer.hpp"
 
@@ -226,6 +227,17 @@ public:
    executor_type get_executor() const noexcept;
 
    void on_request(RequestHandler&& handler);
+
+   /**
+    * Serves plain QUIC streams (see anyhttp/quic.hpp) to clients that negotiate \c config.alpn,
+    * on the UDP port HTTP/3 is on: each such connection is handed to \p handler, on its own
+    * executor, and closed when the handler returns. Registering an ALPN again replaces what was
+    * registered for it, from the next connection on.
+    *
+    * Of \p config, the server uses the flow control limits, the error codes and the write mode;
+    * its idle timeout is Config::idle_timeout.
+    */
+   void on_quic(quic::Config config, quic::ConnectionHandler handler);
 
    TcpEndpoint local_endpoint() const;
 

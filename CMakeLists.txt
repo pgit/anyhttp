@@ -151,11 +151,11 @@ elseif (ANYHTTP_API STREQUAL "COROSIO")
     endforeach()
     FetchContent_Declare(capy
         GIT_REPOSITORY https://github.com/cppalliance/capy.git
-        GIT_TAG a372a6b054261f29497ac0d19c2a9533f9eaad40
+        GIT_TAG bb749f9ace824660c93ba1ba9b875d574b679188
         EXCLUDE_FROM_ALL)
     FetchContent_Declare(corosio
         GIT_REPOSITORY https://github.com/cppalliance/corosio.git
-        GIT_TAG a80ce002fd8cb27c893e50146990dc66d96cac02
+        GIT_TAG f009395950d4a4ce7ee5dd146b29fe74c0610233
         EXCLUDE_FROM_ALL)
     FetchContent_MakeAvailable(capy corosio)
     message(STATUS "Using API style: COROSIO (capy/corosio)")

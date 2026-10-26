@@ -166,8 +166,8 @@ public:
    /// Set instead of has_response for a response that is not delivered, but fails.
    error_code response_error;
 
-   std::string log_prefix_;
-   const std::string& log_prefix() const noexcept { return log_prefix_; }
+   /// Built on every call, not kept: only logging needs it, and a stream lives for one request.
+   std::string log_prefix() const;
    std::string method;
    boost::urls::url url;
 

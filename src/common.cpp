@@ -94,26 +94,54 @@ std::string what(const std::exception_ptr& ptr)
 
 // -------------------------------------------------------------------------------------------------
 
-/// Format according to HTTP date spec (RFC 7231)
-std::string format_http_date(std::chrono::system_clock::time_point tp)
+HttpDate format_http_date(std::chrono::system_clock::time_point tp)
 {
-   // get current system time and convert to UTC
-   std::time_t time = std::chrono::system_clock::to_time_t(tp);
-   std::tm tm;
-   gmtime_r(&time, &tm);
+   using namespace std::chrono;
 
-   constexpr auto weekdays = std::array{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-   constexpr auto months = std::array{"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+   constexpr auto first = sys_seconds{sys_days{year{0} / January / 1}};
+   constexpr auto last = sys_seconds{sys_days{year{9999} / December / 31}} + days{1} - seconds{1};
+   const auto time = std::clamp(floor<seconds>(tp), first, last);
 
-   static_assert(weekdays.size() == 7 && months.size() == 12);
+   const auto day = floor<days>(time);
+   const auto date = year_month_day{day};
+   const auto clock = hh_mm_ss{time - day};
 
-   assert(tm.tm_wday >= 0 && static_cast<size_t>(tm.tm_wday) < weekdays.size());
-   assert(tm.tm_mon >= 0 && static_cast<size_t>(tm.tm_mon) < months.size());
+   //
+   // By hand: std::format() with seven arguments, gmtime_r() and a heap string took 5k
+   // instructions, a sixth of a small HTTP/2 request (docs/benchmark.md).
+   //
+   constexpr std::string_view weekdays = "SunMonTueWedThuFriSat";
+   constexpr std::string_view months = "JanFebMarAprMayJunJulAugSepOctNovDec";
 
-   return std::format("{:s}, {:02d} {:s} {:04d} {:02d}:{:02d}:{:02d} GMT", weekdays[tm.tm_wday],
-                      tm.tm_mday, months[tm.tm_mon], tm.tm_year + 1900, tm.tm_hour, tm.tm_min,
-                      tm.tm_sec);
+   HttpDate result;
+   auto* out = result.chars.data();
+   const auto put = [&](std::string_view text) { out = std::ranges::copy(text, out).out; };
+   const auto put2 = [&](unsigned value) // two digits
+   {
+      *out++ = static_cast<char>('0' + value / 10);
+      *out++ = static_cast<char>('0' + value % 10);
+   };
+
+   const auto y = static_cast<unsigned>(static_cast<int>(date.year()));
+   put(weekdays.substr(weekday{day}.c_encoding() * 3, 3));
+   put(", ");
+   put2(static_cast<unsigned>(date.day()));
+   put(" ");
+   put(months.substr((static_cast<unsigned>(date.month()) - 1) * 3, 3));
+   put(" ");
+   put2(y / 100);
+   put2(y % 100);
+   put(" ");
+   put2(clock.hours().count());
+   put(":");
+   put2(clock.minutes().count());
+   put(":");
+   put2(clock.seconds().count());
+   put(" GMT");
+   assert(out == result.chars.data() + result.chars.size());
+   return result;
 }
+
+HttpDate http_date_now() { return format_http_date(std::chrono::system_clock::now()); }
 
 // =================================================================================================

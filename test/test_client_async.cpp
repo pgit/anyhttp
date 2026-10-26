@@ -420,25 +420,26 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_THEN_can_resume)
 
 TEST_P(ClientAsync, YieldFuzz)
 {
+   // One generator for each side: with MULTITHREADED, they run on different threads.
 #if 0
    static std::random_device rd;
-   static std::mt19937 gen(rd());
+   static std::mt19937 server_gen(rd()), client_gen(rd());
 #else
-   static std::mt19937 gen(42); // fixed seed for reproducibility
+   static std::mt19937 server_gen(42), client_gen(43); // fixed seeds for reproducibility
 #endif
 
    requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       std::uniform_int_distribution<> dist(0, 10);
       constexpr auto msg = "Hello, Client!"sv;
-      co_await yield(dist(gen));
+      co_await yield(dist(server_gen));
       Fields fields;
       fields.set("Content-Length", std::to_string(msg.size()));
       check(co_await response.submit(200, fields));
-      co_await yield(dist(gen));
+      co_await yield(dist(server_gen));
       check(co_await response.write(asio::buffer(msg)));
-      co_await yield(dist(gen));
+      co_await yield(dist(server_gen));
       check(co_await response.write_eof());
-      co_await yield(dist(gen));
+      co_await yield(dist(server_gen));
       std::array<uint8_t, 16> data;
       co_await request.read_some(asio::buffer(data));
    };
@@ -448,15 +449,15 @@ TEST_P(ClientAsync, YieldFuzz)
       {
          std::println(
             "=== {} =========================================================================", i);
-         co_await yield(dist(gen));
+         co_await yield(dist(client_gen));
          Fields fields;
          if (GetParam() == anyhttp::Protocol::h1)
             fields.set("Connection", "Keep-Alive");
          fields.set("Content-Length", "0");
          auto request = check(co_await session.submit(url, fields));
-         co_await yield(dist(gen));
+         co_await yield(dist(client_gen));
          check(co_await request.write_eof());
-         co_await yield(dist(gen));
+         co_await yield(dist(client_gen));
          co_await count_response(request);
       }
    };

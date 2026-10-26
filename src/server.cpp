@@ -106,6 +106,11 @@ Server::~Server()
 
 void Server::on_request(RequestHandler&& handler) { impl->on_request(std::move(handler)); }
 
+void Server::on_quic(quic::Config config, quic::ConnectionHandler handler)
+{
+   impl->on_quic(std::move(config), std::move(handler));
+}
+
 Executor Server::get_executor() const noexcept { return impl->get_executor(); }
 
 TcpEndpoint Server::local_endpoint() const { return impl->local_endpoint(); }

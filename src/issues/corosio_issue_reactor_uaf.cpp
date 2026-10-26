@@ -1,6 +1,6 @@
 //
 // corosio: heap-use-after-free in the epoll reactor with more than one thread in run() (not filed
-// yet; corosio 6a3eed46).
+// yet; corosio 6a3eed46, still in 0a387cb).
 //
 // epoll_scheduler::run_task() takes each event's reactor_descriptor_state* from epoll_wait() and
 // calls add_ready_events() on it, then sets is_enqueued_, without holding the descriptor's mutex.
@@ -20,6 +20,10 @@
 // threads stall part way, which the watchdog reports ("stuck after N of M rounds"): presumably
 // the stale event lands on the next socket allocated at the same address, whose write then never
 // completes. With one thread ("corosio_issue_reactor_uaf 1") it always completes.
+//
+// It is not specific to local sockets: reactor_socket_service is the base of the TCP, UDP and
+// local socket services alike, and the same loop over a tcp_acceptor and tcp_socket on the
+// loopback reports the same use-after-free and stalls the same way.
 //
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/ex/run_async.hpp>

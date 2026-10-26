@@ -292,7 +292,15 @@ Task<void> hello_world(server::Response response)
 
 Task<void> h2spec(server::Request request, server::Response response)
 {
-   co_await yield(10); // FIXME: without this, one more testcase fails
+   //
+   // h2spec's stream state cases (5.1) send an illegal frame right after the request and expect
+   // the STREAM_CLOSED error before anything else. nghttp2 raises it only while the stream is
+   // still open: once our response has closed it, the frame is ignored silently, which is what
+   // makes 5.1/8 to 5.1/13 fail. So let that frame arrive before responding. Yielding is not
+   // enough, however often: a reactor polls its sockets only once its queue of ready handlers
+   // has run dry, and under load the frame has not even arrived by then. It takes real time.
+   //
+   std::ignore = co_await delay(10ms);
    std::array<uint8_t, 1024> buffer;
    std::ignore = co_await request.read_some(asio::buffer(buffer));
 

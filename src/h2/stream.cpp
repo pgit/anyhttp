@@ -57,7 +57,7 @@ void NGHttp2Reader<Base>::detach()
    //
    assert(stream);
    detached_ec = stream->reading_finished() ? errors::eof : errors::partial_message;
-   detached_log_prefix = stream->log_prefix_;
+   detached_log_prefix = stream->log_prefix();
    detached_fields = std::move(stream->fields); // the stream is being destroyed
    stream = nullptr;
 }
@@ -65,7 +65,7 @@ void NGHttp2Reader<Base>::detach()
 template <typename Base>
 std::string NGHttp2Reader<Base>::log_prefix() const
 {
-   return stream ? stream->log_prefix_ : detached_log_prefix;
+   return stream ? stream->log_prefix() : detached_log_prefix;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -124,14 +124,14 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
 
 #if 1
    on_cancel(handler, [this] {
-      logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m", stream->log_prefix_, "cancelled");
+      logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m", stream->log_prefix(), "cancelled");
       if (stream->read_handler_)
          complete_later(std::move(stream->read_handler_), get_executor(), errors::canceled, 0);
    });
 #endif
 
    assert(!stream->read_handler_);
-   logd("[{}] async_read_some:", stream->log_prefix_);
+   logd("[{}] async_read_some:", stream->log_prefix());
    stream->read_handler_buffer_ = buffer;
    stream->read_handler_ = std::move(handler);
    stream->call_read_handler();
@@ -223,14 +223,14 @@ void NGHttp2Writer<Base>::detach()
    // per the Writer contract -- see async_write() above
    assert(stream);
    detached_eof_submitted = stream->eof_submitted;
-   detached_log_prefix = stream->log_prefix_;
+   detached_log_prefix = stream->log_prefix();
    stream = nullptr;
 }
 
 template <typename Base>
 std::string NGHttp2Writer<Base>::log_prefix() const
 {
-   return stream ? stream->log_prefix_ : detached_log_prefix;
+   return stream ? stream->log_prefix() : detached_log_prefix;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -259,11 +259,11 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    }
 
    using namespace boost::beast::http;
-   logd("[{}] {} {}", stream->log_prefix_, status_code,
+   logd("[{}] {} {}", stream->log_prefix(), status_code,
         obsolete_reason(int_to_status(status_code)));
 
-   const std::string status_code_str = std::format("{}", status_code);
-   const std::string date = format_http_date(std::chrono::system_clock::now());
+   const auto status_code_str = std::to_string(status_code);
+   const auto date = http_date_now();
 
    auto nva = boost::container::small_vector<nghttp2_nv, 16>();
    nva.reserve(4 + std::distance(headers.begin(), headers.end()));
@@ -281,7 +281,7 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    for (auto&& item : headers)
    {
       if (item.name_string().starts_with(':'))
-         logw("[{}] async_submit: invalid header '{}'", stream->log_prefix_, item.name_string());
+         logw("[{}] async_submit: invalid header '{}'", stream->log_prefix(), item.name_string());
 
       nva.push_back(make_nv_ls(item.name_string(), item.value()));
    }
@@ -289,12 +289,12 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    std::string length_str;
    if (content_length_)
    {
-      length_str = std::format("{}", *content_length_);
+      length_str = std::to_string(*content_length_);
       nva.push_back(make_nv_ls("content-length", length_str));
    }
 
    for (auto nv : nva)
-      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->log_prefix_, truncated(name_of(nv)),
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->log_prefix(), truncated(name_of(nv)),
            truncated(value_of(nv)));
 
    // TODO: If we already know that there is no body, don't set a producer.
@@ -357,11 +357,12 @@ void NGHttp2Writer<Base>::async_get_response(client::Request::GetResponseHandler
 
 // =================================================================================================
 
-NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int id_)
-   : parent(parent), id(id_), log_prefix_(std::format("{}.{}", parent.log_prefix(), id_))
+NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int id_) : parent(parent), id(id_)
 {
    mlogd("\x1b[1;33mStream: ctor\x1b[0m");
 }
+
+std::string NGHttp2Stream::log_prefix() const { return parent.log_prefix(id); }
 
 size_t NGHttp2Stream::read_buffers_size() const
 {
