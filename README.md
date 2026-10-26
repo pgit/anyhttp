@@ -16,15 +16,17 @@ It supports HTTP/1.x, HTTP/2 and HTTP/3 behind a common, type-erasing interface,
 
 None of those protocols are implemented from scratch. Instead, it is a wrapper around the following well-established libraries:
 
-* Boost Beast (its parser and serializer)
-* nghttp2
-* ngtcp2/nghttp3
+* [beast](https://github.com/boostorg/beast) (its parser and serializer)
+* [nghttp2](https://github.com/nghttp2/nghttp2)
+* [ngtcp2](https://github.com/ngtcp2/ngtcp2) / [nghttp3](https://github.com/ngtcp2/nghttp3)
+
+This project started as a hand-written replacement for [nghttp2-asio](https://github.com/nghttp2/nghttp2-asio). Once the concept was working, HTTP/1.1 was added, and both protocols were hidden behind a type-erased interface. Finally, HTTP/3 was added with the help of agentic coding.
 
 ## API styles
 
 |  | ASIO | COROSIO |
 |---|---|---|
-| CMake | `-DANYHTTP_API=ASIO` (default) | `-DANYHTTP_API=COROSIO -DTLS_LIBRARY=OpenSSL` |
+| CMake | `-DANYHTTP_API=ASIO` (default) | `-DANYHTTP_API=COROSIO`<br>`-DTLS_LIBRARY=OpenSSL` |
 | `Task<T>` | `asio::awaitable<T>` | `capy::task<T>` |
 | `Executor` | `asio::any_io_executor` | `capy::any_executor` |
 | `error_code` | `boost::system::error_code` | `std::error_code` |
@@ -171,51 +173,11 @@ This work is partly inspired by [asio-grpc](https://github.com/Tradias/asio-grpc
 
 ## The End of a Body
 
-A body ends where the protocol says it ends, and never at a zero-sized transfer. Reading and
-writing are not symmetric here: the end of an incoming body is *reported*, the end of an outgoing
-one is *stated*.
-
-### Reading
-
-`read_some()` completes with `errors::eof` and zero bytes at the end of the body, and
-keeps reporting that for every read after it -- there is no state in which a finished body starts
-looking unfinished again. A body cut short completes with `errors::partial_message` instead:
-the two are the whole difference between "the peer is done" and "the peer is gone", and neither
-degrades into the other.
-
-Reading into a zero-length buffer completes immediately, with success, and says nothing at all
-about the body. It is not a way to poll for the end.
-
-### Writing
-
-`write_eof()` ends the body, with or without a buffer of its own (see [Server](#server)
-above). `write({})` is a no-op: it succeeds and leaves the body open.
-
-That an empty write means nothing is deliberate. Generic code that forwards whatever it just read
-will hand over an empty buffer eventually, and a message that ends by accident is a bug that only
-shows up under load. Ending a body is an explicit operation.
-
-### After the end
-
-All three protocols answer in the same order, whatever the state of the connection underneath:
-
-1. An empty non-EOF write succeeds -- always, even after the body has ended.
-2. Once the body has ended, writing data fails with `errc::broken_pipe`, whether it comes
-   through `write()` or `write_eof(buffer)`. Ending an already ended body without data
-   succeeds: it is idempotent.
-3. Only then do the errors of a closed or cancelled stream apply. Their codes differ per protocol
-   (`connection_aborted` for HTTP/1.1 and HTTP/2, `connection_reset` for HTTP/3).
-
-This order survives the session going away. A detached reader or writer answers from the state it
-latched, so a read past a detached stream still distinguishes a clean end (`eof`) from a truncated
-one (`partial_message`), without touching the connection that is gone.
-
-### Cancellation
-
-Cancelling `write_eof()` does not take the end of the body back. The end is declared the
-moment the operation starts, and no protocol can un-send a FIN; cancellation detaches the handler,
-and issuing `write_eof()` again adopts the end that is already on its way rather than
-failing. Intent and delivery are tracked separately for exactly this reason.
+A body ends where the protocol says it ends, and never at a zero-sized transfer. `read_some()`
+*reports* the end, with `errors::eof` for a complete body and `errors::partial_message` for one cut
+short; `write_eof()` *states* it, while `write({})` is a no-op that leaves the body open. See
+[docs/end-of-body.md](docs/end-of-body.md) for the full rules -- what every operation answers after
+the end, and why cancelling `write_eof()` does not take the end back.
 
 ## Concurrent Requests
 
@@ -245,65 +207,19 @@ Pipelining is still possible: complete requests can be sent before any of their 
 * **No queueing of submitted requests.** An earlier version queued the header of a request submitted while the previous one was still incomplete, and sent it as soon as that was complete. That allows code written for HTTP/2 -- submit a couple of requests first, write their bodies later -- to work unchanged. But it needed a queue of pending requests, writes waiting for a header still on its way (and not cancellable while doing so), and failures cascading to queued requests. Refusing the submission keeps it at a single incomplete request per session, which is exactly what the protocol allows.
 * **Requests and responses may outlive their session.** The session keeps track of all of its readers and writers, and detaches them when it goes away. Everything a detached request or response is asked to do after that completes with an error (`connection_aborted` for HTTP/1.1 and HTTP/2, `connection_reset` for HTTP/3), without touching the connection that is gone.
 
-### Outlook: HTTP/2 and HTTP/3
+### Stream limits in HTTP/2 and HTTP/3
 
-HTTP/2 and HTTP/3 have a limit of their own: the peer's `SETTINGS_MAX_CONCURRENT_STREAMS`, or the QUIC stream limit. With that limit reached, they should behave just like HTTP/1.1 -- fail with `would_block` instead of waiting. Currently, anyhttp does not check that limit itself, and leaves it to nghttp2 and ngtcp2; tests for that are still to be added.
+**Not enforced yet.** HTTP/2 and HTTP/3 have a limit of their own: the peer's `SETTINGS_MAX_CONCURRENT_STREAMS`, or the QUIC stream limit. With that limit reached, they should behave just like HTTP/1.1 -- fail with `would_block` instead of waiting. anyhttp does not check that limit itself, and leaves it to nghttp2 and ngtcp2, which accept the stream and defer it internally; tests for that are still to be added.
 
 One difference remains to be decided: in HTTP/2 and HTTP/3, a stream counts against the limit until it is closed in *both* directions, that is, until its response has been received as well. Taken strictly, "max concurrent streams = 1" would forbid submitting the next request before the previous response has been read -- which is stricter than HTTP/1.1 pipelining as implemented.
 
 ## Moving to HTTP/3: Alt-Svc
 
-HTTP/3 runs on QUIC, and QUIC is not something a TCP connection can turn into: there is no
-`Connection: Upgrade` on the way to HTTP/3, the way there is one from HTTP/1.1 to HTTP/2. What
-there is instead is the server saying where else it can be reached
-([RFC 7838](https://www.rfc-editor.org/rfc/rfc7838)), and the client making its *next* connection
-there.
-
-The server does that for its own HTTP/3 endpoint, which shares the address and port the TCP
-acceptor is listening on, so the advertised alt-authority is a port and nothing else -- an empty
-host in one means "the host of the origin":
-
-```
-Alt-Svc: h3=":8080"; ma=86400
-```
-
-It goes into every response sent over HTTP/1.1 and HTTP/2, but never over HTTP/3, which is already
-there. `server::Config::alt_svc_max_age` is how long a client may remember it, and `0s` advertises
-nothing at all.
-
-A client only acts on it with `client::Config::follow_alt_svc` set, and then it takes precedence
-over `client::Config::protocol`:
-
-```c++
-   client::Client client(executor, {.url = url, .protocol = Protocol::h2, .follow_alt_svc = true});
-
-   auto [ec1, first] = co_await client.connect();  // HTTP/2, and learns about the alternative
-   auto [ec2, second] = co_await client.connect(); // HTTP/3
-```
-
-The session that learns about the alternative keeps speaking what it speaks -- a connection in the
-middle of a request can not be moved -- and the alternative is remembered for as long as `ma` says,
-but only for the lifetime of the `Client`: there is no cache on disk. The origin does not change
-with any of this, only where it is reached: requests still go out with the authority of
-`Config::url`.
-
-Over HTTP/2, an alternative may also arrive in an `ALTSVC` frame instead of a header field, which
-lets a server advertise before the first request has even been sent. anyhttp's client reads both;
-its server sends the header field only.
-
-`curl` does the same thing, which is the easy way to watch it happen -- it honours `Alt-Svc` for
-`https://` origins only, so this needs TLS, and a cache file to remember the alternative between
-invocations:
-
-```sh
-./build/src/server -p 8080
-```
-
-```sh
-curl --alt-svc altsvc.txt --cacert pki/out/root.pem https://localhost:8080/echo -d hello -so/dev/null -w '%{http_version}\n'
-```
-
-The first run answers `2`, and every one after it `3`.
+There is no `Connection: Upgrade` on the way to HTTP/3, the way there is one from HTTP/1.1 to
+HTTP/2. Instead, the server says where else it can be reached
+([RFC 7838](https://www.rfc-editor.org/rfc/rfc7838)) -- `Alt-Svc: h3=":8080"; ma=86400`, in every
+response over HTTP/1.1 and HTTP/2 -- and a client with `client::Config::follow_alt_svc` makes its
+*next* connection there. See [docs/alt-svc.md](docs/alt-svc.md).
 
 ## Links
 
@@ -314,3 +230,4 @@ For now, this section contains just a set of random links collected during devel
 * [Development container](docs/devcontainer.md) -- how the build environment is put together
 * [Capturing traffic](docs/capture.md) -- tcpdump and tshark, decrypting TLS and QUIC with a key log
 * [cpp-devcontainer](https://github.com/pgit/cpp-devcontainer) -- the generic C++ base image it builds on
+* [c-ares-asio](https://github.com/pgit/c-ares-asio) -- asynchronous DNS, to resolve HTTPS resource records and start off with HTTP/3
