@@ -226,7 +226,7 @@ INSTANTIATE_TEST_SUITE_P(External, External,
 
 // -------------------------------------------------------------------------------------------------
 
-TEST_P(External, curl)
+TEST_P(External, curl_echo)
 {
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
    Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url};
@@ -240,10 +240,10 @@ TEST_P(External, curl)
    EXPECT_EQ(future.get().size(), file_size(testFile));
 }
 
-TEST_P(External, curl_multiple)
+TEST_P(External, curl_echo_multiple)
 {
    auto url = std::format("http://127.0.0.2:{}/echo", server->local_endpoint().port());
-   Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url, url};
+   Args args = {"-sS", "-v", "--data-binary", std::format("@{}", testFile.string()), url, url, url};
 
    if (GetParam() == anyhttp::Protocol::h2)
       args.insert(args.begin(), "--http2-prior-knowledge");
@@ -251,7 +251,7 @@ TEST_P(External, curl_multiple)
    auto future = spawn(CURL_PATH, std::move(args));
    run();
 
-   EXPECT_EQ(future.get().size(), file_size(testFile) * 2);
+   EXPECT_EQ(future.get().size(), file_size(testFile) * 3);
 }
 
 // =================================================================================================
