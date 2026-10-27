@@ -15,6 +15,7 @@
 #   build-corosio-gcc      COROSIO, GCC, libstdc++, Debug
 #   build-corosio-asan     COROSIO, RelWithDebInfo, AddressSanitizer
 #   build-corosio-tsan     COROSIO, RelWithDebInfo, ThreadSanitizer, tests on all cores
+#   build-h2v2             clang, AWS-LC, Debug, HTTP/2 over nghttp2 v2 (server only so far)
 #
 # Usage: scripts/configure.sh [-b] [tree...]
 #
@@ -37,12 +38,14 @@ shift $((OPTIND - 1))
 cd "$(dirname "$0")/.."
 
 all=(build build-release build-gcc build-asan build-tsan build-openssl build-openssl-release
-   build-corosio build-corosio-release build-corosio-gcc build-corosio-asan build-corosio-tsan)
+   build-corosio build-corosio-release build-corosio-gcc build-corosio-asan build-corosio-tsan
+   build-h2v2)
 
 # cc and c++ are GCC on this host
 clang=(-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++)
 openssl=(-DTLS_LIBRARY=OpenSSL)
 corosio=(-DANYHTTP_API=COROSIO -DTLS_LIBRARY=OpenSSL)
+h2v2=(-DH2_LIBRARY=nghttp2v2)
 
 # Appends to args a RelWithDebInfo build with sanitizer $1 (address or thread) and the further
 # compiler flags $2...
@@ -68,6 +71,7 @@ options() {
       -DCMAKE_BUILD_TYPE=Debug) ;;
    build-corosio-asan) args=("${clang[@]}" "${corosio[@]}") && sanitize address ;;
    build-corosio-tsan) args=("${clang[@]}" "${corosio[@]}") && sanitize thread -DMULTITHREADED ;;
+   build-h2v2) args=("${clang[@]}" "${h2v2[@]}" -DCMAKE_BUILD_TYPE=Debug) ;;
    *)
       echo "error: unknown tree '$1', one of: ${all[*]}" >&2
       exit 2

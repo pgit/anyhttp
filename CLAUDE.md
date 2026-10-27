@@ -30,6 +30,14 @@ event for it (see the port plan, step 8); a report with an anyhttp frame at the 
 ours. A few tests set up their own server or client on the bare context and are not
 thread-aware.
 
+`build-h2v2/` serves HTTP/2 over nghttp2 version 2 (`-DH2_LIBRARY=nghttp2v2`), the rewrite, instead
+of version 1 -- a build-time choice because the two cannot share a process, see the trap below.
+**Only the server side exists so far**, so that tree has no HTTP/2 client at all: its `/HTTP2`
+tests fail by design (`async_submit()` refuses every request), and what covers the backend is the
+external-tool tests, curl, nghttp, h2load and h2spec. `ExternalCustom.h2spec` fails too, as it
+asserts version 1's exact pass count, and `curl_h2c_upgrade` because version 2 dropped the h2c
+upgrade with RFC 7540. Everything else, HTTP/1.1 and HTTP/3 included, passes.
+
 `scripts/configure.sh` configures all of these trees, or the ones named, with their options (`-b`
 builds them too); `scripts/bench.sh` configures its two when they are missing. Name the compiler
 when configuring a tree by hand: `cc` and `c++` are GCC on this host.
@@ -91,8 +99,9 @@ completions there run on acknowledgement, and the Release build hides the use-af
 
 Each protocol lives in a directory of its own, `h1/` (Beast/HTTP/1.1), `h2/` (nghttp2), `quic/`
 (ngtcp2) and `h3/` (nghttp3, on top of `quic/`), in both `include/anyhttp/` and `src/`. **Only
-files in `h2/` may include `<nghttp2/*>`, only files in `quic/` and `h3/` `<ngtcp2/*>`, only files
-in `h3/` `<nghttp3/*>`.** What belongs to one API style only
+files in `h2/` may include `<nghttp2/*>`, only files in `h2v2/` `<nghttp2v2/*>`, only files in
+`quic/` and `h3/` `<ngtcp2/*>`, only files in `h3/` `<nghttp3/*>`.** What belongs to one API style
+only
 is in `asio/` or `corosio/`, again in both; the library compiles the `src/` directory of its style
 and not the other. `src/apps/` has the `server` and `client` programs, `src/issues/` standalone
 reproducers of upstream bugs. Everything else at the top level is generic.
@@ -104,11 +113,25 @@ of the runtime layer. New protocol-specific code goes in that protocol's directo
 code needs to reach it, add a declaration to that backend header rather than including a protocol
 header.
 
+`h2v2/` is the second HTTP/2 backend, nghttp2 version 2, an alternative to `h2/` rather than an
+addition: exactly one of the two is compiled, picked by `H2_LIBRARY`, and both define the factories
+`anyhttp/h2/backend.hpp` declares, so nothing above that header can tell them apart. Each file in
+`h2v2/` has a counterpart of the same name in `h2/` with the same definitions in the same order,
+the way `asio/` and `corosio/` do, so the pair can be read side by side.
+
 Verify the boundary with:
 
 ```
 ninja -C build -t deps | awk '/^[^ ].*: #deps/{o=$1} /nghttp2\/nghttp2.h|ngtcp2\/ngtcp2.h/{print o}' | sort -u
 ninja -C build -t deps | awk '/^[^ ].*: #deps/{o=$1} /nghttp3\/nghttp3.h/{print o}' | sort -u
+```
+
+In `build-h2v2/`, the first command must print nothing at all -- version 1's header has no business
+there -- and version 2's belongs only to `h2v2/` (plus the formatter test):
+
+```
+ninja -C build-h2v2 -t deps | awk '/^[^ ].*: #deps/{o=$1} /nghttp2\/nghttp2.h/{print o}' | sort -u
+ninja -C build-h2v2 -t deps | awk '/^[^ ].*: #deps/{o=$1} /nghttp2v2\/nghttp2.h/{print o}' | sort -u
 ```
 
 Only objects in `h2/`, `quic/` and `h3/` of the library may appear in the first list, only objects
@@ -176,6 +199,14 @@ or query the stored dep database with `ninja -C build -t deps <object>`.
 constructed, for TCP and QUIC alike, and keeps serving the old ones. curl then fails with
 `verify result: 20`; the HTTP/3 client (which reads its CA file on every connect) with "unable to
 get local issuer certificate".
+
+**One nghttp2 per process.** Version 2 installs as its own package (`<nghttp2v2/nghttp2.h>`,
+`libnghttp2v2`), but still exports nine of version 1's symbol names -- `nghttp2_strerror`,
+`nghttp2_http2_strerror`, `nghttp2_check_header_name`/`_value`, `nghttp2_check_authority` and the
+four `nghttp2_rcbuf_*`, whose struct layouts differ between the two. So a binary links one or the
+other, never both, which is why `H2_LIBRARY` is a build-time choice and `h2v2/` a separate
+directory rather than a second backend alongside `h2/`. Both headers also use the `NGHTTP2_H`
+include guard, so a translation unit that includes both silently sees only the first.
 
 **One TLS library per process.** By default anyhttp links AWS-LC (statically, from
 `/opt/boringssl`, what `find_package(ssl CONFIG)` provides) together with

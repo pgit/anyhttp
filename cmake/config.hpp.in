@@ -7,3 +7,12 @@
 //
 #define ANYHTTP_ASIO @ANYHTTP_ASIO@
 #define ANYHTTP_COROSIO @ANYHTTP_COROSIO@
+
+//
+// Which nghttp2 the HTTP/2 backend was built against (see H2_LIBRARY), exactly one of the two.
+// Version 1 lives in h2/, version 2 in h2v2/; both serve Protocol::http2, so this matters only
+// inside those directories -- and to anyone who wants to know which library is in the process,
+// as the two cannot coexist.
+//
+#define ANYHTTP_H2_V1 @ANYHTTP_H2_V1@
+#define ANYHTTP_H2_V2 @ANYHTTP_H2_V2@
