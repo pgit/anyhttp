@@ -37,10 +37,12 @@ tests fail by design (`async_submit()` refuses every request), and what covers t
 external-tool tests, curl, nghttp, h2load and h2spec. `ExternalCustom.h2spec` fails too, as it
 asserts version 1's exact pass count, and `curl_h2c_upgrade` because version 2 dropped the h2c
 upgrade with RFC 7540. Everything else, HTTP/1.1 and HTTP/3 included, passes.
+`build-h2v2-release/` is its Release tree, on OpenSSL so that `scripts/bench.sh -2` can put its
+HTTP/2 beside the other two servers' with the HTTP/2 library as the only difference.
 
 `scripts/configure.sh` configures all of these trees, or the ones named, with their options (`-b`
-builds them too); `scripts/bench.sh` configures its two when they are missing. Name the compiler
-when configuring a tree by hand: `cc` and `c++` are GCC on this host.
+builds them too); `scripts/bench.sh` configures the trees it needs when they are missing. Name the
+compiler when configuring a tree by hand: `cc` and `c++` are GCC on this host.
 
 ```
 scripts/configure.sh build

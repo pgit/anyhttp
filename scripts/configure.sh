@@ -16,6 +16,7 @@
 #   build-corosio-asan     COROSIO, RelWithDebInfo, AddressSanitizer
 #   build-corosio-tsan     COROSIO, RelWithDebInfo, ThreadSanitizer, tests on all cores
 #   build-h2v2             clang, AWS-LC, Debug, HTTP/2 over nghttp2 v2 (server only so far)
+#   build-h2v2-release     nghttp2 v2, OpenSSL, Release: the tree bench.sh compares with -2
 #
 # Usage: scripts/configure.sh [-b] [tree...]
 #
@@ -39,7 +40,7 @@ cd "$(dirname "$0")/.."
 
 all=(build build-release build-gcc build-asan build-tsan build-openssl build-openssl-release
    build-corosio build-corosio-release build-corosio-gcc build-corosio-asan build-corosio-tsan
-   build-h2v2)
+   build-h2v2 build-h2v2-release)
 
 # cc and c++ are GCC on this host
 clang=(-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++)
@@ -72,6 +73,9 @@ options() {
    build-corosio-asan) args=("${clang[@]}" "${corosio[@]}") && sanitize address ;;
    build-corosio-tsan) args=("${clang[@]}" "${corosio[@]}") && sanitize thread -DMULTITHREADED ;;
    build-h2v2) args=("${clang[@]}" "${h2v2[@]}" -DCMAKE_BUILD_TYPE=Debug) ;;
+   # OpenSSL, like the trees bench.sh compares it with: only the HTTP/2 library differs
+   build-h2v2-release) args=("${clang[@]}" "${h2v2[@]}" "${openssl[@]}"
+      -DCMAKE_BUILD_TYPE=Release) ;;
    *)
       echo "error: unknown tree '$1', one of: ${all[*]}" >&2
       exit 2
