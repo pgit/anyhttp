@@ -183,6 +183,18 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2)
 
+#
+# nghttp2 v2 -- the rewrite, a separate package: <nghttp2v2/nghttp2.h>, -lnghttp2v2. Not REQUIRED
+# yet, and nothing links it so far; this only reports whether the container has it. Note that v2
+# still exports nine of v1's symbol names, so a single binary can use only one of the two.
+#
+pkg_check_modules(NGHTTP2_V2 IMPORTED_TARGET libnghttp2v2)
+if (NGHTTP2_V2_FOUND)
+    message(STATUS "Found nghttp2 v2: ${NGHTTP2_V2_VERSION}")
+else()
+    message(STATUS "nghttp2 v2 not found -- rebuild the devcontainer to get it")
+endif()
+
 # --------------------------------------------------------------------------------------------------
 
 # needed for ranges/v3 starting with clang 19
