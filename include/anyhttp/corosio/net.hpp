@@ -250,16 +250,10 @@ inline void close(TcpAcceptor& acceptor) noexcept { acceptor.close(); }
 
 inline auto accept(TcpAcceptor& acceptor, TcpSocket& socket) { return acceptor.accept(socket); }
 
-/// corosio's set_option() throws, but as with ASIO, a failure here is not worth an error.
+/// As with ASIO, a failure here is not worth an error.
 inline void no_delay(TcpSocket& socket)
 {
-   try
-   {
-      socket.set_option(corosio::socket_option::no_delay(true));
-   }
-   catch (const std::system_error&)
-   {
-   }
+   std::ignore = socket.set_option(corosio::socket_option::no_delay(true));
 }
 
 std::pair<int, int> buffer_sizes(TcpSocket& socket);

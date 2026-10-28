@@ -47,22 +47,20 @@ void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port)
    const auto family = endpoint.address().is_v4() ? corosio::family::v4 : corosio::family::v6;
    if (auto ec = acceptor.open(family))
       throw std::system_error(ec, "open");
-   acceptor.set_option(corosio::socket_option::reuse_address(true));
+   if (auto ec = acceptor.set_option(corosio::socket_option::reuse_address(true)))
+      throw std::system_error(ec, "reuse_address");
    if (reuse_port)
-      acceptor.set_option(corosio::socket_option::reuse_port(true));
+   {
+      if (auto ec = acceptor.set_option(corosio::socket_option::reuse_port(true)))
+         throw std::system_error(ec, "reuse_port");
+   }
 
    // Accept IPv4 clients on an IPv6 listener, too, see asio/net.cpp.
    if (family == corosio::family::v6)
    {
-      try
-      {
-         acceptor.set_option(corosio::socket_option::v6_only(false));
-      }
-      catch (const std::system_error& ex)
-      {
+      if (auto ec = acceptor.set_option(corosio::socket_option::v6_only(false)))
          logw("[{}] error enabling dual-stack on {}: {}", log_prefix(Role::server), endpoint,
-              ex.what());
-      }
+              ec.message());
    }
 
    if (auto ec = acceptor.bind(endpoint))
