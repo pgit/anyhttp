@@ -254,6 +254,13 @@ nghttp2_ssize stream_read_data(nghttp2_conn*, int64_t /*stream_id*/, nghttp2_vec
 }
 } // namespace
 
+nghttp2_data_reader make_data_reader()
+{
+   nghttp2_data_reader dr{};
+   dr.read_data = &stream_read_data;
+   return dr;
+}
+
 template <typename Base>
 void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int status_code,
                                        const Fields& headers)
@@ -310,8 +317,7 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    // local is enough. TODO: pass nullptr for a response that is known to have no body, which
    // ends the stream without a DATA frame.
    //
-   nghttp2_data_reader dr{};
-   dr.read_data = &stream_read_data;
+   auto dr = make_data_reader();
 
    if (auto rv = nghttp2_conn_submit_response(stream->parent.conn, stream->id, nva.data(),
                                               nva.size(), &dr))
@@ -369,7 +375,8 @@ void NGHttp2Writer<Base>::async_get_response(client::Request::GetResponseHandler
 
 // =================================================================================================
 
-NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int64_t id_) : parent(parent), id(id_)
+NGHttp2Stream::NGHttp2Stream(NGHttp2Session& parent, int64_t id_, WriteMode write_mode)
+   : write_mode(write_mode), parent(parent), id(id_)
 {
    mlogd("\x1b[1;33mStream: ctor\x1b[0m");
 }
@@ -660,6 +667,29 @@ void NGHttp2Stream::async_write(WriteHandler handler, asio::const_buffer buffer,
 
    on_cancel(write_handler, [this] {
       mlogd("async_write: \x1b[1;31m{}\x1b[0m", "cancelled");
+
+      //
+      // ZeroCopy with bytes still outstanding: nghttp2 is pointing into the caller's buffer, which
+      // this handler is about to hand back, and there is no way to un-offer it. So the stream is
+      // reset, and the handler completes from close_stream() instead -- by then the RST_STREAM has
+      // been serialized and the DATA frame that was in progress finished, which is the point at
+      // which nghttp2 has provably stopped reading. That is one send loop pass away, and needs no
+      // flow control window, so it is no slower than completing here. The peer sees a body that
+      // stops short of its end, which is what a cancelled write means.
+      //
+      // Resetting is also why a cancelled write is the end of this stream, where a Staged one can
+      // be followed by another. See WriteMode.
+      //
+      if (write_mode == WriteMode::ZeroCopy && written_ < offered_ && !closed)
+      {
+         mlogd("async_write: {} of {} bytes still outstanding, resetting stream",
+               offered_ - written_, offered_);
+         write_cancelled_ = true;
+         nghttp2_conn_shutdown_stream(parent.conn, 0, id, NGHTTP2_CANCEL);
+         parent.start_write();
+         return;
+      }
+
       // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
       if (write_handler)
          complete_later(std::move(write_handler), get_executor(), errors::canceled);
@@ -716,39 +746,25 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
 
 //
 // Version 2 takes the body by reference, where version 1's producer callback copied it into the
-// frame nghttp2 was building. So this hands over a vector pointing into the caller's buffer and
-// keeps it alive until on_write_offset() reports those bytes framed -- which is also where the
-// write handler completes, rather than here.
+// frame nghttp2 was building. So this hands over a vector -- into the caller's own buffer, or into
+// a copy of a piece of it, see WriteMode -- and nghttp2 reads from it until it has framed all of
+// it, asking again only then.
 //
 nghttp2_ssize NGHttp2Stream::data_reader(nghttp2_vec* vec, size_t veccnt, uint32_t* pflags)
 {
    assert(!is_deferred);
 
-   const size_t left = write_handler ? write_buffer.size() - offered_ : 0;
-
    //
-   // Nothing new to hand over. Either the body ends here, or there is nothing to do until the
-   // caller starts the next write, which resumes the stream -- returning no data without the EOF
-   // flag would be taken for a callback failure.
+   // No write in progress. Nothing may be handed over, and above all the body must not be ended
+   // here: a cancelled async_write_eof() leaves \c eof_requested standing without a handler, and it
+   // is the write that re-issues it which gets to end the body -- otherwise END_STREAM would go out
+   // for a write that reported itself cancelled. Version 1 deferred here for the same reason.
    //
-   if (left == 0 || veccnt == 0)
+   // Returning no data without the EOF flag counts as a callback failure, hence WOULDBLOCK: the
+   // stream waits until resume() wakes it.
+   //
+   if (!write_handler)
    {
-      if (eof_requested && !eof_submitted)
-      {
-         mlogd("write callback: EOF");
-         eof_submitted = true;
-         *pflags |= NGHTTP2_READ_DATA_FLAG_EOF;
-
-         //
-         // An empty write that only ends the body has no bytes to be acknowledged, so it completes
-         // right here. One that still owes data completes in on_write_offset().
-         //
-         if (write_handler && write_buffer.size() == 0)
-            swap_and_invoke(write_handler, error_code{});
-
-         return 0;
-      }
-
       if (eof_submitted)
       {
          // asked again past the end of the body: say so once more
@@ -762,34 +778,95 @@ nghttp2_ssize NGHttp2Stream::data_reader(nghttp2_vec* vec, size_t veccnt, uint32
    }
 
    //
-   // Hand over everything the library has not seen yet. It takes the vector once and advances it
-   // itself as DATA frames are filled, asking again only when it has run out.
+   // An empty write only ever ends the body, see async_write(). It has no bytes to be framed, so it
+   // completes right here.
    //
-   vec[0].base = const_cast<uint8_t*>(static_cast<const uint8_t*>(write_buffer.data())) + offered_;
-   vec[0].len = left;
-   offered_ += left;
+   const size_t left = write_buffer.size() - offered_;
+   if (left == 0)
+   {
+      if (!eof_requested || eof_submitted)
+      {
+         mlogd("write callback: nothing to send, DEFERRING");
+         is_deferred = true;
+         return NGHTTP2_ERR_WOULDBLOCK;
+      }
+
+      mlogd("write callback: EOF");
+      eof_submitted = true;
+      *pflags |= NGHTTP2_READ_DATA_FLAG_EOF;
+      swap_and_invoke(write_handler, error_code{});
+      return 0;
+   }
+
+   //
+   // There is data to hand over, but nowhere to put it: wait to be asked again with room.
+   //
+   if (veccnt == 0)
+   {
+      mlogd("write callback: no vector to fill, DEFERRING");
+      is_deferred = true;
+      return NGHTTP2_ERR_WOULDBLOCK;
+   }
+
+   //
+   // Hand over the caller's buffer itself, or a copy of the next chunk of it. nghttp2 asks again
+   // only once it has framed everything it was given, so \c write_chunk_ may simply be overwritten.
+   //
+   const size_t offer = write_mode == WriteMode::ZeroCopy ? left : std::min(left, write_chunk_size);
+   const auto* const base = static_cast<const uint8_t*>(write_buffer.data()) + offered_;
+   if (write_mode == WriteMode::ZeroCopy)
+      vec[0].base = const_cast<uint8_t*>(base);
+   else
+   {
+      write_chunk_.assign(base, base + offer);
+      vec[0].base = write_chunk_.data();
+   }
+   vec[0].len = offer;
+   offered_ += offer;
 
    //
    // The last bytes of a write that ends the body carry END_STREAM themselves: setting the flag
    // on this very DATA frame is what spares an async_write_eof() with a payload the extra, empty
    // frame that ending a body would otherwise cost.
    //
-   if (eof_requested)
+   const bool last = offered_ == write_buffer.size();
+   if (last && eof_requested)
    {
-      mlogd("write callback: EOF along with the last {} bytes", left);
+      mlogd("write callback: EOF along with the last {} bytes", offer);
       eof_submitted = true;
       *pflags |= NGHTTP2_READ_DATA_FLAG_EOF;
    }
 
-   mlogd("write callback: offered {} bytes", left);
+   //
+   // Staged: the caller's buffer has been copied out of, so it is free the moment the last chunk is
+   // taken. ZeroCopy: nghttp2 is pointing into it, so the handler has to wait for
+   // on_write_offset().
+   //
+   if (last && write_mode == WriteMode::Staged)
+   {
+      mlogd("write callback: copied the last {} bytes, running handler...", offer);
+      swap_and_invoke(write_handler, error_code{});
+   }
+   else
+      mlogd("write callback: offered {} bytes, {} left", offer, write_buffer.size() - offered_);
+
    return 1;
 }
 
 void NGHttp2Stream::on_write_offset(size_t len)
 {
-   written_ += len;
    bytesWritten += len;
 
+   //
+   // Only ZeroCopy has anything to do here: its write handler is waiting for the caller's buffer to
+   // have been framed. A Staged write is long complete by the time its chunk reaches a frame -- the
+   // offsets of one write arrive once the next has started, so counting them against it would be
+   // counting the wrong write.
+   //
+   if (write_mode != WriteMode::ZeroCopy)
+      return;
+
+   written_ += len;
    mlogd("write offset: {} of {} bytes framed", written_, write_buffer.size());
 
    if (!write_handler || written_ < write_buffer.size())
@@ -952,9 +1029,27 @@ void NGHttp2Stream::maybe_close_stream()
       mlogi("cleanup_stream: not reading or writing any more, "
             "submitting RST with STREAM_CLOSED");
 
-      // this leads to the stream_close callback, eventually
-      nghttp2_conn_shutdown_stream(parent.conn, 0, id, NGHTTP2_STREAM_CLOSED);
-      parent.start_write();
+      //
+      // One turn later, not here. This is reached from the write handler, which data_reader() runs
+      // from inside nghttp2_conn_write() -- and nghttp2 drops the frame it is building for a stream
+      // that has been reset in the meantime (NGHTTP2_STREAM_FLAG_RST_STREAM in
+      // nghttp2_http_writer_write_data). That frame is the one carrying our own END_STREAM, so
+      // resetting right here would replace the clean end of the response with a reset, and the peer
+      // would report a body that stopped short. Version 1 queued its RST_STREAM behind the DATA
+      // frame and needed no such care.
+      //
+      // Posting it is also harmless when the exchange completes by itself in the meantime: the
+      // stream is closed by then, and this does nothing.
+      //
+      run_later(get_executor(), [self = weak_from_this()] {
+         auto stream = self.lock();
+         if (!stream || stream->closed || !stream->parent.conn)
+            return;
+
+         // this leads to the stream_close callback, eventually
+         nghttp2_conn_shutdown_stream(stream->parent.conn, 0, stream->id, NGHTTP2_STREAM_CLOSED);
+         stream->parent.start_write();
+      });
    }
 }
 

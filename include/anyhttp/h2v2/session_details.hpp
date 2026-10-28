@@ -134,9 +134,24 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
    //
    io::cancel(stream_);
 
-   mylogd("send loop: destroying streams...");
+   //
+   // Close whatever streams are left before letting go of them. Version 1 was called back for each
+   // of them, nghttp2_session_terminate_session() closing every open stream on its way out, so
+   // close_stream() did this; version 2 does not call back for the streams a connection that is
+   // over leaves behind. Without this they would only be destroyed, and a pending read, write or
+   // response would hear "cancelled" from the destructor -- where what has actually happened is
+   // that the connection is gone.
+   //
+   mylogd("send loop: closing streams...");
+   for (auto it = streams_.begin(); it != streams_.end();)
+   {
+      const auto id = it->first;
+      close_stream(id);
+      // close_stream() keeps a stream that a reader or an undelivered response still needs
+      it = streams_.upper_bound(id);
+   }
    streams_.clear();
-   mylogd("send loop: destroying streams... done");
+   mylogd("send loop: closing streams... done");
 
    mylogd("send loop: done");
 }
@@ -286,19 +301,42 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, Executor exec
 
 // -------------------------------------------------------------------------------------------------
 
-//
-// Not implemented yet: this slice of the version 2 backend covers the server only, and the two
-// nghttp2 versions cannot share a process, so a tree built with H2_LIBRARY=nghttp2v2 has no
-// HTTP/2 client at all. async_submit() fails every request it is given, see there; this runs the
-// connection just far enough to end it cleanly.
-//
 template <typename Stream>
 Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
    buffer_ = std::move(buffer);
-   mloge("client session: HTTP/2 over nghttp2 v2 has no client yet");
-   io::close(stream_);
-   co_return;
+   auto callbacks = super::setup_callbacks();
+
+   //
+   // The same settings as the server's, minus the CONNECT protocol, which is a server's to offer.
+   // Version 1 also had to enable the ALTSVC extension frame here, or nghttp2 would have dropped
+   // it unseen; version 2 does not implement that frame at all, so an alternative service only
+   // ever arrives as a response header field -- see on_end_headers().
+   //
+   nghttp2_settings settings;
+   super::setup_settings(settings);
+
+   if (auto rv = nghttp2_conn_client_new(&conn, &callbacks, &settings, nullptr, this))
+   {
+      mloge("nghttp2_conn_client_new: {}", nghttp2_strerror(rv));
+      throw std::runtime_error("nghttp2_conn_client_new");
+   }
+
+   //
+   // Let nghttp2 parse what we have received so far.
+   //
+   handle_buffer_contents();
+
+   //
+   // send/receive loop
+   //
+   co_await when_both(send_loop(), recv_loop());
+
+   mlogd("client session done");
+
+   nghttp2_conn_del(conn);
+   conn = nullptr;
+   mlogd("client session deleted");
 }
 
 // =================================================================================================

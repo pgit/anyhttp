@@ -18,6 +18,8 @@
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
 
+#include <boost/container/small_vector.hpp>
+
 #include <boost/url/parse.hpp>
 
 #include <nghttp2v2/nghttp2.h>
@@ -317,11 +319,18 @@ void NGHttp2Session::setup_settings(nghttp2_settings& settings)
    settings.initial_ts = timestamp();
 
    //
-   // The header section limit is the library's own business in version 2 -- version 1 had neither
-   // a setting for it nor any enforcement, which is why on_recv_header() still counts the section
-   // by hand: that is what turns an oversized one into a 431 instead of a connection error.
+   // Version 2 does enforce a header section limit of its own, and resets the stream with
+   // PROTOCOL_ERROR the moment a field crosses it -- before end_headers, so before anything here
+   // can answer. anyhttp answers an oversized section with 431 (a client's async_get_response()
+   // with http::error::header_limit), the same way in HTTP/1.1 and HTTP/3, and that is worth more
+   // to a peer than a bare reset. So the library's limit is taken out of the way and
+   // on_recv_header() counts the section itself, exactly as in version 1.
    //
-   settings.max_field_section_size = max_header_size_;
+   // Nothing is given up by this: the CONTINUATION flood this setting is sometimes credited with
+   // stopping is capped separately, by NGHTTP2_MAX_CONTINUATIONS, and a section past our own limit
+   // is no longer stored. The default here would be 65536, not "no limit", so it has to be said.
+   //
+   settings.max_field_section_size = UINT32_MAX;
 
    settings.max_concurrent_streams_remote = 100;
    settings.initial_max_stream_data = 1_m;
@@ -347,16 +356,98 @@ NGHttp2Session::~NGHttp2Session()
 
 // =================================================================================================
 
-void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view /*method*/,
-                                  boost::urls::url url, const Fields& /*headers*/)
+void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view method,
+                                  boost::urls::url url, const Fields& headers)
 {
+   mlogi("submit: {}", url.buffer());
+
+   if (!conn || closing_)
+   {
+      mloge("submit: session already gone!");
+      std::move(handler)(errors::canceled, client::Request{nullptr});
+      return;
+   }
+
    //
-   // Not implemented yet: this slice of the version 2 backend covers the server only, see
-   // ClientSession::do_session(). Failing the submit is what the generic client turns into an
-   // error on the request it was asked for.
+   // A request body goes through the stream's own buffer rather than being handed over by
+   // reference: a cancelled write has to leave the stream usable, so that the body can still be
+   // ended afterwards. See WriteMode.
    //
-   mloge("submit: HTTP/2 over nghttp2 v2 has no client yet ({})", url.buffer());
-   complete_later(std::move(handler), get_executor(), errors::canceled, client::Request{nullptr});
+   auto stream = std::make_shared<NGHttp2Stream>(*this, 0, WriteMode::Staged);
+   stream->url = url;
+
+   //
+   // Submit request with the full header section; the body is pulled from the data reader.
+   //
+   // TODO: CONNECT
+   //       https://datatracker.ietf.org/doc/html/rfc7540#section-8.3
+   //
+   std::string method_str(method);
+   std::string scheme(url.scheme());
+   std::string target(url.encoded_target());
+   std::string authority(url.encoded_host_and_port());
+
+   auto nva = boost::container::small_vector<nghttp2_nv, 16>();
+   nva.reserve(4 + std::distance(headers.begin(), headers.end()));
+   nva.push_back(make_nv_ls(":method", method_str));
+   nva.push_back(make_nv_ls(":scheme", scheme));
+   nva.push_back(make_nv_ls(":path", target));
+   nva.push_back(make_nv_ls(":authority", authority));
+
+   for (auto&& item : headers)
+   {
+      if (item.name_string().starts_with(':'))
+         logw("[{}] async_submit: invalid header '{}': setting pseudo headers is not allowed",
+              stream->log_prefix(), item.name_string());
+
+      nva.push_back(make_nv_ls(item.name_string(), item.value()));
+   }
+
+   logd("[{}] {} {}", stream->log_prefix(), method_str, url.buffer());
+   for (auto nv : nva)
+      logd("[{}]   \x1b[1;34m{}\x1b[0m: {}", stream->log_prefix(), truncated(name_of(nv)),
+           truncated(value_of(nv)));
+
+   //
+   // The stream is created by this call, and the id is only known afterwards -- unlike a request
+   // that arrives, which gets its stream in the stream_open callback. Version 1 needed a separate
+   // check whether a request was allowed at all; here the submit itself says so.
+   //
+   auto dr = make_data_reader();
+   const auto id = nghttp2_conn_submit_request(conn, nva.data(), nva.size(), &dr, stream.get());
+   if (id < 0)
+   {
+      const auto rv = static_cast<int>(id);
+
+      //
+      // The peer's MAX_CONCURRENT_STREAMS is reached. Version 1 queued such a request and sent it
+      // once a stream came free; version 2 refuses it, which is the behaviour Session::async_submit
+      // describes for a protocol that limits concurrency -- the caller may be the one who has to
+      // finish a request first, so waiting here could deadlock.
+      //
+      error_code ec;
+      if (rv == NGHTTP2_ERR_STREAM_ID_BLOCKED)
+         ec = errors::would_block;
+      else if (rv == NGHTTP2_ERR_REFUSED_STREAM) // a GOAWAY has arrived, no new stream is allowed
+         ec = errors::connection_aborted;
+      else
+         ec = make_error_code(errc::invalid_argument);
+
+      // a request that only has to wait for a free stream is normal back pressure, not a problem
+      logwd(ec != errors::would_block, "[{}] submit: nghttp2_conn_submit_request: {}",
+            stream->log_prefix(), nghttp2_strerror(rv));
+      std::move(handler)(ec, client::Request{nullptr});
+      return;
+   }
+
+   stream->id = id;
+   last_id_ = id;
+
+   logd("[{}] submit: new stream ID: {}", stream->log_prefix(), id);
+   streams_.emplace(id, stream);
+   complete_later(std::move(handler), get_executor(), error_code{},
+                  client::Request{std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)});
+   start_write();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -395,8 +486,12 @@ void NGHttp2Session::handle_buffer_contents()
 
 NGHttp2Stream* NGHttp2Session::create_stream(int64_t stream_id)
 {
-   auto [it, inserted] =
-      streams_.emplace(stream_id, std::make_shared<NGHttp2Stream>(*this, stream_id));
+   //
+   // A stream the peer opened, so what this side writes on it is a response: handed to nghttp2 by
+   // reference, which is what makes serving a large body copy-free. See WriteMode.
+   //
+   auto [it, inserted] = streams_.emplace(
+      stream_id, std::make_shared<NGHttp2Stream>(*this, stream_id, WriteMode::ZeroCopy));
    assert(inserted);
    last_id_ = stream_id;
    request_counter_++;
@@ -434,12 +529,16 @@ void NGHttp2Session::close_stream(int64_t stream_id)
       nghttp2_conn_set_stream_user_data(conn, stream_id, nullptr);
 
    //
-   // Cancel pending write.
+   // Cancel pending write. A write that asked for this reset itself, because it was cancelled with
+   // bytes nghttp2 was still reading, gets the cancellation it is waiting for -- see
+   // NGHttp2Stream::async_write(). Any other one gets the error code the underlying TCP connection
+   // would report in HTTP/1.1.
    //
    if (stream->write_handler)
    {
-      // Use the same error code as reported by the underlying TCP connection used in HTTP/1.1.
-      swap_and_invoke(stream->write_handler, make_error_code(errc::connection_reset));
+      swap_and_invoke(stream->write_handler, stream->write_cancelled_
+                                                ? errors::canceled
+                                                : make_error_code(errc::connection_reset));
    }
 
    //
@@ -487,6 +586,18 @@ void NGHttp2Session::close_stream(int64_t stream_id)
       auto ec = http::make_error_code(http::error::end_of_stream); // be compatible with beast
       swap_and_invoke(stream->response_handler, ec, client::Response{nullptr});
    }
+
+   //
+   // Nothing happens here when a client runs out of streams, and nothing should: the session has
+   // to stay usable for the next request, which the user may submit at any time. It ends when the
+   // peer closes the connection or the user lets go of the session, see destroy().
+   //
+   // Version 1 has a block here that submits a GOAWAY naming last_id_ once the last stream is
+   // gone. That one never reaches the wire: a GOAWAY's last stream ID has to be a stream the peer
+   // opened, so nghttp2_submit_goaway() refuses a client's own ID with NGHTTP2_ERR_INVALID_ARGUMENT
+   // -- which that code does not look at. Doing it properly here, with nghttp2_conn_shutdown(),
+   // ends the session for real, and then a client that submits again a moment later finds it gone.
+   //
 
    // see NGHttp2Stream::call_read_handler() why this is needed
    if (stream)

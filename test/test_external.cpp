@@ -6,7 +6,16 @@
 #include <boost/process/v2/process.hpp>
 #include <boost/process/v2/stdio.hpp>
 
+//
+// Only for NGHTTP2_VERSION_NUM, which the h2spec expectations below depend on, and only from the
+// nghttp2 this tree was actually built against: version 1's header in a version 2 tree compiles
+// (version 1 is still installed) and would quietly report the version of a library not linked here.
+//
+#if ANYHTTP_H2_V2
+#include <nghttp2v2/version.h>
+#else
 #include <nghttp2/nghttp2ver.h>
+#endif
 
 #include <atomic>
 #include <filesystem>
@@ -447,8 +456,17 @@ TEST_F(ExternalCustom, h2spec)
 
    // https://github.com/nghttp2/nghttp2/issues/2278
    // https://github.com/nghttp2/nghttp2/issues/2365
+   //
+   // Version 2 scores three less than version 1, and none of it is this backend's doing: it no
+   // longer polices two of the PRIORITY cases that RFC 9113 deprecated along with the priority tree
+   // (4.2 frame length, 5.3.1 a stream depending on itself), and it answers an unsolicited PING
+   // with ACK as a connection error where version 1 ignored it (conn_on_ping() returns
+   // NGHTTP2_ERR_PROTO, lib/nghttp2_conn.c).
+   //
    const int expected_ok = std::invoke([] {
-      if (NGHTTP2_VERSION_NUM >= 0x004200) // 1.66
+      if (ANYHTTP_H2_V2)
+         return 135;
+      else if (NGHTTP2_VERSION_NUM >= 0x004200) // 1.66
          return 138; // 6.9.1
       else if (NGHTTP2_VERSION_NUM == 0x004100) // 1.65
          return 139;
@@ -485,9 +503,17 @@ TEST_F(ExternalCustom, curl_h2c_upgrade)
       headers.remove_prefix(pos + 1);
    EXPECT_EQ(with_header, 2) << output;
 
+   //
+   // Both requests end up on the same connection and over the same protocol: version 1 upgrades the
+   // first and continues as HTTP/2, while version 2 has no h2c upgrade to offer -- RFC 9113 removed
+   // it, so there is no nghttp2_session_upgrade2() to continue the request with and h2c_upgrade()
+   // declines, which leaves curl with the HTTP/1.1 it asked on. Declining is always a valid answer
+   // to an upgrade, so curl is content either way.
+   //
+   const auto expected = ANYHTTP_H2_V2 ? "200 HTTP/1.1\n" : "200 HTTP/2\n";
    std::string_view rest = output;
    size_t upgraded = 0;
-   for (size_t pos; (pos = rest.find("200 HTTP/2\n")) != std::string_view::npos; ++upgraded)
+   for (size_t pos; (pos = rest.find(expected)) != std::string_view::npos; ++upgraded)
       rest.remove_prefix(pos + 1);
    EXPECT_EQ(upgraded, 2) << output;
 }

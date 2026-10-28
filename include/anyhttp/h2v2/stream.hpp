@@ -30,6 +30,36 @@ namespace anyhttp::nghttp2
 
 // =================================================================================================
 
+//
+// How a stream hands the caller's async_write() buffer down to nghttp2. The counterpart of
+// quic::WriteMode, for the same reason: version 2 takes a body by reference, so the two have the
+// same problem to solve, and solve it the same way. Version 1 copied and needs none of this.
+//
+enum class WriteMode
+{
+   //
+   // Point straight into the caller's buffer: the body is never copied on its way into a DATA
+   // frame, however large it is. What that costs is *when* the write completes -- nghttp2 keeps
+   // reading from that memory until it has framed all of it, which the peer's flow control can
+   // postpone indefinitely, so the handler, which releases the buffer, can only run once the bytes
+   // have been framed. Cancelling a write with bytes still outstanding therefore has to reset the
+   // stream, there being no way to un-offer memory nghttp2 may still read from.
+   //
+   ZeroCopy,
+
+   //
+   // Copy through a bounded, stream-owned chunk (write_chunk_size), the next one carved off the
+   // caller's buffer once the one before has been framed. That costs a copy -- the one version 1
+   // makes anyway -- but completes a write as soon as the bytes are handed over, and makes
+   // cancellation instantaneous: nothing points into the caller's buffer, so the remainder is
+   // simply abandoned and the *stream survives*, which is what lets a cancelled async_write_eof()
+   // end the body for real afterwards.
+   //
+   Staged
+};
+
+// -------------------------------------------------------------------------------------------------
+
 class NGHttp2Stream;
 
 template <typename Interface>
@@ -136,18 +166,33 @@ public:
    //
    // async_write()
    //
-   // Version 2 takes the body by reference: data_reader() hands nghttp2 a vector pointing into the
-   // caller's buffer, which then has to stay alive until the library says it has put those bytes
-   // into a DATA frame -- that is what on_write_offset() is for. So unlike version 1, which copied
-   // in the producer callback and completed the write right there, the write handler completes on
-   // the offset callback. \c offered_ counts how much of \c write_buffer nghttp2 has been given,
-   // \c written_ how much of it has made it into a frame.
+   // Version 2 takes the body by reference: data_reader() hands over an nghttp2_vec, and nghttp2
+   // keeps reading from that memory until it has framed every byte of it -- across as many
+   // nghttp2_conn_write() calls as flow control makes it wait, because the vec lives in the
+   // stream's writer and is only replaced once it has been consumed. Version 1's producer callback
+   // copied into a buffer of nghttp2's and was done with the caller's right away.
    //
+   // \c offered_ counts how much of \c write_buffer nghttp2 has been given, \c written_ how much of
+   // it has made it into a frame, which on_write_offset() reports. What the two are for depends on
+   // \c write_mode: in ZeroCopy the vec points into \c write_buffer itself, so the handler may only
+   // run once \c written_ has caught up; in Staged it points into \c write_chunk_, a copy, so the
+   // handler runs as soon as the last of the buffer has been copied out of it.
+   //
+   static constexpr size_t write_chunk_size = 16 * 1024; // one DATA frame, one send loop pass
+   const WriteMode write_mode;
    asio::const_buffer write_buffer; // undefined unless write_handler is set
    WriteHandler write_handler;
+   std::vector<uint8_t> write_chunk_; // Staged: the piece of the body nghttp2 is pointing into
    size_t offered_ = 0;
    size_t written_ = 0;
    bool is_deferred = false;
+
+   //
+   // ZeroCopy: set when a write was cancelled with bytes still outstanding, which resets the
+   // stream -- so that close_stream() reports the cancellation to the handler it finds there,
+   // rather than the connection_reset a reset would otherwise mean.
+   //
+   bool write_cancelled_ = false;
 
    //
    // How the end of the outgoing body travels: async_write_eof() sets \c eof_requested, and
@@ -199,7 +244,7 @@ public:
    bool close_deferred = false;
 
 public:
-   NGHttp2Stream(NGHttp2Session& parent, int64_t id);
+   NGHttp2Stream(NGHttp2Session& parent, int64_t id, WriteMode write_mode);
    ~NGHttp2Stream();
 
    /// This function is called on receiving body data, `nghttp2_recv_data`.
@@ -252,6 +297,16 @@ public:
    NGHttp2Session& parent;
    int64_t id;
 };
+
+// =================================================================================================
+
+/**
+ * The `nghttp2_data_reader` through which nghttp2 pulls an outgoing body, by reference, out of
+ * NGHttp2Stream::data_reader(). It needs no state of its own: the stream it belongs to arrives as
+ * the per-stream user data, which both submit calls are given. nghttp2 copies the reader, so the
+ * returned value does not have to outlive the call it is passed to.
+ */
+nghttp2_data_reader make_data_reader();
 
 // =================================================================================================
 

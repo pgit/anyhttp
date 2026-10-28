@@ -37,9 +37,10 @@ inline nghttp2_nv make_nv_ls(std::string_view key, std::string_view value)
 }
 
 /**
- * Version 2 counts and enforces the incoming field section itself, through
- * nghttp2_settings::max_field_section_size, so there is no CONTINUATION budget to compute here --
- * h2/common.hpp's max_continuations() has no counterpart.
+ * Version 2 caps the CONTINUATION frames of one field section itself, at NGHTTP2_MAX_CONTINUATIONS,
+ * instead of leaving the budget to the application -- so h2/common.hpp's max_continuations() has no
+ * counterpart here. How large a section anyhttp accepts is still its own business, counted in
+ * on_recv_header(), see NGHttp2Session::setup_settings().
  */
 
 inline std::string_view name_of(const nghttp2_nv& nv)

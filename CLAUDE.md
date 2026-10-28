@@ -32,11 +32,12 @@ thread-aware.
 
 `build-h2v2/` serves HTTP/2 over nghttp2 version 2 (`-DH2_LIBRARY=nghttp2v2`), the rewrite, instead
 of version 1 -- a build-time choice because the two cannot share a process, see the trap below.
-**Only the server side exists so far**, so that tree has no HTTP/2 client at all: its `/HTTP2`
-tests fail by design (`async_submit()` refuses every request), and what covers the backend is the
-external-tool tests, curl, nghttp, h2load and h2spec. `ExternalCustom.h2spec` fails too, as it
-asserts version 1's exact pass count, and `curl_h2c_upgrade` because version 2 dropped the h2c
-upgrade with RFC 7540. Everything else, HTTP/1.1 and HTTP/3 included, passes.
+Server and client both, so the whole suite runs: the expectations that differ by version are in
+`test_external.cpp` (h2spec scores 135 of 146 instead of 138, three upstream differences named
+there, and `curl_h2c_upgrade` is answered as HTTP/1.1 because version 2 dropped the h2c upgrade with
+RFC 7540). What `test/CMakeLists.txt` leaves out of that tree is the three tests that drive an
+nghttp2 session by hand -- `test_alt_svc`, `test_connection_end`, `test_h2c_upgrade` -- which are
+written against version 1's API and would not link.
 `build-h2v2-release/` is its Release tree, on OpenSSL so that `scripts/bench.sh -2` can put its
 HTTP/2 beside the other two servers' with the HTTP/2 library as the only difference.
 
@@ -95,7 +96,10 @@ a race on `operator delete` in `__on_zero_shared_weak`, anyhttp frames and all;
 [test/tsan_libcxx.cpp](test/tsan_libcxx.cpp) gives `test_all` an instrumented copy.
 
 Anything touching lifetimes on the HTTP/3 write path belongs under ASAN before it is committed --
-completions there run on acknowledgement, and the Release build hides the use-after-frees.
+completions there run on acknowledgement, and the Release build hides the use-after-frees. The same
+goes for `h2v2/`'s write path, for the same reason: it hands nghttp2 a pointer into the caller's
+buffer (see `WriteMode`), so configure a version 2 ASAN tree for it with `-DH2_LIBRARY=nghttp2v2`
+added to the recipe above.
 
 ## Source layout
 
@@ -120,6 +124,15 @@ addition: exactly one of the two is compiled, picked by `H2_LIBRARY`, and both d
 `anyhttp/h2/backend.hpp` declares, so nothing above that header can tell them apart. Each file in
 `h2v2/` has a counterpart of the same name in `h2/` with the same definitions in the same order,
 the way `asio/` and `corosio/` do, so the pair can be read side by side.
+
+What `h2v2/` has and `h2/` has no counterpart for is `WriteMode` (`h2v2/stream.hpp`), because
+version 2 takes an outgoing body *by reference* where version 1 copied it: nghttp2 keeps reading
+from the vector it was handed until it has framed all of it, which flow control can postpone
+indefinitely. A response is handed over as `ZeroCopy`, straight out of the caller's buffer, and a
+write cancelled with bytes still outstanding resets the stream -- there being no way to un-offer
+that memory. A request body goes `Staged`, copied through a bounded buffer of the stream's, so that
+cancelling a write leaves the stream usable and the body can still be ended afterwards. This is the
+same split, for the same reason, as `quic::WriteMode` in HTTP/3; read the two together.
 
 Verify the boundary with:
 
