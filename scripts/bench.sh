@@ -95,9 +95,10 @@ for server in "${servers[@]}"; do
    if ((build)); then
       if [[ ! -e $tree/CMakeCache.txt ]]; then
          echo "configuring $tree/ (scripts/configure.sh)" >&2
-         scripts/configure.sh "$tree" >/dev/null
+         scripts/configure.sh "$tree" >&2
       fi
-      cmake --build "$tree" --target server >/dev/null
+      echo "building $tree/ (server)" >&2
+      cmake --build "$tree" --target server >&2
    elif [[ ! -x $tree/src/server ]]; then
       echo "error: $tree/src/server does not exist, run without -n" >&2
       exit 1
