@@ -141,6 +141,9 @@ public:
    /// The largest header section accepted from the peer, see Config::max_header_size.
    size_t max_header_size_ = default_max_header_size;
 
+   /// How many requests the peer may have in progress, see Config::max_concurrent_streams.
+   uint32_t max_concurrent_streams_ = 100;
+
    //
    // What to advertise as this origin's HTTP/3 endpoint in every response, see
    // server::Config::alt_svc_max_age. Only a server session ever has one.
@@ -203,6 +206,7 @@ class ServerSession : public ServerReference, public NGHttp2SessionImpl<Stream>
    using super::alt_svc_;
    using super::buffer_;
    using super::conn;
+   using super::max_concurrent_streams_;
    using super::max_header_size_;
    using super::stream_;
 

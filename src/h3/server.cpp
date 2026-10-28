@@ -54,6 +54,17 @@ public:
 
    std::shared_ptr<quic::QuicStream> make_stream(int64_t id) override;
 
+   //
+   // How many requests a client may have in progress is the QUIC limit on the streams it may open,
+   // see server::Config::max_concurrent_streams. Only the server announces one: the streams a
+   // client lets the server open carry nothing in HTTP/3, server push not being implemented.
+   //
+   void fill_transport_params(ngtcp2_transport_params& params) override
+   {
+      Http3Application::fill_transport_params(params);
+      params.initial_max_streams_bidi = server_.config().max_concurrent_streams;
+   }
+
    const RequestHandler& request_handler() const noexcept { return server_.request_handler(); }
 
 private:

@@ -82,8 +82,6 @@ wherever the two libraries leave anyhttp the choice. Where they do not:
   request is declined and served as HTTP/1.1 instead -- always a valid answer to an upgrade.
 * The `ALTSVC` frame is gone. An alternative service still arrives as a response header field, which
   is how a server sends one anyway, see below.
-* A request past the peer's stream limit is refused rather than queued, see
-  [Stream limits](#stream-limits-in-http2-and-http3).
 
 Version 2 has had no release yet, so a build pins a commit of it.
 
@@ -241,15 +239,14 @@ Pipelining is still possible: complete requests can be sent before any of their 
 
 ### Stream limits in HTTP/2 and HTTP/3
 
-HTTP/2 and HTTP/3 have a limit of their own: the peer's `SETTINGS_MAX_CONCURRENT_STREAMS`, or the QUIC stream limit. With that limit reached, they should behave just like HTTP/1.1 -- fail with `would_block` instead of waiting. anyhttp does not count streams itself, so how far that holds is down to what the library underneath says when asked for one too many:
+HTTP/2 and HTTP/3 have a limit of their own: the peer's `SETTINGS_MAX_CONCURRENT_STREAMS`, or the QUIC limit on bidirectional streams. Reaching it is answered the way HTTP/1.1 answers its limit of one -- `submit()` fails with `would_block` instead of waiting -- so one and the same caller works over all three. A server says what it allows with `server::Config::max_concurrent_streams`; set it to 1, and HTTP/2 and HTTP/3 behave exactly like HTTP/1.1, which is what `OneStream.WHEN_limit_is_one_THEN_second_request_reports_would_block` checks for each of them.
 
-* **nghttp2 version 2** refuses the submission, and `submit()` reports `would_block`, as above.
-* **nghttp2 version 1** accepts the stream and holds it back internally, so the submission succeeds and the request goes out once a stream comes free. Nothing tells the caller it is waiting.
-* **HTTP/3** reports the refusal as `invalid_argument` rather than `would_block` -- still to be put right. Plain QUIC streams (`anyhttp/quic.hpp`) already answer with `would_block`.
+Two things to know about the slot a request occupies:
 
-Tests for any of these are still to be added: nothing in the suite opens enough streams at once to reach a limit.
+* **It is held longer than in HTTP/1.1.** A stream counts against the limit until it is closed in *both* directions, that is, until its response has been read as well, where HTTP/1.1 is free again once the request has been written. So "max concurrent streams = 1" is stricter here than HTTP/1.1 pipelining: the next request has to wait for the previous *response*, not just for the previous request.
+* **In HTTP/3 it comes free one round trip late.** The credit for another stream is granted as the last one closes, and that `MAX_STREAMS` has to reach the client, so a `submit()` immediately after reading a response may still report `would_block`. Retrying it is what the contract asks for anyway.
 
-One difference remains to be decided: in HTTP/2 and HTTP/3, a stream counts against the limit until it is closed in *both* directions, that is, until its response has been received as well. Taken strictly, "max concurrent streams = 1" would forbid submitting the next request before the previous response has been read -- which is stricter than HTTP/1.1 pipelining as implemented.
+Only the number is the peer's to choose; what to do when it is reached is anyhttp's, and the libraries do not agree. nghttp2 version 2 and ngtcp2 refuse the stream, which is reported as `would_block`; nghttp2 version 1 would accept it and hold it back internally, telling the caller nothing, so streams in progress are counted here instead.
 
 ## Moving to HTTP/3: Alt-Svc
 

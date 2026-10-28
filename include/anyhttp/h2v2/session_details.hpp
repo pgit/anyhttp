@@ -215,6 +215,7 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, Executor exec
                                     executor, std::move(stream))
 {
    max_header_size_ = parent.config().max_header_size;
+   max_concurrent_streams_ = static_cast<uint32_t>(parent.config().max_concurrent_streams);
    alt_svc_ = parent.alt_svc();
 }
 

@@ -372,7 +372,7 @@ void NGHttp2Session::setup_settings(nghttp2_settings& settings)
    //
    settings.max_field_section_size = UINT32_MAX;
 
-   settings.max_concurrent_streams_remote = 100;
+   settings.max_concurrent_streams_remote = max_concurrent_streams_;
    settings.initial_max_stream_data = 1_m;
    settings.initial_max_data = 1_m;
 }

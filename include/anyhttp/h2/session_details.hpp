@@ -216,6 +216,7 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, Executor exec
                                     executor, std::move(stream))
 {
    max_header_size_ = parent.config().max_header_size;
+   max_concurrent_streams_ = static_cast<uint32_t>(parent.config().max_concurrent_streams);
    alt_svc_ = parent.alt_svc();
 }
 
@@ -249,10 +250,10 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
    // enforces it in neither direction. Header sections beyond max_header_size are rejected where
    // they arrive, see on_header_callback().
    //
-   auto iv =
-      std::to_array<nghttp2_settings_entry>({{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-                                             {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size},
-                                             {NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL, 1}});
+   auto iv = std::to_array<nghttp2_settings_entry>(
+      {{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, max_concurrent_streams_},
+       {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size},
+       {NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL, 1}});
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);
 #else

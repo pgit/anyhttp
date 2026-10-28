@@ -63,6 +63,17 @@ struct Config
    size_t max_header_size = default_max_header_size;
 
    //
+   // How many requests a client may have in progress at once on one connection, announced to it as
+   // SETTINGS_MAX_CONCURRENT_STREAMS over HTTP/2 and as the limit on bidirectional streams over
+   // HTTP/3. A client that has reached it is refused the next request rather than kept waiting for
+   // a stream: client::Session::async_submit() fails with \c would_block, the way HTTP/1.1 does
+   // with its limit of one, see README.md, "Concurrent Requests".
+   //
+   // HTTP/1.1 has no use for this: one request at a time is what the protocol gives it.
+   //
+   uint64_t max_concurrent_streams = 100;
+
+   //
    // How long a client may remember the HTTP/3 endpoint this server advertises in every response
    // it sends over HTTP/1.1 and HTTP/2, as "Alt-Svc: h3=\":<port>\"; ma=<seconds>" (RFC 7838).
    // A client that takes it up makes its *next* connection over QUIC -- there is no in-band

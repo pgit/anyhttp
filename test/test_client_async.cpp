@@ -978,6 +978,78 @@ TEST_P(ClientAsync, WHEN_request_is_submitted_before_previous_is_complete_THEN_r
    };
 }
 
+// -------------------------------------------------------------------------------------------------
+
+//
+// The same thing for HTTP/2 and HTTP/3, by giving the server the limit HTTP/1.1 has anyway:
+// server::Config::max_concurrent_streams, announced as SETTINGS_MAX_CONCURRENT_STREAMS and as the
+// QUIC limit on bidirectional streams. With one allowed, all three protocols answer the second
+// request with would_block, which is what "max concurrent streams = 1" is supposed to mean.
+//
+class OneStream : public ClientAsync
+{
+protected:
+   void configure_server(server::Config& config) override { config.max_concurrent_streams = 1; }
+};
+
+INSTANTIATE_TEST_SUITE_P(OneStream, OneStream, ValuesIn(protocols()), NameGenerator);
+
+TEST_P(OneStream, WHEN_limit_is_one_THEN_second_request_reports_would_block)
+{
+   clientSession = [this](Session session) -> Task<void> {
+      auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
+
+      //
+      // Take the response of the first request before asking for a second one. Not for the response
+      // itself -- /echo sends it before reading the body -- but because it is a round trip, and the
+      // limit only applies once the client knows about it: HTTP/2 learns it from the server's
+      // SETTINGS, which arrive after the connection does, so submitting straight away could beat
+      // them to it. HTTP/3 has it from the handshake, and HTTP/1.1 never needed telling.
+      //
+      auto response1 = check(co_await request1.get_response());
+
+      auto [ec, refused] = co_await session.submit(url.set_path("echo"), {});
+      EXPECT_EQ(ec, errors::would_block);
+      EXPECT_FALSE(refused);
+
+      //
+      // Finish the first request, body and response both. In HTTP/2 and HTTP/3 its stream counts
+      // against the limit until it is closed in *both* directions, so reading the response to its
+      // end is part of letting the next request through; HTTP/1.1 is free again after the write.
+      //
+      check(co_await request1.write_eof(asio::buffer(body1)));
+      EXPECT_EQ(co_await read(response1), body1);
+
+      //
+      // And now there is room for it -- not necessarily at once, though. HTTP/3 grants the credit
+      // for another stream only as the first one closes, and that MAX_STREAMS has to travel back
+      // to the client, so the next request may be one round trip early. Retrying is exactly what
+      // would_block asks of a caller, see Session::async_submit().
+      //
+      client::Request request2;
+      for (int i = 0; i < 100 && !request2; ++i)
+      {
+         auto [ec, request] = co_await session.submit(url.set_path("echo"), {});
+         if (!ec)
+            request2 = std::move(request);
+         else
+         {
+            EXPECT_EQ(ec, errors::would_block) << what(ec);
+            co_await sleep(10ms);
+         }
+      }
+      EXPECT_TRUE(request2);
+      if (!request2)
+         co_return;
+
+      check(co_await request2.write_eof(asio::buffer(body2)));
+      auto response2 = check(co_await request2.get_response());
+      EXPECT_EQ(co_await read(response2), body2);
+   };
+}
+
+// -------------------------------------------------------------------------------------------------
+
 TEST_P(ClientAsync, WHEN_many_requests_are_made_THEN_all_are_answered_in_order)
 {
    clientSession = [this](Session session) -> Task<void> {
