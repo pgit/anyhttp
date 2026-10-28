@@ -17,7 +17,7 @@ It supports HTTP/1.x, HTTP/2 and HTTP/3 behind a common, type-erasing interface,
 None of those protocols are implemented from scratch. Instead, it is a wrapper around the following well-established libraries:
 
 * [beast](https://github.com/boostorg/beast) (its parser and serializer)
-* [nghttp2](https://github.com/nghttp2/nghttp2)
+* [nghttp2](https://github.com/nghttp2/nghttp2), or [nghttp2 version 2](https://github.com/nghttp2/nghttp2-v2), its rewrite
 * [ngtcp2](https://github.com/ngtcp2/ngtcp2) / [nghttp3](https://github.com/ngtcp2/nghttp3)
 
 This project started as a hand-written replacement for [nghttp2-asio](https://github.com/nghttp2/nghttp2-asio). Once the concept was working, HTTP/1.1 was added, and both protocols were hidden behind a type-erased interface. Finally, HTTP/3 was added with the help of agentic coding.
@@ -54,6 +54,38 @@ Where the two runtimes spell an error differently, `anyhttp::errors` names it:
 Anything else compares against `errc::` (`boost::system::errc` or `std::errc`), with one exception:
 a host that does not resolve is `netdb_errors::host_not_found` in ASIO and
 `errc::no_such_device_or_address` in COROSIO.
+
+## HTTP/2 library
+
+HTTP/2, server and client both, runs on either nghttp2 or its ground-up rewrite,
+[nghttp2 version 2](https://github.com/nghttp2/nghttp2-v2), by the same author. The rewrite's API is
+much closer to nghttp3's than to version 1's: one `nghttp2_conn` instead of a session and an option
+object, settings and callbacks as plain structs, callbacks for connection and HTTP events rather
+than for frames, bodies taken by reference, and flow control credit extended by hand.
+
+|  | nghttp2 | nghttp2 version 2 |
+|---|---|---|
+| CMake | `-DH2_LIBRARY=nghttp2` (default) | `-DH2_LIBRARY=nghttp2v2` |
+| Source | `src/h2/`, `include/anyhttp/h2/` | `src/h2v2/`, `include/anyhttp/h2v2/` |
+
+This is a configure-time choice, not a runtime one, because the two cannot share a process:
+version 2 installs as its own package but still exports nine of version 1's symbol names, among
+them the four `nghttp2_rcbuf_*` whose structs differ. A build links one or the other, and compiles
+only the backend directory that goes with it.
+
+Nothing above the backend changes: the same `Protocol::http2`, the same API, and the same behaviour
+wherever the two libraries leave anyhttp the choice. Where they do not:
+
+* The `Connection: Upgrade` from HTTP/1.1 to h2c
+  ([RFC 7540, section 3.2](https://www.rfc-editor.org/rfc/rfc7540#section-3.2)) went with
+  [RFC 9113](https://www.rfc-editor.org/rfc/rfc9113) and has no counterpart in version 2, so such a
+  request is declined and served as HTTP/1.1 instead -- always a valid answer to an upgrade.
+* The `ALTSVC` frame is gone. An alternative service still arrives as a response header field, which
+  is how a server sends one anyway, see below.
+* A request past the peer's stream limit is refused rather than queued, see
+  [Stream limits](#stream-limits-in-http2-and-http3).
+
+Version 2 has had no release yet, so a build pins a commit of it.
 
 ## Synopsis
 ### Server
@@ -209,7 +241,13 @@ Pipelining is still possible: complete requests can be sent before any of their 
 
 ### Stream limits in HTTP/2 and HTTP/3
 
-**Not enforced yet.** HTTP/2 and HTTP/3 have a limit of their own: the peer's `SETTINGS_MAX_CONCURRENT_STREAMS`, or the QUIC stream limit. With that limit reached, they should behave just like HTTP/1.1 -- fail with `would_block` instead of waiting. anyhttp does not check that limit itself, and leaves it to nghttp2 and ngtcp2, which accept the stream and defer it internally; tests for that are still to be added.
+HTTP/2 and HTTP/3 have a limit of their own: the peer's `SETTINGS_MAX_CONCURRENT_STREAMS`, or the QUIC stream limit. With that limit reached, they should behave just like HTTP/1.1 -- fail with `would_block` instead of waiting. anyhttp does not count streams itself, so how far that holds is down to what the library underneath says when asked for one too many:
+
+* **nghttp2 version 2** refuses the submission, and `submit()` reports `would_block`, as above.
+* **nghttp2 version 1** accepts the stream and holds it back internally, so the submission succeeds and the request goes out once a stream comes free. Nothing tells the caller it is waiting.
+* **HTTP/3** reports the refusal as `invalid_argument` rather than `would_block` -- still to be put right. Plain QUIC streams (`anyhttp/quic.hpp`) already answer with `would_block`.
+
+Tests for any of these are still to be added: nothing in the suite opens enough streams at once to reach a limit.
 
 One difference remains to be decided: in HTTP/2 and HTTP/3, a stream counts against the limit until it is closed in *both* directions, that is, until its response has been received as well. Taken strictly, "max concurrent streams = 1" would forbid submitting the next request before the previous response has been read -- which is stricter than HTTP/1.1 pipelining as implemented.
 
