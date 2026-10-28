@@ -440,6 +440,41 @@ TEST_F(ExternalCustom, nghttp2)
    EXPECT_EQ(future.get().size(), file_size(testFile));
 }
 
+//
+// A trailer section, the fields HTTP/2 allows after a body (RFC 9113, section 8.1): nghttp sends
+// one with --trailer, and both HTTP/2 backends put its fields where the header fields went, so they
+// turn up in Reader::fields(). Only once the body has been read to its end, which is what the
+// handler waits for here -- the trailer section is what carries END_STREAM, and both libraries
+// report its last field before they report the end of the body, so this is not a race.
+//
+// Nothing caught the absence of this when the nghttp2 version 2 backend was written: version 2
+// reports a trailer section through callbacks of its own (begin_trailers, recv_trailer,
+// end_trailers) where version 1 had the one on_header_callback for every field section there is.
+// With those unset the fields were decoded and silently dropped, and no test could tell, because a
+// trailer section neither carries anything anyone reads nor stops the stream from completing.
+//
+// Neither backend really *supports* trailers, mind: they arrive after the message they belong to
+// has long been handed to its reader. Exposing them would be a change to the Reader interface, and
+// the same one in all three protocols, see the TODO in src/h2v2/session.cpp.
+//
+TEST_F(ExternalCustom, nghttp2_trailers)
+{
+   requestHandler = [](server::Request request, server::Response response) -> Task<void> {
+      const auto received = co_await drain(request);
+      auto body = std::format("{} bytes, x-trailer: {}", received,
+                              std::string_view(request.fields()["x-trailer"]));
+      check(co_await response.submit(200, fields({{"Content-Length", body.size()}})));
+      check(co_await response.write_eof(asio::buffer(body)));
+   };
+
+   auto url = std::format("http://127.0.0.2:{}/custom", port());
+   auto future =
+      spawn(NGHTTP_PATH, {"-d", testFile.string(), "--trailer", "x-trailer: caboose", url});
+   run();
+
+   EXPECT_EQ(future.get(), std::format("{} bytes, x-trailer: caboose", file_size(testFile)));
+}
+
 TEST_F(ExternalCustom, h2spec)
 {
    auto future = spawn("bin/h2spec", {"--host", server->local_endpoint().address().to_string(),

@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <random>
 #include <string>
 
@@ -190,6 +191,27 @@ static int on_end_headers(nghttp2_conn* conn, int64_t /*stream_id*/, int /*fin*/
    return 0;
 }
 
+//
+// A trailer section. Version 2 reports one through callbacks of its own, where version 1 had the
+// single on_header_callback() for every field section there is -- which is how a trailer field
+// ended up in \c fields there, after the request or response had long been handed to the user.
+// Keeping that, by letting the trailer fields through the same callback, is what makes the two
+// backends behave the same; wiring up end_trailers separately is what keeps on_request() and
+// on_response() from running a second time.
+//
+// TODO: neither backend really supports trailers, and nor do h1/ and h3/ -- a trailer section that
+//       arrives after its message was delivered is of no use to the reader. Exposing them would be
+//       a change to the Reader interface, the same one in all three protocols.
+//
+static int on_end_trailers(nghttp2_conn*, int64_t /*stream_id*/, int /*fin*/, void* /*user_data*/,
+                           void* stream_user_data)
+{
+   auto stream = static_cast<NGHttp2Stream*>(stream_user_data);
+   assert(stream);
+   stream->log_received_headers();
+   return 0;
+}
+
 static int on_recv_data(nghttp2_conn* conn, int64_t stream_id, const uint8_t* data, size_t datalen,
                         void* user_data, void* stream_user_data)
 {
@@ -274,6 +296,20 @@ static int on_recv_settings_ack(nghttp2_conn*, void* user_data)
    return 0;
 }
 
+//
+// A PING of ours has been acknowledged. Version 1 had to recognize this in its frame callback and
+// time it itself; version 2 reports the round trip time with it. Nothing sends a PING here yet, so
+// this only ever fires for one the library sent on its own.
+//
+static int on_recv_ping_ack(nghttp2_conn*, const nghttp2_ping_data*, nghttp2_duration rtt,
+                            void* user_data)
+{
+   auto handler = static_cast<NGHttp2Session*>(user_data);
+   logd("[{}] on_recv_ping_ack: rtt={}", handler->log_prefix(),
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::nanoseconds{rtt}));
+   return 0;
+}
+
 static int on_shutdown(nghttp2_conn*, int64_t last_stream_id, uint32_t error_code, void* user_data)
 {
    //
@@ -303,10 +339,14 @@ nghttp2_callbacks NGHttp2Session::setup_callbacks()
    callbacks.begin_headers            = on_begin_headers;
    callbacks.recv_header              = on_recv_header;
    callbacks.end_headers              = on_end_headers;
+   callbacks.begin_trailers           = on_begin_headers;
+   callbacks.recv_trailer             = on_recv_header;
+   callbacks.end_trailers             = on_end_trailers;
    callbacks.recv_data                = on_recv_data;
    callbacks.end_stream_remote        = on_end_stream_remote;
    callbacks.write_stream_data_offset = on_write_stream_data_offset;
    callbacks.recv_settings_ack        = on_recv_settings_ack;
+   callbacks.recv_ping_ack            = on_recv_ping_ack;
    callbacks.shutdown                 = on_shutdown;
    // clang-format on
    return callbacks;
