@@ -1,103 +1,68 @@
 #!/usr/bin/env bash
 #
 # Configures the out-of-source build trees described in CLAUDE.md: all of them, or the ones named.
-# Configuring an existing tree again is harmless; to change its compiler, delete it first.
-#
-#   build                  clang, libc++, AWS-LC, Debug (clangd reads its compile_commands.json)
-#   build-release          the same, Release
-#   build-gcc              GCC, libstdc++, AWS-LC, Debug
-#   build-asan             clang, AWS-LC, RelWithDebInfo, AddressSanitizer
-#   build-tsan             clang, AWS-LC, RelWithDebInfo, ThreadSanitizer
-#   build-openssl          clang, OpenSSL, Debug
-#   build-openssl-release  clang, OpenSSL, Release: the ASIO tree bench.sh compares COROSIO with
-#   build-corosio          COROSIO (clang, OpenSSL), Debug
-#   build-corosio-release  COROSIO, Release
-#   build-corosio-gcc      COROSIO, GCC, libstdc++, Debug
-#   build-corosio-asan     COROSIO, RelWithDebInfo, AddressSanitizer
-#   build-corosio-tsan     COROSIO, RelWithDebInfo, ThreadSanitizer, tests on all cores
-#   build-h2v2             clang, AWS-LC, Debug, HTTP/2 over nghttp2 v2 (server only so far)
-#   build-h2v2-release     nghttp2 v2, OpenSSL, Release: the tree bench.sh compares with -2
+# Each tree is a configure preset of the same name in CMakePresets.json, which is where the options
+# of each one live -- this script only does several at once. Configuring an existing tree again is
+# harmless; to change its compiler, delete it first.
 #
 # Usage: scripts/configure.sh [-b] [tree...]
 #
 #   -b  build the trees too
 #
-# Run from anywhere; the trees are created in the repo root.
+# Run from anywhere; the trees are created in the repo root. 'cmake --list-presets' names them all
+# with what each one is for, and 'cmake --preset <tree>' configures a single one without this
+# script.
 #
 set -euo pipefail
 
 build=0
+self=$(realpath "$0")
+
+# the usage is this file's header comment, followed by the trees themselves
+usage() {
+   sed -n '/^set /q; 3,$p' "$self" | sed 's/^# \{0,1\}//'
+   cmake --list-presets
+}
+
+cd "$(dirname "$self")/.."
 
 while getopts "bh" opt; do
    case $opt in
    b) build=1 ;;
-   *) sed -n '/^set /q; 3,$p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+   *)
+      usage
+      exit 2
+      ;;
    esac
 done
 shift $((OPTIND - 1))
 
-cd "$(dirname "$0")/.."
-
-all=(build build-release build-gcc build-asan build-tsan build-openssl build-openssl-release
-   build-corosio build-corosio-release build-corosio-gcc build-corosio-asan build-corosio-tsan
-   build-h2v2 build-h2v2-release)
-
-# cc and c++ are GCC on this host
-clang=(-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++)
-openssl=(-DTLS_LIBRARY=OpenSSL)
-corosio=(-DANYHTTP_API=COROSIO -DTLS_LIBRARY=OpenSSL)
-h2v2=(-DH2_LIBRARY=nghttp2v2)
-
-# Appends to args a RelWithDebInfo build with sanitizer $1 (address or thread) and the further
-# compiler flags $2...
-sanitize() {
-   args+=(-DCMAKE_BUILD_TYPE=RelWithDebInfo
-      "-DCMAKE_CXX_FLAGS=-fsanitize=$1 -fno-omit-frame-pointer -g${2:+ ${*:2}}"
-      "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=$1")
-}
-
-# Sets args to the CMake options of tree $1.
-options() {
-   case $1 in
-   build) args=("${clang[@]}" -DCMAKE_BUILD_TYPE=Debug) ;;
-   build-release) args=("${clang[@]}" -DCMAKE_BUILD_TYPE=Release) ;;
-   build-gcc) args=(-DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Debug) ;;
-   build-asan) args=("${clang[@]}") && sanitize address ;;
-   build-tsan) args=("${clang[@]}") && sanitize thread ;;
-   build-openssl) args=("${clang[@]}" "${openssl[@]}" -DCMAKE_BUILD_TYPE=Debug) ;;
-   build-openssl-release) args=("${clang[@]}" "${openssl[@]}" -DCMAKE_BUILD_TYPE=Release) ;;
-   build-corosio) args=("${clang[@]}" "${corosio[@]}" -DCMAKE_BUILD_TYPE=Debug) ;;
-   build-corosio-release) args=("${clang[@]}" "${corosio[@]}" -DCMAKE_BUILD_TYPE=Release) ;;
-   build-corosio-gcc) args=(-DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ "${corosio[@]}"
-      -DCMAKE_BUILD_TYPE=Debug) ;;
-   build-corosio-asan) args=("${clang[@]}" "${corosio[@]}") && sanitize address ;;
-   build-corosio-tsan) args=("${clang[@]}" "${corosio[@]}") && sanitize thread -DMULTITHREADED ;;
-   build-h2v2) args=("${clang[@]}" "${h2v2[@]}" -DCMAKE_BUILD_TYPE=Debug) ;;
-   # OpenSSL, like the trees bench.sh compares it with: only the HTTP/2 library differs
-   build-h2v2-release) args=("${clang[@]}" "${h2v2[@]}" "${openssl[@]}"
-      -DCMAKE_BUILD_TYPE=Release) ;;
-   *)
-      echo "error: unknown tree '$1', one of: ${all[*]}" >&2
-      exit 2
-      ;;
-   esac
+# the trees are the non-hidden configure presets, in the order CMakePresets.json lists them
+mapfile -t all < <(cmake --list-presets | sed -n 's/^  "\([^"]*\)".*/\1/p')
+((${#all[@]})) || {
+   echo "error: no configure presets in CMakePresets.json" >&2
+   exit 1
 }
 
 (($#)) || set -- "${all[@]}"
 trees=("${@%/}")
+
+# check every name before configuring anything, so that a typo in the last one costs nothing
 for tree in "${trees[@]}"; do
-   options "$tree"
+   printf '%s\n' "${all[@]}" | grep -qxF -- "$tree" || {
+      echo "error: unknown tree '$tree', one of: ${all[*]}" >&2
+      exit 2
+   }
 done
 
 for tree in "${trees[@]}"; do
-   options "$tree"
    echo "=== $tree"
-   cmake -S . -B "$tree" -G Ninja "${args[@]}"
+   cmake --preset "$tree"
 done
 
 if ((build)); then
    for tree in "${trees[@]}"; do
       echo "=== building $tree"
-      cmake --build "$tree"
+      cmake --build --preset "$tree"
    done
 fi

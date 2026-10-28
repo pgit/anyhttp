@@ -41,21 +41,29 @@ written against version 1's API and would not link.
 `build-h2v2-release/` is its Release tree, on OpenSSL so that `scripts/bench.sh -2` can put its
 HTTP/2 beside the other two servers' with the HTTP/2 library as the only difference.
 
-`scripts/configure.sh` configures all of these trees, or the ones named, with their options (`-b`
-builds them too); `scripts/bench.sh` configures the trees it needs when they are missing. Name the
-compiler when configuring a tree by hand: `cc` and `c++` are GCC on this host.
+Every tree is a preset of its own name in [CMakePresets.json](CMakePresets.json) -- that is where
+the options of each one live, and the options of a new tree belong there rather than in a command
+line. `cmake --list-presets` names them all. Do not configure a tree by hand: `cc` and `c++` are
+GCC on this host, so a forgotten `-DCMAKE_CXX_COMPILER=clang++` silently gives a tree the wrong
+compiler.
 
 ```
-scripts/configure.sh build
-cmake --build build
-build/test/test_all
+cmake --preset build            # or: scripts/configure.sh build
+cmake --build --preset build    # or: cmake --build build
+ctest --preset build            # or: build/test/test_all
 ```
+
+`scripts/configure.sh` configures all of the trees, or the ones named, and builds them too with
+`-b`; it reads the tree names from the presets, so it needs nothing when one is added.
+`scripts/bench.sh` configures the trees it needs when they are missing.
 
 **Run the tests from the repo root**, never from inside a build tree: the servers load their TLS
 material and the clients their CA through relative paths (the defaults of
 `server::Config::tls_certificate_chain` / `tls_private_key`, and `pki/out/root.pem`, which the
 test fixtures set as `client::Config::tls_ca_file`). From the wrong working directory every test
-fails in `SetUp()` with "use_certificate_chain_file: No such file or directory".
+fails in `SetUp()` with "use_certificate_chain_file: No such file or directory". `ctest` is the
+exception that proves nothing: `gtest_discover_tests()` gives every test case the repo root as its
+working directory, and `ctest --preset` wants to run there anyway, this file being there.
 
 The full suite takes about 50s serially (h2spec and the HTTP/3 timing tests dominate). Anything
 running much longer means a test is hanging; kill it and run that test alone.
@@ -72,13 +80,10 @@ pass: check for `[ OK ]` lines.
 ### Sanitizers
 
 Separate trees; the sanitizer options in the Debug branch of `CMakeLists.txt` are commented out on
-purpose, so configure a new tree instead of editing them:
+purpose, so use the tree of the sanitizer instead of editing them:
 
 ```
-cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-  -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
-  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
+cmake --build --preset build-asan
 build-asan/test/test_all
 ```
 
@@ -86,7 +91,8 @@ GTest is built from source with the tree's own flags (`test/CMakeLists.txt`), so
 instrumented too and needs no `ASAN_OPTIONS`. The `Recursion` test skips itself under ASAN, so
 expect 3 extra skips.
 
-TSAN is the same recipe with `-fsanitize=thread` and runs clean without suppressions. AWS-LC is
+TSAN is `build-tsan/`, the same flags with `-fsanitize=thread`, and runs clean without
+suppressions. AWS-LC is
 uninstrumented, but linked statically into the executable, so `called_from_lib:` cannot match it:
 should a report ever show *both* stacks inside the TLS library, suppress it with `race:` on the
 AWS-LC function instead. One with an anyhttp frame near the racing access is real. libc++ (the
@@ -98,8 +104,7 @@ a race on `operator delete` in `__on_zero_shared_weak`, anyhttp frames and all;
 Anything touching lifetimes on the HTTP/3 write path belongs under ASAN before it is committed --
 completions there run on acknowledgement, and the Release build hides the use-after-frees. The same
 goes for `h2v2/`'s write path, for the same reason: it hands nghttp2 a pointer into the caller's
-buffer (see `WriteMode`), so configure a version 2 ASAN tree for it with `-DH2_LIBRARY=nghttp2v2`
-added to the recipe above.
+buffer (see `WriteMode`), and `build-h2v2-asan/` is the version 2 ASAN tree for it.
 
 ## Source layout
 
