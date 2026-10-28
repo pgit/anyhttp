@@ -61,9 +61,10 @@ protected:
               value.size(), NGHTTP2_NV_FLAG_NONE};
    }
 
-   /// Upgrades a GET for the first target and sends GETs for the others as HTTP/2 streams.
-   /// \p fields go along with the upgrade request.
-   Task<Responses> upgrade(std::vector<std::string> targets, boost::beast::http::fields fields = {})
+   /// Upgrades a request for the first target, with \p method, and sends GETs for the others as
+   /// HTTP/2 streams. \p fields go along with the upgrade request.
+   Task<Responses> upgrade(std::vector<std::string> targets, boost::beast::http::fields fields = {},
+                           boost::beast::http::verb method = boost::beast::http::verb::get)
    {
       namespace http = boost::beast::http;
 
@@ -116,7 +117,7 @@ protected:
          nghttp2_pack_settings_payload2(settings.data(), settings.size(), iv.data(), iv.size());
       EXPECT_GT(len, 0);
 
-      http::request<http::empty_body> request{http::verb::get, targets.front(), 11};
+      http::request<http::empty_body> request{method, targets.front(), 11};
       for (const auto& field : fields)
          request.insert(field.name_string(), field.value());
       request.set(http::field::host, authority);
@@ -284,6 +285,35 @@ TEST_F(H2CUpgrade, WHEN_upgraded_THEN_connection_takes_more_streams)
    EXPECT_EQ(responses[3].status, 200);
    EXPECT_THAT(responses[3].body, HasSubstr("query: second"));
    EXPECT_EQ(responses[5].status, 404);
+}
+
+//
+// Upgrading with an OPTIONS request is what RFC 7540, section 3.2 suggests when the first real
+// request must not hold up the connection: it has no body to be sent in HTTP/1.1 first, so the
+// requests that matter all start as HTTP/2 streams, concurrently.
+//
+TEST_F(H2CUpgrade, WHEN_options_is_upgraded_THEN_method_is_carried_over_to_stream_1)
+{
+   auto responses = run(upgrade({"/dump?options"}, {}, boost::beast::http::verb::options));
+
+   ASSERT_EQ(responses.size(), 1);
+   ASSERT_TRUE(responses.contains(1));
+   EXPECT_EQ(responses[1].status, 200);
+   EXPECT_TRUE(responses[1].closed);
+   EXPECT_THAT(responses[1].body, HasSubstr("method: OPTIONS"));
+   EXPECT_THAT(responses[1].body, HasSubstr("path: /dump"));
+   EXPECT_THAT(responses[1].body, HasSubstr("query: options"));
+}
+
+TEST_F(H2CUpgrade, WHEN_options_asterisk_is_upgraded_THEN_connection_takes_more_streams)
+{
+   auto responses = run(upgrade({"*", "/dump?second"}, {}, boost::beast::http::verb::options));
+
+   ASSERT_EQ(responses.size(), 2);
+   EXPECT_EQ(responses[1].status, 404); // the test server has no handler for an asterisk target
+   EXPECT_TRUE(responses[1].closed);
+   EXPECT_EQ(responses[3].status, 200);
+   EXPECT_THAT(responses[3].body, HasSubstr("query: second"));
 }
 
 TEST_F(H2CUpgrade, WHEN_request_has_body_THEN_is_served_as_http11)
