@@ -39,7 +39,8 @@ namespace anyhttp::nghttp2
 //
 // Version 1 had a frame_type() helper here, for the frame-level callbacks it logged from. Version 2
 // has no frame-level callbacks at all: what it reports is what the application is meant to act on,
-// which is why there is so much less logging glue below.
+// which is why there is so much less logging glue below. The frame trace is version 2's own, see
+// on_log_write(), and says more than version 1's hand-written one did.
 //
 
 // =================================================================================================
@@ -308,6 +309,21 @@ static int on_shutdown(nghttp2_conn*, int64_t last_stream_id, uint32_t error_cod
    return 0;
 }
 
+//
+// Version 2's own frame trace, one call per line, and what takes the place of the frame-level
+// logging version 1's on_frame_recv_callback() and on_frame_send_callback() did by hand. It covers
+// both directions and every frame type, including the ones no callback here ever sees (SETTINGS,
+// WINDOW_UPDATE, CONTINUATION, an unknown type), so it says more than version 1's did.
+//
+// The message is not newline-terminated -- nghttp2 leaves msg[len] writable so that an application
+// writing to a file can put the terminator there itself. spdlog needs none.
+//
+static void on_log_write(void* user_data, char* msg, size_t len)
+{
+   auto handler = static_cast<NGHttp2Session*>(user_data);
+   logd("[{}] {}", handler->log_prefix(), std::string_view(msg, len));
+}
+
 // =================================================================================================
 
 nghttp2_callbacks NGHttp2Session::setup_callbacks()
@@ -346,6 +362,15 @@ void NGHttp2Session::setup_settings(nghttp2_settings& settings)
    nghttp2_settings_default(&settings);
 
    settings.initial_ts = timestamp();
+
+   //
+   // Install the frame trace only when debug logging is on, the way ngtcp2_settings::log_printf is
+   // installed in QuicSession::fill_settings(): nghttp2 formats every frame of every direction
+   // before calling, so a callback that discards its input still pays for the formatting, while a
+   // NULL one makes nghttp2 skip the work entirely.
+   //
+   if (spdlog::default_logger_raw()->should_log(spdlog::level::debug))
+      settings.log_write = on_log_write;
 
    //
    // Version 2 does enforce a header section limit of its own, and resets the stream with
