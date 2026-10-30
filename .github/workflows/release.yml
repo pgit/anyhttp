@@ -27,8 +27,13 @@ jobs:
   build:
     name: ${{ matrix.api }} ${{ matrix.flavor }}
     runs-on: ubuntu-latest
-    container:
+    container: &container
       image: docker.io/psedoc/anyhttp:0.30
+      # Since ubuntu-latest became Ubuntu 26.04, the runner kernel's ASLR entropy is high
+      # enough that the binary can land in TSAN's fixed shadow region. TSAN then re-execs
+      # itself with personality(ADDR_NO_RANDOMIZE), which docker's default seccomp profile
+      # refuses -- the job dies before the first test.
+      options: --security-opt seccomp=unconfined
     env:
       CC: ${{ matrix.cc || 'clang' }}
       CXX: ${{ matrix.cxx || 'clang++' }}
@@ -99,8 +104,7 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
-    container:
-      image: docker.io/psedoc/anyhttp:0.30
+    container: *container
     permissions:
       contents: read
       pages: write
