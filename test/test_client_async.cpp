@@ -188,11 +188,12 @@ TEST_P(ClientAsync, WHEN_session_is_gone_THEN_request_reports_error)
 //
 TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
 {
+   auto arrived = std::make_shared<Signal>(context.get_executor());
    auto clientGone = std::make_shared<Signal>(context.get_executor());
    auto responded = std::make_shared<Signal>(context.get_executor());
 
-   requestHandler = [this, clientGone, responded](server::Request request,
-                                                  server::Response response) -> Task<void> {
+   requestHandler = [this, arrived, clientGone, responded](server::Request request,
+                                                           server::Response response) -> Task<void> {
       //
       // Keep the response around beyond the request handler, until the client has closed the
       // connection and the server session has ended.
@@ -211,11 +212,22 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
          responded->notify();
       };
       launch(context.get_executor(), respond(clientGone, responded, std::move(response)));
+      arrived->notify();
       co_return;
    };
-   clientSession = [this, clientGone, responded](Session session) -> Task<void> {
+   clientSession = [this, arrived, clientGone, responded](Session session) -> Task<void> {
       auto request = check(co_await session.submit(url, {}));
       check(co_await request.write_eof());
+
+      //
+      // Not before the server has the request: tearing the session down is abrupt, and over QUIC a
+      // write that has been accepted has not necessarily left the process yet. The client's
+      // handshake completes before the server confirms its own, so a request sent and closed over
+      // immediately can be gone for good -- the server logs "served 0 streams" and the handler
+      // this test needs never runs. TCP hides it, the bytes being in the socket buffer by now.
+      //
+      std::ignore = co_await arrived->wait();
+
       request.reset();
       session.reset();
 
@@ -231,11 +243,12 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
 //
 TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_request_head_is_still_there)
 {
+   auto arrived = std::make_shared<Signal>(context.get_executor());
    auto clientGone = std::make_shared<Signal>(context.get_executor());
    auto inspected = std::make_shared<Signal>(context.get_executor());
 
-   requestHandler = [this, clientGone, inspected](server::Request request,
-                                                  server::Response response) -> Task<void> {
+   requestHandler = [this, arrived, clientGone, inspected](server::Request request,
+                                                           server::Response response) -> Task<void> {
       //
       // Keep the request beyond the request handler, until the client has closed the connection
       // and the server session has ended. The response, too, so the exchange is still open then.
@@ -257,13 +270,19 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_request_head_is_still_there
       };
       launch(context.get_executor(),
              inspect(clientGone, inspected, std::move(request), std::move(response)));
+      arrived->notify();
       co_return;
    };
-   clientSession = [this, clientGone, inspected](Session session) -> Task<void> {
+   clientSession = [this, arrived, clientGone, inspected](Session session) -> Task<void> {
       Fields fields;
       fields.set("X-Test", "42");
       auto request = check(co_await session.submit(url.set_path("custom/head"), fields));
       check(co_await request.write_eof());
+
+      // See WHEN_server_session_is_gone_THEN_response_reports_error: over QUIC, tearing the
+      // session down before the server has the request can lose it altogether.
+      std::ignore = co_await arrived->wait();
+
       request.reset();
       session.reset();
 
