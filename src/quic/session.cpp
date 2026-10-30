@@ -17,7 +17,6 @@
 #include <array>
 #include <cassert>
 #include <chrono>
-#include <cstring>
 #include <format> // IWYU pragma: keep
 #include <stdexcept>
 #include <utility>
@@ -693,10 +692,13 @@ int QuicSession::cb_stream_close(ngtcp2_conn*, uint32_t flags, int64_t stream_id
    return self->application_->stream_close(stream_id, flags, app_error_code);
 }
 
+//
+// Only ngtcp2's rand callback takes a context, which is why this one cannot be tls_random_bytes()
+// itself the way nghttp2's and nghttp3's are.
+//
 void QuicSession::cb_rand(uint8_t* dest, size_t destlen, const ngtcp2_rand_ctx*)
 {
-   if (RAND_bytes(dest, static_cast<int>(destlen)) != 1)
-      std::memset(dest, 0, destlen);
+   tls_random_bytes(dest, destlen);
 }
 
 int QuicSession::cb_get_new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, uint8_t* token,

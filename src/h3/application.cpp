@@ -5,6 +5,7 @@
 #include "anyhttp/h3/application.hpp"
 #include "anyhttp/h3/stream.hpp"
 #include "anyhttp/quic/session.hpp"
+#include "anyhttp/tls.hpp"
 
 #include <boost/system/detail/errc.hpp>
 
@@ -61,6 +62,11 @@ int Http3Application::on_ready()
    h3cb.end_stream = &Http3Application::h3_cb_end_stream;
    h3cb.stop_sending = &Http3Application::h3_cb_stop_sending;
    h3cb.reset_stream = &Http3Application::h3_cb_reset_stream;
+   //
+   // Optional, unlike ngtcp2's and nghttp2 version 2's: without it nghttp3 keeps its pre-1.11
+   // behavior of unrandomized seeds, which upstream recommends against as a hardening measure.
+   //
+   h3cb.rand = &tls_random_bytes;
 
    nghttp3_settings settings;
    nghttp3_settings_default(&settings);

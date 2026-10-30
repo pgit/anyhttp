@@ -1,8 +1,12 @@
 #include <anyhttp/tls.hpp>
 
+#include "anyhttp/logging.hpp"
+
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 #include <openssl/ssl.h>
 
+#include <cstdlib>
 #include <format>
 
 // =================================================================================================
@@ -66,6 +70,26 @@ std::string tls_handshake_info(ssl_st* ssl)
    return std::format("{}, cipher={}, group={}, alpn={}{}", SSL_get_version(ssl),
                       SSL_get_cipher_name(ssl), key_exchange(ssl), alpn(ssl),
                       SSL_session_reused(ssl) ? ", resumed" : "");
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// Needs no variant #if, unlike everything above: AWS-LC and OpenSSL both have RAND_bytes.
+//
+// AWS-LC never returns from a failure -- "in the event that sufficient random data can not be
+// obtained, |abort| is called" -- so the branch below is dead code there. OpenSSL does return, and
+// there is nothing useful to do with that: every caller is a C callback of nghttp2, nghttp3 or
+// ngtcp2, so an exception cannot pass, and continuing with predictable bytes would be worse than
+// stopping. Abort, to behave the same way on both.
+//
+void tls_random_bytes(uint8_t* dest, size_t destlen)
+{
+   if (RAND_bytes(dest, static_cast<int>(destlen)) != 1)
+   {
+      loge("tls_random_bytes: RAND_bytes({}) failed, aborting", destlen);
+      std::abort();
+   }
 }
 
 } // namespace anyhttp

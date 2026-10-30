@@ -8,6 +8,7 @@
 #include "anyhttp/h2v2/session_details.hpp" // IWYU pragma: keep
 #include "anyhttp/h2v2/stream.hpp"
 #include "anyhttp/literals.hpp"
+#include "anyhttp/tls.hpp"
 
 #include <boost/asio/buffer.hpp>
 
@@ -24,10 +25,8 @@
 
 #include <nghttp2v2/nghttp2.h>
 
-#include <algorithm>
 #include <charconv>
 #include <chrono>
-#include <random>
 #include <string>
 
 namespace http = boost::beast::http;
@@ -44,20 +43,6 @@ namespace anyhttp::nghttp2
 //
 
 // =================================================================================================
-
-//
-// Mandatory: the library asserts on a missing rand callback. It needs unpredictable data for the
-// PING payloads it sends and for its hash table seeds, neither of which is security critical, so
-// the default engine is enough -- it is not asked for key material.
-//
-static void rand_callback(uint8_t* dest, size_t destlen)
-{
-   static thread_local std::mt19937 engine{std::random_device{}()};
-   std::uniform_int_distribution<unsigned int> dist(0, 255);
-   std::generate(dest, dest + destlen, [&] { return static_cast<uint8_t>(dist(engine)); });
-}
-
-// -------------------------------------------------------------------------------------------------
 
 static int on_stream_open(nghttp2_conn* conn, int64_t stream_id, void* user_data)
 {
@@ -331,9 +316,13 @@ nghttp2_callbacks NGHttp2Session::setup_callbacks()
    // One struct instead of version 1's callbacks object with a setter per entry. There is no send
    // or receive callback to set: nghttp2_conn_read() and nghttp2_conn_write() take the buffers.
    //
+   // `rand` is the one entry that is not optional -- version 1 needed no randomness, version 2
+   // asserts on a missing callback, there being no default to fall back on. tls_random_bytes() has
+   // the signature nghttp2_rand declares, so it serves as the callback itself.
+   //
    nghttp2_callbacks callbacks{};
    // clang-format off
-   callbacks.rand                     = rand_callback;
+   callbacks.rand                     = tls_random_bytes;
    callbacks.stream_open              = on_stream_open;
    callbacks.stream_close             = on_stream_close;
    callbacks.begin_headers            = on_begin_headers;
