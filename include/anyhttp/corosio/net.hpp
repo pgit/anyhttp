@@ -258,6 +258,8 @@ inline void no_delay(TcpSocket& socket)
 
 std::pair<int, int> buffer_sizes(TcpSocket& socket);
 
+void set_buffer_sizes(TcpSocket& socket, int send, int receive);
+
 Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,
                                                                std::string port);
 

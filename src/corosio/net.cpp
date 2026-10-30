@@ -79,6 +79,14 @@ std::pair<int, int> buffer_sizes(TcpSocket& socket)
    return {send, receive};
 }
 
+void set_buffer_sizes(TcpSocket& socket, int send, int receive)
+{
+   if (send > 0)
+      ::setsockopt(socket.native_handle(), SOL_SOCKET, SO_SNDBUF, &send, sizeof(send));
+   if (receive > 0)
+      ::setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVBUF, &receive, sizeof(receive));
+}
+
 Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,
                                                                std::string port)
 {

@@ -36,6 +36,21 @@ struct Config
    size_t max_header_size = default_max_header_size;
 
    /**
+    * The kernel's send and receive buffer, in bytes, for the TCP connection; zero (the default)
+    * leaves the kernel's autotuning alone. Set once the connection is up -- the socket is not open
+    * before that -- so the window scale of the handshake is the kernel's own, and only the window
+    * advertised from then on follows this. TCP only -- HTTP/3 goes over UDP.
+    *
+    * As with \c server::Config::socket_send_buffer_size, this is a testing aid: it bounds how much
+    * \c async_write() can hand to the kernel before it has to wait for the peer, which over
+    * HTTP/1.1 is the only thing that makes a write block at all. Both ends have to be pinned to
+    * bound the pipeline -- the bytes in flight are the client's send buffer plus the server's
+    * receive buffer, and whatever the server echoes back fills the other direction too.
+    */
+   int socket_send_buffer_size = 0;
+   int socket_receive_buffer_size = 0;
+
+   /**
     * Whether to take up an HTTP/3 alternative service the server advertises (RFC 7838), as an
     * "Alt-Svc" header field on a response or, over HTTP/2, an ALTSVC frame. QUIC has no in-band
     * upgrade, so this is what an "upgrade" to HTTP/3 comes down to: the connection that learns

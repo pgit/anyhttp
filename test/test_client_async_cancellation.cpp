@@ -310,10 +310,41 @@ TEST_P(ClientAsyncCancellation, WHEN_read_some_completes_before_cancel_after_THE
 }
 
 //
+// Pins all four socket buffers small so that the body below is far more than the connection can
+// hold. Over HTTP/2 and HTTP/3 the send window would see to that on its own, but HTTP/1.1 has no
+// flow control: what stops a write there is the kernel's buffering alone -- the client's send
+// buffer, the server's receive buffer and, because the echo comes back and nobody reads it, the
+// server's send and the client's receive buffer as well. Linux autotunes all four into the
+// megabytes, so on a fast loopback the write can complete before the timer fires however large
+// the body is; the Ubuntu 26.04 CI runners swallowed 8 MiB in ~40 ms. With them pinned, the
+// pipeline holds a few hundred KiB whatever the host's tcp_wmem/tcp_rmem say.
+//
+class SmallSocketBuffers : public ClientAsyncCancellation
+{
+protected:
+   static constexpr int buffer_size = 64_k;
+
+   void configure_server(server::Config& config) override
+   {
+      config.socket_send_buffer_size = buffer_size;
+      config.socket_receive_buffer_size = buffer_size;
+   }
+
+   void configure_client(client::Config& config) override
+   {
+      config.socket_send_buffer_size = buffer_size;
+      config.socket_receive_buffer_size = buffer_size;
+   }
+};
+
+INSTANTIATE_TEST_SUITE_P(SmallSocketBuffers, SmallSocketBuffers, ValuesIn(protocols()),
+                         NameGenerator);
+
+//
 // cancel_after on async_write(): far more than the send window, with nobody reading the echo, so
 // the write cannot complete before the timer fires.
 //
-TEST_P(ClientAsyncCancellation, WHEN_client_write_with_cancel_after_THEN_cancelled)
+TEST_P(SmallSocketBuffers, WHEN_client_write_with_cancel_after_THEN_cancelled)
 {
    clientSession = [this](Session session) -> Task<void> {
       auto request = check(co_await session.submit(url.set_path("echo"), {}));
