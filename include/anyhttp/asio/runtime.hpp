@@ -21,6 +21,7 @@
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
+#include <boost/asio/immediate.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ip/udp.hpp>
@@ -168,11 +169,18 @@ inline void complete_immediately(Handler&& handler, const Executor& fallback, Ar
    if (!handler)
       return;
 
+#if 1
+   asio::async_immediate(fallback, [handler = std::forward<Handler>(handler),
+                                    ... args = std::forward<Args>(args)]() mutable { //
+      std::move(handler)(std::move(args)...);
+   });
+#else
    asio::any_completion_executor ex = asio::get_associated_immediate_executor(handler, fallback);
    ex.execute([handler = std::forward<Handler>(handler),
                ... args = std::forward<Args>(args)]() mutable { //
       std::move(handler)(std::move(args)...);
    });
+#endif
 }
 
 /**
