@@ -3,8 +3,12 @@
 //
 // The HTTP/2 backend as seen from the generic server and client: factories that turn a stream
 // that is ready to carry HTTP/2 into a Session::Impl. Everything else about the backend --
-// nghttp2 and the session templates driving it -- stays behind h2/session.hpp
-// and h2/session.cpp, so that dispatching to HTTP/2 needs no nghttp2 type here.
+// nghttp2 and the session templates driving it -- stays behind h2/session.hpp and h2/session.cpp,
+// so that dispatching to HTTP/2 needs no nghttp2 type here.
+//
+// This header is version-neutral, and the one place both HTTP/2 backends meet: h2/ implements it
+// over nghttp2 version 1 and h2v2/ over version 2, exactly one of them compiled per tree (see
+// H2_LIBRARY). Which one a build uses is invisible from here upwards.
 //
 
 #include "anyhttp/client_impl.hpp"

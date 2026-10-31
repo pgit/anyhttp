@@ -151,17 +151,50 @@ elseif (ANYHTTP_API STREQUAL "COROSIO")
     endforeach()
     FetchContent_Declare(capy
         GIT_REPOSITORY https://github.com/cppalliance/capy.git
-        GIT_TAG bb749f9ace824660c93ba1ba9b875d574b679188
+        GIT_TAG 24c54af2cf967ccbf8d3809af4bcd9c8f61f553b
         EXCLUDE_FROM_ALL)
     FetchContent_Declare(corosio
         GIT_REPOSITORY https://github.com/cppalliance/corosio.git
-        GIT_TAG f009395950d4a4ce7ee5dd146b29fe74c0610233
+        GIT_TAG 41d0de18b6e4fa1b397c38a866f2daf52c6c36b5
         EXCLUDE_FROM_ALL)
     FetchContent_MakeAvailable(capy corosio)
     message(STATUS "Using API style: COROSIO (capy/corosio)")
 else()
     message(FATAL_ERROR "ANYHTTP_API must be ASIO or COROSIO, not '${ANYHTTP_API}'")
 endif()
+
+# --------------------------------------------------------------------------------------------------
+
+#
+# HTTP/2: nghttp2 version 1 (default) or version 2, selected with H2_LIBRARY.
+#
+# Version 2 is a complete rewrite with an API much closer to nghttp3's. It is a separate package
+# -- <nghttp2v2/nghttp2.h>, -lnghttp2v2 -- but it still exports nine of version 1's symbol names,
+# among them the four nghttp2_rcbuf_* whose struct layouts differ, so the two cannot be linked into
+# one binary. Hence a build-time choice and a tree of its own, build-h2v2/, rather than two
+# backends side by side. Both implement Protocol::http2; which one a tree uses is invisible above
+# h2/backend.hpp. The code tests ANYHTTP_H2_V1 or ANYHTTP_H2_V2, exactly one of which is 1, from
+# the generated anyhttp/config.hpp -- hence the choice being made here, before it is written.
+#
+find_package(PkgConfig REQUIRED)
+set(H2_LIBRARY nghttp2 CACHE STRING "HTTP/2 library: nghttp2 or nghttp2v2")
+set_property(CACHE H2_LIBRARY PROPERTY STRINGS nghttp2 nghttp2v2)
+if (H2_LIBRARY STREQUAL "nghttp2")
+    set(ANYHTTP_H2_V1 1)
+    set(ANYHTTP_H2_V2 0)
+    pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2)
+    message(STATUS "Using HTTP/2 library: nghttp2 ${NGHTTP2_VERSION}")
+elseif (H2_LIBRARY STREQUAL "nghttp2v2")
+    set(ANYHTTP_H2_V1 0)
+    set(ANYHTTP_H2_V2 1)
+    pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2v2)
+    message(STATUS "Using HTTP/2 library: nghttp2 v2 ${NGHTTP2_VERSION}")
+else()
+    message(FATAL_ERROR "H2_LIBRARY must be nghttp2 or nghttp2v2, not '${H2_LIBRARY}'")
+endif()
+
+# --------------------------------------------------------------------------------------------------
+
 configure_file(cmake/config.hpp.in ${CMAKE_BINARY_DIR}/include/anyhttp/config.hpp @ONLY)
 
 # --------------------------------------------------------------------------------------------------
@@ -178,10 +211,9 @@ endif()
 # include_directories(${CMAKE_SOURCE_DIR}/../nghttp2/install/include)
 # link_directories(${CMAKE_SOURCE_DIR}/../nghttp2/install/lib)
 #
-# or, just rely on pkg-config:
+# The version is selected further up, together with the other per-tree options, because the
+# generated anyhttp/config.hpp carries it -- see H2_LIBRARY.
 #
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2)
 
 # --------------------------------------------------------------------------------------------------
 

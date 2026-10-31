@@ -22,13 +22,24 @@ jobs:
   # uses a zero-copy BIO API that AWS-LC lacks), so it is the baseline rather than the default
   # AWS-LC. The legs after the product each isolate one variable the product holds fixed -- the
   # standard library, the TLS library -- so that a red job names its own cause. COROSIO TSAN is
-  # the single-threaded one: -DMULTITHREADED still hangs on the h3 session teardown tests.
+  # the single-threaded one: -DMULTITHREADED is not covered here at all, so run
+  # build-corosio-tsan/ locally.
+  #
+  # The runner image is pinned rather than ubuntu-latest: everything else about the build is
+  # pinned too, down to the container, and the host is what is left to change under us -- the
+  # rollover to 26.04 cost two days of red TSAN legs for reasons that had nothing to do with the
+  # code (see the container options below). Bump it deliberately.
   #
   build:
     name: ${{ matrix.api }} ${{ matrix.flavor }}
-    runs-on: ubuntu-latest
-    container:
+    runs-on: &runs_on ubuntu-26.04
+    container: &container
       image: docker.io/psedoc/anyhttp:0.30
+      # The Ubuntu 26.04 runner kernel's ASLR entropy is high enough that the binary can land in
+      # TSAN's fixed shadow region. TSAN then re-execs itself with
+      # personality(ADDR_NO_RANDOMIZE), which docker's default seccomp profile refuses -- the job
+      # dies before the first test.
+      options: --security-opt seccomp=unconfined
     env:
       CC: ${{ matrix.cc || 'clang' }}
       CXX: ${{ matrix.cxx || 'clang++' }}
@@ -98,9 +109,8 @@ jobs:
 
   coverage:
     name: Coverage
-    runs-on: ubuntu-latest
-    container:
-      image: docker.io/psedoc/anyhttp:0.30
+    runs-on: *runs_on
+    container: *container
     permissions:
       contents: read
       pages: write

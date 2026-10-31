@@ -1,6 +1,16 @@
 #include <anyhttp/formatter.hpp>
-#include <anyhttp/h2/common.hpp> // the nghttp2_nv formatter lives with the rest of the h2 glue
-#include <anyhttp/net.hpp>
+#include <anyhttp/net.hpp> // IWYU pragma: keep -- also brings in config.hpp, for ANYHTTP_H2_V2
+
+//
+// The nghttp2_nv formatter lives with the rest of the HTTP/2 glue, so it comes from whichever
+// nghttp2 this tree was built against -- the two headers even share the NGHTTP2_H include guard,
+// so taking the other one here would quietly test a formatter for a type the library does not use.
+//
+#if ANYHTTP_H2_V2
+#include <anyhttp/h2v2/common.hpp>
+#else
+#include <anyhttp/h2/common.hpp>
+#endif
 
 #include <boost/beast/http/field.hpp>
 #include <boost/core/detail/string_view.hpp>

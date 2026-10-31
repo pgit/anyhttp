@@ -188,11 +188,12 @@ TEST_P(ClientAsync, WHEN_session_is_gone_THEN_request_reports_error)
 //
 TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
 {
+   auto arrived = std::make_shared<Signal>(context.get_executor());
    auto clientGone = std::make_shared<Signal>(context.get_executor());
    auto responded = std::make_shared<Signal>(context.get_executor());
 
-   requestHandler = [this, clientGone, responded](server::Request request,
-                                                  server::Response response) -> Task<void> {
+   requestHandler = [this, arrived, clientGone, responded](server::Request request,
+                                                           server::Response response) -> Task<void> {
       //
       // Keep the response around beyond the request handler, until the client has closed the
       // connection and the server session has ended.
@@ -211,11 +212,22 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
          responded->notify();
       };
       launch(context.get_executor(), respond(clientGone, responded, std::move(response)));
+      arrived->notify();
       co_return;
    };
-   clientSession = [this, clientGone, responded](Session session) -> Task<void> {
+   clientSession = [this, arrived, clientGone, responded](Session session) -> Task<void> {
       auto request = check(co_await session.submit(url, {}));
       check(co_await request.write_eof());
+
+      //
+      // Not before the server has the request: tearing the session down is abrupt, and over QUIC a
+      // write that has been accepted has not necessarily left the process yet. The client's
+      // handshake completes before the server confirms its own, so a request sent and closed over
+      // immediately can be gone for good -- the server logs "served 0 streams" and the handler
+      // this test needs never runs. TCP hides it, the bytes being in the socket buffer by now.
+      //
+      std::ignore = co_await arrived->wait();
+
       request.reset();
       session.reset();
 
@@ -231,11 +243,12 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
 //
 TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_request_head_is_still_there)
 {
+   auto arrived = std::make_shared<Signal>(context.get_executor());
    auto clientGone = std::make_shared<Signal>(context.get_executor());
    auto inspected = std::make_shared<Signal>(context.get_executor());
 
-   requestHandler = [this, clientGone, inspected](server::Request request,
-                                                  server::Response response) -> Task<void> {
+   requestHandler = [this, arrived, clientGone, inspected](server::Request request,
+                                                           server::Response response) -> Task<void> {
       //
       // Keep the request beyond the request handler, until the client has closed the connection
       // and the server session has ended. The response, too, so the exchange is still open then.
@@ -257,13 +270,19 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_request_head_is_still_there
       };
       launch(context.get_executor(),
              inspect(clientGone, inspected, std::move(request), std::move(response)));
+      arrived->notify();
       co_return;
    };
-   clientSession = [this, clientGone, inspected](Session session) -> Task<void> {
+   clientSession = [this, arrived, clientGone, inspected](Session session) -> Task<void> {
       Fields fields;
       fields.set("X-Test", "42");
       auto request = check(co_await session.submit(url.set_path("custom/head"), fields));
       check(co_await request.write_eof());
+
+      // See WHEN_server_session_is_gone_THEN_response_reports_error: over QUIC, tearing the
+      // session down before the server has the request can lose it altogether.
+      std::ignore = co_await arrived->wait();
+
       request.reset();
       session.reset();
 
@@ -977,6 +996,78 @@ TEST_P(ClientAsync, WHEN_request_is_submitted_before_previous_is_complete_THEN_r
       EXPECT_EQ(co_await read(response2), body2);
    };
 }
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// The same thing for HTTP/2 and HTTP/3, by giving the server the limit HTTP/1.1 has anyway:
+// server::Config::max_concurrent_streams, announced as SETTINGS_MAX_CONCURRENT_STREAMS and as the
+// QUIC limit on bidirectional streams. With one allowed, all three protocols answer the second
+// request with would_block, which is what "max concurrent streams = 1" is supposed to mean.
+//
+class OneStream : public ClientAsync
+{
+protected:
+   void configure_server(server::Config& config) override { config.max_concurrent_streams = 1; }
+};
+
+INSTANTIATE_TEST_SUITE_P(OneStream, OneStream, ValuesIn(protocols()), NameGenerator);
+
+TEST_P(OneStream, WHEN_limit_is_one_THEN_second_request_reports_would_block)
+{
+   clientSession = [this](Session session) -> Task<void> {
+      auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
+
+      //
+      // Take the response of the first request before asking for a second one. Not for the response
+      // itself -- /echo sends it before reading the body -- but because it is a round trip, and the
+      // limit only applies once the client knows about it: HTTP/2 learns it from the server's
+      // SETTINGS, which arrive after the connection does, so submitting straight away could beat
+      // them to it. HTTP/3 has it from the handshake, and HTTP/1.1 never needed telling.
+      //
+      auto response1 = check(co_await request1.get_response());
+
+      auto [ec, refused] = co_await session.submit(url.set_path("echo"), {});
+      EXPECT_EQ(ec, errors::would_block);
+      EXPECT_FALSE(refused);
+
+      //
+      // Finish the first request, body and response both. In HTTP/2 and HTTP/3 its stream counts
+      // against the limit until it is closed in *both* directions, so reading the response to its
+      // end is part of letting the next request through; HTTP/1.1 is free again after the write.
+      //
+      check(co_await request1.write_eof(asio::buffer(body1)));
+      EXPECT_EQ(co_await read(response1), body1);
+
+      //
+      // And now there is room for it -- not necessarily at once, though. HTTP/3 grants the credit
+      // for another stream only as the first one closes, and that MAX_STREAMS has to travel back
+      // to the client, so the next request may be one round trip early. Retrying is exactly what
+      // would_block asks of a caller, see Session::async_submit().
+      //
+      client::Request request2;
+      for (int i = 0; i < 100 && !request2; ++i)
+      {
+         auto [ec, request] = co_await session.submit(url.set_path("echo"), {});
+         if (!ec)
+            request2 = std::move(request);
+         else
+         {
+            EXPECT_EQ(ec, errors::would_block) << what(ec);
+            co_await sleep(10ms);
+         }
+      }
+      EXPECT_TRUE(request2);
+      if (!request2)
+         co_return;
+
+      check(co_await request2.write_eof(asio::buffer(body2)));
+      auto response2 = check(co_await request2.get_response());
+      EXPECT_EQ(co_await read(response2), body2);
+   };
+}
+
+// -------------------------------------------------------------------------------------------------
 
 TEST_P(ClientAsync, WHEN_many_requests_are_made_THEN_all_are_answered_in_order)
 {

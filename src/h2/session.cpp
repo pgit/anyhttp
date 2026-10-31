@@ -479,6 +479,24 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
       return;
    }
 
+   //
+   // The peer's SETTINGS_MAX_CONCURRENT_STREAMS. nghttp2 would accept a request beyond it and hold
+   // the stream back until one came free, leaving the caller with no idea that it is waiting -- and
+   // the caller may be the one who has to finish an earlier request, so waiting could deadlock. So
+   // the limit is answered with would_block, the way HTTP/1.1 answers its limit of one, see
+   // Session::async_submit(). Version 2's submit refuses it by itself; here the streams have to be
+   // counted, there being no way to ask how many are active -- which is why this counts the ones
+   // this session still holds, a stream being gone from here once it is closed both ways.
+   //
+   const auto limit =
+      nghttp2_session_get_remote_settings(session, NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS);
+   if (streams_.size() >= limit)
+   {
+      mlogd("submit: {} streams in progress, peer allows {}", streams_.size(), limit);
+      std::move(handler)(errors::would_block, client::Request{nullptr});
+      return;
+   }
+
    auto stream = std::make_shared<NGHttp2Stream>(*this, 0);
    stream->url = url;
 

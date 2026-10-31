@@ -171,7 +171,16 @@ Task<Session> Client::Impl::async_connect()
 
    io::no_delay(socket);
 
-   // Playing with socket buffer sizes doesn't seem to do any good, see the server.
+   //
+   // After connect(), not before: the socket a client starts with is not open yet, and
+   // asio::async_connect() closes and reopens it for every endpoint it tries, which would throw
+   // away anything set on it. Zero, the default, leaves the kernel's autotuning alone; see
+   // Config::socket_send_buffer_size for why a test would want them pinned.
+   //
+   io::set_buffer_sizes(socket, config().socket_send_buffer_size,
+                        config().socket_receive_buffer_size);
+
+   // What the kernel made of the sizes set above, or its own if they were left at zero.
    auto [send_buffer_size, receive_buffer_size] = io::buffer_sizes(socket);
    logd("[{}] socket buffer sizes: send={} receive={}", prefix, send_buffer_size,
         receive_buffer_size);

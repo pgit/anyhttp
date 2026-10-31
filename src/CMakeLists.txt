@@ -11,15 +11,20 @@ pkg_check_modules(NGHTTP3             REQUIRED IMPORTED_TARGET libnghttp3)
 pkg_check_modules(NGTCP2_CRYPTO          REQUIRED IMPORTED_TARGET ${NGTCP2_CRYPTO_MODULE})
 
 #
-# lib -- the protocol backends are in h1/, h2/, quic/ and h3/; only h2/ uses nghttp2, only quic/
-# and h3/ ngtcp2, and only h3/ nghttp3. What differs between the API styles is in asio/ or
-# corosio/, and only the one of this build tree is compiled. Everything at the top level is
-# protocol- and runtime-agnostic.
+# lib -- the protocol backends are in h1/, h2/ or h2v2/, quic/ and h3/; only h2/ uses nghttp2,
+# only h2v2/ nghttp2 v2, only quic/ and h3/ ngtcp2, and only h3/ nghttp3. The two HTTP/2 backends
+# are alternatives (see H2_LIBRARY), so only the one of this build tree is compiled -- same for
+# asio/ and corosio/. Everything at the top level is protocol- and runtime-agnostic.
 #
 string(TOLOWER ${ANYHTTP_API} anyhttp_runtime)
+if (ANYHTTP_H2_V2)
+    set(anyhttp_h2 h2v2)
+else()
+    set(anyhttp_h2 h2)
+endif()
 add_library(anyhttp)
 file(GLOB anyhttp_sources CONFIGURE_DEPENDS
-     *.cpp h1/*.cpp h2/*.cpp h3/*.cpp quic/*.cpp ${anyhttp_runtime}/*.cpp)
+     *.cpp h1/*.cpp ${anyhttp_h2}/*.cpp h3/*.cpp quic/*.cpp ${anyhttp_runtime}/*.cpp)
 target_sources(anyhttp PRIVATE ${anyhttp_sources})
 target_include_directories(anyhttp PUBLIC ../include ${CMAKE_BINARY_DIR}/include)
 

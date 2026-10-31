@@ -200,8 +200,15 @@ Task<void> Server::Impl::handle_connection(Executor executor, TcpSocket socket)
 
    io::no_delay(socket);
 
-   // Playing with socket buffer sizes doesn't seem to do any good: 8 KiB of receive buffer makes
-   // the 'PostRange' testcases very slow, for example.
+   //
+   // Pinning the buffers is of no use in production -- 8 KiB of receive buffer makes the
+   // 'PostRange' testcases very slow, for example -- so both default to zero, which leaves the
+   // kernel's autotuning alone. A test that needs a write to block sets them, see
+   // Config::socket_send_buffer_size. What the kernel made of it is in the line below.
+   //
+   io::set_buffer_sizes(socket, config().socket_send_buffer_size,
+                        config().socket_receive_buffer_size);
+
    auto [send_buffer_size, receive_buffer_size] = io::buffer_sizes(socket);
    logd("[{}] accepted, socket buffer sizes: send={} receive={}", prefix, send_buffer_size,
         receive_buffer_size);

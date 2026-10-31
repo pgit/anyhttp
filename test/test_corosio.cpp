@@ -115,7 +115,8 @@ capy::task<std::error_code> write_message(corosio::tcp_socket& socket, Serialize
 TEST(Corosio, BeastParserAndSerializer)
 {
    corosio::io_context context;
-   auto [server, client] = corosio::test::make_socket_pair(context);
+   auto [ec, server, client] = corosio::test::make_socket_pair(context);
+   ASSERT_FALSE(ec);
 
    std::error_code server_ec, client_ec;
    http::request_parser<http::string_body> request_parser;
@@ -362,7 +363,8 @@ TEST(CorosioRuntime, WHEN_both_tasks_run_THEN_when_both_waits_for_both)
 TEST(CorosioRuntime, WHEN_peeking_THEN_bytes_are_seen_but_not_taken)
 {
    corosio::io_context context;
-   auto [server, client] = corosio::test::make_socket_pair(context);
+   auto [ec, server, client] = corosio::test::make_socket_pair(context);
+   ASSERT_FALSE(ec);
    std::string peeked, read;
 
    auto run = [](corosio::tcp_socket& server, corosio::tcp_socket& client, std::string& peeked,

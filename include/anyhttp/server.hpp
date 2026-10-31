@@ -36,6 +36,21 @@ struct Config
    bool reuse_port = false;
 
    //
+   // The kernel's send and receive buffer, in bytes, for every TCP connection the server accepts;
+   // zero (the default) leaves the kernel's autotuning alone, which grows them into the megabytes.
+   // TCP only -- HTTP/3 has its own flow control, and the UDP socket is shared by every connection
+   // on it.
+   //
+   // This is a testing aid, not a tuning knob: pinning them small bounds how much a peer can write
+   // before it has to wait, which is the only way to make a write block at a predictable point
+   // over HTTP/1.1, where there is no flow control of its own. Small buffers cost throughput --
+   // 8 KiB of receive buffer makes the 'PostRange' tests very slow -- so leave them at zero
+   // unless a test needs the back pressure.
+   //
+   int socket_send_buffer_size = 0;
+   int socket_receive_buffer_size = 0;
+
+   //
    // The server's certificate chain and private key, as PEM files, for TLS over TCP and for
    // HTTP/3. The chain starts with the server certificate, followed by its intermediates. Both
    // files are read when the Server is constructed, which fails if they can't be, and not again:
@@ -61,6 +76,17 @@ struct Config
    // takes up more CONTINUATION frames than a header section of this size needs (but at least 8).
    //
    size_t max_header_size = default_max_header_size;
+
+   //
+   // How many requests a client may have in progress at once on one connection, announced to it as
+   // SETTINGS_MAX_CONCURRENT_STREAMS over HTTP/2 and as the limit on bidirectional streams over
+   // HTTP/3. A client that has reached it is refused the next request rather than kept waiting for
+   // a stream: client::Session::async_submit() fails with \c would_block, the way HTTP/1.1 does
+   // with its limit of one, see README.md, "Concurrent Requests".
+   //
+   // HTTP/1.1 has no use for this: one request at a time is what the protocol gives it.
+   //
+   uint64_t max_concurrent_streams = 100;
 
    //
    // How long a client may remember the HTTP/3 endpoint this server advertises in every response

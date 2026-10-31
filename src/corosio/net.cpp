@@ -47,22 +47,20 @@ void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port)
    const auto family = endpoint.address().is_v4() ? corosio::family::v4 : corosio::family::v6;
    if (auto ec = acceptor.open(family))
       throw std::system_error(ec, "open");
-   acceptor.set_option(corosio::socket_option::reuse_address(true));
+   if (auto ec = acceptor.set_option(corosio::socket_option::reuse_address(true)))
+      throw std::system_error(ec, "reuse_address");
    if (reuse_port)
-      acceptor.set_option(corosio::socket_option::reuse_port(true));
+   {
+      if (auto ec = acceptor.set_option(corosio::socket_option::reuse_port(true)))
+         throw std::system_error(ec, "reuse_port");
+   }
 
    // Accept IPv4 clients on an IPv6 listener, too, see asio/net.cpp.
    if (family == corosio::family::v6)
    {
-      try
-      {
-         acceptor.set_option(corosio::socket_option::v6_only(false));
-      }
-      catch (const std::system_error& ex)
-      {
+      if (auto ec = acceptor.set_option(corosio::socket_option::v6_only(false)))
          logw("[{}] error enabling dual-stack on {}: {}", log_prefix(Role::server), endpoint,
-              ex.what());
-      }
+              ec.message());
    }
 
    if (auto ec = acceptor.bind(endpoint))
@@ -79,6 +77,14 @@ std::pair<int, int> buffer_sizes(TcpSocket& socket)
    len = sizeof(int);
    ::getsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVBUF, &receive, &len);
    return {send, receive};
+}
+
+void set_buffer_sizes(TcpSocket& socket, int send, int receive)
+{
+   if (send > 0)
+      ::setsockopt(socket.native_handle(), SOL_SOCKET, SO_SNDBUF, &send, sizeof(send));
+   if (receive > 0)
+      ::setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVBUF, &receive, sizeof(receive));
 }
 
 Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,

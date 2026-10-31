@@ -9,7 +9,7 @@
 //    SocketStream, stream_traits<>, is_tls(), async_teardown()
 //    io::shutdown(), io::cancel(), io::close(), io::remote_endpoint()
 //    io::make_socket(), io::make_acceptor(), io::listen(), io::local_endpoint(), io::accept()
-//    io::no_delay(), io::buffer_sizes(), io::resolve(), io::connect()
+//    io::no_delay(), io::buffer_sizes(), io::set_buffer_sizes(), io::resolve(), io::connect()
 //    make_server_tls_context(), io::make_tls_stream(), io::handshake(), io::alpn(), io::tls_info()
 //    io::drain()                                             -- below
 //    UdpSocket, io::make_udp_socket(), io::open(), io::cancel(), io::close()

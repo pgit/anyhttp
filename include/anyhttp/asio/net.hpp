@@ -296,6 +296,12 @@ inline void no_delay(TcpSocket& socket)
 /// The kernel's send and receive buffer sizes of \p socket, for the log.
 std::pair<int, int> buffer_sizes(TcpSocket& socket);
 
+/// Pins the send and receive buffer of \p socket, in bytes; either zero leaves that one alone.
+/// A size set this way turns the kernel's autotuning off for that direction, which is the point:
+/// it bounds how much a write can hand over before it has to wait for the peer. Not worth an
+/// error -- the caller logs what it got with buffer_sizes() afterwards.
+void set_buffer_sizes(TcpSocket& socket, int send, int receive);
+
 /// Resolves \p host and \p port (a number): <tt>(error_code, endpoints)</tt>.
 Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,
                                                                std::string port);

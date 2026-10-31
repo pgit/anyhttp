@@ -11,8 +11,12 @@
 # gets as many workers, an event loop each, to which its accepting thread hands the connections
 # round robin -- closer to -i than to one shared context.
 #
+# With -2 the ASIO build over nghttp2 version 2, the rewrite, runs an HTTP/2 row as well:
+# build-h2v2-release/, on OpenSSL again, so that the HTTP/2 library is all that differs from the
+# asio row. Only HTTP/2 -- its HTTP/1.1 and HTTP/3 are the same backends as that row's.
+#
 # Usage: scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-M depth] [-t threads] [-i]
-#                         [-p port] [-u path] [-P] [-n] [-N] [-v]
+#                         [-p port] [-u path] [-P] [-2] [-n] [-N] [-v]
 #
 #   -D  duration of each run in seconds (default 10)
 #   -c  number of h2load clients (default 8)
@@ -24,6 +28,7 @@
 #   -p  port (default 18080)
 #   -u  request path (default /)
 #   -P  plaintext: HTTP/1.1 and HTTP/2 (prior knowledge) without TLS; no HTTP/3
+#   -2  also run the nghttp2 version 2 build, for HTTP/2
 #   -n  don't build the servers first (otherwise a missing tree is configured with
 #       scripts/configure.sh)
 #   -N  leave out nghttpd
@@ -43,11 +48,12 @@ port=18080
 path=/
 build=1
 nghttpd=1
+h2v2=0
 verbose=0
 scheme=https
 independent=()
 
-while getopts "D:c:m:M:t:ip:u:PnNvh" opt; do
+while getopts "D:c:m:M:t:ip:u:P2nNvh" opt; do
    case $opt in
    D) duration=$OPTARG ;;
    c) clients=$OPTARG ;;
@@ -58,6 +64,7 @@ while getopts "D:c:m:M:t:ip:u:PnNvh" opt; do
    p) port=$OPTARG ;;
    u) path=$OPTARG ;;
    P) scheme=http ;;
+   2) h2v2=1 ;;
    n) build=0 ;;
    N) nghttpd=0 ;;
    v) verbose=1 ;;
@@ -68,11 +75,12 @@ done
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
-declare -A trees=([asio]=build-openssl-release [corosio]=build-corosio-release)
-styles=(asio corosio)
+declare -A trees=([asio]=build-openssl-release [corosio]=build-corosio-release
+   [h2v2]=build-h2v2-release)
 protocols=(h1 h2 h3)
 [[ $scheme == http ]] && protocols=(h1 h2)
-servers=("${styles[@]}")
+servers=(asio corosio)
+((h2v2)) && servers+=(h2v2)
 if ((nghttpd)); then
    if command -v nghttpd >/dev/null; then
       servers+=(nghttpd)
@@ -81,14 +89,16 @@ if ((nghttpd)); then
    fi
 fi
 
-for style in "${styles[@]}"; do
-   tree=${trees[$style]}
+for server in "${servers[@]}"; do
+   [[ -v trees[$server] ]] || continue # nghttpd comes from the PATH
+   tree=${trees[$server]}
    if ((build)); then
       if [[ ! -e $tree/CMakeCache.txt ]]; then
          echo "configuring $tree/ (scripts/configure.sh)" >&2
-         scripts/configure.sh "$tree" >/dev/null
+         scripts/configure.sh "$tree" >&2
       fi
-      cmake --build "$tree" --target server >/dev/null
+      echo "building $tree/ (server)" >&2
+      cmake --build "$tree" --target server >&2
    elif [[ ! -x $tree/src/server ]]; then
       echo "error: $tree/src/server does not exist, run without -n" >&2
       exit 1
@@ -171,7 +181,8 @@ declare -A results
 for server in "${servers[@]}"; do
    start_server "$server"
    for proto in "${protocols[@]}"; do
-      [[ $server == nghttpd && $proto != h2 ]] && continue
+      # nghttpd serves HTTP/2 only, and the h2v2 build is the asio one below HTTP/2
+      [[ $server == @(nghttpd|h2v2) && $proto != h2 ]] && continue
       args=(-D "$duration" -c "$clients" -m "$streams" -t "$h2load_threads")
       case $proto in
       h1) args=(--h1 -D "$duration" -c "$clients" -m "$pipeline" -t "$h2load_threads") ;;

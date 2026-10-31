@@ -30,21 +30,40 @@ event for it (see the port plan, step 8); a report with an anyhttp frame at the 
 ours. A few tests set up their own server or client on the bare context and are not
 thread-aware.
 
-`scripts/configure.sh` configures all of these trees, or the ones named, with their options (`-b`
-builds them too); `scripts/bench.sh` configures its two when they are missing. Name the compiler
-when configuring a tree by hand: `cc` and `c++` are GCC on this host.
+`build-h2v2/` serves HTTP/2 over nghttp2 version 2 (`-DH2_LIBRARY=nghttp2v2`), the rewrite, instead
+of version 1 -- a build-time choice because the two cannot share a process, see the trap below.
+Server and client both, so the whole suite runs: the expectations that differ by version are in
+`test_external.cpp` (h2spec scores 135 of 146 instead of 138, three upstream differences named
+there, and `curl_h2c_upgrade` is answered as HTTP/1.1 because version 2 dropped the h2c upgrade with
+RFC 7540). What `test/CMakeLists.txt` leaves out of that tree is the three tests that drive an
+nghttp2 session by hand -- `test_alt_svc`, `test_connection_end`, `test_h2c_upgrade` -- which are
+written against version 1's API and would not link.
+`build-h2v2-release/` is its Release tree, on OpenSSL so that `scripts/bench.sh -2` can put its
+HTTP/2 beside the other two servers' with the HTTP/2 library as the only difference.
+
+Every tree is a preset of its own name in [CMakePresets.json](CMakePresets.json) -- that is where
+the options of each one live, and the options of a new tree belong there rather than in a command
+line. `cmake --list-presets` names them all. Do not configure a tree by hand: `cc` and `c++` are
+GCC on this host, so a forgotten `-DCMAKE_CXX_COMPILER=clang++` silently gives a tree the wrong
+compiler.
 
 ```
-scripts/configure.sh build
-cmake --build build
-build/test/test_all
+cmake --preset build            # or: scripts/configure.sh build
+cmake --build --preset build    # or: cmake --build build
+ctest --preset build            # or: build/test/test_all
 ```
+
+`scripts/configure.sh` configures all of the trees, or the ones named, and builds them too with
+`-b`; it reads the tree names from the presets, so it needs nothing when one is added.
+`scripts/bench.sh` configures the trees it needs when they are missing.
 
 **Run the tests from the repo root**, never from inside a build tree: the servers load their TLS
 material and the clients their CA through relative paths (the defaults of
 `server::Config::tls_certificate_chain` / `tls_private_key`, and `pki/out/root.pem`, which the
 test fixtures set as `client::Config::tls_ca_file`). From the wrong working directory every test
-fails in `SetUp()` with "use_certificate_chain_file: No such file or directory".
+fails in `SetUp()` with "use_certificate_chain_file: No such file or directory". `ctest` is the
+exception that proves nothing: `gtest_discover_tests()` gives every test case the repo root as its
+working directory, and `ctest --preset` wants to run there anyway, this file being there.
 
 The full suite takes about 50s serially (h2spec and the HTTP/3 timing tests dominate). Anything
 running much longer means a test is hanging; kill it and run that test alone.
@@ -61,13 +80,10 @@ pass: check for `[ OK ]` lines.
 ### Sanitizers
 
 Separate trees; the sanitizer options in the Debug branch of `CMakeLists.txt` are commented out on
-purpose, so configure a new tree instead of editing them:
+purpose, so use the tree of the sanitizer instead of editing them:
 
 ```
-cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-  -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
-  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
+cmake --build --preset build-asan
 build-asan/test/test_all
 ```
 
@@ -75,7 +91,8 @@ GTest is built from source with the tree's own flags (`test/CMakeLists.txt`), so
 instrumented too and needs no `ASAN_OPTIONS`. The `Recursion` test skips itself under ASAN, so
 expect 3 extra skips.
 
-TSAN is the same recipe with `-fsanitize=thread` and runs clean without suppressions. AWS-LC is
+TSAN is `build-tsan/`, the same flags with `-fsanitize=thread`, and runs clean without
+suppressions. AWS-LC is
 uninstrumented, but linked statically into the executable, so `called_from_lib:` cannot match it:
 should a report ever show *both* stacks inside the TLS library, suppress it with `race:` on the
 AWS-LC function instead. One with an anyhttp frame near the racing access is real. libc++ (the
@@ -85,14 +102,17 @@ a race on `operator delete` in `__on_zero_shared_weak`, anyhttp frames and all;
 [test/tsan_libcxx.cpp](test/tsan_libcxx.cpp) gives `test_all` an instrumented copy.
 
 Anything touching lifetimes on the HTTP/3 write path belongs under ASAN before it is committed --
-completions there run on acknowledgement, and the Release build hides the use-after-frees.
+completions there run on acknowledgement, and the Release build hides the use-after-frees. The same
+goes for `h2v2/`'s write path, for the same reason: it hands nghttp2 a pointer into the caller's
+buffer (see `WriteMode`), and `build-h2v2-asan/` is the version 2 ASAN tree for it.
 
 ## Source layout
 
 Each protocol lives in a directory of its own, `h1/` (Beast/HTTP/1.1), `h2/` (nghttp2), `quic/`
 (ngtcp2) and `h3/` (nghttp3, on top of `quic/`), in both `include/anyhttp/` and `src/`. **Only
-files in `h2/` may include `<nghttp2/*>`, only files in `quic/` and `h3/` `<ngtcp2/*>`, only files
-in `h3/` `<nghttp3/*>`.** What belongs to one API style only
+files in `h2/` may include `<nghttp2/*>`, only files in `h2v2/` `<nghttp2v2/*>`, only files in
+`quic/` and `h3/` `<ngtcp2/*>`, only files in `h3/` `<nghttp3/*>`.** What belongs to one API style
+only
 is in `asio/` or `corosio/`, again in both; the library compiles the `src/` directory of its style
 and not the other. `src/apps/` has the `server` and `client` programs, `src/issues/` standalone
 reproducers of upstream bugs. Everything else at the top level is generic.
@@ -104,11 +124,34 @@ of the runtime layer. New protocol-specific code goes in that protocol's directo
 code needs to reach it, add a declaration to that backend header rather than including a protocol
 header.
 
+`h2v2/` is the second HTTP/2 backend, nghttp2 version 2, an alternative to `h2/` rather than an
+addition: exactly one of the two is compiled, picked by `H2_LIBRARY`, and both define the factories
+`anyhttp/h2/backend.hpp` declares, so nothing above that header can tell them apart. Each file in
+`h2v2/` has a counterpart of the same name in `h2/` with the same definitions in the same order,
+the way `asio/` and `corosio/` do, so the pair can be read side by side.
+
+What `h2v2/` has and `h2/` has no counterpart for is `WriteMode` (`h2v2/stream.hpp`), because
+version 2 takes an outgoing body *by reference* where version 1 copied it: nghttp2 keeps reading
+from the vector it was handed until it has framed all of it, which flow control can postpone
+indefinitely. A response is handed over as `ZeroCopy`, straight out of the caller's buffer, and a
+write cancelled with bytes still outstanding resets the stream -- there being no way to un-offer
+that memory. A request body goes `Staged`, copied through a bounded buffer of the stream's, so that
+cancelling a write leaves the stream usable and the body can still be ended afterwards. This is the
+same split, for the same reason, as `quic::WriteMode` in HTTP/3; read the two together.
+
 Verify the boundary with:
 
 ```
 ninja -C build -t deps | awk '/^[^ ].*: #deps/{o=$1} /nghttp2\/nghttp2.h|ngtcp2\/ngtcp2.h/{print o}' | sort -u
 ninja -C build -t deps | awk '/^[^ ].*: #deps/{o=$1} /nghttp3\/nghttp3.h/{print o}' | sort -u
+```
+
+In `build-h2v2/`, the first command must print nothing at all -- version 1's header has no business
+there -- and version 2's belongs only to `h2v2/` (plus the formatter test):
+
+```
+ninja -C build-h2v2 -t deps | awk '/^[^ ].*: #deps/{o=$1} /nghttp2\/nghttp2.h/{print o}' | sort -u
+ninja -C build-h2v2 -t deps | awk '/^[^ ].*: #deps/{o=$1} /nghttp2v2\/nghttp2.h/{print o}' | sort -u
 ```
 
 Only objects in `h2/`, `quic/` and `h3/` of the library may appear in the first list, only objects
@@ -176,6 +219,14 @@ or query the stored dep database with `ninja -C build -t deps <object>`.
 constructed, for TCP and QUIC alike, and keeps serving the old ones. curl then fails with
 `verify result: 20`; the HTTP/3 client (which reads its CA file on every connect) with "unable to
 get local issuer certificate".
+
+**One nghttp2 per process.** Version 2 installs as its own package (`<nghttp2v2/nghttp2.h>`,
+`libnghttp2v2`), but still exports nine of version 1's symbol names -- `nghttp2_strerror`,
+`nghttp2_http2_strerror`, `nghttp2_check_header_name`/`_value`, `nghttp2_check_authority` and the
+four `nghttp2_rcbuf_*`, whose struct layouts differ between the two. So a binary links one or the
+other, never both, which is why `H2_LIBRARY` is a build-time choice and `h2v2/` a separate
+directory rather than a second backend alongside `h2/`. Both headers also use the `NGHTTP2_H`
+include guard, so a translation unit that includes both silently sees only the first.
 
 **One TLS library per process.** By default anyhttp links AWS-LC (statically, from
 `/opt/boringssl`, what `find_package(ssl CONFIG)` provides) together with

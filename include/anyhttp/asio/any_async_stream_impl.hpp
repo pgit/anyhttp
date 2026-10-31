@@ -9,6 +9,7 @@
 #include "anyhttp/net.hpp"
 
 #include <boost/asio/associated_immediate_executor.hpp>
+#include <boost/asio/immediate.hpp>
 
 #include <utility>
 
@@ -36,10 +37,16 @@ public:
    virtual void async_read_some(ReadWriteHandler handler, MutableBufferVector buffer) = 0;
    virtual void async_shutdown_impl(ShutdownHandler handler)
    {
+#if 1
+      asio::async_immediate(get_executor(), [handler = std::move(handler)]() mutable {
+         std::move(handler)(boost::system::error_code());
+      });
+#else
       auto ex = boost::asio::get_associated_immediate_executor(handler, get_executor());
       ex.execute([handler = std::move(handler)]() mutable { //
          std::move(handler)(boost::system::error_code());
       });
+#endif
    }
 };
 

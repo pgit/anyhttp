@@ -892,6 +892,15 @@ static std::optional<nghttp2::Upgrade> h2c_upgrade(std::string_view log_prefix,
                                                    const http::request<http::buffer_body>& request,
                                                    const boost::urls::url& url, bool complete)
 {
+   //
+   // nghttp2 version 2 dropped the h2c upgrade along with RFC 7540 -- there is no counterpart of
+   // nghttp2_session_upgrade2() to continue the request as stream 1 with. Declining the upgrade is
+   // always a valid answer to it, so a tree built with H2_LIBRARY=nghttp2v2 serves the request as
+   // HTTP/1.1 instead.
+   //
+   if constexpr (ANYHTTP_H2_V2)
+      return std::nullopt;
+
    const auto has_token = [](std::string_view list, std::string_view token) {
       for (auto item : http::token_list(list))
          if (beast::iequals(item, token))

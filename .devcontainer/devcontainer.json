@@ -16,18 +16,40 @@
 					"--clang-tidy",
 					"--pch-storage=disk",
 					"--background-index",
-					"--compile-commands-dir=build"
+					"--compile-commands-dir=${command:cmake.buildDirectory}"
 				],
 				"C_Cpp.intelliSenseEngine": "disabled",
 				"lldb.showDisassembly": "never",
 				"[cpp]": {
 					"editor.defaultFormatter": "xaver.clang-format"
-			   },
-			   "cmake.ctest.testExplorerIntegrationEnabled": false,
+				},
+				"cmake.ctest.testExplorerIntegrationEnabled": false,
+				"cSpell.ignorePaths": [
+					"build*",
+					".git/{info,lfs,logs,refs,objects}/**",
+					".git/{index,*refs,*HEAD}",
+					".vscode",
+					".vscode-insiders"
+				],
+				"files.exclude": {
+					"gtest-parallel-logs": true,
+					".cache": true
+				},
+				"search.exclude": {
+					"gtest-parallel-logs": true,
+					".cache": true
+				},
+				"testMate.cpp.test.parallelExecutionLimit": 20,
 				"testMate.cpp.test.advancedExecutables": [
 					{
-						"pattern": "build/test/test_*",
-						"cwd": "${workspaceDirectory}"
+						"pattern": "${command:cmake.buildDirectory}/test/test_*",
+						"cwd": "${workspaceDirectory}",
+						"runTask": {
+							"before": [
+								"CMake: build"
+							]
+						},
+						"parallelizationLimit": 20
 					}
 				]
 			},

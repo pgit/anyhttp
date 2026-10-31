@@ -2,7 +2,7 @@
 # https://github.com/microsoft/vscode-dev-containers/tree/main/containers/debian
 # https://github.com/pgit/cpp-devcontainer
 #
-FROM docker.io/psedoc/cpp-devcontainer:0.30
+FROM docker.io/psedoc/cpp-devcontainer:0.31
 
 #
 # GDB libc++ pretty printer (works for string, but not for map with llvm-18)
@@ -145,6 +145,35 @@ RUN git clone --recursive --depth 1 --branch ${NGHTTP2_VERSION} https://github.c
 #    ./configure --prefix=/usr/local --with-mruby --enable-http3 --with-libbpf \
 #        LIBNGTCP2_CRYPTO_BORINGSSL_CFLAGS="-I/opt/boringssl/include" \
 #        LIBNGTCP2_CRYPTO_BORINGSSL_LIBS="-L/opt/boringssl/lib -lssl -lcrypto" && \
+
+#
+# nghttp2 v2, the rewrite, installed next to v1
+#
+# It is a separate package all the way down -- <nghttp2v2/nghttp2.h>, libnghttp2v2.so,
+# libnghttp2v2.pc -- so it coexists with v1 in /usr/local. The C symbols are still named
+# nghttp2_*, though, and nine of them collide with v1 (nghttp2_strerror, nghttp2_http2_strerror,
+# nghttp2_check_header_name/_value, nghttp2_check_authority and the four nghttp2_rcbuf_*), so the
+# two cannot be linked into one binary: which one a build uses is a compile-time decision.
+#
+# No releases yet (the library calls itself 0.2.0-DEV), hence a pinned commit rather than a tag.
+#
+# 'make -C lib install', not 'make install': the latter also installs doc/'s nghttp.1, nghttpd.1,
+# nghttpx.1 and h2load.1, overwriting v1's man pages even though --enable-lib-only builds none of
+# those programs. lib/ has the headers, the libraries and the .pc file, which is all we want.
+#
+# Of the submodules, lib/sfparse is part of the library and tests/munit is what 'make check'
+# needs; the rest (mruby, neverbleed, urlparse) belong to the applications.
+#
+ARG NGHTTP2_V2_VERSION=5f55a2e9db3005530bd8405f53ab11daa8d7b8dc
+RUN git clone https://github.com/nghttp2/nghttp2-v2.git && \
+    cd nghttp2-v2 && \
+    git checkout --detach ${NGHTTP2_V2_VERSION} && \
+    git submodule update --init --recursive lib/sfparse tests/munit && \
+    autoreconf -i && \
+    ./configure --prefix=/usr/local --enable-lib-only && \
+    make -j$(nproc) check && make -C lib install && \
+    cd .. && rm -rf nghttp2-v2 && \
+    ldconfig
 
 # ==================================================================================================
 

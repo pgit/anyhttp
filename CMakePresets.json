@@ -1,0 +1,411 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 30,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "description": "Every tree is out-of-source and named after its preset, so build-corosio-asan/ is what --preset build-corosio-asan configures",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/${presetName}"
+        },
+        {
+            "name": "clang",
+            "hidden": true,
+            "description": "clang with libc++ and the libraries built against it in /opt/libc++ (USE_LIBCXX defaults to ON for clang); named explicitly because cc and c++ are GCC on this host",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        },
+        {
+            "name": "gcc",
+            "hidden": true,
+            "description": "GCC with libstdc++ and the libraries in /usr/local",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++"
+            }
+        },
+        {
+            "name": "openssl",
+            "hidden": true,
+            "description": "The system OpenSSL (3.5+) and ngtcp2_crypto_ossl instead of the default AWS-LC",
+            "cacheVariables": {
+                "TLS_LIBRARY": "OpenSSL"
+            }
+        },
+        {
+            "name": "corosio",
+            "hidden": true,
+            "description": "The COROSIO API style, on capy/corosio, which needs OpenSSL",
+            "inherits": "openssl",
+            "cacheVariables": {
+                "ANYHTTP_API": "COROSIO"
+            }
+        },
+        {
+            "name": "h2v2",
+            "hidden": true,
+            "description": "HTTP/2 over nghttp2 version 2, the rewrite; a build-time choice because the two versions cannot share a process",
+            "cacheVariables": {
+                "H2_LIBRARY": "nghttp2v2"
+            }
+        },
+        {
+            "name": "asan",
+            "hidden": true,
+            "description": "AddressSanitizer. GTest is built from source with these flags, so it is instrumented too and needs no ASAN_OPTIONS",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_CXX_FLAGS": "-fsanitize=address -fno-omit-frame-pointer -g",
+                "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address"
+            }
+        },
+        {
+            "name": "tsan",
+            "hidden": true,
+            "description": "ThreadSanitizer, which runs clean without suppressions",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer -g",
+                "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
+            }
+        },
+        {
+            "name": "build",
+            "displayName": "Debug",
+            "description": "What the library is developed with: clang, libc++, AWS-LC, ASIO. Keep this tree on clang, clangd reads its compile_commands.json",
+            "inherits": [
+                "clang",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "build-release",
+            "displayName": "Release",
+            "description": "Benchmark with this one, never with build/",
+            "inherits": [
+                "clang",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "build-gcc",
+            "displayName": "GCC, libstdc++",
+            "inherits": [
+                "gcc",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "build-asan",
+            "displayName": "AddressSanitizer",
+            "description": "Anything touching lifetimes on the HTTP/3 write path belongs here before it is committed",
+            "inherits": [
+                "clang",
+                "asan",
+                "base"
+            ]
+        },
+        {
+            "name": "build-tsan",
+            "displayName": "ThreadSanitizer",
+            "inherits": [
+                "clang",
+                "tsan",
+                "base"
+            ]
+        },
+        {
+            "name": "build-openssl",
+            "displayName": "OpenSSL",
+            "inherits": [
+                "clang",
+                "openssl",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "build-openssl-release",
+            "displayName": "OpenSSL, Release",
+            "description": "The ASIO tree bench.sh compares COROSIO with: same TLS library, so the runtime is the only difference",
+            "inherits": [
+                "clang",
+                "openssl",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "build-corosio",
+            "displayName": "COROSIO",
+            "description": "The COROSIO API style, see docs/corosio-port-plan.md; capy and corosio are FetchContent'd at pinned SHAs",
+            "inherits": [
+                "clang",
+                "corosio",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "build-corosio-release",
+            "displayName": "COROSIO, Release",
+            "description": "Benchmark COROSIO with this one",
+            "inherits": [
+                "clang",
+                "corosio",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "build-corosio-gcc",
+            "displayName": "COROSIO, GCC, libstdc++",
+            "description": "GCC is pickier about coroutine expressions than clang, so keep a co_await out of any larger expression",
+            "inherits": [
+                "gcc",
+                "corosio",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "build-corosio-asan",
+            "displayName": "COROSIO, AddressSanitizer",
+            "inherits": [
+                "clang",
+                "corosio",
+                "asan",
+                "base"
+            ]
+        },
+        {
+            "name": "build-corosio-tsan",
+            "displayName": "COROSIO, ThreadSanitizer, multithreaded",
+            "description": "MULTITHREADED makes the fixtures run the tests on all cores, a strand per connection. Expect reports inside corosio's epoll reactor; one with an anyhttp frame at the racing access is ours",
+            "inherits": [
+                "clang",
+                "corosio",
+                "tsan",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer -g -DMULTITHREADED"
+            }
+        },
+        {
+            "name": "build-h2v2",
+            "displayName": "nghttp2 v2",
+            "description": "Server and client both, so the whole suite runs; test/CMakeLists.txt leaves out the three tests written against version 1's API",
+            "inherits": [
+                "clang",
+                "h2v2",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "build-h2v2-asan",
+            "displayName": "nghttp2 v2, AddressSanitizer",
+            "description": "h2v2/'s write path hands nghttp2 a pointer into the caller's buffer (see WriteMode), so it belongs under ASAN like the HTTP/3 one",
+            "inherits": [
+                "clang",
+                "h2v2",
+                "asan",
+                "base"
+            ]
+        },
+        {
+            "name": "build-h2v2-release",
+            "displayName": "nghttp2 v2, Release",
+            "description": "On OpenSSL, so that bench.sh -2 can put its HTTP/2 beside the other two servers' with the HTTP/2 library as the only difference",
+            "inherits": [
+                "clang",
+                "h2v2",
+                "openssl",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "build",
+            "configurePreset": "build"
+        },
+        {
+            "name": "build-release",
+            "configurePreset": "build-release"
+        },
+        {
+            "name": "build-gcc",
+            "configurePreset": "build-gcc"
+        },
+        {
+            "name": "build-asan",
+            "configurePreset": "build-asan"
+        },
+        {
+            "name": "build-tsan",
+            "configurePreset": "build-tsan"
+        },
+        {
+            "name": "build-openssl",
+            "configurePreset": "build-openssl"
+        },
+        {
+            "name": "build-openssl-release",
+            "configurePreset": "build-openssl-release"
+        },
+        {
+            "name": "build-corosio",
+            "configurePreset": "build-corosio"
+        },
+        {
+            "name": "build-corosio-release",
+            "configurePreset": "build-corosio-release"
+        },
+        {
+            "name": "build-corosio-gcc",
+            "configurePreset": "build-corosio-gcc"
+        },
+        {
+            "name": "build-corosio-asan",
+            "configurePreset": "build-corosio-asan"
+        },
+        {
+            "name": "build-corosio-tsan",
+            "configurePreset": "build-corosio-tsan"
+        },
+        {
+            "name": "build-h2v2",
+            "configurePreset": "build-h2v2"
+        },
+        {
+            "name": "build-h2v2-asan",
+            "configurePreset": "build-h2v2-asan"
+        },
+        {
+            "name": "build-h2v2-release",
+            "configurePreset": "build-h2v2-release"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "description": "Run from the repo root, where this file is. gtest_discover_tests() gives every test case the repo root as its working directory too, which is what the servers' and clients' relative TLS paths need. A single test never takes a minute; one that does is hanging",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "timeout": 60,
+                "noTestsAction": "error"
+            }
+        },
+        {
+            "name": "build",
+            "configurePreset": "build",
+            "inherits": "base"
+        },
+        {
+            "name": "build-release",
+            "configurePreset": "build-release",
+            "inherits": "base"
+        },
+        {
+            "name": "build-gcc",
+            "configurePreset": "build-gcc",
+            "inherits": "base"
+        },
+        {
+            "name": "build-asan",
+            "configurePreset": "build-asan",
+            "inherits": "base"
+        },
+        {
+            "name": "build-tsan",
+            "configurePreset": "build-tsan",
+            "inherits": "base"
+        },
+        {
+            "name": "build-openssl",
+            "configurePreset": "build-openssl",
+            "inherits": "base"
+        },
+        {
+            "name": "build-openssl-release",
+            "configurePreset": "build-openssl-release",
+            "inherits": "base"
+        },
+        {
+            "name": "build-corosio",
+            "configurePreset": "build-corosio",
+            "inherits": "base"
+        },
+        {
+            "name": "build-corosio-release",
+            "configurePreset": "build-corosio-release",
+            "inherits": "base"
+        },
+        {
+            "name": "build-corosio-gcc",
+            "configurePreset": "build-corosio-gcc",
+            "inherits": "base"
+        },
+        {
+            "name": "build-corosio-asan",
+            "configurePreset": "build-corosio-asan",
+            "inherits": "base"
+        },
+        {
+            "name": "build-corosio-tsan",
+            "configurePreset": "build-corosio-tsan",
+            "inherits": "base"
+        },
+        {
+            "name": "build-h2v2",
+            "configurePreset": "build-h2v2",
+            "inherits": "base"
+        },
+        {
+            "name": "build-h2v2-asan",
+            "configurePreset": "build-h2v2-asan",
+            "inherits": "base"
+        },
+        {
+            "name": "build-h2v2-release",
+            "configurePreset": "build-h2v2-release",
+            "inherits": "base"
+        }
+    ]
+}

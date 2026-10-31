@@ -120,6 +120,15 @@ std::pair<int, int> buffer_sizes(TcpSocket& socket)
    return {send.value(), receive.value()};
 }
 
+void set_buffer_sizes(TcpSocket& socket, int send, int receive)
+{
+   error_code ec;
+   if (send > 0)
+      socket.set_option(asio::socket_base::send_buffer_size(send), ec);
+   if (receive > 0)
+      socket.set_option(asio::socket_base::receive_buffer_size(receive), ec);
+}
+
 Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,
                                                                std::string port)
 {

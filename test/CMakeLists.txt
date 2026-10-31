@@ -19,6 +19,16 @@ link_libraries(Boost::atomic Boost::url Boost::filesystem Boost::process)
 #
 file(GLOB SRC_FILES test_*.cpp)
 
+#
+# Three test files drive an nghttp2 version 1 session by hand, to be a peer our own backend has no
+# say over. They cannot be built against version 2 -- a rewritten API, and a process may hold only
+# one of the two anyway -- so a tree with H2_LIBRARY=nghttp2v2 leaves them out. The h2c upgrade is
+# gone from version 2 altogether, see h2c_upgrade() in src/h1/session.cpp.
+#
+if (ANYHTTP_H2_V2)
+    list(FILTER SRC_FILES EXCLUDE REGEX "test_(alt_svc|connection_end|h2c_upgrade)\\.cpp$")
+endif()
+
 add_executable(test_all ${SRC_FILES})
 # not a test: lets TSAN see weak_ptr's synchronization, see there
 target_sources(test_all PRIVATE tsan_libcxx.cpp)
