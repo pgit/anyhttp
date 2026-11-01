@@ -192,8 +192,8 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
    auto clientGone = std::make_shared<Signal>(context.get_executor());
    auto responded = std::make_shared<Signal>(context.get_executor());
 
-   requestHandler = [this, arrived, clientGone, responded](server::Request request,
-                                                           server::Response response) -> Task<void> {
+   requestHandler = [this, arrived, clientGone,
+                     responded](server::Request request, server::Response response) -> Task<void> {
       //
       // Keep the response around beyond the request handler, until the client has closed the
       // connection and the server session has ended.
@@ -248,8 +248,8 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_request_head_is_still_there
    auto clientGone = std::make_shared<Signal>(context.get_executor());
    auto inspected = std::make_shared<Signal>(context.get_executor());
 
-   requestHandler = [this, arrived, clientGone, inspected](server::Request request,
-                                                           server::Response response) -> Task<void> {
+   requestHandler = [this, arrived, clientGone,
+                     inspected](server::Request request, server::Response response) -> Task<void> {
       //
       // Keep the request beyond the request handler, until the client has closed the connection
       // and the server session has ended. The response, too, so the exchange is still open then.
