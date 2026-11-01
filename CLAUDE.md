@@ -238,10 +238,16 @@ After adding a dependency, check `ldd` of an AWS-LC build shows no `libssl.so.3`
 `libcrypto.so.3` -- a shared OpenSSL would interpose the executable's AWS-LC symbols. `curl`,
 `osslclient` and `osslserver` are OpenSSL builds and are useful for interop testing.
 
-**A capy context has to run dry.** Destroying a corosio `io_context`, or stopping it for good,
-while a coroutine is suspended on it leaks that coroutine's whole stack: unlike ASIO, capy cannot
-unwind it. LeakSanitizer reports it in `build-corosio-asan/`. Tests run their servers and clients to
-their end -- `server.reset()` on the server's own thread, then let `run()` return.
+**A context has to run dry, in both styles.** This is anyhttp's doing, not capy's any more. Since
+capy `8e1244f` and corosio `232c79f`, destroying an `io_context` unwinds the coroutines suspended on
+it, provided the continuation they are parked with carries `env->owner`: whatever in
+`corosio/runtime.hpp` parks or queues a coroutine has to set it. What that cannot reach is a cycle
+through an object that only comes apart by running. `QuicServerSession::do_session()` waits on an
+event of the session that its own completion handler keeps alive, and a client frame that holds its
+`Session` or `Request` holds the `Completion` it is waiting on. HTTP/2 and HTTP/3 leak without the
+drain on ASIO as well; HTTP/1.1 does not. LeakSanitizer does not see all of it, because capy pools
+frames below 2 KiB: count destructors to be sure. Tests run their servers and clients to their end
+-- `server.reset()` on the server's own thread, then let `run()` return.
 
 **Benchmarking.** Confirm `UDP listening` appears in the server log before starting a load run: a
 failed `bind()` aborts quietly and h2load will happily measure whatever other server owns the
