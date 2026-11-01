@@ -211,7 +211,8 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
 
          responded->notify();
       };
-      launch(context.get_executor(), respond(clientGone, responded, std::move(response)));
+      auto executor = response.get_executor(); // the session's: a response is used from there only
+      launch(executor, respond(clientGone, responded, std::move(response)));
       arrived->notify();
       co_return;
    };
@@ -268,8 +269,8 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_request_head_is_still_there
 
          inspected->notify();
       };
-      launch(context.get_executor(),
-             inspect(clientGone, inspected, std::move(request), std::move(response)));
+      auto executor = response.get_executor(); // the session's, as above
+      launch(executor, inspect(clientGone, inspected, std::move(request), std::move(response)));
       arrived->notify();
       co_return;
    };
