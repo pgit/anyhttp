@@ -304,6 +304,101 @@ TEST(CorosioRuntime, WHEN_task_is_launched_for_a_completion_THEN_its_result_comp
    EXPECT_EQ(std::get<1>(*result), 7);
 }
 
+//
+// Destroying a context unwinds the coroutines suspended on it, but only those whose continuation
+// carries the owner of their chain. A frame that is awaited is what shows the difference: without
+// an owner, only the frame on top is destroyed, and the one below it stays behind, holding a
+// destroyed frame. These go by what the frames do, not by LeakSanitizer: capy pools frames.
+//
+namespace
+{
+struct FrameProbe
+{
+   int& destroyed;
+   ~FrameProbe() { ++destroyed; }
+};
+} // namespace
+
+TEST(CorosioRuntime,
+     WHEN_context_goes_away_with_a_nested_yield_now_queued_THEN_frames_are_destroyed)
+{
+   int destroyed = 0, resumed = 0;
+   {
+      corosio::io_context context;
+      auto inner = [&]() -> Task<void> {
+         FrameProbe probe{destroyed};
+         co_await yield_now();
+         ++resumed;
+      };
+      auto outer = [&]() -> Task<void> {
+         FrameProbe probe{destroyed};
+         co_await inner();
+         ++resumed;
+      };
+      launch(context.get_executor(), outer());
+      context.run_one();
+   }
+   EXPECT_EQ(destroyed, 2);
+   EXPECT_EQ(resumed, 0);
+}
+
+TEST(CorosioRuntime, WHEN_context_goes_away_after_a_nested_completion_was_THEN_frames_are_destroyed)
+{
+   int destroyed = 0, resumed = 0;
+   {
+      corosio::io_context context;
+      Completion<ReadSome> parked;
+      auto inner = [&]() -> Task<void> {
+         FrameProbe probe{destroyed};
+         co_await initiate<ReadSome>(
+            [&](Completion<ReadSome> handler) { parked = std::move(handler); });
+         ++resumed;
+      };
+      auto outer = [&]() -> Task<void> {
+         FrameProbe probe{destroyed};
+         co_await inner();
+         ++resumed;
+      };
+      launch(context.get_executor(), outer());
+      context.run_one();
+      ASSERT_TRUE(parked);
+      parked = nullptr; // completes as cancelled, which is posted and never runs
+   }
+   EXPECT_EQ(destroyed, 2);
+   EXPECT_EQ(resumed, 0);
+}
+
+TEST(CorosioRuntime, WHEN_context_goes_away_with_a_task_launched_for_a_completion_THEN_all_unwinds)
+{
+   int destroyed = 0, resumed = 0;
+   {
+      corosio::io_context context;
+      auto task = [&]() -> Task<std::tuple<error_code, size_t>> {
+         FrameProbe probe{destroyed};
+         co_await yield_now();
+         ++resumed;
+         co_return std::tuple{error_code{}, size_t{0}};
+      };
+      auto inner = [&]() -> Task<void> {
+         FrameProbe probe{destroyed};
+         auto executor = co_await capy::this_coro::executor;
+         co_await initiate<ReadSome>([&](Completion<ReadSome> handler) {
+            launch(Executor(executor), task(), std::move(handler));
+         });
+         ++resumed;
+      };
+      auto outer = [&]() -> Task<void> {
+         FrameProbe probe{destroyed};
+         co_await inner();
+         ++resumed;
+      };
+      launch(context.get_executor(), outer());
+      context.run_one();
+   }
+   EXPECT_EQ(destroyed, 3);
+   EXPECT_EQ(resumed, 0);
+}
+
 TEST(CorosioRuntime, WHEN_event_is_set_before_and_while_waiting_THEN_waits_end)
 {
    corosio::io_context context;
