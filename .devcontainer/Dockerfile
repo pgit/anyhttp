@@ -17,20 +17,6 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
 # ==================================================================================================
 
 #
-# TEST: claude code
-#
-# Install Node.js, npm, and git
-# RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
-#     apt-get -y install nodejs npm git && \
-#     apt-get clean && \
-#     rm -rf /var/lib/apt/lists/*
-
-# Install Claude Code
-# RUN npm install -g @anthropic-ai/claude-code
-
-# ==================================================================================================
-
-#
 # enable persistent bash history in container
 #
 # https://code.visualstudio.com/remote/advancedcontainers/persist-bash-history
