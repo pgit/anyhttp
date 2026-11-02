@@ -158,8 +158,7 @@ TEST_F(Http3IdleTimeout, WHEN_client_vanishes_in_flight_THEN_idle_timer_drops_th
    //
    // Only now, on the way out, is the frozen client allowed to unwind: doing so earlier would
    // have sent the CONNECTION_CLOSE that this test is all about not sending. It is run to its end
-   // rather than destroyed along with its context, which only ASIO could unwind: capy has no way
-   // of destroying a coroutine that is suspended on an operation of a context that goes away.
+   // rather than destroyed along with its context: a session only ever comes apart by running.
    //
    response.reset();
    request.reset();

@@ -280,6 +280,7 @@ public:
    std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, const capy::await_context* env)
    {
       state_.continuation.h = h;
+      state_.continuation.owner = env->owner;
       state_.env = env;
       if (env->stop_token.stop_requested())
       {
@@ -372,6 +373,7 @@ struct YieldNow
    std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, const capy::await_context* env)
    {
       continuation.h = h;
+      continuation.owner = env->owner;
       env->executor.post(continuation);
       return std::noop_coroutine();
    }

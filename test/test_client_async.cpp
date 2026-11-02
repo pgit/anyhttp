@@ -192,8 +192,8 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
    auto clientGone = std::make_shared<Signal>(context.get_executor());
    auto responded = std::make_shared<Signal>(context.get_executor());
 
-   requestHandler = [this, arrived, clientGone, responded](server::Request request,
-                                                           server::Response response) -> Task<void> {
+   requestHandler = [this, arrived, clientGone,
+                     responded](server::Request request, server::Response response) -> Task<void> {
       //
       // Keep the response around beyond the request handler, until the client has closed the
       // connection and the server session has ended.
@@ -211,7 +211,8 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
 
          responded->notify();
       };
-      launch(context.get_executor(), respond(clientGone, responded, std::move(response)));
+      auto executor = response.get_executor(); // the session's: a response is used from there only
+      launch(executor, respond(clientGone, responded, std::move(response)));
       arrived->notify();
       co_return;
    };
@@ -247,8 +248,8 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_request_head_is_still_there
    auto clientGone = std::make_shared<Signal>(context.get_executor());
    auto inspected = std::make_shared<Signal>(context.get_executor());
 
-   requestHandler = [this, arrived, clientGone, inspected](server::Request request,
-                                                           server::Response response) -> Task<void> {
+   requestHandler = [this, arrived, clientGone,
+                     inspected](server::Request request, server::Response response) -> Task<void> {
       //
       // Keep the request beyond the request handler, until the client has closed the connection
       // and the server session has ended. The response, too, so the exchange is still open then.
@@ -268,8 +269,8 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_request_head_is_still_there
 
          inspected->notify();
       };
-      launch(context.get_executor(),
-             inspect(clientGone, inspected, std::move(request), std::move(response)));
+      auto executor = response.get_executor(); // the session's, as above
+      launch(executor, inspect(clientGone, inspected, std::move(request), std::move(response)));
       arrived->notify();
       co_return;
    };

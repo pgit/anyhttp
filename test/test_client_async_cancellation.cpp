@@ -44,7 +44,7 @@ TEST_P(ClientAsyncCancellation, Backpressure)
          EXPECT_EQ(rc.index(), 1);
 
       // So instead, we start doing this in background, to be resumed as soon as the window reopens.
-      launch(context.get_executor(), send_eof(request)); // FIXME: join
+      launch(request.get_executor(), send_eof(request)); // FIXME: join
 
       std::println("receiving....");
       error_code ec;
