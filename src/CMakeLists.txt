@@ -1,5 +1,3 @@
-include_directories(${CMAKE_SOURCE_DIR}/include)
-
 # nice sample:
 # https://github.com/andrewmd5/libwtf/blob/main/CMakeLists.txt
 
@@ -23,15 +21,31 @@ else()
     set(anyhttp_h2 h2)
 endif()
 add_library(anyhttp)
+add_library(anyhttp::anyhttp ALIAS anyhttp)
 file(GLOB anyhttp_sources CONFIGURE_DEPENDS
      *.cpp h1/*.cpp ${anyhttp_h2}/*.cpp h3/*.cpp quic/*.cpp ${anyhttp_runtime}/*.cpp)
 target_sources(anyhttp PRIVATE ${anyhttp_sources})
-target_include_directories(anyhttp PUBLIC ../include ${CMAKE_BINARY_DIR}/include)
+target_compile_features(anyhttp PUBLIC cxx_std_23)
+target_include_directories(anyhttp PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>)
 
-target_include_directories(anyhttp PRIVATE "/opt/nghttp3/build/include")
-target_link_libraries(anyhttp PRIVATE Threads::Threads)
-target_link_libraries(anyhttp PRIVATE Boost::thread Boost::atomic Boost::url Boost::filesystem)
-target_link_libraries(anyhttp PRIVATE spdlog::spdlog_header_only)
+#
+# What the public headers need comes with the target, because whoever includes them has to see the
+# same as the library did: Asio and spdlog are header-only, so their configuration is part of what
+# everyone compiles, and two different standard libraries would not even link.
+#
+target_compile_definitions(anyhttp PUBLIC
+    BOOST_ASIO_NO_DEPRECATED # don't allow use of deprecated ASIO interfaces
+    SPDLOG_USE_STD_FORMAT)   # we don't use fmtlib any more
+if (USE_LIBCXX)
+    target_compile_options(anyhttp PUBLIC $<$<COMPILE_LANGUAGE:CXX>:-stdlib=libc++>)
+    target_link_options(anyhttp PUBLIC -stdlib=libc++)
+endif()
+target_link_libraries(anyhttp PUBLIC Threads::Threads Boost::headers Boost::url)
+target_link_libraries(anyhttp PUBLIC spdlog::spdlog_header_only)
+
+target_link_libraries(anyhttp PRIVATE Boost::thread Boost::atomic Boost::filesystem)
 target_link_libraries(anyhttp PRIVATE PkgConfig::NGHTTP2)
 target_link_libraries(anyhttp PRIVATE PkgConfig::NGTCP2_CRYPTO PkgConfig::NGTCP2 PkgConfig::NGHTTP3)
 
@@ -43,6 +57,10 @@ target_link_libraries(anyhttp PUBLIC ${TLS_TARGET})
 
 if (ANYHTTP_COROSIO)
     target_link_libraries(anyhttp PUBLIC Boost::corosio Boost::corosio_openssl)
+endif()
+
+if (NOT ANYHTTP_BUILD_APPS)
+    return()
 endif()
 
 #

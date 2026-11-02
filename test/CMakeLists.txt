@@ -13,6 +13,17 @@ FetchContent_MakeAvailable(googletest)
 
 link_libraries(Boost::atomic Boost::url Boost::filesystem Boost::process)
 
+# use std::filesystem instead of boost::filesystem
+add_compile_definitions(BOOST_PROCESS_USE_STD_FS)
+
+# Boost.Process v2's posix launcher calls asio's execution_context::notify_fork() in the forked
+# child, between fork() and execve(). That walks the io_context's services and locks their
+# mutexes -- and with more than one thread running the context, another thread may well have
+# been holding one of them at the moment of the fork, so the child inherits it locked and hangs
+# there forever, before it ever gets to dup2() its stdio or exec. The child does nothing but
+# exec, so it has no use for the notification in the first place.
+add_compile_definitions(BOOST_PROCESS_V2_DISABLE_NOTIFY_FORK)
+
 #
 # Both API styles build every test file: one that belongs to a single style, or has parts that do,
 # guards them with ANYHTTP_ASIO or ANYHTTP_COROSIO.
@@ -46,7 +57,7 @@ add_dependencies(test_all pki)
 # Register the tests with CTest
 include(GoogleTest)
 gtest_discover_tests(test_all
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
   DISCOVERY_MODE PRE_TEST 
 )
 
@@ -60,6 +71,6 @@ gtest_discover_tests(test_all
 # Register test_all with CTest, ensuring it runs from the project root (for External.* tests)
 # add_test(NAME test_all COMMAND test_all)
 # set_tests_properties(test_all PROPERTIES
-#   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+#   WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
 #   PASS_REGULAR_EXPRESSION "PASSED"
 # )

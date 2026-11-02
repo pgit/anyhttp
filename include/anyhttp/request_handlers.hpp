@@ -11,8 +11,6 @@
 
 #include <boost/asio/buffer.hpp>
 
-#include <range/v3/view/chunk.hpp>
-
 namespace anyhttp
 {
 template <typename T>
@@ -108,10 +106,13 @@ Task<void> send(Writer& request, Range range)
    logd("send:");
    size_t bytes = 0;
    std::array<uint8_t, 16 * 1024> buffer;
-   for (auto chunk : range | ranges::views::chunk(buffer.size()))
+   auto it = std::ranges::begin(range);
+   for (const auto last = std::ranges::end(range); it != last;)
    {
-      const auto end = std::ranges::copy(chunk, buffer.data()).out;
-      const auto n = static_cast<size_t>(end - buffer.data());
+      auto out = buffer.begin();
+      for (; it != last && out != buffer.end(); ++it, ++out)
+         *out = *it;
+      const auto n = static_cast<size_t>(out - buffer.begin());
       if (auto [ec] = co_await request.write(asio::buffer(buffer.data(), n)); ec)
       {
          if (ec == errc::operation_canceled)

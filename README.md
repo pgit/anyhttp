@@ -10,7 +10,9 @@ Low-level C++23 HTTP client and server library, in one of two API styles, chosen
 * **COROSIO**, on [capy](https://github.com/cppalliance/capy) and
   [corosio](https://github.com/cppalliance/corosio): coroutines only.
 
-** THIS REPOSITORY IS PURELY EXPERIMENTAL **
+> [!WARNING]
+> This repository is purely experimental. It is not meant for production use, and anything in it
+> can change or break at any time, without notice.
 
 It supports HTTP/1.x, HTTP/2 and HTTP/3 behind a common, type-erasing interface, hence the *any* in the name -- and plain QUIC streams next to HTTP/3, for protocols of your own.
 
@@ -84,6 +86,65 @@ wherever the two libraries leave anyhttp the choice. Where they do not:
   is how a server sends one anyway, see below.
 
 Version 2 has had no release yet, so a build pins a commit of it.
+
+## Using it from a project
+
+C++23, CMake 3.30 and Boost 1.88 or later, spdlog, nghttp2, ngtcp2 and nghttp3 -- the Dockerfiles in
+[.devcontainer](.devcontainer) build all of them, and those are the versions that are tested. Whatever else goes into
+the process has to agree with anyhttp on the standard library and the TLS library.
+
+### As a subproject
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(anyhttp
+   GIT_REPOSITORY https://github.com/pgit/anyhttp.git
+   GIT_TAG <commit>
+   SYSTEM)
+set(TLS_LIBRARY OpenSSL) # the options of the table above, if the defaults won't do
+FetchContent_MakeAvailable(anyhttp)
+
+target_link_libraries(my_program PRIVATE anyhttp::anyhttp)
+```
+
+This builds the library and nothing else; `ANYHTTP_BUILD_TESTS`, `ANYHTTP_BUILD_APPS` and
+`ANYHTTP_INSTALL` default to `OFF` here. Works in both API styles. To develop against a checkout, set
+`FETCHCONTENT_SOURCE_DIR_ANYHTTP` to it.
+
+### Installed
+
+```sh
+cmake --preset build-deploy
+cmake --build --preset build-deploy
+cmake --install build-deploy --prefix /opt/anyhttp
+```
+
+```cmake
+find_package(anyhttp 0.0 REQUIRED) # with /opt/anyhttp in CMAKE_PREFIX_PATH
+target_link_libraries(my_program PRIVATE anyhttp::anyhttp)
+```
+
+`anyhttp_API`, `anyhttp_TLS_LIBRARY` and `anyhttp_H2_LIBRARY` then say what that copy was built with.
+The package has the public headers only, those of the protocol backends stay behind. It looks for its
+dependencies where they were when it was built. **ASIO only:** corosio writes install rules only when it is the
+top-level project, so a library that links it can't be exported; use FetchContent for COROSIO.
+
+### Deploying the programs
+
+`cmake --install build-deploy --prefix <dir> --component Runtime` gives `bin/anyhttp-server` and
+`bin/anyhttp-client`, plus every shared library they need in `lib/`, except for glibc and `libgcc_s`.
+The tree can be moved or copied to another machine that has a glibc at least as new as the build
+host's. The bundled libraries have licenses of their own, to be passed on along with them.
+
+```sh
+anyhttp-server -p 443 --cert /etc/anyhttp/chain.pem --key /etc/anyhttp/key.pem
+```
+
+The server always loads a certificate, also to serve only cleartext: without `--cert` and `--key` it looks for the
+test PKI (`pki/out/`, relative to the working directory), and exits with an error if that isn't there.
+The library and the programs log through spdlog's default logger, at `info` unless told otherwise.
+
+`scripts/check_package.sh` verifies all of this from the outside.
 
 ## Synopsis
 ### Server

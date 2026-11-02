@@ -255,6 +255,19 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
+        },
+        {
+            "name": "build-deploy",
+            "displayName": "For cmake --install",
+            "description": "Release, without the tests and thus without cfssl and the test PKI. On AWS-LC, which links statically: a TLS library the target machine does not have to provide",
+            "inherits": [
+                "clang",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "ANYHTTP_BUILD_TESTS": "OFF"
+            }
         }
     ],
     "buildPresets": [
@@ -317,6 +330,10 @@
         {
             "name": "build-h2v2-release",
             "configurePreset": "build-h2v2-release"
+        },
+        {
+            "name": "build-deploy",
+            "configurePreset": "build-deploy"
         }
     ],
     "testPresets": [

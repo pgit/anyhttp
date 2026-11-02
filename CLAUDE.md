@@ -41,6 +41,13 @@ written against version 1's API and would not link.
 `build-h2v2-release/` is its Release tree, on OpenSSL so that `scripts/bench.sh -2` can put its
 HTTP/2 beside the other two servers' with the HTTP/2 library as the only difference.
 
+`build-deploy/` is what gets installed: Release, on AWS-LC, without the tests and so without cfssl
+and the test PKI. `scripts/check_package.sh` installs it, moves the result and runs the programs
+from there, compiles [test/package/](test/package/) against the package and again with anyhttp as a
+FetchContent subproject, in `build-package/`. Run it after changing anything in a `CMakeLists.txt`,
+or what a public header includes: each tree here builds the library with the tree's own directory
+flags, so a usage requirement that is missing from the `anyhttp` target shows up only out there.
+
 Every tree is a preset of its own name in [CMakePresets.json](CMakePresets.json) -- that is where
 the options of each one live, and the options of a new tree belong there rather than in a command
 line. `cmake --list-presets` names them all. Do not configure a tree by hand: `cc` and `c++` are
@@ -116,6 +123,13 @@ only
 is in `asio/` or `corosio/`, again in both; the library compiles the `src/` directory of its style
 and not the other. `src/apps/` has the `server` and `client` programs, `src/issues/` standalone
 reproducers of upstream bugs. Everything else at the top level is generic.
+
+What gets installed is the public headers, the ones reachable from `client.hpp`, `server.hpp`,
+`quic.hpp`, `session.hpp` and the like; `cmake/install.cmake` leaves out the protocol directories,
+`net.hpp` and `*_impl.hpp`. A public header that starts including one of those needs the list changed
+-- and if that is a protocol header, more thought than that, because then every user of the library
+needs that protocol library's headers. What a public header does need comes with the target, as
+`PUBLIC` in `src/CMakeLists.txt`.
 
 Generic code (`server_impl.*`, `client_impl.*`, `formatter.hpp`) reaches a backend only through
 `h1/backend.hpp` / `h2/backend.hpp` / `quic/backend.hpp` / `h3/backend.hpp`, which declare their
