@@ -10,7 +10,7 @@
 find_program(CFSSL_EXECUTABLE cfssl REQUIRED)
 find_program(CFSSLJSON_EXECUTABLE cfssljson REQUIRED)
 
-set(PKI_DIR "${CMAKE_SOURCE_DIR}/pki")
+set(PKI_DIR "${PROJECT_SOURCE_DIR}/pki")
 set(PKI_OUT_DIR "${PKI_DIR}/out")
 
 set(PKI_INPUTS

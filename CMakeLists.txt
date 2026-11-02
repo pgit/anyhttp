@@ -1,11 +1,22 @@
 cmake_minimum_required(VERSION 3.30)
-project(asio_anyhttp VERSION 0.0.1)
+project(anyhttp VERSION 0.0.1)
+
+include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED On)
 set(CMAKE_EXPORT_COMPILE_COMMANDS On)
 
 option(ENABLE_COVERAGE "Enable coverage flags and llvm-cov target" OFF)
+
+#
+# As a subproject, by add_subdirectory() or FetchContent, this is the library and nothing else:
+# no tests, which need cfssl for their PKI, no programs, whose targets have names as generic as
+# 'server', and no install rules, which are the parent's to decide on. See cmake/install.cmake.
+#
+option(ANYHTTP_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
+option(ANYHTTP_BUILD_APPS "Build the programs" ${PROJECT_IS_TOP_LEVEL})
+option(ANYHTTP_INSTALL "Generate install rules" ${PROJECT_IS_TOP_LEVEL})
 
 if (DEFINED ENV{GITHUB_ACTIONS})
     add_compile_definitions(GITHUB_ACTIONS)
@@ -34,7 +45,7 @@ if (ENABLE_COVERAGE)
     if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         message(FATAL_ERROR "ENABLE_COVERAGE is supported only with Clang")
     endif()
-    set(COVERAGE_RAW_DIR "${CMAKE_BINARY_DIR}/coverage_raw")
+    set(COVERAGE_RAW_DIR "${PROJECT_BINARY_DIR}/coverage_raw")
     add_compile_options(-O0 -g -fprofile-instr-generate=${COVERAGE_RAW_DIR}/%p.profraw -fcoverage-mapping)
     add_link_options(-fprofile-instr-generate=${COVERAGE_RAW_DIR}/%p.profraw)
 endif()
@@ -57,7 +68,8 @@ if (USE_LIBCXX)
     set(LIBCXX_ROOT /opt/libc++ CACHE PATH "Installation prefix of C++ libraries built against libc++")
     list(PREPEND CMAKE_PREFIX_PATH ${LIBCXX_ROOT})
     # Statically: the shared libraries share their names with the libstdc++ ones in /usr/local/lib,
-    # so an LD_LIBRARY_PATH pointing there would take precedence over our RUNPATH.
+    # so an LD_LIBRARY_PATH pointing there would take precedence over our RUNPATH. The anyhttp target
+# carries -stdlib=libc++ on to whatever links it, this directory's flags reach only what is below.
     set(Boost_USE_STATIC_LIBS ON)
     message(STATUS "Using C++ standard library: libc++ (libraries from ${LIBCXX_ROOT})")
 else()
@@ -66,26 +78,23 @@ endif()
 
 # --------------------------------------------------------------------------------------------------
 
-# use std::filesystem instead of boost::filesystem
-add_compile_definitions(BOOST_PROCESS_USE_STD_FS)
-
-# Boost.Process v2's posix launcher calls asio's execution_context::notify_fork() in the forked
-# child, between fork() and execve(). That walks the io_context's services and locks their
-# mutexes -- and with more than one thread running the context, another thread may well have
-# been holding one of them at the moment of the fork, so the child inherits it locked and hangs
-# there forever, before it ever gets to dup2() its stdio or exec. The child does nothing but
-# exec, so it has no use for the notification in the first place.
-add_compile_definitions(BOOST_PROCESS_V2_DISABLE_NOTIFY_FORK)
-
-# don't allow use of deprecated ASIO interfaces
-add_compile_definitions(BOOST_ASIO_NO_DEPRECATED)
-
 #
 # find boost
 # https://github.com/madmongo1/blog-december-2020/blob/master/CMakeLists.txt
 #
-find_package(Boost 1.88 COMPONENTS thread atomic url filesystem process program_options REQUIRED)
-find_package(Threads)
+# The ANYHTTP_BOOST variables are what the library needs, and all that anyhttp-config.cmake asks for.
+#
+set(ANYHTTP_BOOST_VERSION 1.88)
+set(ANYHTTP_BOOST_COMPONENTS thread atomic url filesystem)
+set(anyhttp_boost_components ${ANYHTTP_BOOST_COMPONENTS})
+if (ANYHTTP_BUILD_TESTS)
+    list(APPEND anyhttp_boost_components process)
+endif()
+if (ANYHTTP_BUILD_APPS)
+    list(APPEND anyhttp_boost_components program_options)
+endif()
+find_package(Boost ${ANYHTTP_BOOST_VERSION} COMPONENTS ${anyhttp_boost_components} REQUIRED)
+find_package(Threads REQUIRED)
 
 # --------------------------------------------------------------------------------------------------
 
@@ -182,20 +191,20 @@ set_property(CACHE H2_LIBRARY PROPERTY STRINGS nghttp2 nghttp2v2)
 if (H2_LIBRARY STREQUAL "nghttp2")
     set(ANYHTTP_H2_V1 1)
     set(ANYHTTP_H2_V2 0)
-    pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2)
-    message(STATUS "Using HTTP/2 library: nghttp2 ${NGHTTP2_VERSION}")
+    set(ANYHTTP_H2_MODULE libnghttp2)
 elseif (H2_LIBRARY STREQUAL "nghttp2v2")
     set(ANYHTTP_H2_V1 0)
     set(ANYHTTP_H2_V2 1)
-    pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2v2)
-    message(STATUS "Using HTTP/2 library: nghttp2 v2 ${NGHTTP2_VERSION}")
+    set(ANYHTTP_H2_MODULE libnghttp2v2)
 else()
     message(FATAL_ERROR "H2_LIBRARY must be nghttp2 or nghttp2v2, not '${H2_LIBRARY}'")
 endif()
+pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET ${ANYHTTP_H2_MODULE})
+message(STATUS "Using HTTP/2 library: ${ANYHTTP_H2_MODULE} ${NGHTTP2_VERSION}")
 
 # --------------------------------------------------------------------------------------------------
 
-configure_file(cmake/config.hpp.in ${CMAKE_BINARY_DIR}/include/anyhttp/config.hpp @ONLY)
+configure_file(cmake/config.hpp.in ${PROJECT_BINARY_DIR}/include/anyhttp/config.hpp @ONLY)
 
 # --------------------------------------------------------------------------------------------------
 
@@ -208,29 +217,14 @@ endif()
 # nghttp2
 # https://github.com/curl/curl/blob/master/CMake/FindNGHTTP2.cmake
 #
-# include_directories(${CMAKE_SOURCE_DIR}/../nghttp2/install/include)
-# link_directories(${CMAKE_SOURCE_DIR}/../nghttp2/install/lib)
+# include_directories(${PROJECT_SOURCE_DIR}/../nghttp2/install/include)
+# link_directories(${PROJECT_SOURCE_DIR}/../nghttp2/install/lib)
 #
 # The version is selected further up, together with the other per-tree options, because the
 # generated anyhttp/config.hpp carries it -- see H2_LIBRARY.
 #
 
 # --------------------------------------------------------------------------------------------------
-
-# needed for ranges/v3 starting with clang 19
-add_compile_options(-Wno-deprecated-declarations)
-
-
-#
-# range-v3 -- FIXME: needed only for views:chunked(),
-#                    as the libc++ version doesn't seem to be available, yet
-#
-include_directories(/usr/local/include/range-v3)
-
-# --------------------------------------------------------------------------------------------------
-
-# we don't use fmtlib any more
-add_compile_definitions(SPDLOG_USE_STD_FORMAT)
 
 #
 # spdlog
@@ -239,10 +233,17 @@ find_package(spdlog REQUIRED)
 
 # --------------------------------------------------------------------------------------------------
 
-enable_testing(false)
-include(cmake/pki.cmake)
 add_subdirectory(src)
-add_subdirectory(test)
+
+if (ANYHTTP_BUILD_TESTS)
+    enable_testing(false)
+    include(cmake/pki.cmake)
+    add_subdirectory(test)
+endif()
+
+if (ANYHTTP_INSTALL)
+    include(cmake/install.cmake)
+endif()
 
 # --------------------------------------------------------------------------------------------------
 
@@ -253,12 +254,12 @@ if (ENABLE_COVERAGE)
         message(FATAL_ERROR "llvm-cov and llvm-profdata are required for coverage reporting")
     endif()
 
-    set(COVERAGE_RAW_DIR "${CMAKE_BINARY_DIR}/coverage_raw")
-    set(COVERAGE_PROFDATA_FILE "${CMAKE_BINARY_DIR}/coverage.profdata")
-    set(COVERAGE_HTML_DIR "${CMAKE_BINARY_DIR}/coverage_report")
-    set(COVERAGE_MERGE_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/merge_profraw.cmake")
-    set(COVERAGE_TEST_BIN "${CMAKE_BINARY_DIR}/test/test_all")
-    set(LLVM_COV_IGNORE_REGEX "/usr/|${CMAKE_BINARY_DIR}/|${CMAKE_SOURCE_DIR}/test/")
+    set(COVERAGE_RAW_DIR "${PROJECT_BINARY_DIR}/coverage_raw")
+    set(COVERAGE_PROFDATA_FILE "${PROJECT_BINARY_DIR}/coverage.profdata")
+    set(COVERAGE_HTML_DIR "${PROJECT_BINARY_DIR}/coverage_report")
+    set(COVERAGE_MERGE_SCRIPT "${PROJECT_SOURCE_DIR}/cmake/merge_profraw.cmake")
+    set(COVERAGE_TEST_BIN "${PROJECT_BINARY_DIR}/test/test_all")
+    set(LLVM_COV_IGNORE_REGEX "/usr/|${PROJECT_BINARY_DIR}/|${PROJECT_SOURCE_DIR}/test/")
 
     add_custom_target(coverage
         COMMAND ${CMAKE_COMMAND} -E rm -rf ${COVERAGE_RAW_DIR} ${COVERAGE_HTML_DIR}
@@ -277,7 +278,7 @@ if (ENABLE_COVERAGE)
             -format=html
             -output-dir=${COVERAGE_HTML_DIR}
             -ignore-filename-regex=${LLVM_COV_IGNORE_REGEX}
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        WORKING_DIRECTORY ${PROJECT_BINARY_DIR}
         COMMENT "Running tests and generating llvm-cov HTML report"
         VERBATIM
     )

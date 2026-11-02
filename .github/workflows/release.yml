@@ -107,6 +107,22 @@ jobs:
       - name: Run tests
         run: env ${{ matrix.opts }} build/test/test_all
 
+  #
+  # anyhttp from the outside: installed and relocated, and as a FetchContent subproject. None of the
+  # jobs above can see a usage requirement missing from the target, as they build it with the
+  # flags of their own tree.
+  #
+  package:
+    name: Package
+    runs-on: *runs_on
+    container: *container
+
+    steps:
+      - *checkout
+
+      - name: Check installing and embedding
+        run: scripts/check_package.sh
+
   coverage:
     name: Coverage
     runs-on: *runs_on
