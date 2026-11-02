@@ -229,18 +229,27 @@ int main(int argc, char* argv[])
 
    std::vector<std::unique_ptr<IoContext>> contexts;
    std::vector<std::optional<server::Server>> servers;
-   for (size_t i = 0; i < num_contexts; ++i)
+   try
    {
+      for (size_t i = 0; i < num_contexts; ++i)
+      {
 #if ANYHTTP_COROSIO
-      auto& context =
-         *contexts.emplace_back(std::make_unique<IoContext>(config->context, threads_per_context));
+         auto& context = *contexts.emplace_back(
+            std::make_unique<IoContext>(config->context, threads_per_context));
 #else
-      auto& context = *contexts.emplace_back(std::make_unique<IoContext>(threads_per_context));
+         auto& context = *contexts.emplace_back(std::make_unique<IoContext>(threads_per_context));
 #endif
-      auto& server = servers.emplace_back(std::in_place, context.get_executor(), config->server);
-      server->on_request(handle_request);
-      if (config->server.port == 0) // the others join the port the first one got
-         config->server.port = server->local_endpoint().port();
+         auto& server = servers.emplace_back(std::in_place, context.get_executor(), config->server);
+         server->on_request(handle_request);
+         if (config->server.port == 0) // the others join the port the first one got
+            config->server.port = server->local_endpoint().port();
+      }
+   }
+   catch (const std::exception& ex)
+   {
+      // an unreadable certificate or a port that is taken, which is not worth a core dump
+      std::println(std::cerr, "cannot start server: {}", ex.what());
+      return 1;
    }
 
    auto& context = *contexts.front();
