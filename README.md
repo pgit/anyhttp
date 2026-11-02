@@ -10,7 +10,9 @@ Low-level C++23 HTTP client and server library, in one of two API styles, chosen
 * **COROSIO**, on [capy](https://github.com/cppalliance/capy) and
   [corosio](https://github.com/cppalliance/corosio): coroutines only.
 
-** THIS REPOSITORY IS PURELY EXPERIMENTAL **
+> [!WARNING]
+> This repository is purely experimental. It is not meant for production use, and anything in it
+> can change or break at any time, without notice.
 
 It supports HTTP/1.x, HTTP/2 and HTTP/3 behind a common, type-erasing interface, hence the *any* in the name -- and plain QUIC streams next to HTTP/3, for protocols of your own.
 
