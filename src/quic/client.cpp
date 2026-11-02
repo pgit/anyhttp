@@ -22,6 +22,7 @@
 #include "anyhttp/quic/common.hpp"
 #include "anyhttp/quic/session.hpp"
 #include "anyhttp/session_impl.hpp"
+#include "anyhttp/tls.hpp"
 
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
@@ -84,17 +85,7 @@ struct TlsClientContext
       SSL_CTX_set_alpn_protos(ctx, reinterpret_cast<const unsigned char*>(alpn.data()),
                               static_cast<unsigned int>(alpn.size()));
 
-      if (config.tls_ca_file.empty())
-      {
-         if (SSL_CTX_set_default_verify_paths(ctx) != 1)
-            throw std::runtime_error(std::format("SSL_CTX_set_default_verify_paths: {}",
-                                                 ERR_error_string(ERR_get_error(), nullptr)));
-      }
-      else if (SSL_CTX_load_verify_locations(ctx, config.tls_ca_file.c_str(), nullptr) != 1)
-         throw std::runtime_error(std::format("SSL_CTX_load_verify_locations: {}: {}",
-                                              config.tls_ca_file,
-                                              ERR_error_string(ERR_get_error(), nullptr)));
-
+      tls_load_trusted_cas(ctx, config.tls_ca_file);
       SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
    }
 
@@ -246,18 +237,11 @@ int QuicClientSession::init(UdpEndpoint remote, const ClientConfig& config,
 
    //
    // The certificate has to be valid for the origin, the host of the URL -- also when `remote` is
-   // an alternative service it advertised (RFC 7838, section 2.1). An IP address is matched
-   // against the certificate's IP SANs and not sent as SNI, which is for host names only.
+   // an alternative service it advertised (RFC 7838, section 2.1).
    //
-   const std::string& host = config.host;
-   auto* param = SSL_get0_param(ssl_);
-   error_code not_an_ip;
-   io::make_address(host, not_an_ip);
-   if (!not_an_ip ? X509_VERIFY_PARAM_set1_ip_asc(param, host.c_str()) != 1
-                  : X509_VERIFY_PARAM_set1_host(param, host.data(), host.size()) != 1 ||
-                       SSL_set_tlsext_host_name(ssl_, host.c_str()) != 1)
+   if (!tls_set_peer_name(ssl_, config.host))
    {
-      mloge("init: can't verify certificates for '{}'", host);
+      mloge("init: can't verify certificates for '{}'", config.host);
       return -1;
    }
 

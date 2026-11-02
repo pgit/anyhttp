@@ -1,13 +1,17 @@
 #include <anyhttp/tls.hpp>
 
 #include "anyhttp/logging.hpp"
+#include "anyhttp/net.hpp"
 
+#include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
+#include <openssl/x509.h>
 
 #include <cstdlib>
 #include <format>
+#include <stdexcept>
 
 // =================================================================================================
 
@@ -70,6 +74,36 @@ std::string tls_handshake_info(ssl_st* ssl)
    return std::format("{}, cipher={}, group={}, alpn={}{}", SSL_get_version(ssl),
                       SSL_get_cipher_name(ssl), key_exchange(ssl), alpn(ssl),
                       SSL_session_reused(ssl) ? ", resumed" : "");
+}
+
+// -------------------------------------------------------------------------------------------------
+
+void tls_load_trusted_cas(ssl_ctx_st* ctx, const std::string& ca_file)
+{
+   if (ca_file.empty())
+   {
+      if (SSL_CTX_set_default_verify_paths(ctx) != 1)
+         throw std::runtime_error(std::format("SSL_CTX_set_default_verify_paths: {}",
+                                              ERR_error_string(ERR_get_error(), nullptr)));
+   }
+   else if (SSL_CTX_load_verify_locations(ctx, ca_file.c_str(), nullptr) != 1)
+      throw std::runtime_error(std::format("SSL_CTX_load_verify_locations: {}: {}", ca_file,
+                                           ERR_error_string(ERR_get_error(), nullptr)));
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// An IP address is matched against the certificate's IP SANs, and not sent as SNI.
+//
+bool tls_set_peer_name(ssl_st* ssl, const std::string& host)
+{
+   auto* param = SSL_get0_param(ssl);
+   error_code not_an_ip;
+   io::make_address(host, not_an_ip);
+   return !not_an_ip ? X509_VERIFY_PARAM_set1_ip_asc(param, host.c_str()) == 1
+                     : X509_VERIFY_PARAM_set1_host(param, host.data(), host.size()) == 1 &&
+                          SSL_set_tlsext_host_name(ssl, host.c_str()) == 1;
 }
 
 // -------------------------------------------------------------------------------------------------

@@ -94,6 +94,13 @@ std::optional<Client::Impl::AlternativeService> Client::Impl::alt_svc() const
 
 // -------------------------------------------------------------------------------------------------
 
+namespace
+{
+
+bool is_https(const boost::urls::url& url) { return url.scheme_id() == boost::urls::scheme::https; }
+
+} // namespace
+
 //
 //
 #if ANYHTTP_ASIO
@@ -125,6 +132,13 @@ Task<Session> Client::Impl::async_connect()
    //
    std::string host = config().url.host_address();
    std::string port = config().url.port();
+
+   //
+   // A URL without a port means the default port of what it is going to be spoken over. HTTP/3 is
+   // TLS whatever the scheme says.
+   //
+   if (port.empty())
+      port = config().protocol == Protocol::h3 || is_https(config().url) ? "443" : "80";
 
    //
    // An HTTP/3 alternative service a previous session was told about takes precedence over the
