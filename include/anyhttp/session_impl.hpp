@@ -18,6 +18,7 @@ class Session::Impl : public std::enable_shared_from_this<Session::Impl>
 public:
    virtual ~Impl() {}
    virtual Executor get_executor() const noexcept = 0;
+   virtual Protocol protocol() const noexcept = 0;
    virtual void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
                              const Fields& headers) = 0;
 

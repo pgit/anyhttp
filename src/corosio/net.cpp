@@ -39,6 +39,24 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 
 // -------------------------------------------------------------------------------------------------
 
+TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol)
+{
+   TlsContext ctx;
+   if (auto ec = ctx.set_min_protocol_version(corosio::tls_version::tls_1_2))
+      throw_error(ec);
+   if (auto ec = ca_file.empty() ? ctx.set_default_verify_paths() : ctx.load_verify_file(ca_file))
+      throw std::system_error(ec, "load_verify_file");
+   if (auto ec = ctx.set_verify_mode(corosio::tls_verify_mode::peer))
+      throw_error(ec);
+   if (protocol == Protocol::h2)
+      std::ignore = ctx.set_alpn({"h2", "http/1.1"});
+   else
+      std::ignore = ctx.set_alpn({"http/1.1"});
+   return ctx;
+}
+
+// -------------------------------------------------------------------------------------------------
+
 namespace io
 {
 

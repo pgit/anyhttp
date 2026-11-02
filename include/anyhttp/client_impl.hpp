@@ -101,6 +101,10 @@ public:
    std::optional<AlternativeService> alt_svc() const;
 
 private:
+   /// Starts a session speaking \p protocol on a \p stream that is ready to carry it.
+   template <SocketStream Stream>
+   Session start_session(Protocol protocol, Stream&& stream);
+
    Config config_;
    Executor executor_;
 

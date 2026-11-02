@@ -131,6 +131,13 @@ public:
    /// \c async_get() as a coroutine: <tt>auto [ec, message] = co_await session.get(url);</tt>
    Task<std::tuple<error_code, client::Message>> get(boost::urls::url url, Fields headers = {});
 
+   /**
+    * The protocol this session speaks, which over TLS the server has a say in: see
+    * \c client::Config::protocol. It tells how many requests the session can take at a time, as
+    * HTTP/1.1 takes only one, see \ref async_submit().
+    */
+   Protocol protocol() const noexcept;
+
    Executor get_executor() const noexcept;
 
 private:

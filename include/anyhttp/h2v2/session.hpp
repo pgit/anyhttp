@@ -46,6 +46,7 @@ public:
    virtual ~NGHttp2Session();
 
    Executor get_executor() const noexcept override { return executor_; }
+   Protocol protocol() const noexcept override { return Protocol::h2; }
    const std::string& log_prefix() const { return log_prefix_; }
 
    std::string log_prefix(int64_t stream_id) const

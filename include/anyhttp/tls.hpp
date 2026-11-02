@@ -22,8 +22,8 @@ std::string tls_handshake_info(ssl_st* ssl);
 
 /**
  * Makes \p ctx trust the CA certificates in the PEM file \p ca_file, or, if that is empty, the
- * default trust store of the TLS library. See \c client::Config::tls_ca_file. Throws if the
- * certificates cannot be loaded.
+ * default trust store of the TLS library. See \c client::Config::tls_ca_file. Throws a
+ * \c system_error if the certificates cannot be loaded.
  */
 void tls_load_trusted_cas(ssl_ctx_st* ctx, const std::string& ca_file);
 

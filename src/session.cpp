@@ -50,6 +50,8 @@ Session::~Session() { reset(); }
 
 Executor Session::get_executor() const noexcept { return impl->get_executor(); }
 
+Protocol Session::protocol() const noexcept { return impl->protocol(); }
+
 #if ANYHTTP_ASIO
 void Session::async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
 {

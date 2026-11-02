@@ -11,7 +11,6 @@
 
 #include <cstdlib>
 #include <format>
-#include <stdexcept>
 
 // =================================================================================================
 
@@ -78,17 +77,21 @@ std::string tls_handshake_info(ssl_st* ssl)
 
 // -------------------------------------------------------------------------------------------------
 
+//
+// A system_error, as that is what Client::connect() turns into its result. What went wrong is too
+// much for an error code, so that goes to the log.
+//
 void tls_load_trusted_cas(ssl_ctx_st* ctx, const std::string& ca_file)
 {
-   if (ca_file.empty())
+   const bool loaded = ca_file.empty()
+                          ? SSL_CTX_set_default_verify_paths(ctx) == 1
+                          : SSL_CTX_load_verify_locations(ctx, ca_file.c_str(), nullptr) == 1;
+   if (!loaded)
    {
-      if (SSL_CTX_set_default_verify_paths(ctx) != 1)
-         throw std::runtime_error(std::format("SSL_CTX_set_default_verify_paths: {}",
-                                              ERR_error_string(ERR_get_error(), nullptr)));
+      loge("can't load CA certificates from '{}': {}", ca_file,
+           ERR_error_string(ERR_get_error(), nullptr));
+      throw_error(make_error_code(errc::invalid_argument));
    }
-   else if (SSL_CTX_load_verify_locations(ctx, ca_file.c_str(), nullptr) != 1)
-      throw std::runtime_error(std::format("SSL_CTX_load_verify_locations: {}: {}", ca_file,
-                                           ERR_error_string(ERR_get_error(), nullptr)));
 }
 
 // -------------------------------------------------------------------------------------------------

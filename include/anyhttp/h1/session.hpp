@@ -36,6 +36,7 @@ public:
    void destroy() noexcept override;
 
    Executor get_executor() const noexcept override { return executor_; }
+   Protocol protocol() const noexcept override { return Protocol::h1; }
 
    // ----------------------------------------------------------------------------------------------
 

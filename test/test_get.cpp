@@ -64,8 +64,8 @@ TEST_P(AsyncGet, WHEN_get_THEN_message_has_status_fields_and_body)
 
 //
 // The TLS handshake summary is only computed when logging at info, which CI builds do not. Turn it
-// on for this one test so that tls_handshake_info() runs -- over QUIC, where both our client and
-// our server do TLS. setup_logging() in the next SetUp() restores the level.
+// on for this one test so that tls_handshake_info() runs. setup_logging() in the next SetUp()
+// restores the level.
 //
 TEST_P(AsyncGet, WHEN_logging_at_info_THEN_tls_handshake_is_summarized)
 {
@@ -82,7 +82,7 @@ TEST_P(AsyncGet, WHEN_logging_at_info_THEN_tls_handshake_is_summarized)
       auto handshake = HasSubstr("TLSv1.3, cipher=");
       if (GetParam() == anyhttp::Protocol::h3)
          EXPECT_THAT(sink->last_formatted(), Contains(handshake));
-      else
+      else if (url.scheme() != "https") // for which corosio has less to say, see io::tls_info()
          EXPECT_THAT(sink->last_formatted(), Not(Contains(handshake)));
    };
 }
