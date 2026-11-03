@@ -175,6 +175,27 @@ TEST_F(ClientConnect, WHEN_http3_connect_is_cancelled_THEN_its_connection_ends_w
    EXPECT_EQ(peer.received(), received_on_return);
 }
 
+//
+// Nobody listening is what ICMP says, right after the handshake went out. Waiting for the probes
+// that repeat it would take 3 s.
+//
+TEST_F(ClientConnect, WHEN_http3_port_is_closed_THEN_completes_with_connection_refused_at_once)
+{
+   client::Client client(
+      context.get_executor(),
+      client::Config{.url =
+                        boost::urls::url("https://127.0.0.1").set_port_number(get_unused_port()),
+                     .protocol = anyhttp::Protocol::h3});
+   error_code result;
+   launch(context.get_executor(), connect(client, result));
+
+   const auto start = std::chrono::steady_clock::now();
+   context.run();
+
+   EXPECT_LT(std::chrono::steady_clock::now() - start, 2s);
+   EXPECT_EQ(result, errc::connection_refused) << result.message();
+}
+
 TEST_F(ClientConnect, WHEN_connect_to_broadcast_ip_THEN_completes_with_network_unreachable)
 {
    EXPECT_EQ(connect(boost::urls::url("http://255.255.255.255:12345")), errc::network_unreachable);

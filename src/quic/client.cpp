@@ -377,6 +377,18 @@ int QuicClientSession::send_datagrams(const ngtcp2_path& /*path*/, std::span<con
    {
       auto len = std::min(gso_size, data.size());
       auto ec = io::send(socket_, asio::buffer(data.data(), len));
+
+      //
+      // ICMP reporting the peer's port unreachable, which the kernel tells whichever call comes
+      // next on the connected socket, and only that one. It ends the connection if that is the
+      // receive in do_session(), and sending again won't help here, either.
+      //
+      if (ec == errc::connection_refused)
+      {
+         mlogw("send: {}", ec.message());
+         return handle_error(-1);
+      }
+
       if (ec && ec != errc::operation_would_block && ec != errc::resource_unavailable_try_again)
       {
          mlogw("send: {}", ec.message());
