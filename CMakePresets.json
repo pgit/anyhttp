@@ -77,6 +77,16 @@
             }
         },
         {
+            "name": "ubsan",
+            "hidden": true,
+            "description": "UndefinedBehaviorSanitizer, fatal so that a report fails the test it happened in instead of scrolling by",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_CXX_FLAGS": "-fsanitize=undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g",
+                "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=undefined"
+            }
+        },
+        {
             "name": "build",
             "displayName": "Debug",
             "description": "What the library is developed with: clang, libc++, AWS-LC, ASIO. Keep this tree on clang, clangd reads its compile_commands.json",
@@ -127,6 +137,15 @@
             "inherits": [
                 "clang",
                 "tsan",
+                "base"
+            ]
+        },
+        {
+            "name": "build-ubsan",
+            "displayName": "UndefinedBehaviorSanitizer",
+            "inherits": [
+                "clang",
+                "ubsan",
                 "base"
             ]
         },
@@ -292,6 +311,10 @@
             "configurePreset": "build-tsan"
         },
         {
+            "name": "build-ubsan",
+            "configurePreset": "build-ubsan"
+        },
+        {
             "name": "build-openssl",
             "configurePreset": "build-openssl"
         },
@@ -372,6 +395,11 @@
         {
             "name": "build-tsan",
             "configurePreset": "build-tsan",
+            "inherits": "base"
+        },
+        {
+            "name": "build-ubsan",
+            "configurePreset": "build-ubsan",
             "inherits": "base"
         },
         {

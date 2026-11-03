@@ -14,6 +14,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace anyhttp::server
 {
@@ -32,9 +33,10 @@ namespace anyhttp::client
 
 // =================================================================================================
 
-/// Connects to `host`:`port` over QUIC and returns the HTTP/3 session running on it.
-Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor, std::string host,
-                                                         std::string port, const Config& config);
+/// Connects to the first of `endpoints` that it can over QUIC, and returns the HTTP/3 session
+/// running on it.
+Task<std::shared_ptr<Session::Impl>>
+async_connect_http3(Executor executor, std::vector<TcpEndpoint> endpoints, const Config& config);
 
 // =================================================================================================
 

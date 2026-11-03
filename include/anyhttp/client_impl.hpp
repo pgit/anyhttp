@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace anyhttp::client
 {
@@ -101,6 +102,9 @@ public:
    std::optional<AlternativeService> alt_svc() const;
 
 private:
+   /// What \p host and \p port resolve to. Throws what goes wrong.
+   Task<std::vector<TcpEndpoint>> resolve(std::string host, std::string port);
+
    /// Starts a session speaking \p protocol on a \p stream that is ready to carry it.
    template <SocketStream Stream>
    Session start_session(Protocol protocol, Stream&& stream);

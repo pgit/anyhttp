@@ -113,6 +113,9 @@ line, so the last `weak_ptr` dropped on another thread than the object's destruc
 a race on `operator delete` in `__on_zero_shared_weak`, anyhttp frames and all;
 [test/tsan_libcxx.cpp](test/tsan_libcxx.cpp) gives `test_all` an instrumented copy.
 
+UBSAN is `build-ubsan/`, with reports fatal, so that one fails the test it happens in. It runs clean
+over cleartext and TLS. CI does not run it.
+
 Anything touching lifetimes on the HTTP/3 write path belongs under ASAN before it is committed --
 completions there run on acknowledgement, and the Release build hides the use-after-frees. The same
 goes for `h2v2/`'s write path, for the same reason: it hands nghttp2 a pointer into the caller's

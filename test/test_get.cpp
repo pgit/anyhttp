@@ -1,13 +1,17 @@
 #include "test_fixtures.hpp"
 
+#include "anyhttp/literals.hpp"
 #include "anyhttp/net.hpp"
 
 #include "anyhttp/tls.hpp"
 
 #include <spdlog/sinks/ringbuffer_sink.h>
 
+#include <array>
+#include <atomic>
 #include <memory>
 #include <string>
+#include <vector>
 
 using namespace testing;
 
@@ -235,6 +239,180 @@ TEST(AsyncGetRaw, WHEN_get_THEN_request_line_says_GET)
    EXPECT_THAT(head, StartsWith("GET /index.html HTTP/1.1\r\n"));
    EXPECT_THAT(head, HasSubstr("Content-Length: 0\r\n"));
    EXPECT_THAT(head, Not(HasSubstr("chunked")));
+}
+
+// =================================================================================================
+
+//
+// Session::submit() with a method: what is left to the caller compared to get(), which keeps every
+// byte, is when to stop reading.
+//
+class SubmitMethod : public ClientAsync
+{
+protected:
+   static Task<std::string> read_all(client::Response& response)
+   {
+      std::string body;
+      std::array<char, 1_k> buffer;
+      for (;;)
+      {
+         auto [ec, n] = co_await response.read_some(asio::buffer(buffer));
+         body.append(buffer.data(), n);
+         if (ec == errors::eof)
+            co_return body;
+         if (ec)
+            throw_error(ec);
+      }
+   }
+
+   // members, as the test case runs in TearDown(), and they can be accessed from any thread
+   std::atomic<size_t> sent = 0;
+   std::atomic<bool> stopped = false;
+};
+
+INSTANTIATE_TEST_SUITE_P(SubmitMethod, SubmitMethod, ValuesIn(protocols()), NameGenerator);
+
+// -------------------------------------------------------------------------------------------------
+
+TEST_P(SubmitMethod, WHEN_method_is_given_THEN_the_server_sees_it)
+{
+   requestHandler = [](server::Request request, server::Response response) -> Task<void> {
+      EXPECT_EQ(request.method(), "PUT");
+      co_await echo(std::move(request), std::move(response));
+   };
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit("PUT", url));
+      check(co_await request.write_eof(asio::buffer("body"sv)));
+      auto response = check(co_await request.get_response());
+      EXPECT_EQ(response.status_code(), 200);
+      EXPECT_EQ(co_await read_all(response), "body");
+   };
+}
+
+//
+// A body with no end, which the client stops reading at a limit of its choice. As the server can't
+// finish, the test can only finish if the client doesn't wait for that.
+//
+TEST_P(SubmitMethod, WHEN_get_stops_reading_at_a_limit_THEN_status_and_fields_are_in_hand)
+{
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
+      EXPECT_EQ(request.method(), "GET");
+      EXPECT_EQ(co_await drain(request), 0);
+      check(co_await response.submit(200, fields({{"X-Answer", 42}})));
+
+      std::vector<char> chunk(16_k);
+      for (;;)
+      {
+         auto [ec] = co_await response.write(asio::buffer(chunk));
+         if (ec)
+            break;
+         sent += chunk.size();
+      }
+      stopped = true;
+   };
+
+   clientSession = [this](Session session) -> Task<void> {
+      constexpr size_t limit = 256_k;
+
+      auto request = check(co_await session.submit("GET", url));
+      check(co_await request.write_eof());
+      auto response = check(co_await request.get_response());
+      EXPECT_EQ(response.status_code(), 200);
+      EXPECT_EQ(response.fields()["x-answer"], "42");
+
+      std::array<char, 16_k> buffer;
+      size_t total = 0;
+      while (total < limit)
+         total += check(co_await response.read_some(asio::buffer(buffer)));
+      EXPECT_LE(total, limit + buffer.size());
+
+      //
+      // Not reading is what holds the server back: flow control, and with HTTP/1.1 the socket
+      // buffers. Given the time, it would have sent gigabytes if nothing did.
+      //
+      co_await sleep(100ms);
+      logi("sent {} bytes while the client read {}", sent.load(), total);
+      EXPECT_LT(sent.load(), 64_m);
+
+      //
+      // Ending the connection is what stops the server, without anything else of the body being
+      // read here.
+      //
+      response.reset();
+      request.reset();
+      session.reset();
+      for (int i = 0; i < 2000 && !stopped; ++i)
+         co_await sleep(1ms);
+      EXPECT_TRUE(stopped);
+   };
+}
+
+//
+// HTTP/2 and HTTP/3 reset just the stream of a response released before its end, while HTTP/1.1,
+// which has nothing but the connection to stop it with, can't send anything else.
+//
+TEST_P(SubmitMethod, WHEN_response_is_released_early_THEN_only_http11_loses_the_connection)
+{
+   requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
+      co_await drain(request);
+      if (request.url().query() == "next")
+      {
+         check(co_await response.submit(200, fields({{"Content-Length", 0}})));
+         check(co_await response.write_eof());
+         co_return;
+      }
+      check(co_await response.submit(200, {}));
+      std::vector<char> chunk(16_k);
+      while (!std::get<0>(co_await response.write(asio::buffer(chunk))))
+         ;
+      stopped = true;
+   };
+
+   clientSession = [this](Session session) -> Task<void> {
+      {
+         auto request = check(co_await session.submit("GET", url));
+         check(co_await request.write_eof());
+         auto response = check(co_await request.get_response());
+         std::array<char, 1_k> buffer;
+         check(co_await response.read_some(asio::buffer(buffer)));
+      }
+
+      auto next = url;
+      next.set_query("next");
+      auto [ec, message] = co_await session.get(next);
+      if (GetParam() == anyhttp::Protocol::h1)
+         EXPECT_EQ(ec, errc::connection_aborted) << ec.message();
+      else
+      {
+         EXPECT_EQ(ec, error_code{}) << ec.message();
+         EXPECT_EQ(message.result_int(), 200);
+         for (int i = 0; i < 2000 && !stopped; ++i)
+            co_await sleep(1ms);
+         EXPECT_TRUE(stopped) << "the server is still sending on the stream that was released";
+      }
+   };
+}
+
+//
+// A response to HEAD says what the response to GET would have had, with nothing following it.
+// HTTP/1.1 can't tell from the response that this is one, and would wait for the body.
+//
+TEST_P(SubmitMethod, WHEN_method_is_head_THEN_response_ends_after_its_header)
+{
+   requestHandler = [](server::Request request, server::Response response) -> Task<void> {
+      EXPECT_EQ(request.method(), "HEAD");
+      EXPECT_EQ(co_await drain(request), 0);
+      check(co_await response.submit(200, fields({{"Content-Length", 5}})));
+      check(co_await response.write_eof());
+   };
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit("HEAD", url));
+      check(co_await request.write_eof());
+      auto response = check(co_await request.get_response());
+      EXPECT_EQ(response.status_code(), 200);
+      EXPECT_EQ(response.fields()["content-length"], "5");
+      EXPECT_EQ(co_await read_all(response), "");
+   };
 }
 
 // =================================================================================================

@@ -377,6 +377,18 @@ int QuicClientSession::send_datagrams(const ngtcp2_path& /*path*/, std::span<con
    {
       auto len = std::min(gso_size, data.size());
       auto ec = io::send(socket_, asio::buffer(data.data(), len));
+
+      //
+      // ICMP reporting the peer's port unreachable, which the kernel tells whichever call comes
+      // next on the connected socket, and only that one. It ends the connection if that is the
+      // receive in do_session(), and sending again won't help here, either.
+      //
+      if (ec == errc::connection_refused)
+      {
+         mlogw("send: {}", ec.message());
+         return handle_error(-1);
+      }
+
       if (ec && ec != errc::operation_would_block && ec != errc::resource_unavailable_try_again)
       {
          mlogw("send: {}", ec.message());
@@ -417,6 +429,52 @@ void QuicClientSession::async_submit(SubmitHandler&& handler, std::string_view m
 
 // =================================================================================================
 
+Task<std::shared_ptr<QuicSession>> async_connect(Executor executor,
+                                                 std::vector<TcpEndpoint> endpoints,
+                                                 ClientConfig config, ApplicationFactory factory)
+{
+   if (endpoints.empty())
+      throw_error(make_error_code(errc::host_unreachable));
+
+   for (const auto& endpoint : endpoints)
+   {
+      auto session = std::make_shared<QuicClientSession>(executor);
+      if (session->init(UdpEndpoint{endpoint.address(), endpoint.port()}, config, factory) != 0)
+         continue;
+
+      std::shared_ptr<Session::Impl> impl = session;
+
+      launch(executor, impl->do_session(Buffer{}),
+             [impl, prefix = session->log_prefix()](const std::exception_ptr& ex) mutable {
+                if (ex)
+                   logw("[{}] client run: {}", prefix, what(ex));
+                else
+                   logi("[{}] client run: done", prefix);
+                impl.reset();
+             });
+
+      //
+      // The wait ends when the handshake has gotten far enough, when the connection has failed or
+      // closed before that, or when the caller cancels. Only ready() tells these apart.
+      //
+      auto [ec] = co_await session->wait_ready();
+      if (session->ready())
+         co_return session;
+
+      //
+      // Nobody is going to use this session any more, and nothing else would end it: left alone,
+      // it goes on sending to the peer until the idle timeout, and keeps the context from running
+      // dry until then. A connection that has failed by itself is closed already.
+      //
+      session->destroy();
+      if (ec)
+         throw_error(ec);
+      logi("[{}] connecting to {} failed", session->log_prefix(), endpoint);
+   }
+
+   throw_error(make_error_code(errc::connection_refused));
+}
+
 Task<std::shared_ptr<QuicSession>> async_connect(Executor executor, std::string host,
                                                  std::string port, ClientConfig config,
                                                  ApplicationFactory factory)
@@ -424,34 +482,9 @@ Task<std::shared_ptr<QuicSession>> async_connect(Executor executor, std::string 
    auto [resolved, endpoints] = co_await io::resolve(executor, host, port);
    if (resolved)
       throw_error(resolved);
-   if (endpoints.empty())
-      throw_error(make_error_code(errc::host_unreachable));
-   const UdpEndpoint remote{endpoints.front().address(), endpoints.front().port()};
 
-   auto session = std::make_shared<QuicClientSession>(executor);
-   if (session->init(remote, config, factory) != 0)
-      throw_error(make_error_code(errc::connection_refused));
-
-   std::shared_ptr<Session::Impl> impl = session;
-
-   launch(executor, impl->do_session(Buffer{}),
-          [impl, prefix = session->log_prefix()](const std::exception_ptr& ex) mutable {
-             if (ex)
-                logw("[{}] client run: {}", prefix, what(ex));
-             else
-                logi("[{}] client run: done", prefix);
-             impl.reset();
-          });
-
-   //
-   // The wait ends when the handshake has gotten far enough, when the connection has failed or
-   // closed before that, or when the caller cancels. Only ready() tells these apart.
-   //
-   auto [ec] = co_await session->wait_ready();
-   if (!session->ready())
-      throw_error(make_error_code(errc::connection_refused));
-
-   co_return session;
+   co_return co_await async_connect(std::move(executor), std::move(endpoints), std::move(config),
+                                    std::move(factory));
 }
 
 // =================================================================================================
