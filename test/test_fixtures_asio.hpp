@@ -228,6 +228,18 @@ protected:
 
    void TearDown() override
    {
+      //
+      // SetUp() has failed, which gtest reports, and there is no test case that would ever release
+      // the work guard: without this, the failure would be a hang.
+      //
+      if (!client)
+      {
+         server.reset();
+         work.reset();
+         run();
+         return;
+      }
+
       EXPECT_CALL(*this, on_complete(boost::system::error_code{}));
       run();
    }
