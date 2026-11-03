@@ -133,6 +133,26 @@ Task<std::tuple<error_code, client::Message>> get_message(std::shared_ptr<Sessio
 
 } // namespace
 
+namespace
+{
+
+// The implementation is held by shared_ptr for the same reason as in get_message().
+Task<std::tuple<error_code>> shutdown_session(std::shared_ptr<Session::Impl> session)
+{
+   co_return co_await session->shutdown();
+}
+
+} // namespace
+
+Task<std::tuple<error_code>> Session::shutdown() { return shutdown_session(impl); }
+
+#if ANYHTTP_ASIO
+void Session::async_shutdown_any(SessionShutdownHandler&& handler)
+{
+   launch(impl->get_executor(), shutdown_session(impl), std::move(handler));
+}
+#endif
+
 Task<std::tuple<error_code, client::Request>> Session::submit(boost::urls::url target,
                                                               Fields headers)
 {

@@ -16,6 +16,9 @@ using SubmitHandler = Completion<Submit>;
 using Get = void(error_code, client::Message);
 using GetHandler = Completion<Get>;
 
+using SessionShutdown = void(error_code);
+using SessionShutdownHandler = Completion<SessionShutdown>;
+
 class Session
 {
 public:
@@ -118,6 +121,41 @@ public:
    }
 #endif
 
+   /**
+    * Ends the connection in an orderly way, and completes once it is closed. Unlike destroying the
+    * session, which is over as fast as possible, this tells the peer that nothing has been lost:
+    *
+    * - HTTP/2 sends a GOAWAY, and TLS over TCP sends its "close_notify" and waits for the peer's.
+    *   Then comes the FIN, and the socket is closed once the peer has sent its own. Each of those
+    *   waits is limited to two seconds, so a peer that does not cooperate can only delay this.
+    *   How the peer has ended its side is not reported: there is nothing to be done about it, and
+    *   not every TLS library can tell.
+    * - HTTP/3 sends a CONNECTION_CLOSE, which has no answer to wait for.
+    *
+    * It does not wait for anything in progress: a request or response that is not complete yet
+    * fails, right away, and so does anything else tried with this session afterwards.
+    *
+    * The one error is \c asio::error::connection_aborted, for an end that could not be orderly: a
+    * write has been interrupted, leaving part of a TLS record behind, for which a "close_notify"
+    * would come too late. The connection is closed in that case as well.
+    *
+    * Calling this again does nothing, and neither does destroying the session afterwards.
+    */
+#if ANYHTTP_ASIO
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(SessionShutdown)
+                CompletionToken = DefaultCompletionToken>
+   auto async_shutdown(CompletionToken&& token = CompletionToken())
+   {
+      auto executor = asio::get_associated_executor(token, get_executor());
+      return asio::async_initiate<CompletionToken, SessionShutdown>(
+         asio::bind_executor(executor,
+                             [this](auto&& handler) { //
+                                async_shutdown_any(std::move(handler));
+                             }),
+         token);
+   }
+#endif
+
    //
    // The coroutine spelling of the operations above, which both runtimes have: no completion
    // token, the result as a tuple, and errors reported, never thrown.
@@ -130,6 +168,9 @@ public:
 
    /// \c async_get() as a coroutine: <tt>auto [ec, message] = co_await session.get(url);</tt>
    Task<std::tuple<error_code, client::Message>> get(boost::urls::url url, Fields headers = {});
+
+   /// \c async_shutdown() as a coroutine: <tt>auto [ec] = co_await session.shutdown();</tt>
+   Task<std::tuple<error_code>> shutdown();
 
    /**
     * The protocol this session speaks, which over TLS the server has a say in: see
@@ -144,6 +185,7 @@ private:
 #if ANYHTTP_ASIO
    void async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers);
    void async_get_any(GetHandler&& handler, boost::urls::url url, const Fields& headers);
+   void async_shutdown_any(SessionShutdownHandler&& handler);
 #endif
    std::shared_ptr<Impl> impl;
 };

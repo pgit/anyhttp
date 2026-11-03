@@ -30,6 +30,11 @@ public:
          async_submit(std::move(handler), method, std::move(url), headers);
       });
    }
+   /// See Session::async_shutdown(). Only a client's session has that, a server's ends by itself.
+   virtual Task<std::tuple<error_code>> shutdown()
+   {
+      co_return std::tuple{make_error_code(errc::operation_not_supported)};
+   }
    virtual Task<void> do_session(Buffer&& data) = 0;
    virtual void destroy() noexcept = 0;
 };

@@ -83,6 +83,15 @@ public:
    // 2 has no frame-level send callback, so this is set where the GOAWAY is asked for.
    bool goaway_sent_ = false;
 
+   // Set when writing to the stream has failed, for which a TLS "close_notify" comes too late.
+   bool send_failed_ = false;
+
+   // Set by ClientSession::shutdown().
+   bool shutdown_started_ = false;
+
+   // Set once a client session's do_session() is over.
+   Event session_done_;
+
    void start_write();
 
    // ----------------------------------------------------------------------------------------------
@@ -171,8 +180,15 @@ public:
    Task<void> recv_loop() override;
    void destroy() noexcept override;
 
+   /**
+    * Ends the connection in order, with the send and receive loops over: over TLS a "close_notify",
+    * then a FIN. Returns once the peer has ended its side as well, or has had its time.
+    */
+   Task<void> end_connection();
+
 public:
    Stream stream_;
+   bool stream_closed_ = false; ///< set by end_connection(), with nothing left for destroy() to do
 };
 
 // =================================================================================================
@@ -258,6 +274,7 @@ public:
    ClientSession(client::Client::Impl& parent, Executor executor, Stream&& stream);
 
    Task<void> do_session(Buffer&& data) override;
+   Task<std::tuple<error_code>> shutdown() override;
 
    void on_alt_svc(std::string_view field_value) override { client().on_alt_svc(field_value); }
 };

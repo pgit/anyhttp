@@ -69,12 +69,16 @@ namespace
 //
 struct TlsClientContext
 {
-   explicit TlsClientContext(const ClientConfig& config)
+   TlsClientContext()
    {
       ctx = SSL_CTX_new(TLS_client_method());
       if (!ctx)
          throw std::runtime_error("SSL_CTX_new");
+   }
 
+   // Delegating, so that the destructor frees the context if what follows throws.
+   explicit TlsClientContext(const ClientConfig& config) : TlsClientContext()
+   {
       QuicSession::configure_tls_context(ctx, false);
 
       if (config.alpn.empty() || config.alpn.size() > 255)
@@ -120,6 +124,7 @@ public:
                      const Fields& headers) override;
    Task<void> do_session(Buffer&& data) override;
    void destroy() noexcept override;
+   Task<std::tuple<error_code>> shutdown() override;
 
    //
    // Connect-time setup, with the application `factory` makes. Returns 0 on success.
@@ -298,6 +303,16 @@ Task<void> QuicClientSession::do_session(Buffer&&)
 }
 
 void QuicClientSession::destroy() noexcept { close(); }
+
+Task<std::tuple<error_code>> QuicClientSession::shutdown()
+{
+   //
+   // Nothing to wait for: CONNECTION_CLOSE is all there is to an orderly end, and no answer to it
+   // is required, so this ends the connection no differently than destroy().
+   //
+   close();
+   co_return std::tuple{error_code{}};
+}
 
 void QuicClientSession::close()
 {
