@@ -5,6 +5,7 @@
 #include <string>
 
 struct ssl_st;
+struct ssl_ctx_st;
 
 // =================================================================================================
 
@@ -18,6 +19,19 @@ namespace anyhttp
  * Used for both TLS over TCP and QUIC, so that the log looks the same for all protocols.
  */
 std::string tls_handshake_info(ssl_st* ssl);
+
+/**
+ * Makes \p ctx trust the CA certificates in the PEM file \p ca_file, or, if that is empty, the
+ * default trust store of the TLS library. See \c client::Config::tls_ca_file. Throws a
+ * \c system_error if the certificates cannot be loaded.
+ */
+void tls_load_trusted_cas(ssl_ctx_st* ctx, const std::string& ca_file);
+
+/**
+ * Makes \p ssl accept only a certificate valid for \p host, a name or an address. A name is sent as
+ * SNI as well, which is for host names only. Returns whether that worked out.
+ */
+bool tls_set_peer_name(ssl_st* ssl, const std::string& host);
 
 /**
  * Unpredictable bytes from the TLS library's own generator, for the `rand` callback that each of

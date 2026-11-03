@@ -14,6 +14,7 @@
 //
 
 #include "anyhttp/common.hpp"
+#include "anyhttp/net.hpp"
 
 #include <boost/beast/core/buffers_range.hpp>
 #include <boost/beast/core/read_size.hpp>
@@ -54,6 +55,11 @@ inline error_code to_error_code(const boost::system::error_code& ec)
  * The end of the stream is \c http::error::end_of_stream if nothing of a message had arrived yet.
  * Otherwise the parser decides: a message that ends with the connection is complete, any other one
  * is a \c http::error::partial_message.
+ *
+ * Over TLS, a connection that ends without a "close_notify" may have been cut by anyone, so no
+ * message can be complete because of it: that is a \c http::error::partial_message for everything
+ * that has begun. Between messages, it is just the end of the stream, as nothing can have been
+ * lost.
  */
 template <typename Stream, typename DynamicBuffer, bool isRequest>
 Task<std::tuple<error_code, size_t>> read_some(Stream& stream, DynamicBuffer& buffer,
@@ -82,6 +88,10 @@ Task<std::tuple<error_code, size_t>> read_some(Stream& stream, DynamicBuffer& bu
             parser.put_eof(ec);
             co_return std::tuple{to_error_code(ec), parsed};
          }
+         if (io::is_truncated(read_ec))
+            co_return std::tuple{to_error_code(parser.got_some() ? http::error::partial_message
+                                                                 : http::error::end_of_stream),
+                                 parsed};
          if (read_ec)
             co_return std::tuple{read_ec, parsed};
       }

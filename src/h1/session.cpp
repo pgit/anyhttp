@@ -181,6 +181,7 @@ public:
          size_t n = 0;
          try
          {
+            const auto op = session->read_op();
             std::tie(ec, n) = co_await h1::read_some(stream, buffer, parser);
          }
          catch (const system_error& e) // a cancelled coroutine throws from its next co_await
@@ -381,6 +382,7 @@ public:
       size_t n = 0;
       try
       {
+         const auto op = session->write_op();
          std::tie(ec, n) = co_await h1::write(stream, serializer);
       }
       catch (const system_error& e) // a cancelled coroutine throws from its next co_await
@@ -462,6 +464,7 @@ public:
       error_code ec;
       try
       {
+         const auto op = session->write_op();
          std::tie(ec, std::ignore) = co_await h1::write_header(stream, serializer);
       }
       catch (const system_error& e) // a cancelled coroutine throws from its next co_await
@@ -750,6 +753,7 @@ public:
       size_t len = 0;
       try
       {
+         const auto op = session->read_op();
          std::tie(ec, len) = co_await h1::read_header(stream, buffer, parser);
       }
       catch (const system_error& e) // a cancelled coroutine throws from its next co_await
@@ -840,8 +844,42 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, Executor exec
 }
 
 template <typename Stream>
+Task<void> BeastSession<Stream>::end_connection(bool notify)
+{
+   //
+   // End the stream itself first: over TLS, that is the "close_notify" the peer needs to tell the
+   // end of the data from a connection that was cut. Everything else has nothing to send here.
+   //
+   if (notify)
+   {
+      if (auto ec = co_await async_teardown(stream_); ec)
+         mlogw("teardown: {}", ec.message());
+   }
+
+   //
+   // Send a FIN next, and let go of the socket only once the peer has ended its side as well
+   // (RFC 9112, section 9.6), reading and dropping what still comes in for two seconds at most:
+   // see io::drain() why.
+   //
+   if (auto ec = io::shutdown(stream_, io::Shutdown::send); !ec)
+   {
+      if (auto drained = co_await io::drain(stream_, get_executor(), 2s))
+         mlogd("dropped {} bytes the peer sent after the last message", drained);
+   }
+   else if (ec != errc::not_connected) // the peer may be gone already
+      mlogw("shutdown: {}", ec.message());
+   io::close(stream_);
+   stream_closed_ = true;
+}
+
+// -------------------------------------------------------------------------------------------------
+
+template <typename Stream>
 void BeastSession<Stream>::destroy() noexcept
 {
+   if (stream_closed_)
+      return;
+
    mlogd("destroy: closing stream");
    //
    // FIXME: ClientAsync.Cancellation runs into a heap-use-after-free here, when the session is
@@ -1173,26 +1211,7 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
    mlogi("closing stream, served {} requests", requestCounter);
 
-   //
-   // End the stream itself first: over TLS, that is the "close_notify" the peer needs to tell the
-   // end of the data from a connection that was cut. Everything else has nothing to send here.
-   //
-   if (auto teardown_ec = co_await async_teardown(stream_); teardown_ec)
-      mlogw("teardown: {}", teardown_ec.message());
-
-   //
-   // Send a FIN next, and let go of the socket only once the peer has ended its side as well
-   // (RFC 9112, section 9.6), reading and dropping what still comes in for two seconds at most:
-   // see io::drain() why.
-   //
-   if (auto ec = io::shutdown(stream_, io::Shutdown::send); !ec)
-   {
-      if (auto drained = co_await io::drain(stream_, super::get_executor(), 2s))
-         mlogd("dropped {} bytes the peer sent after the last request", drained);
-   }
-   else if (ec != errc::not_connected) // the peer may be gone already
-      mlogw("shutdown: {}", ec.message());
-   io::close(stream_);
+   co_await super::end_connection();
 
    mlogd("session done");
 }
@@ -1222,6 +1241,39 @@ Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    //       the client to make a request here right now...
    //
    co_return;
+}
+
+// -------------------------------------------------------------------------------------------------
+
+template <typename Stream>
+Task<std::tuple<error_code>> ClientSession<Stream>::shutdown()
+{
+   if (std::exchange(shutting_down_, true))
+      co_return std::tuple{error_code{}};
+
+   const auto ops = stream_ops_;
+   const bool intact = !send_failed_ && ops->writes == 0;
+   mlogd("shutdown: {} operations in progress, {} writes", ops->pending, ops->writes);
+
+   //
+   // What is left of the requests and responses fails like with a session that is gone, and nothing
+   // new can get to the stream any more. What is on it right now has to be off it before TLS can
+   // shut down, which must not overlap a read.
+   //
+   send_failed_ = receive_failed_ = true;
+   sending_ = nullptr;
+   detach_writers();
+   detach_readers();
+
+   io::cancel(stream_);
+   if (ops->pending)
+   {
+      ops->idle.clear();
+      co_await ops->idle.wait();
+   }
+
+   co_await super::end_connection(intact);
+   co_return std::tuple{intact ? error_code{} : errors::connection_aborted};
 }
 
 // -------------------------------------------------------------------------------------------------

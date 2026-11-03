@@ -120,7 +120,7 @@ using PlainServerStream = TcpSocket;
 inline PlainServerStream make_plain_server_stream(TcpSocket&& socket) { return std::move(socket); }
 
 #define ANYHTTP_SERVER_STREAMS(X) X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream)
-#define ANYHTTP_CLIENT_STREAMS(X) X(::anyhttp::TcpSocket)
+#define ANYHTTP_CLIENT_STREAMS(X) X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream)
 
 // -------------------------------------------------------------------------------------------------
 
@@ -233,6 +233,9 @@ static_assert(SocketStream<TlsStream>);
 TlsContext make_server_tls_context(const std::string& certificate_chain,
                                    const std::string& private_key);
 
+/// A client's TLS context, see asio/net.hpp.
+TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol);
+
 namespace io
 {
 
@@ -271,6 +274,12 @@ inline TlsStream make_tls_stream(TcpSocket&& socket, TlsContext& context)
    return TlsStream(std::move(socket), context);
 }
 
+/// corosio treats an address the way tls_set_peer_name() does.
+inline void set_peer_name(TlsStream& stream, const std::string& host)
+{
+   stream.tls().set_hostname(host);
+}
+
 inline auto handshake(TlsStream& stream, Role role)
 {
    return stream.tls().handshake(role == Role::server ? corosio::tls_role::server
@@ -281,6 +290,8 @@ inline std::string_view alpn(TlsStream& stream) { return stream.tls().alpn_proto
 
 /// corosio exposes no SSL*, so there is less to tell than with ASIO.
 std::string tls_info(TlsStream& stream);
+
+inline bool is_truncated(const error_code& ec) { return ec == capy::error::stream_truncated; }
 
 inline UdpSocket make_udp_socket(const Executor& executor) { return UdpSocket(executor.context()); }
 

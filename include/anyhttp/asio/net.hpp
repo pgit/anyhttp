@@ -23,6 +23,7 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ip/udp.hpp>
 #include <boost/asio/ssl/context.hpp>
+#include <boost/asio/ssl/error.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
 
@@ -61,7 +62,7 @@ inline PlainServerStream make_plain_server_stream(TcpSocket&& socket)
 //
 #define ANYHTTP_SERVER_STREAMS(X)                                                                  \
    X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream) X(::anyhttp::any_async_stream)
-#define ANYHTTP_CLIENT_STREAMS(X) X(::anyhttp::TcpSocket)
+#define ANYHTTP_CLIENT_STREAMS(X) X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream)
 
 // -------------------------------------------------------------------------------------------------
 
@@ -258,6 +259,13 @@ static_assert(!SocketStream<boost::asio::ip::tcp::socket&>); // rvalues only, se
 TlsContext make_server_tls_context(const std::string& certificate_chain,
                                    const std::string& private_key);
 
+/**
+ * A client's TLS context: TLS 1.2 and up, the server's certificate verified against \p ca_file as
+ * \c client::Config::tls_ca_file describes. ALPN offers "http/1.1", preceded by "h2" if that is
+ * what \p protocol asks for. Throws if the CA certificates cannot be loaded.
+ */
+TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol);
+
 namespace io
 {
 
@@ -315,6 +323,9 @@ inline TlsStream make_tls_stream(TcpSocket&& socket, TlsContext& context)
    return TlsStream(std::move(socket), context);
 }
 
+/// Makes a client accept only a certificate valid for \p host, see tls_set_peer_name().
+void set_peer_name(TlsStream& stream, const std::string& host);
+
 /// The TLS handshake, in the role given: <tt>(error_code)</tt>.
 inline auto handshake(TlsStream& stream, Role role)
 {
@@ -328,6 +339,9 @@ std::string_view alpn(TlsStream& stream);
 
 /// The one-line summary of the handshake, see tls_handshake_info().
 std::string tls_info(TlsStream& stream);
+
+/// Whether a read has failed because the TLS connection ended without a "close_notify".
+inline bool is_truncated(const error_code& ec) { return ec == asio::ssl::error::stream_truncated; }
 
 //
 // UDP, for HTTP/3. The backend sends and receives on the native handle, with sendmsg() and

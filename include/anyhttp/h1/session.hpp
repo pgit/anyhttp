@@ -20,6 +20,42 @@ namespace anyhttp::beast_impl
 
 // =================================================================================================
 
+/**
+ * What is going on on the stream of a session. Shared with the operations themselves, as a reader
+ * or writer may be left with a pending one when it is detached from its session.
+ */
+struct StreamOps
+{
+   size_t pending = 0;
+   size_t writes = 0; ///< the writes among those
+   Event idle; ///< set when the last one is over
+};
+
+/// One read or write on the stream of a session, while it is in progress.
+class StreamOp
+{
+public:
+   StreamOp(std::shared_ptr<StreamOps> ops, bool write) : ops_(std::move(ops)), write_(write)
+   {
+      ++ops_->pending;
+      ops_->writes += write_;
+   }
+   StreamOp(const StreamOp&) = delete;
+   StreamOp& operator=(const StreamOp&) = delete;
+   ~StreamOp()
+   {
+      ops_->writes -= write_;
+      if (--ops_->pending == 0)
+         ops_->idle.set();
+   }
+
+private:
+   std::shared_ptr<StreamOps> ops_;
+   bool write_;
+};
+
+// =================================================================================================
+
 template <typename Stream>
 class BeastSession : public ::anyhttp::Session::Impl
 {
@@ -36,6 +72,7 @@ public:
    void destroy() noexcept override;
 
    Executor get_executor() const noexcept override { return executor_; }
+   Protocol protocol() const noexcept override { return Protocol::h1; }
 
    // ----------------------------------------------------------------------------------------------
 
@@ -61,11 +98,23 @@ public:
          writer->detach();
    }
 
+   StreamOp read_op() { return {stream_ops_, false}; }
+   StreamOp write_op() { return {stream_ops_, true}; }
+
    /// Called once by each reader when it is done with the stream: either because its message has
    /// been read completely (\p complete), or because it is going away before that.
    virtual void reader_finished(bool complete) {}
 
    // ----------------------------------------------------------------------------------------------
+
+protected:
+   /**
+    * Ends the connection in order, with nothing on the stream any more: over TLS a "close_notify",
+    * unless \p notify says that a write has been interrupted and left the stream in a state for
+    * which that would be garbage, then a FIN. Returns once the peer has ended its side as well, or
+    * has had its time.
+    */
+   Task<void> end_connection(bool notify = true);
 
 public:
    std::string log_prefix_;
@@ -73,6 +122,8 @@ public:
    Stream stream_;
    Buffer buffer_;
    bool closed_ = false;
+   bool stream_closed_ = false; ///< set by end_connection(), with nothing left for destroy() to do
+   std::shared_ptr<StreamOps> stream_ops_ = std::make_shared<StreamOps>();
 
 private:
    /// Non-owning pointers to the attached readers, see attach().
@@ -185,8 +236,11 @@ class ClientSession : public ClientSessionBase, public BeastSession<Stream>
 
    // FIXME: maybe use CRTP or something similar to avoid this?
    using super::buffer_;
+   using super::detach_readers;
+   using super::detach_writers;
    using super::log_prefix;
    using super::stream_;
+   using super::stream_ops_;
 
 public:
    ClientSession(client::Client::Impl& parent, Executor executor, Stream&& stream);
@@ -196,6 +250,7 @@ public:
    Task<std::tuple<error_code, client::Request>> submit(std::string method, boost::urls::url url,
                                                         Fields headers) override;
    Task<void> do_session(Buffer&& data) override;
+   Task<std::tuple<error_code>> shutdown() override;
 
    // ----------------------------------------------------------------------------------------------
 
@@ -219,6 +274,7 @@ public:
    size_t responses_read_ = 0; ///< number of responses that have been read completely
    bool send_failed_ = false; ///< set when a request could not be completed
    bool receive_failed_ = false; ///< set when a response could not be read completely
+   bool shutting_down_ = false; ///< set by shutdown()
 };
 
 // =================================================================================================

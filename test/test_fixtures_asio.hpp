@@ -158,6 +158,12 @@ protected:
    {
       Server::SetUp();
       url.set_port_number(server->local_endpoint().port());
+      //
+      // The server tells TLS from cleartext on the same port, so with this, every test of a client
+      // can run over TLS as well: the tests' CI step does that, too.
+      //
+      if (const char* scheme = std::getenv("ANYHTTP_TEST_SCHEME"))
+         url.set_scheme(scheme);
       client::Config config{.url = url, .protocol = GetParam(), .tls_ca_file = "pki/out/root.pem"};
       configure_client(config);
 #if defined(MULTITHREADED)
@@ -222,6 +228,18 @@ protected:
 
    void TearDown() override
    {
+      //
+      // SetUp() has failed, which gtest reports, and there is no test case that would ever release
+      // the work guard: without this, the failure would be a hang.
+      //
+      if (!client)
+      {
+         server.reset();
+         work.reset();
+         run();
+         return;
+      }
+
       EXPECT_CALL(*this, on_complete(boost::system::error_code{}));
       run();
    }

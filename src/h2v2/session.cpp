@@ -653,9 +653,15 @@ void NGHttp2Session::close_stream(int64_t stream_id)
    // ends the session for real, and then a client that submits again a moment later finds it gone.
    //
 
-   // see NGHttp2Stream::call_read_handler() why this is needed
+   //
+   // See NGHttp2Stream::call_read_handler() why this is needed. A stream refers to its session, and
+   // the session may end before this gets its turn, so the stream takes it along until it is gone.
+   //
    if (stream)
-      run_later(get_executor(), [stream = std::move(stream)]() { /* deferred delete */ });
+      run_later(get_executor(),
+                [session = weak_from_this().lock(), stream = std::move(stream)]() mutable {
+                   stream.reset(); // deferred delete
+                });
 }
 
 void NGHttp2Session::start_write()

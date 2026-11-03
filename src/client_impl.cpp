@@ -94,6 +94,13 @@ std::optional<Client::Impl::AlternativeService> Client::Impl::alt_svc() const
 
 // -------------------------------------------------------------------------------------------------
 
+namespace
+{
+
+bool is_https(const boost::urls::url& url) { return url.scheme_id() == boost::urls::scheme::https; }
+
+} // namespace
+
 //
 //
 #if ANYHTTP_ASIO
@@ -127,6 +134,13 @@ Task<Session> Client::Impl::async_connect()
    std::string port = config().url.port();
 
    //
+   // A URL without a port means the default port of what it is going to be spoken over. HTTP/3 is
+   // TLS whatever the scheme says.
+   //
+   if (port.empty())
+      port = config().protocol == Protocol::h3 || is_https(config().url) ? "443" : "80";
+
+   //
    // An HTTP/3 alternative service a previous session was told about takes precedence over the
    // configured protocol -- that is what following it means, see Config::follow_alt_svc. The
    // origin does not change with it, only where it is reached: requests still go out with the
@@ -156,8 +170,6 @@ Task<Session> Client::Impl::async_connect()
    //
    // Initiate connection.
    //
-   // TODO: TLS
-   //
    auto socket = io::make_socket(executor_);
    auto [connect_ec, endpoint] = co_await io::connect(socket, std::move(endpoints));
    if (connect_ec)
@@ -165,9 +177,7 @@ Task<Session> Client::Impl::async_connect()
 
    mlogi("connected to {}", endpoint);
 
-   // what the session is going to call itself, see make_client_session() below (no TLS yet)
-   const auto prefix = anyhttp::log_prefix(
-      Role::client, config().protocol == Protocol::h1 ? "h1" : "h2c", io::remote_endpoint(socket));
+   const auto prefix = anyhttp::log_prefix(Role::client, "tcp", io::remote_endpoint(socket));
 
    io::no_delay(socket);
 
@@ -186,8 +196,46 @@ Task<Session> Client::Impl::async_connect()
         receive_buffer_size);
 
    //
-   // Select implementation, currently by configuration only.
-   // With TLS and ALPN, HTTP protocol negotiation can be automatic as well.
+   // The scheme alone decides about TLS, so that an "https" URL can never end up in cleartext. The
+   // certificate has to be valid for the host of the URL.
+   //
+   if (is_https(config().url))
+   {
+      auto tls_context = make_client_tls_context(config().tls_ca_file, config().protocol);
+      auto tls = io::make_tls_stream(std::move(socket), tls_context);
+      io::set_peer_name(tls, host);
+      if (auto [ec] = co_await io::handshake(tls, Role::client); ec)
+      {
+         logw("[{}] TLS handshake: {}", prefix, ec.message());
+         throw_error(ec);
+      }
+
+      //
+      // Anything but "h2" is HTTP/1.1, as on the server: that includes a server that does not use
+      // ALPN at all, with which HTTP/2 is not an option (RFC 9113, section 3.2).
+      //
+      const auto alpn = io::alpn(tls);
+      logi("[{}] connected over TLS ({})", prefix, io::tls_info(tls));
+      co_return start_session(alpn == "h2" ? Protocol::h2 : Protocol::h1, std::move(tls));
+   }
+
+   co_return start_session(config().protocol, std::move(socket));
+}
+
+// -------------------------------------------------------------------------------------------------
+
+template <SocketStream Stream>
+Session Client::Impl::start_session(Protocol protocol, Stream&& stream)
+{
+   // what the session is going to call itself, see make_client_session()
+   const auto prefix = anyhttp::log_prefix(Role::client,
+                                           protocol == Protocol::h1 ? "h1"
+                                           : is_tls(stream)         ? "h2"
+                                                                    : "h2c",
+                                           io::remote_endpoint(stream));
+
+   //
+   // Select implementation, by configuration or, with TLS, what ALPN has come up with.
    //
    // FIXME: How to handle upgrades? This is a top-level responsibility of the client.
    //
@@ -200,14 +248,14 @@ Task<Session> Client::Impl::async_connect()
    // 4) Support DNS HTTPS RR (serving the same purpose as Alt-Svc)
    //
    std::shared_ptr<Session::Impl> impl;
-   switch (config().protocol)
+   switch (protocol)
    {
    case Protocol::h1:
-      impl = beast_impl::make_client_session(*this, executor_, std::move(socket));
+      impl = beast_impl::make_client_session(*this, executor_, std::forward<Stream>(stream));
       break;
 
    case Protocol::h2:
-      impl = nghttp2::make_client_session(*this, executor_, std::move(socket));
+      impl = nghttp2::make_client_session(*this, executor_, std::forward<Stream>(stream));
       break;
 
    case anyhttp::Protocol::h3:
@@ -243,7 +291,7 @@ Task<Session> Client::Impl::async_connect()
    // FIXME: instead of executing a submit() directly, it should be queued and executed
    // within do_client_session(). This approach avoids the problem, and allows pipelining, too
    //
-   co_return Session{std::move(impl)};
+   return Session{std::move(impl)};
 }
 
 // =================================================================================================

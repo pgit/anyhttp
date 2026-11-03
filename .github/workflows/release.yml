@@ -107,6 +107,15 @@ jobs:
       - name: Run tests
         run: env ${{ matrix.opts }} build/test/test_all
 
+      # Every test of a client once more, over TLS. External tools bring their own clients, so they
+      # would only repeat themselves. On COROSIO, an HTTP/1.1 response can not be read over TLS once
+      # a write has failed, which is what the tests left out there do: see step 8 of
+      # docs/corosio-port-plan.md.
+      - name: Run tests over TLS
+        run: >
+          env ${{ matrix.opts }} ANYHTTP_TEST_SCHEME=https build/test/test_all
+          --gtest_filter=-External*${{ matrix.api == 'COROSIO' && ':ClientAsync/ClientAsync.WHEN_post_to_unknown_path_THEN_error_404/HTTP11:ClientAsyncCancellation/ClientAsyncCancellation.Cancellation/HTTP11:ClientAsyncCancellation/ClientAsyncCancellation.CancellationContentLength/HTTP11:ClientAsyncCancellation/ClientAsyncCancellation.CancellationRange/HTTP11:ClientAsyncCancellation/ClientAsyncCancellation.Backpressure/HTTP11' || '' }}
+
   #
   # anyhttp from the outside: installed and relocated, and as a FetchContent subproject. None of the
   # jobs above can see a usage requirement missing from the target, as they build it with the

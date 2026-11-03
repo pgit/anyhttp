@@ -211,6 +211,30 @@ The convenience is paid for with memory, as the body is buffered in full: anythi
 look at the body while it arrives, or to send a body of its own, still goes through
 `submit()`.
 
+An `https` URL means TLS, with the server's certificate verified against `tls_ca_file`, or the
+default trust store of the TLS library. `protocol` then says what to offer with ALPN: `h2` also
+offers HTTP/1.1, and the server picks, so ask `session.protocol()` if it matters -- HTTP/1.1 takes
+only one request at a time, see [Concurrent Requests](#concurrent-requests). Any other scheme means
+cleartext, and exactly the protocol given. HTTP/3 is TLS over QUIC with any scheme.
+
+```c++
+   client::Client client(executor, {.url = boost::urls::url("https://example.org")});
+```
+
+Over TLS, a body that ends with the connection is complete only if the server has said so with a
+`close_notify`: otherwise, it may have been cut by anyone, and reading it fails with
+`errors::partial_message`.
+
+There are two ways to end a session, and neither waits for what is in progress, which fails right
+away:
+
+* `co_await session.shutdown()` (or `async_shutdown()`) ends the connection in an orderly way: over
+  HTTP/2 with a GOAWAY, over TLS with a `close_notify` in both directions, then a FIN in both, with
+  each wait limited to two seconds. It fails with `errors::connection_aborted` only if a write had to
+  be interrupted, which rules out a `close_notify`. HTTP/3 sends its CONNECTION_CLOSE.
+* Destroying the session, or `session.reset()`, is over as fast as possible, and does nothing
+  asynchronous. The peer sees a connection that was cut.
+
 ### Plain QUIC streams
 QUIC streams without HTTP in them -- for a protocol of your own, told apart by its ALPN -- run on
 the UDP port HTTP/3 is on. A `quic::Stream` is a `Reader` and a `Writer` at once:

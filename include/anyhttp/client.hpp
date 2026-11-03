@@ -25,6 +25,16 @@ struct Config
 {
    // FIXME: the client does not connect to an URL, it connects to a host:port or endpoint
    boost::urls::url url{"localhost:8080"};
+
+   /**
+    * What to speak. An "https" \c url means TLS, and the server has a say in it: \c h1 offers
+    * HTTP/1.1 only, while \c h2 offers HTTP/2 and HTTP/1.1 and takes what the server picks, so
+    * the session may turn out to speak HTTP/1.1, see \c Session::protocol(). A server that does
+    * not use ALPN at all gets HTTP/1.1, too.
+    *
+    * Any other scheme means cleartext, and exactly the protocol given: HTTP/2 is then "h2c" by
+    * prior knowledge, which a server has to be ready for. HTTP/3 is TLS over QUIC with any scheme.
+    */
    Protocol protocol{Protocol::h2};
 
    /**
@@ -64,13 +74,11 @@ struct Config
    bool follow_alt_svc = false;
 
    /**
-    * The CA certificates to verify the server against, as a PEM file. Empty uses the default
-    * trust store of the TLS library. The server's certificate must be valid for the host of
+    * The CA certificates to verify the server against over TLS, as a PEM file. Empty uses the
+    * default trust store of the TLS library. The server's certificate must be valid for the host of
     * \c url -- also when connecting to an alternative service, as RFC 7838 requires -- or
     * \c async_connect() fails. Read on every connect, so a replaced file takes effect with the
     * next connection.
-    *
-    * Only HTTP/3 uses TLS so far: HTTP/1.1 and HTTP/2 connect in cleartext.
     */
    std::string tls_ca_file;
 };

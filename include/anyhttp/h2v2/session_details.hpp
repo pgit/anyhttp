@@ -13,6 +13,7 @@
 #include "anyhttp/net.hpp"
 
 #include <boost/asio/buffer.hpp>
+#include <boost/scope/scope_exit.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
 #include <boost/url/format.hpp>
@@ -27,6 +28,9 @@ namespace anyhttp::nghttp2
 template <typename Stream>
 void NGHttp2SessionImpl<Stream>::destroy() noexcept
 {
+   if (stream_closed_)
+      return;
+
    auto ec = io::shutdown(stream_, io::Shutdown::both);
    // not_connected: the peer is gone already, which is what we wanted anyway
    logwd(ec && ec != errc::not_connected, //
@@ -93,6 +97,7 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
          auto [ec, written] = co_await io::write(stream_, asio::buffer(buffer.data(), nwrite));
          if (ec)
          {
+            send_failed_ = true;
             // a peer that hung up is not our error
             if (ec == errc::broken_pipe || ec == errc::connection_reset)
                mlogi("send loop: error writing {} bytes: {}", bytes_to_write, ec.message());
@@ -205,6 +210,38 @@ Task<void> NGHttp2SessionImpl<Stream>::recv_loop()
    mlogi("recv loop: done, served {} requests", request_counter_);
 }
 
+// -------------------------------------------------------------------------------------------------
+
+template <typename Stream>
+Task<void> NGHttp2SessionImpl<Stream>::end_connection()
+{
+   //
+   // End the stream itself: over TLS, that is the "close_notify" the peer needs to tell the end
+   // of the data from a connection that was cut, see async_teardown().
+   //
+   if (!send_failed_)
+   {
+      if (auto ec = co_await async_teardown(stream_); ec)
+         mlogd("teardown: {}", ec.message());
+   }
+
+   //
+   // Then send a FIN, and let go of the socket only once the peer has ended its side as well,
+   // reading and dropping what still comes in for two seconds at most: closing it right away would
+   // answer a peer that sent anything after our GOAWAY with an RST, which may cost it that GOAWAY.
+   // See io::drain().
+   //
+   if (auto ec = io::shutdown(stream_, io::Shutdown::send); !ec)
+   {
+      if (auto drained = co_await io::drain(stream_, this->get_executor(), std::chrono::seconds(2)))
+         mlogd("dropped {} bytes the peer sent after the session ended", drained);
+   }
+   else if (ec != errc::not_connected) // the peer may be gone already
+      mlogw("shutdown: {}", ec.message());
+   io::close(stream_);
+   stream_closed_ = true;
+}
+
 // =================================================================================================
 
 template <typename Stream>
@@ -261,27 +298,7 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 
    mlogd("server session done");
 
-   //
-   // End the stream itself: over TLS, that is the "close_notify" the peer needs to tell the end
-   // of the data from a connection that was cut, see async_teardown().
-   //
-   if (auto ec = co_await async_teardown(stream_); ec)
-      mlogd("teardown: {}", ec.message());
-
-   //
-   // Then send a FIN, and let go of the socket only once the peer has ended its side as well,
-   // reading and dropping what still comes in for two seconds at most: closing it right away would
-   // answer a peer that sent anything after our GOAWAY with an RST, which may cost it that GOAWAY.
-   // See io::drain().
-   //
-   if (auto ec = io::shutdown(stream_, io::Shutdown::send); !ec)
-   {
-      if (auto drained = co_await io::drain(stream_, this->get_executor(), std::chrono::seconds(2)))
-         mlogd("dropped {} bytes the peer sent after the session ended", drained);
-   }
-   else if (ec != errc::not_connected) // the peer may be gone already
-      mlogw("shutdown: {}", ec.message());
-   io::close(stream_);
+   co_await super::end_connection();
 
    nghttp2_conn_del(conn);
    conn = nullptr;
@@ -305,6 +322,9 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, Executor exec
 template <typename Stream>
 Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
+   // also when this ends in an exception, which shutdown() must not wait for in vain
+   const boost::scope::scope_exit done([this] { this->session_done_.set(); });
+
    buffer_ = std::move(buffer);
    auto callbacks = super::setup_callbacks();
 
@@ -335,9 +355,43 @@ Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 
    mlogd("client session done");
 
+   //
+   // However it has come to this -- the peer has ended the connection, or shutdown() has asked for
+   // it -- this is the same orderly end as on the server.
+   //
+   co_await super::end_connection();
+
    nghttp2_conn_del(conn);
    conn = nullptr;
    mlogd("client session deleted");
+}
+
+// -------------------------------------------------------------------------------------------------
+
+template <typename Stream>
+Task<std::tuple<error_code>> ClientSession<Stream>::shutdown()
+{
+   if (std::exchange(this->shutdown_started_, true) || this->session_done_.is_set())
+      co_return std::tuple{error_code{}};
+
+   //
+   // A GOAWAY, and the end of both loops once that is written, which ends do_session(). It may
+   // never be written, with a peer that has stopped reading: then the stream is what is cancelled.
+   //
+   if (conn && !this->closing_ && !this->goaway_sent_)
+   {
+      nghttp2_conn_terminate(conn, NGHTTP2_NO_ERROR);
+      this->goaway_sent_ = true;
+   }
+   this->recv_done_ = true;
+   this->start_write();
+
+   Timer timer(this->get_executor());
+   timer.arm(std::chrono::seconds(2), [this] { io::cancel(stream_); });
+   co_await this->session_done_.wait();
+   timer.cancel();
+
+   co_return std::tuple{this->send_failed_ ? errors::connection_aborted : error_code{}};
 }
 
 // =================================================================================================

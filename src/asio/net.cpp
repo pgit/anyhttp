@@ -82,6 +82,26 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 
 // -------------------------------------------------------------------------------------------------
 
+TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol)
+{
+   asio::ssl::context ctx{asio::ssl::context::tls_client};
+   SSL_CTX_set_min_proto_version(ctx.native_handle(), TLS1_2_VERSION);
+
+   tls_load_trusted_cas(ctx.native_handle(), ca_file);
+   ctx.set_verify_mode(asio::ssl::verify_peer);
+
+   // "http/1.1" is the tail of the list, what follows the three bytes of "h2".
+   auto alpn = std::span<const unsigned char>{next_proto_list};
+   if (protocol != Protocol::h2)
+      alpn = alpn.subspan(3);
+   SSL_CTX_set_alpn_protos(ctx.native_handle(), alpn.data(),
+                           static_cast<unsigned int>(alpn.size()));
+
+   return ctx;
+}
+
+// -------------------------------------------------------------------------------------------------
+
 namespace io
 {
 
@@ -146,6 +166,15 @@ Task<std::tuple<error_code, TcpEndpoint>> connect(TcpSocket& socket,
                                                   std::vector<TcpEndpoint> endpoints)
 {
    co_return co_await asio::async_connect(socket, endpoints, asio::as_tuple);
+}
+
+void set_peer_name(TlsStream& stream, const std::string& host)
+{
+   if (!tls_set_peer_name(stream.native_handle(), host))
+   {
+      loge("can't verify certificates for '{}'", host);
+      throw_error(make_error_code(errc::invalid_argument));
+   }
 }
 
 std::string_view alpn(TlsStream& stream)

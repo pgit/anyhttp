@@ -22,6 +22,7 @@
 #include "anyhttp/quic/common.hpp"
 #include "anyhttp/quic/session.hpp"
 #include "anyhttp/session_impl.hpp"
+#include "anyhttp/tls.hpp"
 
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
@@ -68,12 +69,16 @@ namespace
 //
 struct TlsClientContext
 {
-   explicit TlsClientContext(const ClientConfig& config)
+   TlsClientContext()
    {
       ctx = SSL_CTX_new(TLS_client_method());
       if (!ctx)
          throw std::runtime_error("SSL_CTX_new");
+   }
 
+   // Delegating, so that the destructor frees the context if what follows throws.
+   explicit TlsClientContext(const ClientConfig& config) : TlsClientContext()
+   {
       QuicSession::configure_tls_context(ctx, false);
 
       if (config.alpn.empty() || config.alpn.size() > 255)
@@ -84,17 +89,7 @@ struct TlsClientContext
       SSL_CTX_set_alpn_protos(ctx, reinterpret_cast<const unsigned char*>(alpn.data()),
                               static_cast<unsigned int>(alpn.size()));
 
-      if (config.tls_ca_file.empty())
-      {
-         if (SSL_CTX_set_default_verify_paths(ctx) != 1)
-            throw std::runtime_error(std::format("SSL_CTX_set_default_verify_paths: {}",
-                                                 ERR_error_string(ERR_get_error(), nullptr)));
-      }
-      else if (SSL_CTX_load_verify_locations(ctx, config.tls_ca_file.c_str(), nullptr) != 1)
-         throw std::runtime_error(std::format("SSL_CTX_load_verify_locations: {}: {}",
-                                              config.tls_ca_file,
-                                              ERR_error_string(ERR_get_error(), nullptr)));
-
+      tls_load_trusted_cas(ctx, config.tls_ca_file);
       SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
    }
 
@@ -129,6 +124,7 @@ public:
                      const Fields& headers) override;
    Task<void> do_session(Buffer&& data) override;
    void destroy() noexcept override;
+   Task<std::tuple<error_code>> shutdown() override;
 
    //
    // Connect-time setup, with the application `factory` makes. Returns 0 on success.
@@ -246,18 +242,11 @@ int QuicClientSession::init(UdpEndpoint remote, const ClientConfig& config,
 
    //
    // The certificate has to be valid for the origin, the host of the URL -- also when `remote` is
-   // an alternative service it advertised (RFC 7838, section 2.1). An IP address is matched
-   // against the certificate's IP SANs and not sent as SNI, which is for host names only.
+   // an alternative service it advertised (RFC 7838, section 2.1).
    //
-   const std::string& host = config.host;
-   auto* param = SSL_get0_param(ssl_);
-   error_code not_an_ip;
-   io::make_address(host, not_an_ip);
-   if (!not_an_ip ? X509_VERIFY_PARAM_set1_ip_asc(param, host.c_str()) != 1
-                  : X509_VERIFY_PARAM_set1_host(param, host.data(), host.size()) != 1 ||
-                       SSL_set_tlsext_host_name(ssl_, host.c_str()) != 1)
+   if (!tls_set_peer_name(ssl_, config.host))
    {
-      mloge("init: can't verify certificates for '{}'", host);
+      mloge("init: can't verify certificates for '{}'", config.host);
       return -1;
    }
 
@@ -314,6 +303,16 @@ Task<void> QuicClientSession::do_session(Buffer&&)
 }
 
 void QuicClientSession::destroy() noexcept { close(); }
+
+Task<std::tuple<error_code>> QuicClientSession::shutdown()
+{
+   //
+   // Nothing to wait for: CONNECTION_CLOSE is all there is to an orderly end, and no answer to it
+   // is required, so this ends the connection no differently than destroy().
+   //
+   close();
+   co_return std::tuple{error_code{}};
+}
 
 void QuicClientSession::close()
 {

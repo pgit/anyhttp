@@ -61,6 +61,7 @@ public:
    // Session::Impl
    //
    Executor get_executor() const noexcept override { return executor_; }
+   Protocol protocol() const noexcept override { return Protocol::h3; }
 
    ngtcp2_conn* conn() const noexcept { return conn_; }
    bool closed() const noexcept { return closed_; }

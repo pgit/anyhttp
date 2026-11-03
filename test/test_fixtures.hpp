@@ -17,6 +17,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstdlib>
+
 #include <spdlog/spdlog.h>
 
 #include <chrono>
