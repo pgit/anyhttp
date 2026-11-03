@@ -11,6 +11,7 @@
 #include <boost/asio/buffer.hpp>
 #include <boost/logic/tribool.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -32,6 +33,8 @@ boost::tribool buffer_sequence_starts_with(const ConstBufferSequence& buffers,
    for (auto it = asio::buffer_sequence_begin(buffers); it != end && matched < prefix.size(); ++it)
    {
       const asio::const_buffer buffer(*it);
+      if (buffer.size() == 0)
+         continue; // an empty buffer may well have a null pointer, which memcmp() must not get
       const auto to_compare = std::min(buffer.size(), prefix.size() - matched);
       if (std::memcmp(buffer.data(), prefix.data() + matched, to_compare) != 0)
          return false;
