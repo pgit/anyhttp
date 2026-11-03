@@ -211,6 +211,30 @@ The convenience is paid for with memory, as the body is buffered in full: anythi
 look at the body while it arrives, or to send a body of its own, still goes through
 `submit()`.
 
+`submit()` is a POST unless it is given a method. Reading a response from a server that may send
+more than you want then stops wherever you do, with status and header fields in hand:
+
+```c++
+   auto [ec1, request] = co_await session.submit("GET", url);
+   auto [ec2] = co_await request.write_eof();
+   auto [ec3, response] = co_await request.get_response();
+   std::println("{} {}", response.status_code(), response.fields()["content-type"]);
+
+   std::array<char, 16_k> buffer;
+   for (size_t total = 0; total < limit;)
+   {
+      auto [ec, n] = co_await response.read_some(asio::buffer(buffer));
+      total += n;
+      if (ec)
+         break;
+   }
+   session.reset(); // the rest of the body is never read
+```
+
+What the server gets to send in the meantime is bounded by flow control, and over HTTP/1.1 by the
+socket buffers. Releasing the response early also resets its stream with HTTP/2 and HTTP/3, leaving
+the session usable, but it is the end of an HTTP/1.1 connection.
+
 An `https` URL means TLS, with the server's certificate verified against `tls_ca_file`, or the
 default trust store of the TLS library. `protocol` then says what to offer with ALPN: `h2` also
 offers HTTP/1.1, and the server picks, so ask `session.protocol()` if it matters -- HTTP/1.1 takes

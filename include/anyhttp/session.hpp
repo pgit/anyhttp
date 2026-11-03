@@ -5,6 +5,9 @@
 
 #include <boost/url.hpp>
 
+#include <string>
+#include <string_view>
+
 namespace anyhttp
 {
 
@@ -52,6 +55,8 @@ public:
     * After a request could not be completed, an HTTP/1.1 session can't send any more requests,
     * and this fails with \c asio::error::connection_aborted.
     *
+    * Without a method, this is a POST. There is an overload for any other, see below.
+    *
     * TODO: There is only a single Session interface for both server and client. This even might
     *       make sense for HTTP/2, where the server can also (sort of) submit a push promise to the
     *       client. But in general, it may be better to separate them.
@@ -71,9 +76,38 @@ public:
          asio::bind_executor(
             executor,
             [this](auto&& handler, boost::urls::url url, const Fields& headers) { //
-               async_submit_any(std::move(handler), std::move(url), headers);
+               async_submit_any(std::move(handler), "POST", std::move(url), headers);
             }),
          token, std::move(target), headers);
+   }
+
+   /**
+    * Submits a new request with the given \p method. All else is as with the overload above, and
+    * ends the same way: \ref client::Request::async_write_eof() ends the request body, even if
+    * there is none, and \ref client::Request::async_get_response() waits for the response.
+    *
+    * GET and HEAD go out with "Content-Length: 0" unless \p headers already frames a body, so that
+    * HTTP/1.1 does not have to make them chunked, which some servers refuse. With any other method,
+    * a request without framing has a chunked body over HTTP/1.1.
+    *
+    * This is the way to have the body of a response without keeping all of it, as
+    * \ref async_get() does, when a peer may send more than the caller wants to read. What it gets
+    * to send is bounded by flow control, and over HTTP/1.1 by the socket buffers. Releasing the
+    * session ends the rest of it, see README.md, "Client".
+    */
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Submit) CompletionToken = DefaultCompletionToken>
+   auto async_submit(std::string_view method, boost::urls::url target, const Fields& headers = {},
+                     CompletionToken&& token = CompletionToken())
+   {
+      auto executor = asio::get_associated_executor(token, get_executor());
+      return asio::async_initiate<CompletionToken, Submit>(
+         asio::bind_executor(executor,
+                             [this](auto&& handler, const std::string& method, boost::urls::url url,
+                                    const Fields& headers) { //
+                                async_submit_any(std::move(handler), method, std::move(url),
+                                                 headers);
+                             }),
+         token, std::string(method), std::move(target), headers);
    }
 #endif
 
@@ -92,8 +126,8 @@ public:
     *
     * The convenience is paid for with memory: the body is buffered in full, however large it
     * turns out to be, as there is no way to look at it before it is complete. Anything that needs
-    * the body while it arrives, a request body of its own, or a method other than GET still wants
-    * \ref async_submit().
+    * the body while it arrives, or to stop reading it at some point, a request body of its own, or
+    * a method other than GET still wants \ref async_submit().
     *
     * The request goes out with "Content-Length: 0" unless \p headers already frames a body, so
     * that HTTP/1.1 does not have to make it chunked.
@@ -166,6 +200,11 @@ public:
    Task<std::tuple<error_code, client::Request>> submit(boost::urls::url target,
                                                         Fields headers = {});
 
+   /// \c async_submit() with a method, as a coroutine:
+   /// <tt>auto [ec, request] = co_await session.submit("GET", url, headers);</tt>
+   Task<std::tuple<error_code, client::Request>>
+   submit(std::string_view method, boost::urls::url target, Fields headers = {});
+
    /// \c async_get() as a coroutine: <tt>auto [ec, message] = co_await session.get(url);</tt>
    Task<std::tuple<error_code, client::Message>> get(boost::urls::url url, Fields headers = {});
 
@@ -183,7 +222,8 @@ public:
 
 private:
 #if ANYHTTP_ASIO
-   void async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers);
+   void async_submit_any(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
+                         const Fields& headers);
    void async_get_any(GetHandler&& handler, boost::urls::url url, const Fields& headers);
    void async_shutdown_any(SessionShutdownHandler&& handler);
 #endif

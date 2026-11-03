@@ -5,6 +5,8 @@
 #include <boost/asio/buffer.hpp>
 
 #include <array>
+#include <string>
+#include <string_view>
 
 using namespace boost::asio;
 
@@ -52,10 +54,32 @@ Executor Session::get_executor() const noexcept { return impl->get_executor(); }
 
 Protocol Session::protocol() const noexcept { return impl->protocol(); }
 
-#if ANYHTTP_ASIO
-void Session::async_submit_any(SubmitHandler&& handler, boost::urls::url url, const Fields& headers)
+// =================================================================================================
+
+namespace
 {
-   impl->async_submit(std::move(handler), "POST", std::move(url), headers);
+
+//
+// GET and HEAD have no body as a rule, and saying so with a "Content-Length: 0" keeps HTTP/1.1 from
+// framing one as chunked -- which would leave the request incomplete until its write_eof(), and the
+// session unable to take another one until then.
+//
+Fields framed(std::string_view method, Fields headers)
+{
+   if ((method == "GET" || method == "HEAD") &&
+       !headers.count(boost::beast::http::field::content_length) &&
+       !headers.count(boost::beast::http::field::transfer_encoding))
+      headers.set(boost::beast::http::field::content_length, "0");
+   return headers;
+}
+
+} // namespace
+
+#if ANYHTTP_ASIO
+void Session::async_submit_any(SubmitHandler&& handler, std::string_view method,
+                               boost::urls::url url, const Fields& headers)
+{
+   impl->async_submit(std::move(handler), method, std::move(url), framed(method, headers));
 }
 #endif
 
@@ -85,20 +109,8 @@ Task<std::tuple<error_code, client::Message>> get_message(std::shared_ptr<Sessio
       return std::tuple{ec, std::move(message)};
    };
 
-   //
-   // A GET has no body, and saying so with a "Content-Length: 0" keeps HTTP/1.1 from framing one
-   // as chunked -- which would leave the request incomplete until the write_eof() below, and the
-   // session unable to take another one until then.
-   //
-   if (!headers.count(boost::beast::http::field::content_length) &&
-       !headers.count(boost::beast::http::field::transfer_encoding))
-      headers.set(boost::beast::http::field::content_length, "0");
-
-   //
-   // The public Session::submit() is POST-only, but every backend can send whatever method it is
-   // handed, see Session::Impl::async_submit().
-   //
-   auto [ec, request] = co_await session->submit("GET", std::move(url), std::move(headers));
+   auto [ec, request] =
+      co_await session->submit("GET", std::move(url), framed("GET", std::move(headers)));
    if (ec)
       co_return failed(ec);
 
@@ -157,6 +169,12 @@ Task<std::tuple<error_code, client::Request>> Session::submit(boost::urls::url t
                                                               Fields headers)
 {
    return impl->submit("POST", std::move(target), std::move(headers));
+}
+
+Task<std::tuple<error_code, client::Request>>
+Session::submit(std::string_view method, boost::urls::url target, Fields headers)
+{
+   return impl->submit(std::string(method), std::move(target), framed(method, std::move(headers)));
 }
 
 Task<std::tuple<error_code, client::Message>> Session::get(boost::urls::url url, Fields headers)

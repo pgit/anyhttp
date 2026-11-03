@@ -748,6 +748,8 @@ public:
             *session, stream, buffer);
       auto& parser = reader->parser;
       parser.header_limit(header_limit(cs.client().config().max_header_size));
+      // whatever its header field says, a response to HEAD is over after that (RFC 9112, 6.3)
+      parser.skip(message.method() == http::verb::head);
 
       mlogd("waiting for response (size={} capacity={})", buffer.size(), buffer.capacity());
       size_t len = 0;
