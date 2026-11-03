@@ -36,7 +36,8 @@ struct ClientConfig
 //
 // Connects to `host`:`port` over QUIC, with the application `factory` makes on top, and returns
 // the session once that application is up (QuicApplication::on_ready()). Throws if it doesn't
-// get there.
+// get there: with what ended the wait if the caller cancelled it, which also closes the connection,
+// and with errc::connection_refused if the connection failed.
 //
 Task<std::shared_ptr<QuicSession>> async_connect(Executor executor, std::string host,
                                                  std::string port, ClientConfig config,

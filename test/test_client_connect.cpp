@@ -1,5 +1,14 @@
 #include "test_fixtures.hpp"
 
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <array>
+#include <cstdint>
+#include <format>
+#include <stop_token>
+
 using namespace testing;
 
 // =================================================================================================
@@ -78,6 +87,93 @@ TEST_F(ClientConnect, WHEN_async_connect_is_cancelled_THEN_returns_operation_can
    context.run();
 }
 #endif
+
+// -------------------------------------------------------------------------------------------------
+
+namespace
+{
+
+/// A UDP socket on loopback that takes whatever arrives and never answers, as a host that does not
+/// speak QUIC and drops what it gets. Reading it does not take a running context.
+class SilentPeer
+{
+public:
+   SilentPeer() : fd_(::socket(AF_INET, SOCK_DGRAM, 0))
+   {
+      sockaddr_in address{};
+      address.sin_family = AF_INET;
+      address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      socklen_t size = sizeof(address);
+      EXPECT_EQ(::bind(fd_, reinterpret_cast<sockaddr*>(&address), size), 0);
+      EXPECT_EQ(::getsockname(fd_, reinterpret_cast<sockaddr*>(&address), &size), 0);
+      port_ = ntohs(address.sin_port);
+   }
+   ~SilentPeer() { ::close(fd_); }
+
+   uint16_t port() const noexcept { return port_; }
+
+   /// How many datagrams have arrived so far.
+   size_t received()
+   {
+      std::array<char, 2048> buffer;
+      while (::recv(fd_, buffer.data(), buffer.size(), MSG_DONTWAIT) >= 0)
+         ++received_;
+      return received_;
+   }
+
+private:
+   int fd_;
+   uint16_t port_ = 0;
+   size_t received_ = 0;
+};
+
+} // namespace
+
+//
+// The connect gives up before the peer has answered, and that has to be the end of the connection.
+// By then, the handshake has been sent: 100 ms is long after that, and long before the probe that
+// would repeat it, and the connection would otherwise go on until its idle timeout of 30 s.
+//
+TEST_F(ClientConnect, WHEN_http3_connect_is_cancelled_THEN_its_connection_ends_with_it)
+{
+   SilentPeer peer;
+   client::Client client(
+      context.get_executor(),
+      client::Config{.url = boost::urls::url(std::format("https://127.0.0.1:{}/", peer.port())),
+                     .protocol = anyhttp::Protocol::h3});
+
+   error_code result;
+   size_t received_on_return = 0;
+   auto on_return = [&](error_code ec) {
+      result = ec;
+      received_on_return = peer.received();
+   };
+
+   const auto start = std::chrono::steady_clock::now();
+#if ANYHTTP_COROSIO
+   auto connect = [](client::Client& client, auto& on_return) -> Task<void> {
+      auto [ec, session] = co_await client.connect();
+      on_return(ec);
+   };
+   auto stop_later = [](std::stop_source& stop) -> Task<void> {
+      co_await sleep(100ms);
+      stop.request_stop();
+   };
+   std::stop_source stop;
+   boost::capy::run_async(context.get_executor(), stop.get_token())(connect(client, on_return));
+   launch(context.get_executor(), stop_later(stop));
+#else
+   client.async_connect(cancel_after(100ms, [&](boost::system::error_code ec, Session) { //
+      on_return(ec);
+   }));
+#endif
+   context.run();
+
+   EXPECT_LT(std::chrono::steady_clock::now() - start, 5s);
+   EXPECT_EQ(result, errc::operation_canceled) << result.message();
+   EXPECT_GT(received_on_return, 0u) << "the peer has not even seen the handshake";
+   EXPECT_EQ(peer.received(), received_on_return);
+}
 
 TEST_F(ClientConnect, WHEN_connect_to_broadcast_ip_THEN_completes_with_network_unreachable)
 {

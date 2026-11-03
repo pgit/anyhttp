@@ -449,7 +449,15 @@ Task<std::shared_ptr<QuicSession>> async_connect(Executor executor, std::string 
    //
    auto [ec] = co_await session->wait_ready();
    if (!session->ready())
-      throw_error(make_error_code(errc::connection_refused));
+   {
+      //
+      // Nobody is going to use this session any more, and nothing else would end it: left alone,
+      // it goes on sending to the peer until the idle timeout, and keeps the context from running
+      // dry until then. A connection that has failed by itself is closed already.
+      //
+      session->destroy();
+      throw_error(ec ? ec : make_error_code(errc::connection_refused));
+   }
 
    co_return session;
 }
