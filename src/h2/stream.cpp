@@ -571,15 +571,12 @@ void NGHttp2Stream::call_read_handler(asio::const_buffer view)
 #endif
 }
 
-void NGHttp2Stream::on_data(nghttp2_session* session, int32_t id_, const uint8_t* data, size_t len)
+void NGHttp2Stream::on_data(const uint8_t* data, size_t len)
 {
-   assert(id == id_);
    assert(!eof_received);
    assert(len); // for EOF, on_eof() is called instead
 
    mlogd("read callback: {} bytes...", len);
-
-   nghttp2_session_consume_connection(session, len);
 
    //
    // We try to invoke the read handler directly with the new buffer view. Only if there is no

@@ -204,23 +204,22 @@ static int on_recv_data(nghttp2_conn* conn, int64_t stream_id, const uint8_t* da
    auto handler = static_cast<NGHttp2Session*>(user_data);
    auto stream = static_cast<NGHttp2Stream*>(stream_user_data);
 
-   if (!stream)
-   {
-      logw("[{}] on_recv_data: DATA, but no stream found", handler->log_prefix(stream_id));
-      nghttp2_conn_extend_max_offset(conn, datalen);
-      return 0;
-   }
-
-   logd("[{}] on_recv_data: DATA, len={}", handler->log_prefix(stream_id), datalen);
-
    //
-   // Connection-level credit is given back right away; the stream-level window is only reopened
-   // once the reader has taken the data, which is what applies back pressure. Version 1 split the
-   // same two steps between nghttp2_session_consume_connection() and consume_stream().
+   // Connection-level credit is given back right away, with or without a stream: nobody else would,
+   // and the connection would run out of it. The stream-level window is only reopened once the
+   // reader has taken the data, which is what applies back pressure. Version 1 split the same two
+   // steps between nghttp2_session_consume_connection() and consume_stream().
    //
    nghttp2_conn_extend_max_offset(conn, datalen);
 
-   stream->on_data(data, datalen);
+   if (stream)
+   {
+      logd("[{}] on_recv_data: DATA, len={}", handler->log_prefix(stream_id), datalen);
+      stream->on_data(data, datalen);
+   }
+   else
+      logw("[{}] on_recv_data: DATA, but no stream found", handler->log_prefix(stream_id));
+
    handler->start_write(); // might re-open windows
 
    return 0;

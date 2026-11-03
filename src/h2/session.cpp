@@ -373,15 +373,23 @@ static int on_data_chunk_recv_callback(nghttp2_session* session, uint8_t flags, 
    auto handler = static_cast<NGHttp2Session*>(user_data);
    auto stream = handler->find_stream(stream_id);
 
-   if (!stream)
+   //
+   // Connection-level credit is given back right away, with or without a stream: nobody else would,
+   // and the connection would run out of it. The stream-level window is only reopened once the
+   // reader has taken the data, which is what applies back pressure.
+   //
+   nghttp2_session_consume_connection(session, len);
+
+   if (stream)
    {
+      logd("[{}.{}] on_data_chunk_recv_callback: DATA, len={}", handler->log_prefix(), stream_id,
+           len);
+      stream->on_data(data, len);
+   }
+   else
       logw("[{}.{}] on_data_chunk_recv_callback: DATA, but no stream found (id={})",
            handler->log_prefix(), stream_id, stream_id);
-      return 0;
-   }
 
-   logd("[{}.{}] on_data_chunk_recv_callback: DATA, len={}", handler->log_prefix(), stream_id, len);
-   stream->on_data(session, stream_id, data, len);
    handler->start_write(); // might re-open windows
 
    return 0;
