@@ -218,7 +218,12 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
    `netdb_errors::host_not_found`.
 8. Later: threads in COROSIO; `client_main` for COROSIO; upstream issues for corosio
    (`openssl_stream` on AWS-LC, the read on an error event, the reactor's use-after-free with
-   threads).
+   threads, and a TLS read that flushes what an earlier write left behind and fails with what that
+   fails with: over TLS, a response that has already arrived can not be read once a write has
+   failed, `driver_read_some()` in corosio's `engine_driver.hpp`. An HTTP/1.1 client that is still
+   uploading when the server responds and closes loses that response, which ASIO does not.
+   `ClientAsync`'s 404 test and four of `ClientAsyncCancellation` fail for that reason with
+   `ANYHTTP_TEST_SCHEME=https`, and CI leaves them out there).
    *`server_main` done 2026-10-01:* it builds in both styles and refuses `--threads` above 1 with
    COROSIO. The Debug `run()` wrapper steps a corosio context with `run_one()` too, and the COROSIO
    fixtures run through it. That reordering flipped an h2 test: a write issued after the stream

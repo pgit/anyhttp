@@ -80,6 +80,11 @@ Every server binds an ephemeral port, so parallel processes do not collide. It p
 failing tests and does not report skips, and since each test gets its own process it cannot
 catch interference through process-wide state (statics, the logger) -- do a serial run before committing changes to shared or global state.
 
+`ANYHTTP_TEST_SCHEME=https` makes the URL of every test of a client say so, and the same tests run
+over TLS, the server telling it from cleartext on the same port. Do that as well after changing
+anything on the client's TCP path. COROSIO fails five tests of HTTP/1.1 that way, for a reason of
+corosio's, see `.github/workflows/release.yml` and step 8 of the port plan.
+
 Parametrized tests are suffixed `/HTTP11`, `/HTTP2`, `/HTTP3` -- not h2/h3. `--gtest_filter` knows
 only `*` and `?`, and a filter that matches nothing exits 0 with no output, which reads like a
 pass: check for `[ OK ]` lines.
