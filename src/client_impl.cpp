@@ -125,32 +125,52 @@ void Client::Impl::async_connect(ConnectHandler handler)
 }
 #endif
 
+Task<std::vector<TcpEndpoint>> Client::Impl::resolve(std::string host, std::string port)
+{
+   mlogd("resolving {}:{} ...", host, port);
+   auto [ec, endpoints] = co_await io::resolve(executor_, host, port);
+   if (ec)
+      throw_error(ec);
+   for (auto& endpoint : endpoints)
+      mlogd("{}:{} -> {}", host, port, endpoint);
+   co_return std::move(endpoints);
+}
+
 Task<Session> Client::Impl::async_connect()
 {
    //
-   // Extract host and port from URL and resolve hostname.
+   // Where the connection goes is up to the caller, if the caller has said so, and then nothing
+   // that is to be learned about the host of the URL matters.
    //
-   std::string host = config().url.host_address();
-   std::string port = config().url.port();
+   std::vector<TcpEndpoint> endpoints = config().endpoints;
+   const std::string host = config().url.host_address();
 
-   //
-   // A URL without a port means the default port of what it is going to be spoken over. HTTP/3 is
-   // TLS whatever the scheme says.
-   //
-   if (port.empty())
-      port = config().protocol == Protocol::h3 || is_https(config().url) ? "443" : "80";
-
-   //
-   // An HTTP/3 alternative service a previous session was told about takes precedence over the
-   // configured protocol -- that is what following it means, see Config::follow_alt_svc. The
-   // origin does not change with it, only where it is reached: requests still go out with the
-   // authority of config().url.
-   //
-   if (auto alt = alt_svc())
+   if (endpoints.empty())
    {
-      auto alt_host = alt->host.empty() ? host : alt->host;
-      mlogi("connecting to {}:{} over HTTP/3, as advertised by Alt-Svc", alt_host, alt->port);
-      co_return Session{co_await async_connect_http3(executor_, alt_host, alt->port, config())};
+      std::string port = config().url.port();
+
+      //
+      // A URL without a port means the default port of what it is going to be spoken over. HTTP/3
+      // is TLS whatever the scheme says.
+      //
+      if (port.empty())
+         port = config().protocol == Protocol::h3 || is_https(config().url) ? "443" : "80";
+
+      //
+      // An HTTP/3 alternative service a previous session was told about takes precedence over the
+      // configured protocol -- that is what following it means, see Config::follow_alt_svc. The
+      // origin does not change with it, only where it is reached: requests still go out with the
+      // authority of config().url.
+      //
+      if (auto alt = alt_svc())
+      {
+         auto alt_host = alt->host.empty() ? host : alt->host;
+         mlogi("connecting to {}:{} over HTTP/3, as advertised by Alt-Svc", alt_host, alt->port);
+         endpoints = co_await resolve(alt_host, alt->port);
+         co_return Session{co_await async_connect_http3(executor_, std::move(endpoints), config())};
+      }
+
+      endpoints = co_await resolve(host, port);
    }
 
    //
@@ -158,14 +178,7 @@ Task<Session> Client::Impl::async_connect()
    // handshake, ...) than the TCP-based h1/h2 paths below.
    //
    if (config().protocol == Protocol::h3)
-      co_return Session{co_await async_connect_http3(executor_, host, port, config())};
-
-   mlogd("resolving {}:{} ...", host, port);
-   auto [resolve_ec, endpoints] = co_await io::resolve(executor_, host, port);
-   if (resolve_ec)
-      throw_error(resolve_ec);
-   for (auto& endpoint : endpoints)
-      mlogd("{}:{} -> {}", host, port, endpoint);
+      co_return Session{co_await async_connect_http3(executor_, std::move(endpoints), config())};
 
    //
    // Initiate connection.
@@ -197,7 +210,7 @@ Task<Session> Client::Impl::async_connect()
 
    //
    // The scheme alone decides about TLS, so that an "https" URL can never end up in cleartext. The
-   // certificate has to be valid for the host of the URL.
+   // certificate has to be valid for the host of the URL, wherever the connection went.
    //
    if (is_https(config().url))
    {

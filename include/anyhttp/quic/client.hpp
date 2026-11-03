@@ -11,6 +11,7 @@
 #include <chrono>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace anyhttp::quic
 {
@@ -34,11 +35,17 @@ struct ClientConfig
 };
 
 //
-// Connects to `host`:`port` over QUIC, with the application `factory` makes on top, and returns
-// the session once that application is up (QuicApplication::on_ready()). Throws if it doesn't
-// get there: with what ended the wait if the caller cancelled it, which also closes the connection,
-// and with errc::connection_refused if the connection failed.
+// Connects over QUIC to the first of `endpoints` that gets there, one after the other, with the
+// application `factory` makes on top, and returns the session once that application is up
+// (QuicApplication::on_ready()). Throws if it doesn't get there: with what ended the wait if the
+// caller cancelled it, which also closes the connection, and with errc::connection_refused if the
+// connections failed.
 //
+Task<std::shared_ptr<QuicSession>> async_connect(Executor executor,
+                                                 std::vector<TcpEndpoint> endpoints,
+                                                 ClientConfig config, ApplicationFactory factory);
+
+/// The same with what `host`:`port` resolves to.
 Task<std::shared_ptr<QuicSession>> async_connect(Executor executor, std::string host,
                                                  std::string port, ClientConfig config,
                                                  ApplicationFactory factory);

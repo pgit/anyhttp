@@ -370,12 +370,13 @@ void Http3ClientApplication::async_submit(SubmitHandler&& handler, std::string_v
 // Entry point used by Client::Impl::async_connect() for Protocol::h3.
 // =================================================================================================
 
-Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor, std::string host,
-                                                         std::string port, const Config& config)
+Task<std::shared_ptr<Session::Impl>>
+async_connect_http3(Executor executor, std::vector<TcpEndpoint> endpoints, const Config& config)
 {
    //
-   // The certificate has to be valid for the origin, the host of the URL -- also when `host` is
-   // an alternative service it advertised (RFC 7838, section 2.1).
+   // The certificate has to be valid for the origin, the host of the URL -- also when `endpoints`
+   // are an alternative service it advertised (RFC 7838, section 2.1), or what the caller has
+   // told us.
    //
    quic::ClientConfig quic_config{.alpn = "h3",
                                   .host = config.url.host_address(),
@@ -383,7 +384,7 @@ Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor, std:
                                   .idle_timeout = 30s};
    const size_t max_header_size = config.max_header_size;
    co_return co_await quic::async_connect(
-      std::move(executor), std::move(host), std::move(port), std::move(quic_config),
+      std::move(executor), std::move(endpoints), std::move(quic_config),
       [max_header_size](quic::QuicSession& session) -> std::unique_ptr<quic::QuicApplication> {
          return std::make_unique<Http3ClientApplication>(session, max_header_size);
       });

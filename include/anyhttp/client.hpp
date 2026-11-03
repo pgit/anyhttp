@@ -12,6 +12,7 @@
 #include <boost/url.hpp>
 
 #include <string>
+#include <vector>
 
 namespace anyhttp
 {
@@ -23,8 +24,25 @@ namespace client
 
 struct Config
 {
-   // FIXME: the client does not connect to an URL, it connects to a host:port or endpoint
+   /// What this client is for: the server's certificate has to be valid for the host of this URL.
+   /// Unless \c endpoints says otherwise, it also is where the client connects to.
    boost::urls::url url{"localhost:8080"};
+
+   /**
+    * Where to connect, instead of resolving the host of \c url, for a caller that knows better:
+    * it uses a resolver of its own, or follows a DNS HTTPS record (RFC 9460). They are tried in
+    * this order until one of them can be connected to, and with these, \c url does not have to
+    * resolve at all.
+    *
+    * Only where the connection goes changes. The certificate still has to be valid for the host of
+    * \c url, which also goes out as SNI. And what a request says it is for is the URL it is
+    * submitted with, as ever. An HTTP/3 alternative service is not followed, see
+    * \c follow_alt_svc: the caller has made that choice.
+    *
+    * With HTTP/3, an endpoint that does not answer at all takes the idle timeout of 30 seconds
+    * before the next one is tried -- limit that by cancelling \c async_connect().
+    */
+   std::vector<TcpEndpoint> endpoints{};
 
    /**
     * What to speak. An "https" \c url means TLS, and the server has a say in it: \c h1 offers
@@ -69,7 +87,8 @@ struct Config
     *
     * The alternative is remembered for as long as its "ma" parameter says, which is 24 hours
     * unless the server gives one, and only for as long as the Client itself lives -- there is no
-    * cache on disk, so a fresh process starts over with \c protocol.
+    * cache on disk, so a fresh process starts over with \c protocol. It does not apply to a client
+    * that has been given \c endpoints.
     */
    bool follow_alt_svc = false;
 

@@ -245,6 +245,16 @@ cleartext, and exactly the protocol given. HTTP/3 is TLS over QUIC with any sche
    client::Client client(executor, {.url = boost::urls::url("https://example.org")});
 ```
 
+`url` says what the connection is for, and unless told otherwise, also where it goes. A caller with
+its own resolver, or following a DNS HTTPS record, gives the addresses in `endpoints`, which are
+tried in order. Nothing is resolved then, while the certificate still has to be valid for the host
+of the URL, and requests still say they are for it:
+
+```c++
+   client::Client client(executor, {.url = boost::urls::url("https://example.org"),
+                                    .endpoints = {TcpEndpoint(address, 8443)}});
+```
+
 Over TLS, a body that ends with the connection is complete only if the server has said so with a
 `close_notify`: otherwise, it may have been cut by anyone, and reading it fails with
 `errors::partial_message`.

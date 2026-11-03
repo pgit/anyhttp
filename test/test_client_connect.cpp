@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <format>
 #include <stop_token>
+#include <string>
 
 using namespace testing;
 
@@ -290,7 +291,8 @@ TEST_P(ClientTlsMissingCaFile, WHEN_ca_file_cannot_be_loaded_THEN_connect_fails)
 // -------------------------------------------------------------------------------------------------
 
 //
-// The test certificate is issued for localhost, ::1, 127.0.0.1 and 127.0.0.2 -- not 127.0.0.3.
+// The test certificate is issued for localhost, anyhttp.invalid, ::1, 127.0.0.1 and 127.0.0.2 --
+// not 127.0.0.3.
 //
 class ClientTlsWrongHost : public ClientTls
 {
@@ -331,6 +333,128 @@ TEST_P(ClientCleartext, WHEN_scheme_is_http_THEN_no_tls_is_involved)
 {
    EXPECT_EQ(connect(), error_code{});
    EXPECT_EQ(protocol, GetParam());
+}
+
+// =================================================================================================
+
+//
+// Connecting where client::Config::endpoints says, for a URL that names no such place: ".invalid"
+// never resolves (RFC 6761), so any attempt at resolving it fails the connect, while the test
+// certificate is issued for "anyhttp.invalid".
+//
+class ClientEndpoints : public ClientAsync
+{
+protected:
+   ClientEndpoints() { url = boost::urls::url{"https://anyhttp.invalid/custom"}; }
+
+   void configure_client(client::Config& config) override
+   {
+      config.endpoints = {server->local_endpoint()};
+   }
+
+   /// Responds with the authority the request says it is for.
+   void respond_with_authority()
+   {
+      requestHandler = [](server::Request request, server::Response response) -> Task<void> {
+         co_await drain(request);
+         const std::string authority(request.url().encoded_host_and_port());
+         check(co_await response.submit(200, fields({{"Content-Length", authority.size()}})));
+         check(co_await response.write_eof(asio::buffer(authority)));
+      };
+   }
+
+   Task<void> expect_response_from_server(Session session)
+   {
+      EXPECT_EQ(session.protocol(), GetParam());
+      auto message = check(co_await session.get(url));
+      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.body(), url.encoded_host_and_port());
+   }
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientEndpoints, ClientEndpoints, all_protocols, NameGenerator);
+
+TEST_P(ClientEndpoints, WHEN_endpoint_is_given_THEN_url_is_verified_and_sent_but_not_resolved)
+{
+   respond_with_authority();
+   clientSession = [this](Session session) -> Task<void> {
+      co_await expect_response_from_server(std::move(session));
+   };
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// The first endpoint is nobody's, which TCP learns from a refused connect, and QUIC from an ICMP
+// message telling it the port is unreachable.
+//
+class ClientEndpointsFallback : public ClientEndpoints
+{
+protected:
+   void configure_client(client::Config& config) override
+   {
+      const auto live = server->local_endpoint();
+      config.endpoints = {TcpEndpoint(live.address(), get_unused_port()), live};
+   }
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientEndpointsFallback, ClientEndpointsFallback, all_protocols,
+                         NameGenerator);
+
+TEST_P(ClientEndpointsFallback, WHEN_first_endpoint_fails_THEN_next_one_is_tried)
+{
+   respond_with_authority();
+   clientSession = [this](Session session) -> Task<void> {
+      co_await expect_response_from_server(std::move(session));
+   };
+}
+
+// -------------------------------------------------------------------------------------------------
+
+/// Cleartext has nothing to verify, and the URL still is what requests say they are for.
+class ClientEndpointsCleartext : public ClientEndpoints
+{
+protected:
+   void configure_client(client::Config& config) override
+   {
+      ClientEndpoints::configure_client(config);
+      config.url.set_scheme("http"); // whatever ANYHTTP_TEST_SCHEME says
+      url.set_scheme("http");
+   }
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientEndpointsCleartext, ClientEndpointsCleartext,
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2), NameGenerator);
+
+TEST_P(ClientEndpointsCleartext, WHEN_endpoint_is_given_THEN_url_is_not_resolved)
+{
+   respond_with_authority();
+   clientSession = [this](Session session) -> Task<void> {
+      co_await expect_response_from_server(std::move(session));
+   };
+}
+
+// -------------------------------------------------------------------------------------------------
+
+/// Being told where to go changes nothing about whom to expect there.
+class ClientEndpointsWrongHost : public ClientTls
+{
+protected:
+   ClientEndpointsWrongHost() { url = boost::urls::url{"https://not-in-the-certificate.invalid/"}; }
+
+   void configure_client(client::Config& config) override
+   {
+      config.endpoints = {server->local_endpoint()};
+   }
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientEndpointsWrongHost, ClientEndpointsWrongHost, all_protocols,
+                         NameGenerator);
+
+TEST_P(ClientEndpointsWrongHost, WHEN_certificate_is_not_for_the_host_of_the_url_THEN_connect_fails)
+{
+   expect_failure(connect());
+   EXPECT_FALSE(protocol);
 }
 
 // =================================================================================================

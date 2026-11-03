@@ -202,6 +202,35 @@ TEST_P(AltSvcUpgrade, WHEN_the_server_clears_the_alternative_THEN_it_is_not_used
 // -------------------------------------------------------------------------------------------------
 
 //
+// With Config::endpoints, the caller has said where to connect, and that does not change either.
+//
+class AltSvcWithEndpoints : public AltSvcUpgrade
+{
+protected:
+   void configure_client(client::Config& config) override
+   {
+      AltSvcUpgrade::configure_client(config);
+      config.endpoints = {server->local_endpoint()};
+   }
+};
+
+INSTANTIATE_TEST_SUITE_P(AltSvcWithEndpoints, AltSvcWithEndpoints,
+                         Values(anyhttp::Protocol::h1, anyhttp::Protocol::h2), NameGenerator);
+
+TEST_P(AltSvcWithEndpoints, WHEN_endpoints_are_given_THEN_the_alternative_is_not_followed)
+{
+   clientSession = [this](Session session) -> Task<void> {
+      auto first = check(co_await session.get(echo()));
+      EXPECT_THAT(std::string(first[http::field::alt_svc]), HasSubstr("h3="));
+
+      auto second = check(co_await check(co_await client->connect()).get(echo()));
+      EXPECT_FALSE(served_over_http3(second));
+   };
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
 // Without Config::follow_alt_svc, the advertisement is still there to be seen, but nothing is
 // done with it: a client asked for a protocol gets that protocol.
 //

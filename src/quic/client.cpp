@@ -429,6 +429,52 @@ void QuicClientSession::async_submit(SubmitHandler&& handler, std::string_view m
 
 // =================================================================================================
 
+Task<std::shared_ptr<QuicSession>> async_connect(Executor executor,
+                                                 std::vector<TcpEndpoint> endpoints,
+                                                 ClientConfig config, ApplicationFactory factory)
+{
+   if (endpoints.empty())
+      throw_error(make_error_code(errc::host_unreachable));
+
+   for (const auto& endpoint : endpoints)
+   {
+      auto session = std::make_shared<QuicClientSession>(executor);
+      if (session->init(UdpEndpoint{endpoint.address(), endpoint.port()}, config, factory) != 0)
+         continue;
+
+      std::shared_ptr<Session::Impl> impl = session;
+
+      launch(executor, impl->do_session(Buffer{}),
+             [impl, prefix = session->log_prefix()](const std::exception_ptr& ex) mutable {
+                if (ex)
+                   logw("[{}] client run: {}", prefix, what(ex));
+                else
+                   logi("[{}] client run: done", prefix);
+                impl.reset();
+             });
+
+      //
+      // The wait ends when the handshake has gotten far enough, when the connection has failed or
+      // closed before that, or when the caller cancels. Only ready() tells these apart.
+      //
+      auto [ec] = co_await session->wait_ready();
+      if (session->ready())
+         co_return session;
+
+      //
+      // Nobody is going to use this session any more, and nothing else would end it: left alone,
+      // it goes on sending to the peer until the idle timeout, and keeps the context from running
+      // dry until then. A connection that has failed by itself is closed already.
+      //
+      session->destroy();
+      if (ec)
+         throw_error(ec);
+      logi("[{}] connecting to {} failed", session->log_prefix(), endpoint);
+   }
+
+   throw_error(make_error_code(errc::connection_refused));
+}
+
 Task<std::shared_ptr<QuicSession>> async_connect(Executor executor, std::string host,
                                                  std::string port, ClientConfig config,
                                                  ApplicationFactory factory)
@@ -436,42 +482,9 @@ Task<std::shared_ptr<QuicSession>> async_connect(Executor executor, std::string 
    auto [resolved, endpoints] = co_await io::resolve(executor, host, port);
    if (resolved)
       throw_error(resolved);
-   if (endpoints.empty())
-      throw_error(make_error_code(errc::host_unreachable));
-   const UdpEndpoint remote{endpoints.front().address(), endpoints.front().port()};
 
-   auto session = std::make_shared<QuicClientSession>(executor);
-   if (session->init(remote, config, factory) != 0)
-      throw_error(make_error_code(errc::connection_refused));
-
-   std::shared_ptr<Session::Impl> impl = session;
-
-   launch(executor, impl->do_session(Buffer{}),
-          [impl, prefix = session->log_prefix()](const std::exception_ptr& ex) mutable {
-             if (ex)
-                logw("[{}] client run: {}", prefix, what(ex));
-             else
-                logi("[{}] client run: done", prefix);
-             impl.reset();
-          });
-
-   //
-   // The wait ends when the handshake has gotten far enough, when the connection has failed or
-   // closed before that, or when the caller cancels. Only ready() tells these apart.
-   //
-   auto [ec] = co_await session->wait_ready();
-   if (!session->ready())
-   {
-      //
-      // Nobody is going to use this session any more, and nothing else would end it: left alone,
-      // it goes on sending to the peer until the idle timeout, and keeps the context from running
-      // dry until then. A connection that has failed by itself is closed already.
-      //
-      session->destroy();
-      throw_error(ec ? ec : make_error_code(errc::connection_refused));
-   }
-
-   co_return session;
+   co_return co_await async_connect(std::move(executor), std::move(endpoints), std::move(config),
+                                    std::move(factory));
 }
 
 // =================================================================================================
