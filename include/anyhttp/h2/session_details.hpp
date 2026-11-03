@@ -399,8 +399,13 @@ Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    // enforces it in neither direction. Header sections beyond max_header_size are rejected where
    // they arrive, see on_header_callback().
    //
+   // No server push, either: there is no way to hand out a pushed response. nghttp2 acts on this
+   // from here on, on its own: until the server has acknowledged it, a push is cancelled with
+   // RST_STREAM, and after that it is a connection error. See on_begin_frame_callback().
+   //
    auto iv =
-      std::to_array<nghttp2_settings_entry>({{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
+      std::to_array<nghttp2_settings_entry>({{NGHTTP2_SETTINGS_ENABLE_PUSH, 0},
+                                             {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
                                              {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size}});
    nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, iv.data(), iv.size());
    nghttp2_session_set_local_window_size(session, NGHTTP2_FLAG_NONE, 0, window_size);

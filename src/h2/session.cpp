@@ -74,6 +74,19 @@ static std::string_view frame_type(uint8_t type)
 
 // =================================================================================================
 
+/**
+ * The only place that gets to see a server push. The client asks for none, and then nghttp2 drops a
+ * PUSH_PROMISE on its own, without any of the other callbacks, see ClientSession::do_session(). So
+ * all that is known here is that there was one, not what it promised.
+ */
+static int on_begin_frame_callback(nghttp2_session*, const nghttp2_frame_hd* hd, void* user_data)
+{
+   if (hd->type == NGHTTP2_PUSH_PROMISE)
+      logi("[{}] on_begin_frame_callback: PUSH_PROMISE, length={}, not asked for and dropped",
+           static_cast<NGHttp2Session*>(user_data)->log_prefix(hd->stream_id), hd->length);
+   return 0;
+}
+
 static int on_begin_headers_callback(nghttp2_session*, const nghttp2_frame* frame, void* user_data)
 {
    auto handler = static_cast<NGHttp2Session*>(user_data);
@@ -99,8 +112,18 @@ static int on_header_callback(nghttp2_session* session, const nghttp2_frame* fra
    auto name = make_string_view(name_, namelen_);
    auto value = make_string_view(value_, valuelen_);
 
+   //
+   // No frame of a peer may take down the process. This was an assert until a pushed response came
+   // here, which SETTINGS_ENABLE_PUSH=0 prevents now. Should another way lead here, there is just
+   // nothing to store the fields in.
+   //
    auto stream = handler->find_stream(frame->hd.stream_id);
-   assert(stream);
+   if (!stream)
+   {
+      logd("[{}] ignoring header without a stream: {}: {}", handler->log_prefix(frame),
+           truncated(name), truncated(value));
+      return 0;
+   }
 
    //
    // Beyond the limit, fields are not stored any more, but nghttp2 still has to decode them: HPACK
@@ -434,6 +457,7 @@ nghttp2_unique_ptr<nghttp2_session_callbacks> NGHttp2Session::setup_callbacks()
    nghttp2_session_callbacks_set_on_data_chunk_recv_callback(cbs, on_data_chunk_recv_callback);
    nghttp2_session_callbacks_set_on_frame_send_callback     (cbs, on_frame_send_callback);
    nghttp2_session_callbacks_set_on_stream_close_callback   (cbs, on_stream_close_callback);
+   nghttp2_session_callbacks_set_on_begin_frame_callback    (cbs, on_begin_frame_callback);
    nghttp2_session_callbacks_set_on_begin_headers_callback  (cbs, on_begin_headers_callback);
    nghttp2_session_callbacks_set_on_header_callback         (cbs, on_header_callback);
    nghttp2_session_callbacks_set_on_frame_not_send_callback (cbs, on_frame_not_send_callback);
