@@ -166,7 +166,7 @@ biggest difference between the two engines:
 
 | | nghttp2 (pull, copies) | nghttp3 (pull, *borrows until ACK*) |
 |---|---|---|
-| Engine behaviour | the data provider copies into the frame immediately | `read_data` hands out pointers that stay live until `acked_stream_data` |
+| Engine behavior | the data provider copies into the frame immediately | `read_data` hands out pointers that stay live until `acked_stream_data` |
 | What we did | borrowed the caller's buffer descriptors, zero-copy (`f0f5859`) | **copy into a stream-owned staging area** (`kMaxStagedBytes = 256 KiB`) |
 | `write_some` completes | after one provider pull (a true partial write) | as soon as the bytes are staged |
 | Backpressure from | the peer's flow-control window | the staging bound |
@@ -301,7 +301,7 @@ recvmsg(socket.native_handle(), ...);             // transfer by hand; EAGAIN ->
   ngtcp2 and collapses the congestion window over what is only local backpressure. (anyhttp drops
   here.)
 - Make optional kernel features best-effort, with **sticky per-session fallbacks** (`no_gso_`,
-  `no_ecn_`). Each degradation lands exactly on the previous behaviour.
+  `no_ecn_`). Each degradation lands exactly on the previous behavior.
 - Value-initialise the send-side control buffer (`control[kControlSize]{}`). `CMSG_SPACE` pads
   beyond `CMSG_LEN`, `msg_controllen` covers that padding, and valgrind caught the kernel reading
   uninitialised stack on every GSO send.

@@ -474,7 +474,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
 
       //
       // The peer's MAX_CONCURRENT_STREAMS is reached. Version 1 queued such a request and sent it
-      // once a stream came free; version 2 refuses it, which is the behaviour Session::async_submit
+      // once a stream came free; version 2 refuses it, which is the behavior Session::async_submit
       // describes for a protocol that limits concurrency -- the caller may be the one who has to
       // finish a request first, so waiting here could deadlock.
       //
