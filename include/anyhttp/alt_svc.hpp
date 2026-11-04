@@ -49,13 +49,12 @@ struct AltSvc
    /// The field value was "clear": everything known about the origin is to be forgotten.
    bool clear = false;
 
-   //
-   // The advertised alternatives, in the order they were given, which is the order of the
-   // server's preference (RFC 7838, section 3).
-   //
+   /// The advertised alternatives, in the order they were given, which is the order of the
+   /// server's preference (RFC 7838, section 3).
    std::vector<AltService> services;
 
-   /// The first alternative offering \p protocol, or nullptr if there is none.
+   /// \param protocol The ALPN protocol name to look for.
+   /// \return The first alternative offering \p protocol, or nullptr if there is none.
    const AltService* find(std::string_view protocol) const noexcept;
 };
 
@@ -66,6 +65,9 @@ struct AltSvc
  * parameters are malformed -- a client is free to ignore what it does not understand (RFC 7838,
  * section 3), and the alternatives it *can* read are still worth having. The result is empty for
  * a field value that yields nothing at all.
+ *
+ * \param value The field value.
+ * \return What could be made of it.
  */
 AltSvc parse_alt_svc(std::string_view value);
 

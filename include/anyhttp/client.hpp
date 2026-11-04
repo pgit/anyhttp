@@ -22,6 +22,7 @@ namespace client
 
 // =================================================================================================
 
+/// What a \ref Client is made with.
 struct Config
 {
    /// What this client is for: the server's certificate has to be valid for the host of this URL.
@@ -58,7 +59,7 @@ struct Config
    /**
     * The largest header section of a response the client accepts, in bytes, counted as for
     * \c server::Config::max_header_size. For a response with more, \c async_get_response() fails
-    * with \c boost::beast::http::error::header_limit and the stream is reset -- with HTTP/1.1,
+    * with \c errors::header_limit and the stream is reset -- with HTTP/1.1,
     * which has no streams, the connection can not be used any more.
     */
    size_t max_header_size = default_max_header_size;
@@ -76,6 +77,8 @@ struct Config
     * receive buffer, and whatever the server echoes back fills the other direction too.
     */
    int socket_send_buffer_size = 0;
+
+   /// See \ref socket_send_buffer_size.
    int socket_receive_buffer_size = 0;
 
    /**
@@ -104,32 +107,46 @@ struct Config
 
 // =================================================================================================
 
-//
-// A response received in one piece: status, header fields and the whole body as a string.
-//
-// This is a plain Beast message, with nothing of anyhttp left in it -- what \c Session::async_get()
-// hands back. Its version is 11 whatever the protocol was: HTTP/2 and HTTP/3 have no version on
-// the wire, and a Beast message has nowhere else to put one.
-//
+/**
+ * A response received in one piece: status, header fields and the whole body as a string.
+ *
+ * This is a plain Beast message, with nothing of anyhttp left in it -- what \c Session::async_get()
+ * hands back. Its version is 11 whatever the protocol was: HTTP/2 and HTTP/3 have no version on
+ * the wire, and a Beast message has nowhere else to put one.
+ */
 using Message = boost::beast::http::response<boost::beast::http::string_body>;
 
 // -------------------------------------------------------------------------------------------------
 
+/**
+ * The response to a request, as a handle: its status and header fields, and a \ref Reader for its
+ * body. It can be moved but not copied.
+ *
+ * Releasing one before the end of the body resets its stream with HTTP/2 and HTTP/3, which leaves
+ * the session usable. Over HTTP/1.1, it is the end of the connection for further responses.
+ */
 class Response : public Reader
 {
 public:
+   /// \cond internal
    class Impl;
-   Response();
    explicit Response(std::unique_ptr<Impl> impl);
    Response(Response&& other) noexcept;
    Response& operator=(Response&& other) noexcept;
-   void reset() noexcept;
    ~Response();
+   /// \endcond
+
+   /// A handle without a response, as the one that comes with an error.
+   Response();
+
+   /// Releases the response, as the destructor does.
+   void reset() noexcept;
 
 public:
+   /// \return The status code of the response.
    int status_code() const noexcept;
 
-   /// The response header fields, without HTTP/2 and HTTP/3 pseudo-headers.
+   /// \return The response header fields, without HTTP/2 and HTTP/3 pseudo-headers.
    const Fields& fields() const;
 
 private:
@@ -139,18 +156,33 @@ private:
 
 // -------------------------------------------------------------------------------------------------
 
+/**
+ * A request that has been submitted, as a handle: a \ref Writer for its body, and the way to its
+ * response. It can be moved but not copied.
+ *
+ * The body is ended with \ref Writer::async_write_eof, which does no harm where there is none.
+ * What releasing a request before that means, or before asking for its response, is on the page on
+ * concurrent requests.
+ */
 class Request : public Writer
 {
 public:
+   /// \cond internal
    class Impl;
-   Request();
    explicit Request(std::unique_ptr<Impl> impl);
    Request(Request&& other) noexcept;
    Request& operator=(Request&& other) noexcept;
-   void reset() noexcept;
    ~Request();
+   /// \endcond
+
+   /// A handle without a request, as the one that comes with an error.
+   Request();
+
+   /// Releases the request, as the destructor does.
+   void reset() noexcept;
 
 public:
+   /// The completion signature of \c async_get_response: the error and the response.
    using GetResponse = void(error_code, Response);
    using GetResponseHandler = Completion<GetResponse>;
 
@@ -160,9 +192,12 @@ public:
     * With HTTP/1.1, responses arrive in the order the requests were sent, one after the other.
     * Getting the response to a request whose predecessors' responses have not been read to their
     * end does not wait for that to happen, but fails immediately with
-    * \c asio::error::would_block. After a response could not be read -- it was released before
+    * \c errors::would_block. After a response could not be read -- it was released before
     * its end, or its request was released without asking for it -- getting any later response
-    * fails with \c asio::error::connection_aborted. See README.md, "Concurrent Requests".
+    * fails with \c errors::connection_aborted. See the page on concurrent requests.
+    *
+    * \param token The completion token, for a handler of the signature \c GetResponse.
+    * \return What \p token makes of the operation.
     */
 #if ANYHTTP_ASIO
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken = DefaultCompletionToken>
@@ -180,6 +215,7 @@ public:
 
    /// \c async_get_response() as a coroutine:
    /// <tt>auto [ec, response] = co_await request.get_response();</tt>
+   /// \return The error and the response.
    Task<std::tuple<error_code, Response>> get_response();
 
 private:
@@ -195,19 +231,33 @@ private:
 
 // =================================================================================================
 
+/// The completion signature of \c Client::async_connect: the error and the session.
 using Connect = void(error_code, Session);
 using ConnectHandler = Completion<Connect>;
 
+/**
+ * Makes connections to the one server of its \ref Config, each of them a \ref Session. It can be
+ * moved but not copied.
+ */
 class Client
 {
 public:
+   /// \cond internal
    class Impl;
-   Client(Executor executor, Config config);
    Client(Client&& other) noexcept;
    Client& operator=(Client&& other) noexcept;
    ~Client();
+   /// \endcond
 
+   /// A client on \p executor, which does nothing until it is told to connect.
+   /// \param executor What the client and its sessions run on.
+   /// \param config What it connects to, and how.
+   Client(Executor executor, Config config);
+
+   /// The executor type, for what looks for one.
    using executor_type = Executor;
+
+   /// \return The executor the client runs on.
    executor_type get_executor() const noexcept;
 
    /**
@@ -218,6 +268,9 @@ public:
     * \c getaddrinfo(), which is a blocking system call. This is done from a separate thread,
     * so the users executor is not blocked, but this still means that the operation cannot be
     * interrupted.
+    *
+    * \param token The completion token, for a handler of the signature \c Connect.
+    * \return What \p token makes of the operation.
     */
 #if ANYHTTP_ASIO
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken = DefaultCompletionToken>
@@ -231,6 +284,7 @@ public:
 #endif
 
    /// \c async_connect() as a coroutine: <tt>auto [ec, session] = co_await client.connect();</tt>
+   /// \return The error and the session.
    Task<std::tuple<error_code, Session>> connect();
 
 private:

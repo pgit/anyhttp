@@ -45,6 +45,7 @@
 #include <tuple>
 #include <utility>
 
+/// \cond internal
 /// The error code of what \p ptr holds, as thrown by the runtime.
 inline boost::system::error_code code(const std::exception_ptr& ptr)
 {
@@ -64,6 +65,8 @@ inline boost::system::error_code code(const std::exception_ptr& ptr)
    }
 }
 
+/// \endcond
+
 namespace anyhttp
 {
 namespace asio = boost::asio;
@@ -75,12 +78,17 @@ using Task = asio::awaitable<T>;
 /// What sessions, streams and their readers and writers run on.
 using Executor = asio::any_io_executor;
 
-/// The runtime's own IP address and endpoints, which the API speaks, too.
+/// The runtime's own IP address, which the API speaks, too.
 using IpAddress = asio::ip::address;
+
+/// The runtime's own TCP endpoint.
 using TcpEndpoint = asio::ip::tcp::endpoint;
+
+/// The runtime's own UDP endpoint.
 using UdpEndpoint = asio::ip::udp::endpoint;
 
-using boost::system::error_code;
+/// What every operation reports its outcome with.
+using error_code = boost::system::error_code;
 
 // =================================================================================================
 
@@ -93,7 +101,7 @@ namespace errc = boost::system::errc;
 
 /**
  * The error codes anyhttp reports where the two runtimes spell them differently. Most of them
- * are part of the API contract (README.md, "The End of a Body" and "Concurrent Requests"). Every
+ * are part of the API contract (docs/end-of-body.rst and docs/concurrent-requests.rst). Every
  * other error is made with `make_error_code(errc::...)`.
  */
 namespace errors
@@ -123,18 +131,22 @@ inline const error_code already_started = asio::error::already_started;
 inline const error_code header_limit = boost::beast::http::error::header_limit;
 } // namespace errors
 
+/// \cond internal
 /// Whether the runtime supports running a server or client on several threads (with strands).
 inline constexpr bool multithreaded_runtime = true;
+/// \endcond
 
 /// What the runtime throws an error_code as.
 using system_error = boost::system::system_error;
 
 /// Throws \p ec, for code that reports errors as exceptions, as the runtime's own does.
+/// \param ec The error.
 [[noreturn]] inline void throw_error(const error_code& ec)
 {
    throw boost::system::system_error(ec);
 }
 
+/// \cond internal
 /// What `errno` holds, for code that calls the operating system itself.
 inline error_code last_error() noexcept { return {errno, boost::system::system_category()}; }
 
@@ -237,7 +249,11 @@ auto initiate(Init&& init)
       asio::as_tuple(asio::deferred));
 }
 
+/// \endcond
+
 /// Starts \p task on \p executor, detached: nobody waits for it, and what it throws is dropped.
+/// \param executor What to run it on.
+/// \param task What to run.
 inline void launch(const Executor& executor, Task<void> task)
 {
    asio::co_spawn(executor, std::move(task), asio::detached);
@@ -245,12 +261,16 @@ inline void launch(const Executor& executor, Task<void> task)
 
 /// Starts \p task on \p executor and calls \p on_done with what it threw, if anything, when it
 /// is done: <tt>void(const std::exception_ptr&)</tt>.
+/// \param executor What to run it on.
+/// \param task What to run.
+/// \param on_done What to call when it is done.
 template <typename F>
 inline void launch(const Executor& executor, Task<void> task, F&& on_done)
 {
    asio::co_spawn(executor, std::move(task), std::forward<F>(on_done));
 }
 
+/// \cond internal
 /**
  * Runs \p task on \p executor as the operation \p handler stands for: the task's result
  * completes that operation, and cancelling it cancels the task. A task that throws completes it
@@ -306,8 +326,12 @@ inline void dispatch_to(const Executor& executor, F&& function)
 /// while the io_context runs on several threads (\c server::Config::use_strand).
 inline Executor new_strand(const Executor& executor) { return asio::make_strand(executor); }
 
+/// \endcond
+
 /// Waits for \p duration to pass. Cancelling the wait completes it early, with the error code
 /// the runtime's timers report for that.
+/// \param duration How long to wait.
+/// \return The error, if the wait has been cancelled.
 inline Task<error_code> delay(std::chrono::steady_clock::duration duration)
 {
    asio::steady_timer timer(co_await asio::this_coro::executor);
@@ -320,6 +344,10 @@ inline Task<error_code> delay(std::chrono::steady_clock::duration duration)
  * Runs \p a and \p b concurrently, until both are done, and yields what they return: nothing,
  * the one value, or both as a tuple. If one of them throws, the other is cancelled, and the
  * exception is rethrown once both are done.
+ *
+ * \param a One of the two.
+ * \param b The other one.
+ * \return What to await.
  */
 template <typename A, typename B>
 auto when_both(Task<A> a, Task<B> b)
@@ -333,6 +361,10 @@ auto when_both(Task<A> a, Task<B> b)
  * what it returned as a variant, with \c std::monostate for nothing. One that throws does not
  * succeed: only when both have thrown is one of the exceptions rethrown (wrapped in ASIO's
  * multiple_exceptions). Waits for the other one to finish all the same.
+ *
+ * \param a One of the two.
+ * \param b The other one.
+ * \return What to await.
  */
 template <typename A, typename B>
 auto when_either(Task<A> a, Task<B> b)
@@ -346,6 +378,8 @@ auto when_either(Task<A> a, Task<B> b)
  * ASIO throws from everything it awaits after that otherwise -- a nested coroutine included, which
  * is why this has to be awaited in the cancelled coroutine itself. In COROSIO, there is nothing to
  * reset, see shielded().
+ *
+ * \return What to await.
  */
 inline auto reset_cancellation() { return asio::this_coro::reset_cancellation_state(); }
 
@@ -353,6 +387,9 @@ inline auto reset_cancellation() { return asio::this_coro::reset_cancellation_st
  * Awaits \p task although the caller has been cancelled already, once reset_cancellation() has
  * been awaited. With ASIO, that is all it takes. A stop request in COROSIO can not be taken back,
  * and there, the task runs with a stop token of its own instead.
+ *
+ * \param task What to await.
+ * \return What to await instead.
  */
 template <typename T>
 Task<T> shielded(Task<T> task)
@@ -361,6 +398,8 @@ Task<T> shielded(Task<T> task)
 }
 
 // =================================================================================================
+
+/// \cond internal
 
 /**
  * Wakes up the coroutine that waits for it, as capy's \c async_event does. The event is latched:
@@ -517,5 +556,7 @@ auto wait_readable(Socket& socket)
 } // namespace io
 
 // =================================================================================================
+
+/// \endcond
 
 } // namespace anyhttp
