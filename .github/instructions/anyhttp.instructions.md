@@ -37,7 +37,7 @@ Builds are out-of-source, one tree per configuration (`build/` Debug, `build-rel
 Run the tests from the repository root -- they load TLS material through relative paths -- and
 prefer `gtest-parallel build/test/test_all`.
 
-[README.md](../../README.md) documents the API, the concurrency model and the reasoning behind it:
+[docs/](../../docs/README.md) documents the API, the concurrency model and the reasoning behind it:
 read it before changing anything about request/response semantics.
 [CLAUDE.md](../../CLAUDE.md) covers working in the tree in detail -- the build trees and their
 options, how to run and filter the tests, the sanitizer recipes, the source layout and the traps.

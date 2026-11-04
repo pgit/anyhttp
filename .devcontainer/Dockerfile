@@ -17,6 +17,20 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
 # ==================================================================================================
 
 #
+# What makes the documentation (cmake --build build --target docs): Doxygen for the comments in the
+# headers, Sphinx for the pages. These are the versions of the release of Debian that the base image
+# is on, which are known to work together. The Documentation job in .github/workflows/release.yml
+# installs the same.
+#
+RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
+    apt-get -y install --no-install-recommends \
+        doxygen python3-sphinx python3-breathe python3-sphinx-rtd-theme && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# ==================================================================================================
+
+#
 # enable persistent bash history in container
 #
 # https://code.visualstudio.com/remote/advancedcontainers/persist-bash-history

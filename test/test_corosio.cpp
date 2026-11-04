@@ -161,7 +161,8 @@ TEST(Corosio, BeastParserAndSerializer)
 //
 // Why each API style needs error constants of its own: a Boost.System code survives the conversion
 // to std::error_code -- Beast's errors stay comparable across it -- but asio's eof does not become
-// capy's. The README's "asio::error::eof at the end of a body" is capy::error::eof in COROSIO.
+// capy's. What docs/end-of-body.rst calls errors::eof at the end of a body is capy::error::eof in
+// COROSIO.
 //
 TEST(Corosio, ErrorCodeInterop)
 {

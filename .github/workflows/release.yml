@@ -132,8 +132,45 @@ jobs:
       - name: Check installing and embedding
         run: scripts/check_package.sh
 
+  #
+  # The guide and the reference, with Doxygen and Sphinx, where warnings are errors: this is where a
+  # public symbol without a comment shows, and a reference that goes nowhere. The tools are the
+  # ones .devcontainer/Dockerfile installs, as the image does not have them. Nothing is compiled.
+  #
+  docs:
+    name: Documentation
+    runs-on: *runs_on
+    container: *container
+
+    steps:
+      - *checkout
+
+      - name: Install the tools
+        run: |
+          apt-get update
+          apt-get -y install --no-install-recommends \
+            doxygen python3-sphinx python3-breathe python3-sphinx-rtd-theme
+
+      - name: Make the documentation
+        run: |
+          cmake --preset build
+          cmake --build --preset build --target docs
+
+      - name: Upload the documentation
+        uses: actions/upload-artifact@v7
+        with:
+          name: documentation
+          path: build/docs/html/
+          retention-days: 30
+
+  #
+  # A site has one deployment, so this is what publishes the documentation as well: it goes to the
+  # root of the site, and the coverage report next to it. There is no point in publishing a report
+  # without the documentation, so a failure over there holds this back.
+  #
   coverage:
     name: Coverage
+    needs: docs
     runs-on: *runs_on
     container: *container
     permissions:
@@ -160,6 +197,13 @@ jobs:
           mkdir -p pages/coverage
           cp -r build/coverage_report/* pages/coverage/
 
+      - name: Get the documentation
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        uses: actions/download-artifact@v8
+        with:
+          name: documentation
+          path: pages/
+
       - name: Upload Coverage Report
         uses: actions/upload-artifact@v7
         with:
@@ -167,7 +211,7 @@ jobs:
           path: build/coverage_report/
           retention-days: 30
 
-      - name: Upload coverage to GitHub Pages
+      - name: Upload coverage and documentation to GitHub Pages
         if: github.ref == 'refs/heads/master' && github.event_name == 'push'
         uses: actions/upload-pages-artifact@v5
         with:

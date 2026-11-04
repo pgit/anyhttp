@@ -278,14 +278,15 @@
         {
             "name": "build-deploy",
             "displayName": "For cmake --install",
-            "description": "Release, without the tests and thus without cfssl and the test PKI. On AWS-LC, which links statically: a TLS library the target machine does not have to provide",
+            "description": "Release, without the tests and thus without cfssl and the test PKI, and without the code of the guide. On AWS-LC, which links statically: a TLS library the target machine does not have to provide",
             "inherits": [
                 "clang",
                 "base"
             ],
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
-                "ANYHTTP_BUILD_TESTS": "OFF"
+                "ANYHTTP_BUILD_TESTS": "OFF",
+                "ANYHTTP_BUILD_DOCS": "OFF"
             }
         }
     ],
