@@ -34,7 +34,7 @@ jobs:
     name: ${{ matrix.api }} ${{ matrix.flavor }}
     runs-on: &runs_on ubuntu-26.04
     container: &container
-      image: docker.io/psedoc/anyhttp:0.31
+      image: docker.io/psedoc/anyhttp:0.32
       # The Ubuntu 26.04 runner kernel's ASLR entropy is high enough that the binary can land in
       # TSAN's fixed shadow region. TSAN then re-execs itself with
       # personality(ADDR_NO_RANDOMIZE), which docker's default seccomp profile refuses -- the job

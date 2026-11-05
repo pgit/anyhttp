@@ -92,7 +92,7 @@ private:
    capy::const_buffer linearize(const ConstBufferSequence& buffers)
    {
       size_t used = 0;
-      for (auto it = capy::begin(buffers), end = capy::end(buffers);
+      for (auto it = capy::buffer_sequence_begin(buffers), end = capy::buffer_sequence_end(buffers);
            it != end && used < linearize_size;)
       {
          capy::const_buffer buffer = *it++;
