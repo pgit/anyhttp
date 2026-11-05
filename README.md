@@ -1,14 +1,14 @@
 
 # Overview
 [![Build and run tests](https://github.com/pgit/anyhttp/actions/workflows/release.yml/badge.svg)](https://github.com/pgit/anyhttp/actions/workflows/release.yml)
+[![Documentation](https://img.shields.io/badge/documentation-read-blue)](https://pgit.github.io/anyhttp/)
 [![Coverage](https://img.shields.io/badge/coverage-report-blue)](https://pgit.github.io/anyhttp/coverage/)
 
 Low-level C++23 HTTP client and server library, in one of two API styles, chosen at configure time:
 
-* **ASIO**, on Boost.Asio: every operation is an ASIO asynchronous operation and takes any
-  completion token.
-* **COROSIO**, on [capy](https://github.com/cppalliance/capy) and
-  [corosio](https://github.com/cppalliance/corosio): coroutines only.
+* **ASIO**, on [Asio](https://www.boost.org/doc/libs/release/doc/html/boost_asio.html): every
+  operation is an asynchronous operation of Asio and takes any completion token.
+* **COROSIO**, on [Corosio](https://github.com/cppalliance/corosio): coroutines only.
 
 > [!WARNING]
 > This repository is purely experimental. It is not meant for production use, and anything in it
@@ -24,130 +24,18 @@ None of those protocols are implemented from scratch. Instead, it is a wrapper a
 
 This project started as a hand-written replacement for [nghttp2-asio](https://github.com/nghttp2/nghttp2-asio). Once the concept was working, HTTP/1.1 was added, and both protocols were hidden behind a type-erased interface. Finally, HTTP/3 was added with the help of agentic coding.
 
-## API styles
+## Documentation
 
-|  | ASIO | COROSIO |
-|---|---|---|
-| CMake | `-DANYHTTP_API=ASIO` (default) | `-DANYHTTP_API=COROSIO`<br>`-DTLS_LIBRARY=OpenSSL` |
-| `Task<T>` | `asio::awaitable<T>` | `capy::task<T>` |
-| `Executor` | `asio::any_io_executor` | `capy::any_executor` |
-| `error_code` | `boost::system::error_code` | `std::error_code` |
-| `TcpEndpoint`, `UdpEndpoint` | `asio::ip::tcp::endpoint`, `asio::ip::udp::endpoint` | `corosio::endpoint` |
-| Operations | `async_x(..., token)` and `x()` | `x()` |
-| TLS | AWS-LC (default) or OpenSSL 3.5+ | OpenSSL 3.5+ |
-| Programs | `server`, `client` | `server` |
+**<https://pgit.github.io/anyhttp/>** has the [programmer's guide](docs/programmers-guide.rst), which
+is the place to start, the API reference and how it all works:
+[API styles](docs/api-styles.rst), [the end of a body](docs/end-of-body.rst),
+[concurrent requests](docs/concurrent-requests.rst), [moving to HTTP/3](docs/alt-svc.rst) and
+[the HTTP/2 library](docs/http2-library.rst). [docs/README.md](docs/README.md) says how to make it.
 
-Both styles have every operation as a coroutine -- `read_some`, `write`, `write_eof`, `submit`,
-`get_response`, `connect`, `get` -- that yields a tuple and reports errors instead of throwing.
-This README uses that spelling. Buffers are Boost.Asio's in both, headers are Beast's `Fields`, URLs
-Boost.URL's.
+## Example
 
-Where the two runtimes spell an error differently, `anyhttp::errors` names it:
+A server, which echoes every request, over HTTP/1.1, HTTP/2 and HTTP/3 on one port:
 
-| `errors::` | ASIO | COROSIO |
-|---|---|---|
-| `eof` | `asio::error::eof` | `capy::error::eof` |
-| `partial_message` | `beast::http::error::partial_message` | `capy::error::stream_truncated` |
-| `canceled` | `errc::operation_canceled` | `capy::error::canceled` |
-| `would_block` | `asio::error::would_block` | `errc::operation_would_block` |
-| `connection_aborted` | `asio::error::connection_aborted` | `errc::connection_aborted` |
-| `header_limit` | `beast::http::error::header_limit` | the same |
-
-Anything else compares against `errc::` (`boost::system::errc` or `std::errc`), with one exception:
-a host that does not resolve is `netdb_errors::host_not_found` in ASIO and
-`errc::no_such_device_or_address` in COROSIO.
-
-## HTTP/2 library
-
-HTTP/2, server and client both, runs on either nghttp2 or its ground-up rewrite,
-[nghttp2 version 2](https://github.com/nghttp2/nghttp2-v2), by the same author. The rewrite's API is
-much closer to nghttp3's than to version 1's: one `nghttp2_conn` instead of a session and an option
-object, settings and callbacks as plain structs, callbacks for connection and HTTP events rather
-than for frames, bodies taken by reference, and flow control credit extended by hand.
-
-|  | nghttp2 | nghttp2 version 2 |
-|---|---|---|
-| CMake | `-DH2_LIBRARY=nghttp2` (default) | `-DH2_LIBRARY=nghttp2v2` |
-| Source | `src/h2/`, `include/anyhttp/h2/` | `src/h2v2/`, `include/anyhttp/h2v2/` |
-
-This is a configure-time choice, not a runtime one, because the two cannot share a process:
-version 2 installs as its own package but still exports nine of version 1's symbol names, among
-them the four `nghttp2_rcbuf_*` whose structs differ. A build links one or the other, and compiles
-only the backend directory that goes with it.
-
-Nothing above the backend changes: the same `Protocol::http2`, the same API, and the same behaviour
-wherever the two libraries leave anyhttp the choice. Where they do not:
-
-* The `Connection: Upgrade` from HTTP/1.1 to h2c
-  ([RFC 7540, section 3.2](https://www.rfc-editor.org/rfc/rfc7540#section-3.2)) went with
-  [RFC 9113](https://www.rfc-editor.org/rfc/rfc9113) and has no counterpart in version 2, so such a
-  request is declined and served as HTTP/1.1 instead -- always a valid answer to an upgrade.
-* The `ALTSVC` frame is gone. An alternative service still arrives as a response header field, which
-  is how a server sends one anyway, see below.
-
-Version 2 has had no release yet, so a build pins a commit of it.
-
-## Using it from a project
-
-C++23, CMake 3.30 and Boost 1.88 or later, spdlog, nghttp2, ngtcp2 and nghttp3 -- the Dockerfiles in
-[.devcontainer](.devcontainer) build all of them, and those are the versions that are tested. Whatever else goes into
-the process has to agree with anyhttp on the standard library and the TLS library.
-
-### As a subproject
-
-```cmake
-include(FetchContent)
-FetchContent_Declare(anyhttp
-   GIT_REPOSITORY https://github.com/pgit/anyhttp.git
-   GIT_TAG <commit>
-   SYSTEM)
-set(TLS_LIBRARY OpenSSL) # the options of the table above, if the defaults won't do
-FetchContent_MakeAvailable(anyhttp)
-
-target_link_libraries(my_program PRIVATE anyhttp::anyhttp)
-```
-
-This builds the library and nothing else; `ANYHTTP_BUILD_TESTS`, `ANYHTTP_BUILD_APPS` and
-`ANYHTTP_INSTALL` default to `OFF` here. Works in both API styles. To develop against a checkout, set
-`FETCHCONTENT_SOURCE_DIR_ANYHTTP` to it.
-
-### Installed
-
-```sh
-cmake --preset build-deploy
-cmake --build --preset build-deploy
-cmake --install build-deploy --prefix /opt/anyhttp
-```
-
-```cmake
-find_package(anyhttp 0.0 REQUIRED) # with /opt/anyhttp in CMAKE_PREFIX_PATH
-target_link_libraries(my_program PRIVATE anyhttp::anyhttp)
-```
-
-`anyhttp_API`, `anyhttp_TLS_LIBRARY` and `anyhttp_H2_LIBRARY` then say what that copy was built with.
-The package has the public headers only, those of the protocol backends stay behind. It looks for its
-dependencies where they were when it was built. **ASIO only:** corosio writes install rules only when it is the
-top-level project, so a library that links it can't be exported; use FetchContent for COROSIO.
-
-### Deploying the programs
-
-`cmake --install build-deploy --prefix <dir> --component Runtime` gives `bin/anyhttp-server` and
-`bin/anyhttp-client`, plus every shared library they need in `lib/`, except for glibc and `libgcc_s`.
-The tree can be moved or copied to another machine that has a glibc at least as new as the build
-host's. The bundled libraries have licenses of their own, to be passed on along with them.
-
-```sh
-anyhttp-server -p 443 --cert /etc/anyhttp/chain.pem --key /etc/anyhttp/key.pem
-```
-
-The server always loads a certificate, also to serve only cleartext: without `--cert` and `--key` it looks for the
-test PKI (`pki/out/`, relative to the working directory), and exits with an error if that isn't there.
-The library and the programs log through spdlog's default logger, at `info` unless told otherwise.
-
-`scripts/check_package.sh` verifies all of this from the outside.
-
-## Synopsis
-### Server
 ```C++
 Task<void> echo(server::Request request, server::Response response)
 {
@@ -174,214 +62,52 @@ Task<void> echo(server::Request request, server::Response response)
 }
 ```
 
-The end of an incoming body is reported the way the runtime reports it everywhere else:
-`errors::eof` with zero bytes. A body cut short -- a reset stream, a connection that went away
-mid-message -- completes with `errors::partial_message` instead, so the two stay distinguishable.
-
-The end of an *outgoing* body is stated explicitly, with `write_eof()`. It takes a buffer of
-its own, so the last of the body and the end of it go out together -- one DATA frame with
-END_STREAM, one QUIC STREAM frame with FIN, one last chunk -- instead of costing a second, empty
-write:
+A client, for which a plain GET is one operation, and anything else a few more:
 
 ```C++
-   co_await response.submit(200, fields({{"Content-Length", body.size()}}));
-   co_await response.write_eof(asio::buffer(body));
-```
-### Client
-```c++
 Task<void> do_session(client::Client& client, boost::urls::url url)
 {
    auto [ec1, session] = co_await client.connect();
-   auto [ec2, request] = co_await session.submit(url, {});
-   auto [ec3] = co_await request.write_eof();
-   auto [ec4, response] = co_await request.get_response();
+
+   auto [ec2, message] = co_await session.get(url);
+   std::println("{}: {} bytes", message.result_int(), message.body().size());
+
+   auto [ec3, request] = co_await session.submit(url, {});
+   auto [ec4] = co_await request.write_eof();
+   auto [ec5, response] = co_await request.get_response();
 }
 ```
 
-A plain GET needs none of those four steps spelled out. `get()` does the whole request as one
-operation and hands back the response as a plain Beast message -- status, fields and the body as a
-`std::string`:
+Both API styles have every operation as such a coroutine, that yields a tuple and reports errors
+instead of throwing. On ASIO, each is also an asynchronous operation that takes any completion token.
+The whole programs are [hello_server.cpp](docs/examples/hello_server.cpp) and
+[hello_client.cpp](docs/examples/hello_client.cpp).
 
-```c++
-   auto [ec, message] = co_await session.get(url);
-   std::println("{}: {} bytes", message.result_int(), message.body().size());
+## Using it from a project
+
+C++23, CMake 3.30 and Boost 1.88 or later, spdlog, nghttp2, ngtcp2 and nghttp3 -- the Dockerfiles in
+[.devcontainer](.devcontainer) build all of them, and those are the versions that are tested.
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(anyhttp
+   GIT_REPOSITORY https://github.com/pgit/anyhttp.git
+   GIT_TAG <commit>
+   SYSTEM)
+FetchContent_MakeAvailable(anyhttp)
+
+target_link_libraries(my_program PRIVATE anyhttp::anyhttp)
 ```
 
-The convenience is paid for with memory, as the body is buffered in full: anything that wants to
-look at the body while it arrives, or to send a body of its own, still goes through
-`submit()`.
-
-`submit()` is a POST unless it is given a method. Reading a response from a server that may send
-more than you want then stops wherever you do, with status and header fields in hand:
-
-```c++
-   auto [ec1, request] = co_await session.submit("GET", url);
-   auto [ec2] = co_await request.write_eof();
-   auto [ec3, response] = co_await request.get_response();
-   std::println("{} {}", response.status_code(), response.fields()["content-type"]);
-
-   std::array<char, 16_k> buffer;
-   for (size_t total = 0; total < limit;)
-   {
-      auto [ec, n] = co_await response.read_some(asio::buffer(buffer));
-      total += n;
-      if (ec)
-         break;
-   }
-   session.reset(); // the rest of the body is never read
-```
-
-What the server gets to send in the meantime is bounded by flow control, and over HTTP/1.1 by the
-socket buffers. Releasing the response early also resets its stream with HTTP/2 and HTTP/3, leaving
-the session usable, but it is the end of an HTTP/1.1 connection.
-
-An `https` URL means TLS, with the server's certificate verified against `tls_ca_file`, or the
-default trust store of the TLS library. `protocol` then says what to offer with ALPN: `h2` also
-offers HTTP/1.1, and the server picks, so ask `session.protocol()` if it matters -- HTTP/1.1 takes
-only one request at a time, see [Concurrent Requests](#concurrent-requests). Any other scheme means
-cleartext, and exactly the protocol given. HTTP/3 is TLS over QUIC with any scheme.
-
-```c++
-   client::Client client(executor, {.url = boost::urls::url("https://example.org")});
-```
-
-`url` says what the connection is for, and unless told otherwise, also where it goes. A caller with
-its own resolver, or following a DNS HTTPS record, gives the addresses in `endpoints`, which are
-tried in order. Nothing is resolved then, while the certificate still has to be valid for the host
-of the URL, and requests still say they are for it:
-
-```c++
-   client::Client client(executor, {.url = boost::urls::url("https://example.org"),
-                                    .endpoints = {TcpEndpoint(address, 8443)}});
-```
-
-Over TLS, a body that ends with the connection is complete only if the server has said so with a
-`close_notify`: otherwise, it may have been cut by anyone, and reading it fails with
-`errors::partial_message`.
-
-There are two ways to end a session, and neither waits for what is in progress, which fails right
-away:
-
-* `co_await session.shutdown()` (or `async_shutdown()`) ends the connection in an orderly way: over
-  HTTP/2 with a GOAWAY, over TLS with a `close_notify` in both directions, then a FIN in both, with
-  each wait limited to two seconds. It fails with `errors::connection_aborted` only if a write had to
-  be interrupted, which rules out a `close_notify`. HTTP/3 sends its CONNECTION_CLOSE.
-* Destroying the session, or `session.reset()`, is over as fast as possible, and does nothing
-  asynchronous. The peer sees a connection that was cut.
-
-### Plain QUIC streams
-QUIC streams without HTTP in them -- for a protocol of your own, told apart by its ALPN -- run on
-the UDP port HTTP/3 is on. A `quic::Stream` is a `Reader` and a `Writer` at once:
-
-```c++
-server.on_quic({.alpn = "echo"}, [](quic::Connection connection) -> Task<void> {
-   for (;;)
-   {
-      auto [ec, stream] = co_await connection.accept_stream();
-      if (ec)
-         co_return; // the connection is over
-      launch(connection.get_executor(), echo(std::move(stream)));
-   }
-});
-```
-```c++
-   auto [ec1, connection] = co_await quic::connect(executor, "localhost", "8080",
-                                                   {.alpn = "echo", .tls_ca_file = "root.pem"});
-   auto [ec2, stream] = connection.open_stream();
-   auto [ec3] = co_await stream.write_eof(asio::buffer("hello", 5));
-   auto [ec4, n] = co_await stream.read_some(asio::buffer(buffer));
-```
-
-The ends map onto the Reader/Writer contract below: a FIN is `write_eof()` on one side and
-`errors::eof` on the other, a stream its writer gave up on (`reset_stream()`, or a Writer dropped
-before the end) reads as `errors::partial_message`, and writing to a peer that asked us to stop
-(`stop_sending()`) fails with `errc::connection_reset`. The two directions are independent. Opening
-a stream never waits: at the peer's limit, `open_stream()` fails with `errors::would_block`. A
-connection is closed when its handle goes away -- on the server, when the handler returns. See
-[anyhttp/quic.hpp](include/anyhttp/quic.hpp) and [docs/quic-streams-plan.md](docs/quic-streams-plan.md).
-
-# Class Hierarchy
-
-![Class hierarchy](docs/overview.drawio.svg)
-
-# Implementation
-
-Both styles build the same library and protocol sources; only a thin runtime layer
-(`anyhttp/runtime.hpp` and `anyhttp/net.hpp`, implemented in `asio/` and `corosio/`) differs. See
-[docs/corosio-port-plan.md](docs/corosio-port-plan.md).
-
-In ASIO, the operations exposed by server and client are [ASIO asynchronous operations](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/asynchronous_operations.html). As such, they support a range of [completion tokens](https://think-async.com/Asio/asio-1.30.2/doc/asio/overview/model/completion_tokens.html) like [use_awaitable](https://think-async.com/Asio/asio-1.30.2/doc/asio/reference/use_awaitable.html) or plain callbacks.
-
-The implementation is hidden behind [any_completion_handler](https://www.boost.org/doc/libs/1_86_0/doc/html/boost_asio/reference/any_completion_handler.html) so that it can be compiled separately.
-
-In COROSIO, they are capy coroutines, cancelled through the awaiting chain's `std::stop_token`.
-`Reader` and `Writer` model `capy::ReadStream` and `capy::WriteStream`.
-
-This work is partly inspired by [asio-grpc](https://github.com/Tradias/asio-grpc), which takes the idea even one step further and also supports the upcoming sender/receiver model of execution.
-
-
-## The End of a Body
-
-A body ends where the protocol says it ends, and never at a zero-sized transfer. `read_some()`
-*reports* the end, with `errors::eof` for a complete body and `errors::partial_message` for one cut
-short; `write_eof()` *states* it, while `write({})` is a no-op that leaves the body open. See
-[docs/end-of-body.md](docs/end-of-body.md) for the full rules -- what every operation answers after
-the end, and why cancelling `write_eof()` does not take the end back.
-
-## Concurrent Requests
-
-HTTP/2 and HTTP/3 multiplex requests: each one is a stream of its own, and streams make progress independently. HTTP/1.1 has a single connection instead, which requests are written to and responses read from, one after the other. anyhttp treats HTTP/1.1 as a protocol with **"max concurrent streams = 1"**, and makes that explicit in the client API instead of hiding it.
-
-### Complete requests and responses
-
-A request is *complete* when all of it -- header and body -- has been written to the connection:
-
-* A request **without a body** is complete as soon as `submit()` has succeeded. Whether a request has a body is a matter of its framing only ([RFC 9112, section 6.3](https://www.rfc-editor.org/rfc/rfc9112#section-6.3)), never of its method: it has none without `Transfer-Encoding` and with a `Content-Length` of zero or none. As the HTTP/1.1 client sends every request without `Content-Length` chunked, that means `Content-Length: 0`.
-* **Any other request** is complete when `write_eof()` has succeeded -- even if all of a `Content-Length` has been written before. The body of a request without one is ended implicitly: `write_eof()` is an idempotent no-op on it, and writing data fails with `broken_pipe`.
-
-A response is *complete* when it has been read to its end.
-
-### Rules for HTTP/1.1
-
-1. `submit()` fails with `errors::would_block` while the previous request is not complete.
-2. `get_response()` fails with `errors::would_block` while the responses to earlier requests have not been read completely -- otherwise, it would read one of those.
-3. When a request can not be completed -- a write fails, or it is released before it is complete -- the connection is stuck in the middle of a message: every later `submit()` fails with `errors::connection_aborted`.
-4. When a response can not be read completely -- it is released before its end, or its request is released without asking for it -- every later `get_response()` fails with `errors::connection_aborted`.
-
-Pipelining is still possible: complete requests can be sent before any of their responses have been read.
-
-### Design decisions
-
-* **Fail instead of waiting.** An operation that has to wait for an earlier request or response does not wait. Very often, the caller waiting is the one who has to finish that earlier request or response, after the operation returns -- waiting would deadlock. Failing immediately with `would_block` turns a hang into an error that can be handled: finish the earlier one, then retry.
-* **No queueing of submitted requests.** An earlier version queued the header of a request submitted while the previous one was still incomplete, and sent it as soon as that was complete. That allows code written for HTTP/2 -- submit a couple of requests first, write their bodies later -- to work unchanged. But it needed a queue of pending requests, writes waiting for a header still on its way (and not cancellable while doing so), and failures cascading to queued requests. Refusing the submission keeps it at a single incomplete request per session, which is exactly what the protocol allows.
-* **Requests and responses may outlive their session.** The session keeps track of all of its readers and writers, and detaches them when it goes away. Everything a detached request or response is asked to do after that completes with an error (`connection_aborted` for HTTP/1.1 and HTTP/2, `connection_reset` for HTTP/3), without touching the connection that is gone.
-
-### Stream limits in HTTP/2 and HTTP/3
-
-HTTP/2 and HTTP/3 have a limit of their own: the peer's `SETTINGS_MAX_CONCURRENT_STREAMS`, or the QUIC limit on bidirectional streams. Reaching it is answered the way HTTP/1.1 answers its limit of one -- `submit()` fails with `would_block` instead of waiting -- so one and the same caller works over all three. A server says what it allows with `server::Config::max_concurrent_streams`; set it to 1, and HTTP/2 and HTTP/3 behave exactly like HTTP/1.1, which is what `OneStream.WHEN_limit_is_one_THEN_second_request_reports_would_block` checks for each of them.
-
-Two things to know about the slot a request occupies:
-
-* **It is held longer than in HTTP/1.1.** A stream counts against the limit until it is closed in *both* directions, that is, until its response has been read as well, where HTTP/1.1 is free again once the request has been written. So "max concurrent streams = 1" is stricter here than HTTP/1.1 pipelining: the next request has to wait for the previous *response*, not just for the previous request.
-* **In HTTP/3 it comes free one round trip late.** The credit for another stream is granted as the last one closes, and that `MAX_STREAMS` has to reach the client, so a `submit()` immediately after reading a response may still report `would_block`. Retrying it is what the contract asks for anyway.
-
-Only the number is the peer's to choose; what to do when it is reached is anyhttp's, and the libraries do not agree. nghttp2 version 2 and ngtcp2 refuse the stream, which is reported as `would_block`; nghttp2 version 1 would accept it and hold it back internally, telling the caller nothing, so streams in progress are counted here instead.
-
-## Moving to HTTP/3: Alt-Svc
-
-There is no `Connection: Upgrade` on the way to HTTP/3, the way there is one from HTTP/1.1 to
-HTTP/2. Instead, the server says where else it can be reached
-([RFC 7838](https://www.rfc-editor.org/rfc/rfc7838)) -- `Alt-Svc: h3=":8080"; ma=86400`, in every
-response over HTTP/1.1 and HTTP/2 -- and a client with `client::Config::follow_alt_svc` makes its
-*next* connection there. See [docs/alt-svc.md](docs/alt-svc.md).
+An installed package works as well, on ASIO, see
+[getting the library](docs/programmers-guide.rst#getting-the-library).
 
 ## Links
 
 For now, this section contains just a set of random links collected during development.
 
 * [Beast Example using Type Erasure](https://www.boost.org/doc/libs/develop/boost/beast/http/message_generator.hpp)
-* [asio-grpc](https://github.com/Tradias/asio-grpc)
-* [Development container](docs/devcontainer.md) -- how the build environment is put together
-* [Capturing traffic](docs/capture.md) -- tcpdump and tshark, decrypting TLS and QUIC with a key log
+* [Development container](docs/devcontainer.rst) -- how the build environment is put together
+* [Capturing traffic](docs/capture.rst) -- tcpdump and tshark, decrypting TLS and QUIC with a key log
 * [cpp-devcontainer](https://github.com/pgit/cpp-devcontainer) -- the generic C++ base image it builds on
-* [c-ares-asio](https://github.com/pgit/c-ares-asio) -- asynchronous DNS, to resolve HTTPS resource records and start off with HTTP/3
+* [c-ares-async](https://github.com/pgit/c-ares-async) -- asynchronous DNS, to resolve HTTPS resource records and start off with HTTP/3

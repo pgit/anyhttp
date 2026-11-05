@@ -1,5 +1,9 @@
 {
     "words": [
+        "dedent",
+        "doxygen",
+        "literalinclude",
+        "toctree",
         "64kminus1",
         "ALTSVC",
         "anyhttp",

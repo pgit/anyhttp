@@ -40,39 +40,50 @@ namespace anyhttp
 class Reader
 {
 public:
+   /// \cond internal
    /// The implementation, defined in \c reader_impl.hpp: what a protocol backend implements to
    /// be read from. Only code that implements or narrows one needs to see it.
    class Impl;
-
-   using executor_type = Executor;
 
    explicit Reader(std::shared_ptr<Impl> impl) noexcept;
    Reader(Reader&&) noexcept;
    Reader& operator=(Reader&&) noexcept;
    ~Reader();
+   /// \endcond
+
+   /// The executor type, for what looks for one.
+   using executor_type = Executor;
 
    /// Releases the implementation, as the destructor does. Reading afterwards fails.
    void reset() noexcept;
 
+   /// \return Whether this handle has an implementation: not after \c reset(), or being moved from.
    explicit constexpr operator bool() const noexcept { return static_cast<bool>(impl_); }
 
-   /// The executor of the session this message belongs to, or an empty one after \c reset().
+   /// \return The executor of the session this message belongs to, or an empty one after
+   /// \c reset().
    executor_type get_executor() const noexcept;
 
-   /// The \c [proto:address:port.stream] tag the library's log lines carry for this message,
-   /// without the brackets, or an empty string after \c reset().
+   /// \return The <tt>[proto:address:port.stream]</tt> tag the library's log lines carry for this
+   /// message, without the brackets, or an empty string after \c reset().
    std::string log_prefix() const;
 
-   /// What the incoming message announced as its body length, if it announced one.
+   /// \return What the incoming message announced as its body length, if it announced one.
    std::optional<size_t> content_length() const noexcept;
 
 #if ANYHTTP_ASIO
    /**
     * Reads a part of the incoming body.
     *
-    * The end of the body is reported as \c asio::error::eof with zero bytes, as ASIO does
+    * The end of the body is reported as \c errors::eof with zero bytes, as the runtime does
     * everywhere else, and so is every read after it. A body cut short by a reset stream or a lost
-    * connection completes with \c http::error::partial_message instead.
+    * connection completes with \c errors::partial_message instead. See the page on the end of
+    * a body.
+    *
+    * \param buffer Where to put what has been read, which has to stay valid until the operation
+    *               completes.
+    * \param token The completion token, for a handler of the signature \c ReadSome.
+    * \return What \p token makes of the operation.
     */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
    auto async_read_some(asio::mutable_buffer buffer, CompletionToken&& token = CompletionToken())
@@ -92,7 +103,12 @@ public:
    /**
     * \overload
     *
-    * FIXME: When given an actual sequence of buffers, this fills only the first non-empty one.
+    * When given an actual sequence of buffers, this fills only the first non-empty one.
+    *
+    * \param buffers Where to put what has been read, which has to stay valid until the operation
+    *                completes.
+    * \param token The completion token, for a handler of the signature \c ReadSome.
+    * \return What \p token makes of the operation.
     */
    template <typename Buffers,
              BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
@@ -116,11 +132,16 @@ public:
    //
 
    /// Reads a part of the incoming body: <tt>auto [ec, n] = co_await reader.read_some(buffer);</tt>
+   /// \param buffer Where to put what has been read.
+   /// \return The error, and how many bytes have been read.
    Task<std::tuple<error_code, size_t>> read_some(asio::mutable_buffer buffer);
 
    /// \overload
    ///
-   /// FIXME: As with async_read_some(), this fills only the first non-empty buffer.
+   /// As with async_read_some(), this fills only the first non-empty buffer.
+   ///
+   /// \param buffers Where to put what has been read.
+   /// \return The error, and how many bytes have been read.
    template <typename Buffers>
       requires(asio::is_mutable_buffer_sequence<Buffers>::value &&
                !std::convertible_to<const Buffers&, asio::mutable_buffer>)
@@ -147,8 +168,10 @@ public:
 #endif
 
 protected:
+   /// \cond internal
    /// The implementation, for the derived handle to narrow to its own \c Impl. Never null.
    Impl& pimpl() const noexcept { return *impl_; }
+   /// \endcond
 
 private:
 #if ANYHTTP_ASIO

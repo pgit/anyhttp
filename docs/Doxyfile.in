@@ -1,0 +1,56 @@
+#
+# What Doxygen makes of the comments in the public headers: XML, for Breathe to hand to Sphinx. The
+# HTML is Sphinx's, see conf.py. CMake fills this in, see CMakeLists.txt in here.
+#
+PROJECT_NAME           = anyhttp
+OUTPUT_DIRECTORY       = @CMAKE_CURRENT_BINARY_DIR@/doxygen
+STRIP_FROM_PATH        = @PROJECT_SOURCE_DIR@/include
+
+#
+# The public interface, and nothing else. The comments on the vocabulary of the two runtimes are in
+# asio/runtime.hpp, and corosio/runtime.hpp has the same names in the same order -- api-styles.rst
+# has the table of what they map to. What these headers have for the library's own use is between
+# \cond and \endcond.
+#
+INPUT                  = @PROJECT_SOURCE_DIR@/include/anyhttp/common.hpp \
+                         @PROJECT_SOURCE_DIR@/include/anyhttp/reader.hpp \
+                         @PROJECT_SOURCE_DIR@/include/anyhttp/writer.hpp \
+                         @PROJECT_SOURCE_DIR@/include/anyhttp/session.hpp \
+                         @PROJECT_SOURCE_DIR@/include/anyhttp/client.hpp \
+                         @PROJECT_SOURCE_DIR@/include/anyhttp/server.hpp \
+                         @PROJECT_SOURCE_DIR@/include/anyhttp/quic.hpp \
+                         @PROJECT_SOURCE_DIR@/include/anyhttp/alt_svc.hpp \
+                         @PROJECT_SOURCE_DIR@/include/anyhttp/asio/runtime.hpp
+
+# the plumbing that the handles and the operations with completion tokens are built from
+EXCLUDE_SYMBOLS        = Impl \
+                         ReadSomeHandler WriteSome WriteSomeHandler WriteHandler StatusHandler \
+                         SubmitHandler GetHandler SessionShutdownHandler \
+                         GetResponseHandler ConnectHandler AcceptStreamHandler
+
+# the first sentence of a comment is its summary, there is no need to say so with \brief
+JAVADOC_AUTOBRIEF      = YES
+
+# Doxygen does not compile anything, so what a compiler would get from config.hpp and from Asio's
+# headers is said here -- which is also why the reference takes neither Boost nor a configured
+# runtime, and comes out the same from a tree of either style
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+PREDEFINED             = ANYHTTP_ASIO=1 \
+                         ANYHTTP_COROSIO=0 \
+                         "BOOST_ASIO_COMPLETION_TOKEN_FOR(x)=typename"
+SEARCH_INCLUDES        = NO
+
+# what is not documented is not finished
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = YES
+WARN_AS_ERROR          = FAIL_ON_WARNINGS
+
+# Doxygen 1.9.8 only finds out that parameters are documented while it makes its HTML, and without
+# that warns about every one of them. So it makes some, which nobody looks at.
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+XML_PROGRAMLISTING     = NO

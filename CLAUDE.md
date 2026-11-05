@@ -1,8 +1,10 @@
 # Working on anyhttp
 
-C++23 HTTP/1.1 + HTTP/2 + HTTP/3 server and client on top of Boost.Asio. [README.md](README.md)
-describes the API, the concurrency model and the reasoning behind it -- read it before changing
-anything about request/response semantics. This file is about *how to work in the tree*.
+C++23 HTTP/1.1 + HTTP/2 + HTTP/3 server and client on top of Boost.Asio. [docs/](docs/README.md)
+has the API, the concurrency model and the reasoning behind it, in
+[programmers-guide.rst](docs/programmers-guide.rst), [end-of-body.rst](docs/end-of-body.rst) and
+[concurrent-requests.rst](docs/concurrent-requests.rst) -- read them before changing anything about
+request/response semantics. This file is about *how to work in the tree*.
 
 ## Build and test
 
@@ -88,6 +90,15 @@ corosio's, see `.github/workflows/release.yml` and step 8 of the port plan.
 Parametrized tests are suffixed `/HTTP11`, `/HTTP2`, `/HTTP3` -- not h2/h3. `--gtest_filter` knows
 only `*` and `?`, and a filter that matches nothing exits 0 with no output, which reads like a
 pass: check for `[ OK ]` lines.
+
+### Documentation
+
+`cmake --build build --target docs` makes the site in `build/docs/html`; the pages are `docs/*.rst`,
+the reference comes from the comments in the public headers. [docs/README.md](docs/README.md) has
+how to write it. Warnings are errors in Doxygen and Sphinx, so changing a public header can fail this
+target: run it, a new public symbol also needs an entry in `docs/reference.rst`. The code the guide
+shows is `docs/snippets.cpp` and `docs/examples/`, compiled in every tree with
+`ANYHTTP_BUILD_DOCS` and run by `test/test_docs.cpp`. Change it there, never in a page.
 
 ### Sanitizers
 

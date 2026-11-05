@@ -36,7 +36,7 @@ namespace h1 = anyhttp::beast_impl::h1;
 // A clean end has each side send its GOAWAY (HTTP/2 only), its "close_notify" (TLS only) and its
 // FIN, in this order, and keep reading until the peer's FIN before it closes the socket: closing
 // earlier makes the kernel answer whatever still arrives with an RST, which may cost the peer what
-// it has not read yet. See docs/capture.md, "What a clean end looks like".
+// it has not read yet. See docs/capture.rst, "What a clean end looks like".
 //
 // The client side is driven by hand, nghttp2 for HTTP/2 included, so that the tests see what goes
 // over the wire. It ends the way the server does, with one constraint over TLS: it sends its

@@ -17,6 +17,9 @@ option(ENABLE_COVERAGE "Enable coverage flags and llvm-cov target" OFF)
 option(ANYHTTP_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
 option(ANYHTTP_BUILD_APPS "Build the programs" ${PROJECT_IS_TOP_LEVEL})
 option(ANYHTTP_INSTALL "Generate install rules" ${PROJECT_IS_TOP_LEVEL})
+option(ANYHTTP_BUILD_DOCS
+       "Build the code of the guide, and add the 'docs' target where Doxygen and Sphinx are there"
+       ${PROJECT_IS_TOP_LEVEL})
 
 if (DEFINED ENV{GITHUB_ACTIONS})
     add_compile_definitions(GITHUB_ACTIONS)
@@ -239,6 +242,10 @@ if (ANYHTTP_BUILD_TESTS)
     enable_testing(false)
     include(cmake/pki.cmake)
     add_subdirectory(test)
+endif()
+
+if (ANYHTTP_BUILD_DOCS)
+    add_subdirectory(docs)
 endif()
 
 if (ANYHTTP_INSTALL)

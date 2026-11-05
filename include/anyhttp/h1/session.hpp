@@ -201,7 +201,7 @@ class RequestWriter;
  * only a single connection to write requests to and read responses from, without any means to
  * interleave them. Pipelining is supported: requests can be written before the responses to the
  * earlier ones have been read. But everything that goes onto the connection, or comes off it, has
- * to be done one after the other, and completely. See README.md, "Concurrent Requests", for the
+ * to be done one after the other, and completely. See docs/concurrent-requests.rst for the
  * reasoning behind this.
  *
  * A request is \e complete when all of it has been written to the connection, header and body:

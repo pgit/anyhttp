@@ -34,30 +34,36 @@ namespace anyhttp
 class Writer
 {
 public:
+   /// \cond internal
    /// The implementation, defined in \c writer_impl.hpp: what a protocol backend implements to
    /// be written to. Only code that implements or narrows one needs to see it.
    class Impl;
-
-   using executor_type = Executor;
 
    explicit Writer(std::shared_ptr<Impl> impl) noexcept;
    Writer(Writer&&) noexcept;
    Writer& operator=(Writer&&) noexcept;
    ~Writer();
+   /// \endcond
+
+   /// The executor type, for what looks for one.
+   using executor_type = Executor;
 
    /// Releases the implementation, as the destructor does. Writing afterwards fails.
    void reset() noexcept;
 
+   /// \return Whether this handle has an implementation: not after \c reset(), or being moved from.
    explicit constexpr operator bool() const noexcept { return static_cast<bool>(impl_); }
 
-   /// The executor of the session this message belongs to, or an empty one after \c reset().
+   /// \return The executor of the session this message belongs to, or an empty one after
+   /// \c reset().
    executor_type get_executor() const noexcept;
 
-   /// The \c [proto:address:port.stream] tag the library's log lines carry for this message,
-   /// without the brackets, or an empty string after \c reset().
+   /// \return The <tt>[proto:address:port.stream]</tt> tag the library's log lines carry for this
+   /// message, without the brackets, or an empty string after \c reset().
    std::string log_prefix() const;
 
    /// Announces the length of the outgoing body, before its header is submitted.
+   /// \param content_length The length, or nothing to take back what has been announced.
    void content_length(std::optional<size_t> content_length);
 
 #if ANYHTTP_ASIO
@@ -66,6 +72,10 @@ public:
     *
     * An empty buffer writes nothing and completes immediately -- use \c async_write_eof() to end
     * the body.
+    *
+    * \param buffer What to write, which has to stay valid until the operation completes.
+    * \param token The completion token, for a handler of the signature \c Write.
+    * \return What \p token makes of the operation.
     */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
    auto async_write(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
@@ -86,6 +96,10 @@ public:
     * stack. Re-ending an already-ended body with an empty buffer completes immediately and
     * changes nothing; with data attached it completes with \c errc::broken_pipe, just as writing
     * that data would -- there is no body left for it to belong to.
+    *
+    * \param buffer What to write, which has to stay valid until the operation completes.
+    * \param token The completion token, for a handler of the signature \c Write.
+    * \return What \p token makes of the operation.
     */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
    auto async_write_eof(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
@@ -99,6 +113,8 @@ public:
    }
 
    /// Ends the outgoing body without writing anything more.
+   /// \param token The completion token, for a handler of the signature \c Write.
+   /// \return What \p token makes of the operation.
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
    auto async_write_eof(CompletionToken&& token = CompletionToken())
    {
@@ -113,10 +129,14 @@ public:
    //
 
    /// Writes \p buffer as part of the body: <tt>auto [ec] = co_await writer.write(buffer);</tt>
+   /// \param buffer What to write.
+   /// \return The error.
    Task<std::tuple<error_code>> write(asio::const_buffer buffer);
 
    /// Writes \p buffer, if any, and ends the body: <tt>auto [ec] = co_await
    /// writer.write_eof();</tt>
+   /// \param buffer What to write.
+   /// \return The error.
    Task<std::tuple<error_code>> write_eof(asio::const_buffer buffer = {});
 
 #if ANYHTTP_COROSIO
@@ -138,8 +158,10 @@ public:
 #endif
 
 protected:
+   /// \cond internal
    /// The implementation, for the derived handle to narrow to its own \c Impl. Never null.
    Impl& pimpl() const noexcept { return *impl_; }
+   /// \endcond
 
 private:
 #if ANYHTTP_ASIO
