@@ -97,8 +97,19 @@ for server in "${servers[@]}"; do
          echo "configuring $tree/ (scripts/configure.sh)" >&2
          scripts/configure.sh "$tree" >&2
       fi
-      echo "building $tree/ (server)" >&2
-      cmake --build "$tree" --target server >&2
+      # Quiet when up to date: drop ninja's glob re-check and "no work to do", and announce the
+      # build only once it has something else to say. A shell loop, not awk: mawk reads its input
+      # in blocks, which holds the compiler's output back.
+      cmake --build "$tree" --target server 2>&1 | {
+         said=0
+         while IFS= read -r line || [[ -n $line ]]; do
+            case $line in
+            *"Re-checking globbed directories"* | "ninja: no work to do.") continue ;;
+            esac
+            ((said)) || { echo "building $tree/ (server)"; said=1; }
+            printf '%s\n' "$line"
+         done
+      } >&2
    elif [[ ! -x $tree/src/server ]]; then
       echo "error: $tree/src/server does not exist, run without -n" >&2
       exit 1
