@@ -176,7 +176,7 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
    awaitable returned from a wrapper that made the buffer a temporary reads into freed memory
    (`EFAULT` from `recv()`), so the COROSIO `io::receive()` is a coroutine.
 6. **The test suite in both modes** (§5).
-   *Done 2026-10-01 (`012e0a5`..`86ef515`).* Every test file builds in both styles, and so does
+   *Done 2026-10-01 (`012e0a5`..`86ef515`).* Every test file builds on both runtimes, and so does
    every library source; the explicit COROSIO lists gave way to the globs. COROSIO runs 403 tests, ASIO
    396, with the same 23 skips. The tests use the coroutine spelling plus a few helpers:
    - `check()` unwraps a result and throws its error, as ASIO's default token does.
@@ -210,10 +210,10 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
      *No longer capy's doing, since capy `8e1244f` and corosio `232c79f`:* destroying a context
      unwinds what is suspended on it, once `Initiation` and `YieldNow` carry `env->owner`. The rule
      stays for a different reason, and for ASIO just the same: HTTP/2 and HTTP/3 leak without the
-     drain in both styles, through cycles that only running can break (`do_session()` waiting on an
+     drain on both runtimes, through cycles that only running can break (`do_session()` waiting on an
      event of the session its handler keeps alive, a frame holding the `Session` or `Request` whose
      `Completion` it waits on). HTTP/1.1 does not.
-7. **README**: the two API styles, the per-mode error table, the constraints (OpenSSL). The error table includes the resolver: corosio reports a host that does not resolve
+7. **README**: the two I/O runtimes, the per-mode error table, the constraints (OpenSSL). The error table includes the resolver: corosio reports a host that does not resolve
    as `no_such_device_or_address` (`EAI_NONAME` mapped onto a generic code), ASIO as
    `netdb_errors::host_not_found`.
 8. Later: threads in COROSIO; `client_main` for COROSIO; upstream issues for corosio
@@ -224,14 +224,14 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
    uploading when the server responds and closes loses that response, which ASIO does not.
    `ClientAsync`'s 404 test and four of `ClientAsyncCancellation` fail for that reason with
    `ANYHTTP_TEST_SCHEME=https`, and CI leaves them out there).
-   *`server_main` done 2026-10-01:* it builds in both styles and refuses `--threads` above 1 with
+   *`server_main` done 2026-10-01:* it builds on both runtimes and refuses `--threads` above 1 with
    COROSIO. The Debug `run()` wrapper steps a corosio context with `run_one()` too, and the COROSIO
    fixtures run through it. That reordering flipped an h2 test: a write issued after the stream
    closed reported `canceled`, one parked when it closed `connection_reset`; both report the
    latter now (`ccb30df`).
 
-   *Threads in COROSIO done 2026-10-03.* `server --threads N` and `Config::use_strand` work in both
-   styles. corosio resumes a coroutine after I/O through the executor in its `await_context` (capy's
+   *Threads in COROSIO done 2026-10-03.* `server --threads N` and `Config::use_strand` work on both
+   runtimes. corosio resumes a coroutine after I/O through the executor in its `await_context` (capy's
    executor affinity), so a connection launched on a strand stays on it, and so does everything it
    awaits. What changed:
    - `new_strand()` returns a `capy::strand` on the context's executor, wrapped in a forwarding
@@ -244,8 +244,8 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
      into the launching frame, and Readers and Writers keep the executor after they detach.
    - `Signal` is capy's `async_waker` (`notify()` from any thread). Its waiter must run on a
      strand, so the accept loop has one of its own with `use_strand`.
-   - `Server::Impl` destroys each session on the session's executor (`dispatch_to()`), in both
-     styles: `shutdown()` from the signal handler's thread raced the strand closing the socket.
+   - `Server::Impl` destroys each session on the session's executor (`dispatch_to()`), on both
+     runtimes: `shutdown()` from the signal handler's thread raced the strand closing the socket.
      ASIO had the same race; it never ran threaded under TSAN.
    - `Timer` checks its stop token once its wait has resumed: an expired wait may still be queued
      behind the strand when the timer is re-armed or cancelled.
@@ -288,8 +288,8 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
    (no inline budget); these numbers are with that default.
 
 9. **Source layout and the Asio boundary** (2026-10-05). The protocols live in `h1/`, `h2/` and
-   `h3/`, and what belongs to one API style lives in `asio/` or `corosio/`, in both `include/anyhttp/`
-   and `src/`. The style comes from the generated `anyhttp/config.hpp` (`ab7b236`). Generic and
+   `h3/`, and what belongs to one I/O runtime lives in `asio/` or `corosio/`, in both `include/anyhttp/`
+   and `src/`. The runtime comes from the generated `anyhttp/config.hpp` (`ab7b236`). Generic and
    protocol code include nothing of Asio's but what Beast's parser, serializer and `Fields` bring
    (`boost/asio/buffer.hpp`), see CLAUDE.md for the check (`1c868ad`). Addresses and endpoints
    are the runtime's own: `IpAddress`, `TcpEndpoint` and `UdpEndpoint` are Boost.Asio's or

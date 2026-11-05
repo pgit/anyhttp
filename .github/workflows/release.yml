@@ -18,7 +18,7 @@ env:
 
 jobs:
   #
-  # Both API styles in all three flavors, on OpenSSL: COROSIO needs it (corosio's openssl_stream
+  # Both I/O runtimes in all three flavors, on OpenSSL: COROSIO needs it (corosio's openssl_stream
   # uses a zero-copy BIO API that AWS-LC lacks), so it is the baseline rather than the default
   # AWS-LC. The legs after the product each isolate one variable the product holds fixed -- the
   # standard library, the TLS library -- so that a red job names its own cause. COROSIO TSAN is
@@ -50,7 +50,7 @@ jobs:
         api: [ASIO, COROSIO]
         flavor: [RelWithDebInfo, ASAN, TSAN]
         include:
-          # Flags per flavor, merged into the leg of each API style.
+          # Flags per flavor, merged into the leg of each I/O runtime.
           - flavor: RelWithDebInfo
             cmake: -DCMAKE_BUILD_TYPE=RelWithDebInfo
           - flavor: ASAN
@@ -59,7 +59,7 @@ jobs:
           - flavor: TSAN
             cmake: -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
             opts: TSAN_OPTIONS=report_signal_unsafe=0
-          # Legs of their own: GCC and libstdc++ for both styles, and the other TLS library.
+          # Legs of their own: GCC and libstdc++ for both runtimes, and the other TLS library.
           - api: ASIO
             flavor: GCC
             cc: gcc

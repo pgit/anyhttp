@@ -6,7 +6,7 @@ Programmer's guide
 This goes through what a program does with the library, from its first request to shutting down.
 The code is taken from :src:`docs/examples` and :src:`docs/snippets.cpp`, which are compiled with
 every build, and :src:`test/test_docs.cpp` runs it over all three protocols. What is about how it
-all works rather than how it is used has a page of its own, starting with :doc:`api-styles`.
+all works rather than how it is used has a page of its own, starting with :doc:`io-runtimes`.
 
 .. contents:: On this page
    :local:
@@ -20,7 +20,7 @@ Dockerfiles in :src:`.devcontainer` build all of them, and those are the version
 see :doc:`devcontainer`. Whatever else goes into the process has to agree with anyhttp on the
 standard library and the TLS library.
 
-As a subproject, which builds the library and nothing else, in both API styles:
+As a subproject, which builds the library and nothing else, on both I/O runtimes:
 
 .. code-block:: cmake
 
@@ -29,7 +29,7 @@ As a subproject, which builds the library and nothing else, in both API styles:
       GIT_REPOSITORY https://github.com/pgit/anyhttp.git
       GIT_TAG <commit>
       SYSTEM)
-   set(TLS_LIBRARY OpenSSL) # the options of the API style and the libraries, if the defaults won't do
+   set(TLS_LIBRARY OpenSSL) # the options of the runtime and the libraries, if the defaults won't do
    FetchContent_MakeAvailable(anyhttp)
 
    target_link_libraries(my_program PRIVATE anyhttp::anyhttp)
@@ -38,7 +38,7 @@ As a subproject, which builds the library and nothing else, in both API styles:
 default to ``OFF`` that way. To develop against a checkout, set ``FETCHCONTENT_SOURCE_DIR_ANYHTTP``
 to it.
 
-Or installed, which is for the ASIO style only: Corosio writes install rules only when it is the
+Or installed, which is for the ASIO runtime only: Corosio writes install rules only when it is the
 top-level project, so a library that links it can't be exported.
 
 .. code-block:: sh
@@ -56,8 +56,8 @@ top-level project, so a library that links it can't be exported.
 built with. The package has the public headers only, those of the protocol backends stay behind.
 It looks for its dependencies where they were when it was built.
 
-A build is of one API style or the other, ``-DANYHTTP_API=ASIO``, the default, or ``COROSIO``, which
-also takes ``-DTLS_LIBRARY=OpenSSL``. :doc:`api-styles` has the difference. Everything below uses
+A build is on one I/O runtime or the other, ``-DANYHTTP_API=ASIO``, the default, or ``COROSIO``, which
+also takes ``-DTLS_LIBRARY=OpenSSL``. :doc:`io-runtimes` has the difference. Everything below uses
 what both have and builds with either, and what is for ASIO only says so.
 
 A first server
@@ -103,7 +103,7 @@ The whole of a program, which makes one GET and prints what comes back:
 
 A :cpp:class:`client::Client` makes connections, and :cpp:func:`connect() <client::Client::connect>`
 gives each as a :cpp:class:`Session`, which is what requests are submitted on. There is no error to
-catch: like every operation that both API styles have, these yield a tuple with the error first, and
+catch: like every operation that both runtimes have, these yield a tuple with the error first, and
 report what goes wrong instead of throwing it. The library has something to say about it all, too,
 which goes to the default logger of spdlog, see `Logging`_.
 
@@ -312,7 +312,7 @@ Errors
 ------
 
 What goes wrong is an :cpp:type:`error_code`. Where the two runtimes spell one differently, the
-namespace ``errors::`` names it, see :ref:`the table <api-styles-errors>`, and anything else compares
+namespace ``errors::`` names it, see :ref:`the table <io-runtimes-errors>`, and anything else compares
 against ``errc::``: ``ec == errc::connection_reset``. The ones that belong to the contract
 of an operation are in its reference and in :doc:`end-of-body` and :doc:`concurrent-requests`.
 
@@ -326,7 +326,7 @@ abort, it also ends the connection, so a handler that means to go on has to catc
 Cancellation
 ------------
 
-How an operation is cancelled depends on the API style: with a cancellation slot, from a completion
+How an operation is cancelled depends on the I/O runtime: with a cancellation slot, from a completion
 token, or through the ``std::stop_token`` of the awaiting coroutine. What works in both is racing it
 against something else, with :cpp:func:`when_either`, which cancels the loser:
 
@@ -351,6 +351,8 @@ depends on how far it had come, and on the protocol:
 
 A coroutine that has been cancelled and wants to clean up by awaiting something else, as a last
 ``write_eof()``, needs :cpp:func:`reset_cancellation` and :cpp:func:`shielded` to get there.
+
+.. _completion-tokens:
 
 Completion tokens
 -----------------
@@ -378,7 +380,7 @@ A callback is a token as well:
    :start-after: // [token-callback]
    :end-before: // [token-callback-end]
 
-So is ``cancel_after``, which is the short way to a timeout on this API style:
+So is ``cancel_after``, which is the short way to a timeout on this runtime:
 
 .. literalinclude:: snippets.cpp
    :language: cpp
@@ -417,7 +419,7 @@ that on the server's own executor, and then let the context run on until it retu
    :start-after: // [stop]
    :end-before: // [stop-end]
 
-A context has to run dry, in both API styles. What is suspended when it is destroyed mostly gets
+A context has to run dry, on both I/O runtimes. What is suspended when it is destroyed mostly gets
 unwound, but not what waits on an object that only comes apart by running, and sessions do. HTTP/2
 and HTTP/3 leak without that drain.
 

@@ -8,7 +8,7 @@ STRIP_FROM_PATH        = @PROJECT_SOURCE_DIR@/include
 
 #
 # The public interface, and nothing else. The comments on the vocabulary of the two runtimes are in
-# asio/runtime.hpp, and corosio/runtime.hpp has the same names in the same order -- api-styles.rst
+# asio/runtime.hpp, and corosio/runtime.hpp has the same names in the same order -- io-runtimes.rst
 # has the table of what they map to. What these headers have for the library's own use is between
 # \cond and \endcond.
 #
@@ -33,7 +33,7 @@ JAVADOC_AUTOBRIEF      = YES
 
 # Doxygen does not compile anything, so what a compiler would get from config.hpp and from Asio's
 # headers is said here -- which is also why the reference takes neither Boost nor a configured
-# runtime, and comes out the same from a tree of either style
+# runtime, and comes out the same from a tree of either runtime
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = YES
 PREDEFINED             = ANYHTTP_ASIO=1 \

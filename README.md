@@ -4,7 +4,7 @@
 [![Documentation](https://img.shields.io/badge/documentation-read-blue)](https://pgit.github.io/anyhttp/)
 [![Coverage](https://img.shields.io/badge/coverage-report-blue)](https://pgit.github.io/anyhttp/coverage/)
 
-Low-level C++23 HTTP client and server library, in one of two API styles, chosen at configure time:
+Low-level C++23 HTTP client and server library, on one of two I/O runtimes, chosen at configure time:
 
 * **ASIO**, on [Asio](https://www.boost.org/doc/libs/release/doc/html/boost_asio.html): every
   operation is an asynchronous operation of Asio and takes any completion token.
@@ -28,7 +28,7 @@ This project started as a hand-written replacement for [nghttp2-asio](https://gi
 
 **<https://pgit.github.io/anyhttp/>** has the [programmer's guide](docs/programmers-guide.rst), which
 is the place to start, the API reference and how it all works:
-[API styles](docs/api-styles.rst), [the end of a body](docs/end-of-body.rst),
+[I/O runtimes](docs/io-runtimes.rst), [the end of a body](docs/end-of-body.rst),
 [concurrent requests](docs/concurrent-requests.rst), [moving to HTTP/3](docs/alt-svc.rst) and
 [the HTTP/2 library](docs/http2-library.rst). [docs/README.md](docs/README.md) says how to make it.
 
@@ -78,7 +78,7 @@ Task<void> do_session(client::Client& client, boost::urls::url url)
 }
 ```
 
-Both API styles have every operation as such a coroutine, that yields a tuple and reports errors
+Both I/O runtimes have every operation as such a coroutine, that yields a tuple and reports errors
 instead of throwing. On ASIO, each is also an asynchronous operation that takes any completion token.
 The whole programs are [hello_server.cpp](docs/examples/hello_server.cpp) and
 [hello_client.cpp](docs/examples/hello_client.cpp).

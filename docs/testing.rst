@@ -55,7 +55,7 @@ A derived fixture adjusts the configuration by overriding ``configure_server()``
       void configure_client(client::Config& config) override { config.max_header_size = 4_k; }
    };
 
-The fixtures themselves differ by API style, in :src:`test/test_fixtures_asio.hpp` and
+The fixtures themselves differ by I/O runtime, in :src:`test/test_fixtures_asio.hpp` and
 :src:`test/test_fixtures_corosio.hpp`.
 
 Asynchronous tests: ``requestHandler`` and ``clientSession``

@@ -133,11 +133,11 @@ endif()
 # --------------------------------------------------------------------------------------------------
 
 #
-# API style and I/O runtime, one per build tree: ASIO (completion tokens, on Boost.Asio) or COROSIO
+# The I/O runtime, one per build tree: ASIO (completion tokens, on Boost.Asio) or COROSIO
 # (coroutines only, on capy/corosio). The code tests ANYHTTP_ASIO or ANYHTTP_COROSIO, exactly one of
 # which is 1, from the generated anyhttp/config.hpp. See docs/corosio-port-plan.md.
 #
-set(ANYHTTP_API ASIO CACHE STRING "API style and I/O runtime: ASIO or COROSIO")
+set(ANYHTTP_API ASIO CACHE STRING "I/O runtime: ASIO or COROSIO")
 set_property(CACHE ANYHTTP_API PROPERTY STRINGS ASIO COROSIO)
 if (ANYHTTP_API STREQUAL "ASIO")
     set(ANYHTTP_ASIO 1)
@@ -170,7 +170,7 @@ elseif (ANYHTTP_API STREQUAL "COROSIO")
         GIT_TAG 41d0de18b6e4fa1b397c38a866f2daf52c6c36b5
         EXCLUDE_FROM_ALL)
     FetchContent_MakeAvailable(capy corosio)
-    message(STATUS "Using API style: COROSIO (capy/corosio)")
+    message(STATUS "Using I/O runtime: COROSIO (capy/corosio)")
 else()
     message(FATAL_ERROR "ANYHTTP_API must be ASIO or COROSIO, not '${ANYHTTP_API}'")
 endif()

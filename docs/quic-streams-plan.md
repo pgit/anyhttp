@@ -130,7 +130,7 @@ The after-the-end and cancellation rules carry over unchanged.
 - **Server:** an ALPN registered with a connection handler, `Task<void>(quic::Connection)`, on the
   existing `Server`, sharing its UDP socket and CID demux.
 
-Both API styles, like the rest: coroutines in both, `async_*` with completion tokens in ASIO.
+Both I/O runtimes, like the rest: coroutines in both, `async_*` with completion tokens in ASIO.
 
 ---------------------------------------------------------------------------------------------------
 
@@ -148,7 +148,7 @@ Both API styles, like the rest: coroutines in both, `async_*` with completion to
 
 ## 6. Steps
 
-Each step leaves both API styles building and the full suite green.
+Each step leaves both I/O runtimes building and the full suite green.
 
 1. **Transport into `quic/`, nghttp3 behind `Http3Application`.** A pure refactor that changes no
    behavior, with an ASAN run (CLAUDE.md: HTTP/3 write-path lifetimes) and the new boundary
