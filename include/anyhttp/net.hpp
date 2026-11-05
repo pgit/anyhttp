@@ -3,23 +3,30 @@
 //
 // The network half of the runtime layer, see anyhttp/runtime.hpp: TCP sockets, the acceptor, name
 // resolution, TLS over TCP, what the sessions need from the stream they run on, and UDP sockets.
+// Addresses and endpoints are the runtime's own, see anyhttp/runtime.hpp.
 //
-//    TcpSocket, TcpAcceptor, TlsContext, TlsStream, PlainServerStream
-//    ANYHTTP_SERVER_STREAMS(X), ANYHTTP_CLIENT_STREAMS(X)   -- what the backends instantiate for
-//    SocketStream, stream_traits<>, is_tls(), async_teardown()
-//    io::shutdown(), io::cancel(), io::close(), io::remote_endpoint()
-//    io::make_socket(), io::make_acceptor(), io::listen(), io::local_endpoint(), io::accept()
-//    io::no_delay(), io::buffer_sizes(), io::set_buffer_sizes(), io::resolve(), io::connect()
-//    make_server_tls_context(), make_client_tls_context(), io::make_tls_stream()
-//    io::set_peer_name(), io::handshake(), io::alpn(), io::tls_info(), io::is_truncated()
-//    io::drain()                                             -- below
-//    UdpSocket, io::make_udp_socket(), io::open(), io::cancel(), io::close()
-//    io::bind(), io::connect(), io::local_endpoint(), io::set_option(), io::send()   -- below
-//    io::make_address(), SocketAddress, io::to_sockaddr(), io::from_sockaddr()        -- below
-//    Signal                                                  -- a wake-up for any thread
+// Each runtime defines, in asio/net.hpp or corosio/net.hpp (documented in asio/net.hpp):
 //
-// asio/net.hpp has the documentation of each, except of those declared below. Addresses and
-// endpoints are the runtime's own, see anyhttp/runtime.hpp.
+//    Types        TcpSocket, TcpAcceptor, TlsContext, TlsStream, UdpSocket, PlainServerStream,
+//                 ANYHTTP_SERVER_STREAMS(X), ANYHTTP_CLIENT_STREAMS(X)
+//    Streams      SocketStream, stream_traits<>, get_socket(), is_tls(), io::shutdown(),
+//                 io::cancel(), io::close(), io::remote_endpoint(), async_teardown()
+//    TCP          io::make_socket(), io::make_acceptor(), io::listen(), io::local_endpoint(),
+//                 io::accept(), io::no_delay(), io::buffer_sizes(), io::set_buffer_sizes(),
+//                 io::resolve(), io::connect()
+//    TLS          make_server_tls_context(), make_client_tls_context(), io::make_tls_stream(),
+//                 io::set_peer_name(), io::handshake(), io::alpn(), io::tls_info(),
+//                 io::is_truncated()
+//    UDP          io::make_udp_socket(), io::open(), io::cancel(), io::close()
+//    Threads      Signal, a wake-up that may be sent from any thread
+//
+// Declared and documented here, the same for both runtimes:
+//
+//    Streams      io::drain()
+//    Addresses    io::make_address(), SocketAddress, io::to_sockaddr(), io::from_sockaddr()
+//                 (defined by each runtime, in src/asio/net.cpp and src/corosio/net.cpp)
+//    UDP          io::bind(), io::connect(), io::local_endpoint(), io::set_option(), io::send()
+//                 (defined once, in src/net.cpp, on the native handle)
 //
 
 #include "anyhttp/common.hpp"
