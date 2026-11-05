@@ -160,7 +160,8 @@ public:
    template <capy::MutableBufferSequence Buffers>
    Task<std::tuple<error_code, size_t>> read_some(Buffers buffers)
    {
-      for (auto it = capy::begin(buffers); it != capy::end(buffers); ++it)
+      for (auto it = capy::buffer_sequence_begin(buffers); it != capy::buffer_sequence_end(buffers);
+           ++it)
          if (capy::mutable_buffer buffer = *it; buffer.size() > 0)
             return read_some(asio::mutable_buffer(buffer.data(), buffer.size()));
       return read_some(asio::mutable_buffer{});

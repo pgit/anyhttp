@@ -147,7 +147,8 @@ public:
    template <capy::ConstBufferSequence Buffers>
    Task<std::tuple<error_code, size_t>> write_some(Buffers buffers)
    {
-      for (auto it = capy::begin(buffers); it != capy::end(buffers); ++it)
+      for (auto it = capy::buffer_sequence_begin(buffers); it != capy::buffer_sequence_end(buffers);
+           ++it)
          if (capy::const_buffer buffer = *it; buffer.size() > 0)
          {
             auto [ec] = co_await write(asio::const_buffer(buffer.data(), buffer.size()));
