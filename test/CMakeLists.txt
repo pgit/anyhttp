@@ -25,7 +25,7 @@ add_compile_definitions(BOOST_PROCESS_USE_STD_FS)
 add_compile_definitions(BOOST_PROCESS_V2_DISABLE_NOTIFY_FORK)
 
 #
-# Both API styles build every test file: one that belongs to a single style, or has parts that do,
+# Both I/O runtimes build every test file: one that belongs to a single runtime, or has parts that do,
 # guards them with ANYHTTP_ASIO or ANYHTTP_COROSIO.
 #
 file(GLOB SRC_FILES test_*.cpp)

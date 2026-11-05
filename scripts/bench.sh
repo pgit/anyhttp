@@ -134,7 +134,7 @@ stop_server() {
 }
 trap stop_server EXIT
 
-# Starts server $1 (a style or nghttpd) and waits until it listens: on TCP and UDP (on every thread
+# Starts server $1 (a runtime or nghttpd) and waits until it listens: on TCP and UDP (on every thread
 # with -i), nghttpd on TCP. A failed bind() aborts quietly, and h2load would then measure whatever
 # else owns the port.
 start_server() {

@@ -404,7 +404,44 @@ Task<std::tuple<error_code, std::string>> quic_hello(Executor executor, std::str
 
 // -------------------------------------------------------------------------------------------------
 //
-// What only the ASIO style has.
+// The shape of an operation on either runtime, with the types the aliases stand for.
+//
+
+#if ANYHTTP_ASIO
+// [shape-asio]
+boost::asio::awaitable<std::size_t> read_twice(Reader& reader, boost::asio::mutable_buffer buffer)
+{
+   // The asynchronous operation, with a completion token that reports errors instead of throwing.
+   auto [ec, n] = co_await reader.async_read_some(buffer, boost::asio::as_tuple);
+   if (ec)
+      co_return n;
+
+   // The coroutine around it.
+   boost::asio::awaitable<std::tuple<boost::system::error_code, std::size_t>> next =
+      reader.read_some(buffer + n);
+   auto [next_ec, m] = co_await std::move(next);
+   co_return n + m;
+}
+// [shape-asio-end]
+#else
+// [shape-corosio]
+boost::capy::task<std::size_t> read_twice(Reader& reader, boost::asio::mutable_buffer buffer)
+{
+   // The coroutine, which is all there is.
+   auto [ec, n] = co_await reader.read_some(buffer);
+   if (ec)
+      co_return n;
+
+   boost::capy::task<std::tuple<std::error_code, std::size_t>> next = reader.read_some(buffer + n);
+   auto [next_ec, m] = co_await std::move(next);
+   co_return n + m;
+}
+// [shape-corosio-end]
+#endif
+
+// -------------------------------------------------------------------------------------------------
+//
+// What only the ASIO runtime has.
 //
 
 #if ANYHTTP_ASIO

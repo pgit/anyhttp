@@ -34,7 +34,7 @@ report <https://pgit.github.io/anyhttp/coverage/>`__.
    :maxdepth: 1
    :caption: How it works
 
-   api-styles
+   io-runtimes
    end-of-body
    concurrent-requests
    alt-svc

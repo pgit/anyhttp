@@ -107,7 +107,7 @@ The tables below use `-c 32` unless they say otherwise.
 ## HTTP/2: nghttpd vs anyhttp
 
 *2026-10-07, measured at `d445bdf`.* nghttpd, which `bench.sh` runs as the HTTP/2 reference,
-serves twice as many requests as either API style: `bench.sh -D 5 -c 32` gave 555k req/s against
+serves twice as many requests as either I/O runtime: `bench.sh -D 5 -c 32` gave 555k req/s against
 284k (ASIO) and 273k (COROSIO), on one thread each, with the same nghttp2 and OpenSSL. This is
 where the time goes; [Done since](#done-since) lists what has been fixed.
 
@@ -144,7 +144,7 @@ instructions may sit in a neighbouring row:
 
 COROSIO, by `perf` share of user time: malloc/free 21%, `std::format` 13%, capy/corosio 12%,
 nghttp2 15%, Boost.URL 5%, Beast 3.5%. The same shape, so the cost lies in the generic code and
-the HTTP/2 backend, not in the API style.
+the HTTP/2 backend, not in the I/O runtime.
 
 ### Where it goes
 
@@ -304,7 +304,7 @@ Scaling across independent contexts, h2 (`h2load -D 6 -c 32 -m 10 -t 4`, req/s):
 - **COROSIO's threaded scheduler is far better than ASIO's shared one,** but a context per thread
   takes most of its lead away. In the independent model COROSIO stays ahead on h1 only and is
   7-22% behind on h2 and h3.
-- **h1 and h3 gain from independent contexts in both styles.** COROSIO h1 drops from 26 to 15.5 µs
+- **h1 and h3 gain from independent contexts on both runtimes.** COROSIO h1 drops from 26 to 15.5 µs
   per request, 4.7 µs of the saving in system time.
 - **COROSIO h2 gets slower** with independent contexts: 6.2 instead of 5.0 µs per request, with
   system time up by half. Load is spread evenly (all threads equally busy), and
@@ -353,7 +353,7 @@ causes, both fixed:
    completed inside the initiating call, which `Response::submit()` always does. HTTP/3's write
    pass, posted by `wake_write()`, then ran first and sent each response head in a packet of its
    own, before the handler could add the body: twice the flushes, packets and ACKs of ASIO. Found
-   by counting events per request in both styles, not by profiling. Fixed by resuming at once,
+   by counting events per request on both runtimes, not by profiling. Fixed by resuming at once,
    after the initiating call has returned (`6c3c50f`): h3 97k → 143k (ASIO 124k), h2 197k → 247k
    (ASIO 207k), h2 cleartext 229k → 276k (ASIO 191k), with `bench.sh -D 3`.
 

@@ -13,10 +13,10 @@ benchmark with the latter, never with `build/`. Both use clang, which builds aga
 the libraries in `/opt/libc++` (`USE_LIBCXX`, `LIBCXX_ROOT`); `build-gcc/` is GCC with libstdc++
 and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.json`.
 
-`build-corosio/` is the COROSIO API style (`-DANYHTTP_API=COROSIO -DTLS_LIBRARY=OpenSSL`, see
+`build-corosio/` is the COROSIO I/O runtime (`-DANYHTTP_API=COROSIO -DTLS_LIBRARY=OpenSSL`, see
 [docs/corosio-port-plan.md](docs/corosio-port-plan.md)); capy and corosio are FetchContent'd at
-pinned SHAs. Both styles build the same library sources and test files; what belongs to one style
-only is guarded with `ANYHTTP_ASIO` or `ANYHTTP_COROSIO` (exactly one of them is 1). So is the
+pinned SHAs. Both runtimes build the same library sources and test files; what belongs to one
+runtime only is guarded with `ANYHTTP_ASIO` or `ANYHTTP_COROSIO` (exactly one of them is 1). So is the
 `server` program; the `client` program is ASIO-only so far. `build-corosio-asan/` is its ASAN
 tree, `build-corosio-release/` its Release tree (benchmark COROSIO with it) and
 `build-corosio-gcc/` its GCC one -- capy and corosio do build against libstdc++, but GCC is
@@ -137,10 +137,9 @@ buffer (see `WriteMode`), and `build-h2v2-asan/` is the version 2 ASAN tree for 
 Each protocol lives in a directory of its own, `h1/` (Beast/HTTP/1.1), `h2/` (nghttp2), `quic/`
 (ngtcp2) and `h3/` (nghttp3, on top of `quic/`), in both `include/anyhttp/` and `src/`. **Only
 files in `h2/` may include `<nghttp2/*>`, only files in `h2v2/` `<nghttp2v2/*>`, only files in
-`quic/` and `h3/` `<ngtcp2/*>`, only files in `h3/` `<nghttp3/*>`.** What belongs to one API style
-only
-is in `asio/` or `corosio/`, again in both; the library compiles the `src/` directory of its style
-and not the other. `src/apps/` has the `server` and `client` programs, `src/issues/` standalone
+`quic/` and `h3/` `<ngtcp2/*>`, only files in `h3/` `<nghttp3/*>`.** What belongs to one async
+runtime only is in `asio/` or `corosio/`, again in both; the library compiles the `src/` directory
+of its runtime and not the other. `src/apps/` has the `server` and `client` programs, `src/issues/` standalone
 reproducers of upstream bugs. Everything else at the top level is generic.
 
 What gets installed is the public headers, the ones reachable from `client.hpp`, `server.hpp`,
@@ -194,7 +193,7 @@ may: the h2c upgrade and formatter tests drive nghttp2 by hand.)
 **Generic and protocol code include nothing from Boost.Asio but `<boost/asio/buffer.hpp>`**, which
 Beast's parser, serializer and `Fields` bring anyway, and nothing from capy or corosio. They reach
 the runtime through `anyhttp/runtime.hpp`, `anyhttp/net.hpp` and `anyhttp/formatter.hpp`, which
-include the `asio/` or `corosio/` header of the build's style. Addresses and endpoints are the
+include the `asio/` or `corosio/` header of the build's runtime. Addresses and endpoints are the
 runtime's own (`IpAddress`, `TcpEndpoint`, `UdpEndpoint`); where the two differ, `net.hpp` declares
 a function each runtime defines (`io::make_address()`, `io::to_sockaddr()`, ...). Verify in a
 COROSIO tree that no library object includes more of Asio:
@@ -204,7 +203,7 @@ ninja -C build-corosio -t deps | awk '/^[^ ].*: #deps/{o=$1} /boost\/asio\// && 
 ```
 
 It must print nothing. (Test objects may: `test_external.cpp` runs its child processes on an ASIO
-context in both styles.)
+context on both runtimes.)
 
 QUIC and HTTP/3 are two layers, and each shares one implementation between server and client.
 `quic/session.*` has all ngtcp2 callbacks, packet writing, timers and connection flow control,
@@ -222,16 +221,16 @@ shared files.
 ## Conventions
 
 - clang-format is authoritative: 3-space indent, 100 columns.
-- The two API styles are ASIO and COROSIO: `ANYHTTP_ASIO`/`ANYHTTP_COROSIO`,
+- The two I/O runtimes are ASIO and COROSIO: `ANYHTTP_ASIO`/`ANYHTTP_COROSIO`,
   `asio/`/`corosio/`, `build-corosio/`. "capy" names only the library itself (`capy::task`,
   `<boost/capy/...>`), the non-I/O base that corosio adds I/O to.
-- Where the two styles differ by more than a few lines, each gets a file of its own, of the same
+- Where the two runtimes differ by more than a few lines, each gets a file of its own, of the same
   name in `asio/` and `corosio/`, with the same definitions in the same order, so that the pair can
   be read side by side: `runtime.hpp`, `net.hpp`, `src/*/net.cpp`. What both share stays in the
   generic file of that name (`anyhttp/runtime.hpp`, which selects one of the two, `anyhttp/net.hpp`,
   `src/net.cpp`). The test fixtures follow the old pattern, `test/test_fixtures_*.hpp`. Keep the
   order when adding to either.
-- The style comes from the generated `anyhttp/config.hpp` (`cmake/config.hpp.in`), not from a
+- The runtime comes from the generated `anyhttp/config.hpp` (`cmake/config.hpp.in`), not from a
   compile definition: a file that tests `ANYHTTP_ASIO`/`ANYHTTP_COROSIO` must include it (or
   `anyhttp/runtime.hpp`) first, or the test is silently false.
 - Test `.cpp` files put `using namespace testing;` after the includes and use `HasSubstr`,
@@ -271,7 +270,7 @@ After adding a dependency, check `ldd` of an AWS-LC build shows no `libssl.so.3`
 `libcrypto.so.3` -- a shared OpenSSL would interpose the executable's AWS-LC symbols. `curl`,
 `osslclient` and `osslserver` are OpenSSL builds and are useful for interop testing.
 
-**A context has to run dry, in both styles.** This is anyhttp's doing, not capy's any more. Since
+**A context has to run dry, on both runtimes.** This is anyhttp's doing, not capy's any more. Since
 capy `8e1244f` and corosio `232c79f`, destroying an `io_context` unwinds the coroutines suspended on
 it, provided the continuation they are parked with carries `env->owner`: whatever in
 `corosio/runtime.hpp` parks or queues a coroutine has to set it. What that cannot reach is a cycle

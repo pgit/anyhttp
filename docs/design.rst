@@ -41,7 +41,7 @@ ngtcp2 and nghttp3 from being compile-time dependencies of anyone who uses anyht
      - HTTP/3
      - nghttp3, and ``quic/``
    * - ``asio/``, ``corosio/``
-     - the runtime, see :doc:`api-styles`
+     - the runtime, see :doc:`io-runtimes`
      - Asio, or Corosio and Capy
 
 Generic code (``server_impl.*``, ``client_impl.*``) reaches a backend only through

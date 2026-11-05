@@ -7,7 +7,7 @@ says how these go together.
 Everything is in the namespace ``anyhttp``, with what is for one side in ``anyhttp::client``,
 ``anyhttp::server`` and ``anyhttp::quic``. This shows the headers of an ASIO build: on COROSIO, there
 are no operations with completion tokens, and the types are the other column of
-:ref:`the table <api-styles-vocabulary>`.
+:ref:`the table <io-runtimes-vocabulary>`.
 
 Client
 ------
@@ -142,7 +142,7 @@ The runtime
    #include <anyhttp/runtime.hpp>
 
 What the interface is written in, and what each name is on ASIO. On COROSIO the same names are
-something else, which :ref:`the table <api-styles-vocabulary>` has.
+something else, which :ref:`the table <io-runtimes-vocabulary>` has.
 
 .. doxygentypedef:: anyhttp::Task
 
@@ -165,7 +165,7 @@ something else, which :ref:`the table <api-styles-vocabulary>` has.
 Errors
 ^^^^^^
 
-Where the two runtimes spell an error differently, see :ref:`the table <api-styles-errors>`. Anything
+Where the two runtimes spell an error differently, see :ref:`the table <io-runtimes-errors>`. Anything
 else compares against ``errc::``.
 
 .. doxygenvariable:: anyhttp::errors::eof

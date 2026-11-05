@@ -1,20 +1,24 @@
 .. cpp:namespace:: anyhttp
 
-API styles
-==========
+I/O runtimes: Asio and Corosio
+==============================
 
-A build of the library is of one of two API styles, chosen when it is configured:
+A build of the library is on one of two I/O runtimes, chosen when it is configured:
 
 * **ASIO**, on `Asio <https://www.boost.org/doc/libs/release/doc/html/boost_asio.html>`__: every
   operation is an asynchronous operation of Asio, and takes any completion token. It is also there
   as a coroutine.
 * **COROSIO**, on `Corosio <https://github.com/cppalliance/corosio>`__: coroutines only.
 
-Both styles build the same library and protocol sources. Only a thin runtime layer differs,
+Each brings the sockets, timers and TLS, on top of an async runtime: the executors, coroutines and
+cancellation. Asio is both in one. Corosio is the I/O only, on top of `Capy
+<https://github.com/cppalliance/capy>`__, which is the async runtime.
+
+Both build the same library and protocol sources. Only a thin runtime layer differs,
 ``anyhttp/runtime.hpp`` and ``anyhttp/net.hpp`` with what they include from ``asio/`` or ``corosio/``.
 :src:`docs/corosio-port-plan.md` has how that came about.
 
-.. _api-styles-vocabulary:
+.. _io-runtimes-vocabulary:
 
 What the names stand for
 ------------------------
@@ -51,15 +55,55 @@ What the names stand for
      - ``server``, ``client``
      - ``server``
 
-Both styles have every operation as a coroutine, ``read_some``, ``write``, ``write_eof``, ``submit``,
-``get_response``, ``connect``, ``get``, that yields a tuple and reports errors instead of throwing.
-Code written like that builds with either, which is what the guide does. Buffers are Asio's in both,
-headers are Beast's :cpp:type:`Fields`, URLs Boost.URL's.
+Buffers are Asio's on both, headers are Beast's :cpp:type:`Fields`, URLs Boost.URL's.
 
 The reference shows what the headers have for ASIO, as Doxygen is told to read them that way. So the
 reference has the operations with completion tokens that a COROSIO build does not have, and the types
 as they are in the table. ``corosio/runtime.hpp`` has the same names as ``asio/runtime.hpp``, in the
 same order.
+
+.. _io-runtimes-operations:
+
+The shape of an operation
+-------------------------
+
+On ASIO, an operation comes in two shapes. The asynchronous operation of Asio is named ``async_...``
+and takes a completion token last, which decides what it returns, and the coroutine of the plain name
+wraps it. On COROSIO, the coroutine is all there is. Taking :cpp:func:`Reader::read_some` for an
+example, with the types of the library:
+
+.. code-block:: cpp
+
+   // ASIO: the operation, which completes a handler of the signature void(error_code, size_t) ...
+   template <typename CompletionToken = DefaultCompletionToken>
+   auto async_read_some(asio::mutable_buffer buffer, CompletionToken&& token = CompletionToken());
+
+   // ... and the coroutine around it.
+   Task<std::tuple<error_code, size_t>> read_some(asio::mutable_buffer buffer);
+
+   // COROSIO: the coroutine.
+   Task<std::tuple<error_code, size_t>> read_some(asio::mutable_buffer buffer);
+
+The coroutine has the same declaration on both, so code that uses only coroutines builds with
+either, which is what the guide does. It yields a tuple with the error first, and reports what goes
+wrong instead of throwing it. Every operation has it: ``read_some``, ``write``, ``write_eof``,
+``submit``, ``get_response``, ``connect``, ``get``, and the others. What it does not have is a
+completion token, so an ASIO build that wants one, for a callback, for ``cancel_after`` or to have
+errors thrown, uses the ``async_...`` shape, see :ref:`completion-tokens` in the guide.
+
+With the types spelled out, the same piece of code on ASIO, using both shapes:
+
+.. literalinclude:: snippets.cpp
+   :language: cpp
+   :start-after: // [shape-asio]
+   :end-before: // [shape-asio-end]
+
+And on COROSIO:
+
+.. literalinclude:: snippets.cpp
+   :language: cpp
+   :start-after: // [shape-corosio]
+   :end-before: // [shape-corosio-end]
 
 On ASIO, the implementation of each operation is hidden behind `any_completion_handler
 <https://www.boost.org/doc/libs/release/doc/html/boost_asio/reference/any_completion_handler.html>`__,
@@ -68,7 +112,7 @@ so that it can be compiled separately. On COROSIO, they are coroutines of `Capy
 ``std::stop_token``. :cpp:class:`Reader` and :cpp:class:`Writer` model ``capy::ReadStream`` and
 ``capy::WriteStream``.
 
-.. _api-styles-errors:
+.. _io-runtimes-errors:
 
 What the errors are
 -------------------

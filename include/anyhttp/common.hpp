@@ -147,7 +147,7 @@ using Status = void(error_code);
 using StatusHandler = Completion<Status>;
 
 #if ANYHTTP_ASIO
-/// What an operation of a style that has completion tokens takes when it is given none.
+/// What an operation of a runtime that has completion tokens takes when it is given none.
 using DefaultCompletionToken = asio::default_completion_token_t<Executor>;
 #endif
 

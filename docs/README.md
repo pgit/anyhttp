@@ -31,7 +31,7 @@ apt-get install doxygen python3-sphinx python3-breathe python3-sphinx-rtd-theme
 ```
 
 The target is not part of a regular build, and not there at all where CMake finds no `doxygen` or no
-`sphinx-build`, or was told `ANYHTTP_BUILD_DOCS=OFF`. It can be made from a tree of either API style
+`sphinx-build`, or was told `ANYHTTP_BUILD_DOCS=OFF`. It can be made from a tree of either I/O runtime
 and gives the same result: the comments on the types of the two runtimes are in `asio/runtime.hpp`.
 
 ## Writing it
@@ -43,12 +43,12 @@ Warnings are errors in both tools, so a public symbol without a comment, a param
   What a public header has for the library's own use goes between `\cond internal` and `\endcond`.
 * In a comment, Doxygen takes `http::...` and `https://` for a link, and `\c` of either, or of a word
   that starts with `[`, comes out empty, which neither tool warns about. So write `errors::...`, as
-  that is the spelling that holds in both API styles anyway, and `<tt>[...]</tt>`.
+  that is the spelling that holds on both I/O runtimes anyway, and `<tt>[...]</tt>`.
 * Code in the guide comes from `snippets.cpp`, between a `// [name]` and a `// [name-end]` comment,
   and is shown with `literalinclude`. Only pseudo code is written in place.
 * In a page, names link to the reference with `` :cpp:func:`Session::submit` `` and the like, and
   files of the repository with `` :src:`src/server.cpp` ``.
-* In prose, the libraries are Asio, Corosio and Capy. `ASIO` and `COROSIO` are the API styles, the
+* In prose, the libraries are Asio, Corosio and Capy. `ASIO` and `COROSIO` are the I/O runtimes, the
   values of `ANYHTTP_API`: "an ASIO build". Capy is named only where Capy itself is meant.
 
 [`Doxyfile.in`](Doxyfile.in) configures Doxygen and [`conf.py`](conf.py) configures Sphinx.

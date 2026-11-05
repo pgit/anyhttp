@@ -42,7 +42,7 @@
         {
             "name": "corosio",
             "hidden": true,
-            "description": "The COROSIO API style, on capy/corosio, which needs OpenSSL",
+            "description": "The COROSIO I/O runtime, on capy/corosio, which needs OpenSSL",
             "inherits": "openssl",
             "cacheVariables": {
                 "ANYHTTP_API": "COROSIO"
@@ -177,7 +177,7 @@
         {
             "name": "build-corosio",
             "displayName": "COROSIO",
-            "description": "The COROSIO API style, see docs/corosio-port-plan.md; capy and corosio are FetchContent'd at pinned SHAs",
+            "description": "The COROSIO I/O runtime, see docs/corosio-port-plan.md; capy and corosio are FetchContent'd at pinned SHAs",
             "inherits": [
                 "clang",
                 "corosio",

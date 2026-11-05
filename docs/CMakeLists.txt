@@ -19,7 +19,7 @@ target_link_libraries(hello_client PRIVATE anyhttp)
 #    cmake --build build --target docs
 #
 # Doxygen does not compile the headers, so unlike the snippets the documentation depends on neither
-# the API style of the tree nor on what that style needs. See Doxyfile.in.
+# the I/O runtime of the tree nor on what that runtime needs. See Doxyfile.in.
 #
 find_program(DOXYGEN_EXECUTABLE doxygen DOC "Doxygen, which reads the comments in the headers")
 find_program(SPHINX_EXECUTABLE sphinx-build DOC "Sphinx, which makes the documentation")
