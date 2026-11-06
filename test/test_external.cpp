@@ -58,7 +58,7 @@ protected:
 #if ANYHTTP_COROSIO
    //
    // Boost.Process needs Boost.Asio, so with COROSIO the child processes run on an io_context of
-   // their own, on a thread of their own, next to the server's corosio::io_context.
+   // their own, on a thread of their own, next to the server's boost::corosio::io_context.
    //
    void SetUp() override
    {
@@ -138,7 +138,8 @@ protected:
    awaitable<std::string> read_all(readable_pipe pipe)
    {
       std::string result;
-      auto [ec, nread] = co_await asio::async_read(pipe, asio::dynamic_buffer(result), as_tuple);
+      auto [ec, nread] =
+         co_await boost::asio::async_read(pipe, boost::asio::dynamic_buffer(result), as_tuple);
       logi("STDOUT: {} bytes ({})", nread, what(ec));
       if (ec && ec != error::eof)
          throw boost::system::system_error(ec);
@@ -464,7 +465,7 @@ TEST_F(ExternalCustom, nghttp2_trailers)
       auto body = std::format("{} bytes, x-trailer: {}", received,
                               std::string_view(request.fields()["x-trailer"]));
       check(co_await response.submit(200, fields({{"Content-Length", body.size()}})));
-      check(co_await response.write_eof(asio::buffer(body)));
+      check(co_await response.write_eof(boost::asio::buffer(body)));
    };
 
    auto url = std::format("http://127.0.0.2:{}/custom", port());

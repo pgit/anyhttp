@@ -39,13 +39,13 @@ std::optional<size_t> Reader::content_length() const noexcept
 
 static IoTask<size_t> no_reader() { co_return std::tuple{errors::bad_descriptor, size_t{0}}; }
 
-IoTask<size_t> Reader::read_some(asio::mutable_buffer buffer)
+IoTask<size_t> Reader::read_some(boost::asio::mutable_buffer buffer)
 {
    return impl_ ? impl_->read_some(buffer) : no_reader();
 }
 
 #if ANYHTTP_ASIO
-void Reader::async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler)
+void Reader::async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler)
 {
    if (impl_)
       impl_->async_read_some(buffer, std::move(handler));

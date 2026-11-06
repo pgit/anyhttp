@@ -11,7 +11,13 @@
 // UDP, the same in both runtimes, see anyhttp/net.hpp.
 // =================================================================================================
 
-namespace anyhttp::io
+// The runtime's own namespace, which io:: is part of: a plain "namespace anyhttp::io" here would
+// be a namespace of its own to clang, which does not look through the inline namespace for it.
+#if ANYHTTP_COROSIO
+namespace anyhttp::inline corosio::io
+#else
+namespace anyhttp::inline asio::io
+#endif
 {
 
 error_code bind(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept
@@ -49,11 +55,11 @@ error_code set_option(UdpSocket& socket, int level, int name, int value) noexcep
    return {};
 }
 
-error_code send(UdpSocket& socket, asio::const_buffer buffer) noexcept
+error_code send(UdpSocket& socket, boost::asio::const_buffer buffer) noexcept
 {
    if (::send(socket.native_handle(), buffer.data(), buffer.size(), 0) < 0)
       return last_error();
    return {};
 }
 
-} // namespace anyhttp::io
+} // namespace anyhttp::io (in the runtime's namespace)

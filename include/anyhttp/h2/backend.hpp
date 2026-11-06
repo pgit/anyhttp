@@ -22,7 +22,7 @@
 #include <optional>
 #include <string>
 
-namespace anyhttp::nghttp2
+namespace anyhttp::h2
 {
 
 // =================================================================================================
@@ -71,4 +71,4 @@ ANYHTTP_CLIENT_STREAMS(ANYHTTP_H2_CLIENT)
 
 // =================================================================================================
 
-} // namespace anyhttp::nghttp2
+} // namespace anyhttp::h2

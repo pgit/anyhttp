@@ -254,12 +254,12 @@ public:
                      CompletionToken&& token = CompletionToken())
    {
       // binding the executor lets tokens that need one -- cancel_after's timer -- find it here
-      return asio::async_initiate<CompletionToken, Status>(
-         asio::bind_executor(asio::get_associated_executor(token, get_executor()),
-                             [this](StatusHandler handler, unsigned int status_code,
-                                    const Fields& headers) { //
-                                async_submit_any(std::move(handler), status_code, headers);
-                             }),
+      return boost::asio::async_initiate<CompletionToken, Status>(
+         boost::asio::bind_executor(boost::asio::get_associated_executor(token, get_executor()),
+                                    [this](StatusHandler handler, unsigned int status_code,
+                                           const Fields& headers) { //
+                                       async_submit_any(std::move(handler), status_code, headers);
+                                    }),
          token, status_code, headers);
    }
 #endif

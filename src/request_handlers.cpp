@@ -83,7 +83,7 @@ Task<void> dump(server::Request request, server::Response response)
           200, fields({{"Content-Length", body.size()}, {"Content-Type", "text/plain"}}));
        ec)
       co_return;
-   co_await response.write_eof(asio::buffer(body));
+   co_await response.write_eof(boost::asio::buffer(body));
 }
 
 Task<void> echo(server::Request request, server::Response response)
@@ -97,13 +97,13 @@ Task<void> echo(server::Request request, server::Response response)
    std::array<uint8_t, 64_k> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await request.read_some(asio::buffer(buffer));
+      auto [ec, n] = co_await request.read_some(boost::asio::buffer(buffer));
       if (ec == errors::eof)
          break;
       if (ec)
          co_return; // a body cut short, see not ending ours below
 
-      if (auto [write_ec] = co_await response.write(asio::buffer(buffer, n)); write_ec)
+      if (auto [write_ec] = co_await response.write(boost::asio::buffer(buffer, n)); write_ec)
          co_return;
    }
 
@@ -178,7 +178,7 @@ Task<size_t> drain(Reader& reader)
    std::array<uint8_t, 16_k> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await reader.read_some(asio::buffer(buffer));
+      auto [ec, n] = co_await reader.read_some(boost::asio::buffer(buffer));
       bytes += n;
 
       // the regular end of the body is not something to report as an error
@@ -202,7 +202,7 @@ Task<std::string> read(Reader& reader)
    std::array<char, 16_k> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await reader.read_some(asio::buffer(buffer));
+      auto [ec, n] = co_await reader.read_some(boost::asio::buffer(buffer));
       body += std::string_view(buffer.data(), n);
       if (ec == errors::eof)
       {
@@ -227,7 +227,7 @@ Task<std::tuple<size_t, error_code>> try_receive(Reader& reader)
    std::array<uint8_t, 16_k> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await reader.read_some(asio::buffer(buffer));
+      auto [ec, n] = co_await reader.read_some(boost::asio::buffer(buffer));
       bytes += n;
 
       // the regular end of the body is not something to report as an error
@@ -287,7 +287,7 @@ Task<void> hello_world(server::Response response)
 {
    constexpr auto hello = "Hello, World!\n"sv;
    if (auto [ec] = co_await response.submit(200, fields({{"Content-Length", hello.size()}})); !ec)
-      co_await response.write_eof(asio::buffer(hello));
+      co_await response.write_eof(boost::asio::buffer(hello));
 }
 
 Task<void> h2spec(server::Request request, server::Response response)
@@ -302,12 +302,12 @@ Task<void> h2spec(server::Request request, server::Response response)
    //
    std::ignore = co_await delay(10ms);
    std::array<uint8_t, 1024> buffer;
-   std::ignore = co_await request.read_some(asio::buffer(buffer));
+   std::ignore = co_await request.read_some(boost::asio::buffer(buffer));
 
    constexpr auto hello = "Hello, World!\n"sv;
    if (auto [ec] = co_await response.submit(200, fields({{"Content-Length", hello.size()}})); ec)
       co_return;
-   co_await response.write_eof(asio::buffer(hello));
+   co_await response.write_eof(boost::asio::buffer(hello));
    co_await drain(request);
 }
 

@@ -21,7 +21,7 @@ class QuicStream;
 // =================================================================================================
 
 //
-// What runs on top of a QUIC connection: HTTP/3 (http3::Http3Application, on nghttp3) or plain
+// What runs on top of a QUIC connection: HTTP/3 (h3::Http3Application, on nghttp3) or plain
 // streams. A session owns exactly one, picked by the ALPN the handshake negotiates -- on the server
 // in the TLS ALPN callback, on the client before it connects -- and forwards to it every ngtcp2
 // callback that is about streams rather than about the connection. It is also the write

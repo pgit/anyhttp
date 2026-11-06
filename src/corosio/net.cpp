@@ -18,7 +18,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
-namespace anyhttp
+namespace anyhttp::inline corosio
 {
 
 // =================================================================================================
@@ -27,11 +27,11 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
                                    const std::string& private_key)
 {
    TlsContext ctx;
-   if (auto ec = ctx.set_min_protocol_version(corosio::tls_version::tls_1_3))
+   if (auto ec = ctx.set_min_protocol_version(boost::corosio::tls_version::tls_1_3))
       throw_error(ec);
    if (auto ec = ctx.use_certificate_chain_file(certificate_chain))
       throw std::system_error(ec, "use_certificate_chain_file");
-   if (auto ec = ctx.use_private_key_file(private_key, corosio::tls_file_format::pem))
+   if (auto ec = ctx.use_private_key_file(private_key, boost::corosio::tls_file_format::pem))
       throw std::system_error(ec, "use_private_key_file");
    std::ignore = ctx.set_alpn({"h2", "http/1.1"});
    return ctx;
@@ -42,11 +42,11 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol)
 {
    TlsContext ctx;
-   if (auto ec = ctx.set_min_protocol_version(corosio::tls_version::tls_1_2))
+   if (auto ec = ctx.set_min_protocol_version(boost::corosio::tls_version::tls_1_2))
       throw_error(ec);
    if (auto ec = ca_file.empty() ? ctx.set_default_verify_paths() : ctx.load_verify_file(ca_file))
       throw std::system_error(ec, "load_verify_file");
-   if (auto ec = ctx.set_verify_mode(corosio::tls_verify_mode::peer))
+   if (auto ec = ctx.set_verify_mode(boost::corosio::tls_verify_mode::peer))
       throw_error(ec);
    if (protocol == Protocol::h2)
       std::ignore = ctx.set_alpn({"h2", "http/1.1"});
@@ -62,21 +62,22 @@ namespace io
 
 void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port)
 {
-   const auto family = endpoint.address().is_v4() ? corosio::family::v4 : corosio::family::v6;
+   const auto family =
+      endpoint.address().is_v4() ? boost::corosio::family::v4 : boost::corosio::family::v6;
    if (auto ec = acceptor.open(family))
       throw std::system_error(ec, "open");
-   if (auto ec = acceptor.set_option(corosio::socket_option::reuse_address(true)))
+   if (auto ec = acceptor.set_option(boost::corosio::socket_option::reuse_address(true)))
       throw std::system_error(ec, "reuse_address");
    if (reuse_port)
    {
-      if (auto ec = acceptor.set_option(corosio::socket_option::reuse_port(true)))
+      if (auto ec = acceptor.set_option(boost::corosio::socket_option::reuse_port(true)))
          throw std::system_error(ec, "reuse_port");
    }
 
    // Accept IPv4 clients on an IPv6 listener, too, see asio/net.cpp.
-   if (family == corosio::family::v6)
+   if (family == boost::corosio::family::v6)
    {
-      if (auto ec = acceptor.set_option(corosio::socket_option::v6_only(false)))
+      if (auto ec = acceptor.set_option(boost::corosio::socket_option::v6_only(false)))
          logw("[{}] error enabling dual-stack on {}: {}", log_prefix(Role::server), endpoint,
               ec.message());
    }
@@ -107,9 +108,9 @@ void set_buffer_sizes(TcpSocket& socket, int send, int receive)
 
 IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, std::string port)
 {
-   corosio::resolver resolver(executor.context());
+   boost::corosio::resolver resolver(executor.context());
    auto [ec, results] =
-      co_await resolver.resolve(host, port, corosio::resolve_flags::numeric_service);
+      co_await resolver.resolve(host, port, boost::corosio::resolve_flags::numeric_service);
 
    std::vector<TcpEndpoint> endpoints;
    for (auto&& entry : results)
@@ -123,8 +124,8 @@ IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoint
    for (const auto& endpoint : endpoints)
    {
       socket.close();
-      if ((ec =
-              socket.open(endpoint.address().is_v4() ? corosio::family::v4 : corosio::family::v6)))
+      if ((ec = socket.open(endpoint.address().is_v4() ? boost::corosio::family::v4
+                                                       : boost::corosio::family::v6)))
          continue;
       std::tie(ec) = co_await socket.connect(endpoint);
       if (!ec)
@@ -160,7 +161,7 @@ namespace io
 
 IpAddress make_address(std::string_view text, error_code& ec) noexcept
 {
-   auto [result, address] = corosio::make_ip_address(text);
+   auto [result, address] = boost::corosio::make_ip_address(text);
    ec = result;
    return address;
 }
@@ -200,17 +201,18 @@ std::optional<UdpEndpoint> from_sockaddr(const sockaddr* address, socklen_t size
    {
       sockaddr_in in;
       std::memcpy(&in, address, sizeof(in));
-      corosio::ipv4_address::bytes_type bytes;
+      boost::corosio::ipv4_address::bytes_type bytes;
       std::memcpy(bytes.data(), &in.sin_addr, bytes.size());
-      return UdpEndpoint(corosio::ipv4_address(bytes), ntohs(in.sin_port));
+      return UdpEndpoint(boost::corosio::ipv4_address(bytes), ntohs(in.sin_port));
    }
    if (address->sa_family == AF_INET6 && size >= sizeof(sockaddr_in6))
    {
       sockaddr_in6 in6;
       std::memcpy(&in6, address, sizeof(in6));
-      corosio::ipv6_address::bytes_type bytes;
+      boost::corosio::ipv6_address::bytes_type bytes;
       std::memcpy(bytes.data(), &in6.sin6_addr, bytes.size());
-      return UdpEndpoint(corosio::ipv6_address(bytes, in6.sin6_scope_id), ntohs(in6.sin6_port));
+      return UdpEndpoint(boost::corosio::ipv6_address(bytes, in6.sin6_scope_id),
+                         ntohs(in6.sin6_port));
    }
    return std::nullopt;
 }
@@ -219,4 +221,4 @@ std::optional<UdpEndpoint> from_sockaddr(const sockaddr* address, socklen_t size
 
 // =================================================================================================
 
-} // namespace anyhttp
+} // namespace anyhttp::inline corosio

@@ -14,10 +14,7 @@ include(CMakePackageConfigHelpers)
 # --------------------------------------------------------------------------------------------------
 
 if (ANYHTTP_BUILD_APPS)
-    set(anyhttp_programs server)
-    if (ANYHTTP_ASIO)
-        list(APPEND anyhttp_programs client)
-    endif()
+    set(anyhttp_programs server client)
 
     set_target_properties(${anyhttp_programs} PROPERTIES
         INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")

@@ -58,13 +58,13 @@ Task<void> serve_echo(server::Request request, server::Response response)
    std::array<uint8_t, 64_k> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await request.read_some(asio::buffer(buffer));
+      auto [ec, n] = co_await request.read_some(boost::asio::buffer(buffer));
       if (ec == errors::eof)
          break;
       if (ec)
          co_return;
 
-      if (auto [write_ec] = co_await response.write(asio::buffer(buffer, n)); write_ec)
+      if (auto [write_ec] = co_await response.write(boost::asio::buffer(buffer, n)); write_ec)
          co_return;
    }
 
@@ -80,7 +80,7 @@ Task<void> respond_with(server::Response response, std::string body)
        ec)
       co_return;
 
-   std::ignore = co_await response.write_eof(asio::buffer(body));
+   std::ignore = co_await response.write_eof(boost::asio::buffer(body));
 }
 // [write-at-once-end]
 
@@ -115,7 +115,7 @@ IoTask<std::string> read_all(Reader& reader)
    std::array<char, 16_k> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await reader.read_some(asio::buffer(buffer));
+      auto [ec, n] = co_await reader.read_some(boost::asio::buffer(buffer));
       body.append(buffer.data(), n);
       if (ec == errors::eof)
          co_return std::tuple{error_code{}, std::move(body)};
@@ -133,7 +133,7 @@ IoTask<std::string> post(Session& session, boost::urls::url url, std::string bod
    if (submit_ec)
       co_return std::tuple{submit_ec, std::string{}};
 
-   if (auto [ec] = co_await request.write_eof(asio::buffer(body)); ec)
+   if (auto [ec] = co_await request.write_eof(boost::asio::buffer(body)); ec)
       co_return std::tuple{ec, std::string{}};
 
    auto [response_ec, response] = co_await request.get_response();
@@ -174,7 +174,7 @@ Task<size_t> read_at_most(Session session, boost::urls::url url, size_t limit)
    std::array<char, 16_k> buffer;
    while (total < limit)
    {
-      auto [ec, n] = co_await response.read_some(asio::buffer(buffer));
+      auto [ec, n] = co_await response.read_some(boost::asio::buffer(buffer));
       total += n;
       if (ec)
          break;
@@ -189,7 +189,7 @@ Task<size_t> read_at_most(Session session, boost::urls::url url, size_t limit)
 Task<void> upload(Writer& writer, std::string_view body)
 {
    for (; !body.empty(); body.remove_prefix(std::min(body.size(), size_t{16_k})))
-      if (auto [ec] = co_await writer.write(asio::buffer(body.substr(0, 16_k))); ec)
+      if (auto [ec] = co_await writer.write(boost::asio::buffer(body.substr(0, 16_k))); ec)
          throw_error(ec);
 
    if (auto [ec] = co_await writer.write_eof(); ec)
@@ -352,13 +352,13 @@ Task<void> quic_echo(quic::Stream stream)
    std::array<uint8_t, 16_k> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await stream.read_some(asio::buffer(buffer));
+      auto [ec, n] = co_await stream.read_some(boost::asio::buffer(buffer));
       if (ec == errors::eof)
          break;
       if (ec)
          co_return;
 
-      if (auto [write_ec] = co_await stream.write(asio::buffer(buffer, n)); write_ec)
+      if (auto [write_ec] = co_await stream.write(boost::asio::buffer(buffer, n)); write_ec)
          co_return;
    }
    std::ignore = co_await stream.write_eof();
@@ -393,7 +393,7 @@ IoTask<std::string> quic_hello(Executor executor, std::string host, std::string 
    if (open_ec)
       co_return std::tuple{open_ec, std::string{}};
 
-   if (auto [ec] = co_await stream.write_eof(asio::buffer("hello", 5)); ec)
+   if (auto [ec] = co_await stream.write_eof(boost::asio::buffer("hello", 5)); ec)
       co_return std::tuple{ec, std::string{}};
 
    co_return co_await read_all(stream);
@@ -455,7 +455,7 @@ Task<std::string> token_exception(Session& session, boost::urls::url url)
 // [token-tuple]
 Task<std::string> token_tuple(Session& session, boost::urls::url url)
 {
-   auto [ec, message] = co_await session.async_get(url, {}, asio::as_tuple);
+   auto [ec, message] = co_await session.async_get(url, {}, boost::asio::as_tuple);
    if (ec)
       co_return ec.message();
    co_return std::move(message.body());
@@ -476,7 +476,7 @@ void token_callback(Session& session, boost::urls::url url)
 Task<bool> response_within(client::Request& request, std::chrono::milliseconds limit)
 {
    auto [ec, response] =
-      co_await request.async_get_response(asio::cancel_after(limit, asio::as_tuple));
+      co_await request.async_get_response(boost::asio::cancel_after(limit, boost::asio::as_tuple));
    co_return ec != errc::operation_canceled;
 }
 // [cancel-after-end]

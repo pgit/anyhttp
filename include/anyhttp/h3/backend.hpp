@@ -16,28 +16,20 @@
 #include <string>
 #include <vector>
 
-namespace anyhttp::server
+namespace anyhttp::h3
 {
 
 // =================================================================================================
 
 /// HTTP/3 for QuicServer::add_application(): its requests go to the request handler of `server`.
-quic::ApplicationFactory make_http3_application(Server::Impl& server);
-
-// =================================================================================================
-
-} // namespace anyhttp::server
-
-namespace anyhttp::client
-{
-
-// =================================================================================================
+quic::ApplicationFactory make_http3_application(server::Server::Impl& server);
 
 /// Connects to the first of `endpoints` that it can over QUIC, and returns the HTTP/3 session
 /// running on it.
-Task<std::shared_ptr<Session::Impl>>
-async_connect_http3(Executor executor, std::vector<TcpEndpoint> endpoints, const Config& config);
+Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor,
+                                                         std::vector<TcpEndpoint> endpoints,
+                                                         const client::Config& config);
 
 // =================================================================================================
 
-} // namespace anyhttp::client
+} // namespace anyhttp::h3

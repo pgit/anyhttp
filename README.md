@@ -48,13 +48,13 @@ Task<void> echo(server::Request request, server::Response response)
    std::array<uint8_t, 64 * 1024> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await request.read_some(asio::buffer(buffer));
+      auto [ec, n] = co_await request.read_some(boost::asio::buffer(buffer));
       if (ec == errors::eof)
          break;
       if (ec)
          co_return;
 
-      if (auto [write_ec] = co_await response.write(asio::buffer(buffer, n)); write_ec)
+      if (auto [write_ec] = co_await response.write(boost::asio::buffer(buffer, n)); write_ec)
          co_return;
    }
 

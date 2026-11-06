@@ -56,6 +56,9 @@
 
 #include <sys/socket.h>
 
+namespace anyhttp::inline corosio
+{
+
 /// The error code of what \p ptr holds, as thrown by the runtime.
 inline std::error_code code(const std::exception_ptr& ptr)
 {
@@ -75,11 +78,7 @@ inline std::error_code code(const std::exception_ptr& ptr)
    }
 }
 
-namespace anyhttp
-{
-namespace asio = boost::asio;
 namespace capy = boost::capy;
-namespace corosio = boost::corosio;
 
 // =================================================================================================
 
@@ -90,9 +89,12 @@ using Executor = capy::any_executor;
 
 /// corosio has one endpoint type for TCP and UDP alike: an overload set on TcpEndpoint and
 /// UdpEndpoint, which compiles with ASIO, is a redefinition here.
-using IpAddress = corosio::ip_address;
-using TcpEndpoint = corosio::endpoint;
-using UdpEndpoint = corosio::endpoint;
+using IpAddress = boost::corosio::ip_address;
+using TcpEndpoint = boost::corosio::endpoint;
+using UdpEndpoint = boost::corosio::endpoint;
+
+/// \p address, or the IPv4 address an IPv4-mapped IPv6 one maps. Defined in net.cpp.
+IpAddress normalize(IpAddress address);
 
 using std::error_code;
 
@@ -426,7 +428,7 @@ namespace detail
 class Strand
 {
 public:
-   explicit Strand(const corosio::io_context::executor_type& executor) : strand_(executor) {}
+   explicit Strand(const boost::corosio::io_context::executor_type& executor) : strand_(executor) {}
 
    auto& context() const noexcept { return strand_.context(); }
    void on_work_started() const noexcept { strand_.on_work_started(); }
@@ -436,7 +438,7 @@ public:
    bool operator==(const Strand&) const noexcept = default;
 
 private:
-   capy::strand<corosio::io_context::executor_type> strand_;
+   capy::strand<boost::corosio::io_context::executor_type> strand_;
 };
 } // namespace detail
 
@@ -447,14 +449,14 @@ private:
  */
 inline Executor new_strand(const Executor& executor)
 {
-   auto& context = static_cast<corosio::io_context&>(executor.context());
+   auto& context = static_cast<boost::corosio::io_context&>(executor.context());
    return Executor(detail::Strand(context.get_executor()));
 }
 
 /// Waits for \p duration to pass, or until cancelled (errors::canceled).
 inline Task<error_code> delay(std::chrono::steady_clock::duration duration)
 {
-   auto [ec] = co_await corosio::delay(duration);
+   auto [ec] = co_await boost::corosio::delay(duration);
    co_return ec;
 }
 
@@ -579,7 +581,7 @@ public:
       stop_.emplace();
       auto wait = [](std::chrono::steady_clock::duration delay,
                      std::function<void()> on_expiry) -> Task<void> {
-         auto [ec] = co_await corosio::delay(delay);
+         auto [ec] = co_await boost::corosio::delay(delay);
          // Hoisted out of the condition: GCC cannot parse a co_await inside a member call.
          const std::stop_token token = co_await capy::this_coro::stop_token;
          if (!ec && !token.stop_requested())
@@ -610,7 +612,7 @@ namespace io
 {
 
 template <typename Stream>
-auto read_some(Stream& stream, asio::mutable_buffer buffer)
+auto read_some(Stream& stream, boost::asio::mutable_buffer buffer)
 {
    return stream.read_some(capy::mutable_buffer(buffer.data(), buffer.size()));
 }
@@ -624,11 +626,11 @@ auto write(Stream& stream, const ConstBufferSequence& buffers)
 /// Peeks at what has arrived on \p socket, without taking it. corosio has no flags for its
 /// receive operations, so this waits for readiness and peeks at the native socket.
 template <typename Socket>
-IoTask<size_t> peek(Socket& socket, asio::mutable_buffer buffer)
+IoTask<size_t> peek(Socket& socket, boost::asio::mutable_buffer buffer)
 {
    for (;;)
    {
-      if (auto [ec] = co_await socket.wait(corosio::wait_type::read); ec)
+      if (auto [ec] = co_await socket.wait(boost::corosio::wait_type::read); ec)
          co_return std::tuple{ec, size_t{0}};
 
       auto n = ::recv(socket.native_handle(), buffer.data(), buffer.size(), MSG_PEEK);
@@ -645,7 +647,7 @@ IoTask<size_t> peek(Socket& socket, asio::mutable_buffer buffer)
 /// read_some(): corosio's datagram operations do not copy their buffer sequence, as its stream
 /// operations do, but point to it, so it has to outlive the operation.
 template <typename Socket>
-IoTask<size_t> receive(Socket& socket, asio::mutable_buffer buffer)
+IoTask<size_t> receive(Socket& socket, boost::asio::mutable_buffer buffer)
 {
    const capy::mutable_buffer buffers(buffer.data(), buffer.size());
    auto [ec, n] = co_await socket.recv(buffers);
@@ -656,11 +658,11 @@ IoTask<size_t> receive(Socket& socket, asio::mutable_buffer buffer)
 template <typename Socket>
 auto wait_readable(Socket& socket)
 {
-   return socket.wait(corosio::wait_type::read);
+   return socket.wait(boost::corosio::wait_type::read);
 }
 
 } // namespace io
 
 // =================================================================================================
 
-} // namespace anyhttp
+} // namespace anyhttp::inline corosio

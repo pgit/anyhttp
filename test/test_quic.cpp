@@ -21,7 +21,7 @@ IoTask<std::string> read_all(Reader& reader)
    std::array<char, 4096> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await reader.read_some(asio::buffer(buffer));
+      auto [ec, n] = co_await reader.read_some(boost::asio::buffer(buffer));
       body.append(buffer.data(), n);
       if (ec)
          co_return std::tuple{ec == errors::eof ? error_code{} : ec, std::move(body)};
@@ -44,7 +44,7 @@ Task<void> echo_streams(quic::Connection connection)
    auto echo = [](quic::Stream stream) -> Task<void> {
       auto [ec, body] = co_await read_all(stream);
       EXPECT_FALSE(ec) << ec.message();
-      auto [write_ec] = co_await stream.write_eof(asio::buffer(body));
+      auto [write_ec] = co_await stream.write_eof(boost::asio::buffer(body));
       std::ignore = write_ec; // the client may be gone before it acknowledges the end
    };
    for (;;)
@@ -139,9 +139,9 @@ TEST_P(QuicStreams, WHEN_stream_is_echoed_THEN_both_ends_see_the_whole_body)
       EXPECT_FALSE(ec) << ec.message();
       EXPECT_EQ(stream.id(), 0);
 
-      auto [write_ec] = co_await stream.write(asio::buffer("Hello, ", 7));
+      auto [write_ec] = co_await stream.write(boost::asio::buffer("Hello, ", 7));
       EXPECT_FALSE(write_ec) << write_ec.message();
-      auto [eof_ec] = co_await stream.write_eof(asio::buffer("World!", 6));
+      auto [eof_ec] = co_await stream.write_eof(boost::asio::buffer("World!", 6));
       EXPECT_FALSE(eof_ec) << eof_ec.message();
 
       auto [read_ec, body] = co_await read_all(stream);
@@ -162,7 +162,7 @@ TEST_P(QuicStreams, WHEN_bodies_are_larger_than_the_windows_THEN_they_arrive_int
       auto connection = co_await connect();
 
       auto exchange = [](quic::Stream stream, std::string body) -> Task<void> {
-         auto [write_ec] = co_await stream.write_eof(asio::buffer(body));
+         auto [write_ec] = co_await stream.write_eof(boost::asio::buffer(body));
          EXPECT_FALSE(write_ec) << write_ec.message();
          auto [read_ec, echoed] = co_await read_all(stream);
          EXPECT_FALSE(read_ec) << read_ec.message();
@@ -191,7 +191,7 @@ TEST_P(QuicStreams, WHEN_one_side_ends_its_body_THEN_the_other_can_still_write)
       // the client's side is over, ours is not
       for (auto part : {"an", "s", "wer"})
       {
-         auto [write_ec] = co_await stream.write(asio::buffer(std::string_view(part)));
+         auto [write_ec] = co_await stream.write(boost::asio::buffer(std::string_view(part)));
          EXPECT_FALSE(write_ec) << write_ec.message();
       }
       std::ignore = co_await stream.write_eof();
@@ -201,7 +201,7 @@ TEST_P(QuicStreams, WHEN_one_side_ends_its_body_THEN_the_other_can_still_write)
    run([&]() -> Task<void> {
       auto connection = co_await connect();
       auto [ec, stream] = connection.open_stream();
-      auto [eof_ec] = co_await stream.write_eof(asio::buffer("question", 8));
+      auto [eof_ec] = co_await stream.write_eof(boost::asio::buffer("question", 8));
       EXPECT_FALSE(eof_ec) << eof_ec.message();
 
       auto [read_ec, response] = co_await read_all(stream);
@@ -209,7 +209,7 @@ TEST_P(QuicStreams, WHEN_one_side_ends_its_body_THEN_the_other_can_still_write)
       EXPECT_EQ(response, "answer");
 
       // the end is final: data after it is refused, a second end is a no-op
-      auto [late_ec] = co_await stream.write(asio::buffer("x", 1));
+      auto [late_ec] = co_await stream.write(boost::asio::buffer("x", 1));
       EXPECT_EQ(late_ec, errc::broken_pipe);
       auto [again_ec] = co_await stream.write_eof();
       EXPECT_FALSE(again_ec) << again_ec.message();
@@ -228,19 +228,19 @@ TEST_P(QuicStreams, WHEN_peer_resets_its_side_THEN_reads_report_partial_message)
       // Our side of the stream is unaffected. (Not checked: with zero copy, the write completes
       // when the client acknowledges it, and the client may be gone by then.)
       //
-      std::ignore = co_await stream.write_eof(asio::buffer("still here", 10));
+      std::ignore = co_await stream.write_eof(boost::asio::buffer("still here", 10));
       std::ignore = co_await connection.accept_stream();
    };
 
    run([&]() -> Task<void> {
       auto connection = co_await connect();
       auto [ec, stream] = connection.open_stream();
-      auto [write_ec] = co_await stream.write(asio::buffer("partial", 7));
+      auto [write_ec] = co_await stream.write(boost::asio::buffer("partial", 7));
       EXPECT_FALSE(write_ec) << write_ec.message();
       co_await delay(50ms); // let it arrive, so that the server sees a stream to accept
       stream.reset_stream(42);
 
-      auto [late_ec] = co_await stream.write(asio::buffer("more", 4));
+      auto [late_ec] = co_await stream.write(boost::asio::buffer("more", 4));
       EXPECT_EQ(late_ec, errc::connection_reset);
 
       auto [read_ec, body] = co_await read_all(stream);
@@ -272,13 +272,13 @@ TEST_P(QuicStreams, WHEN_peer_stops_reading_THEN_writes_fail_with_connection_res
       error_code write_ec;
       for (int i = 0; i < 100 && !write_ec; ++i)
       {
-         std::tie(write_ec) = co_await stream.write(asio::buffer("data", 4));
+         std::tie(write_ec) = co_await stream.write(boost::asio::buffer("data", 4));
          if (!write_ec)
             co_await delay(5ms);
       }
       EXPECT_EQ(write_ec, errc::connection_reset);
 
-      auto [late_ec] = co_await stream.write(asio::buffer("more", 4));
+      auto [late_ec] = co_await stream.write(boost::asio::buffer("more", 4));
       EXPECT_EQ(late_ec, errc::connection_reset);
    }());
 }
@@ -296,7 +296,7 @@ TEST_P(QuicStreams, WHEN_writer_is_dropped_before_the_end_THEN_peer_sees_partial
    run([&]() -> Task<void> {
       auto connection = co_await connect();
       auto [ec, stream] = connection.open_stream();
-      auto [write_ec] = co_await stream.write(asio::buffer("unfinished", 10));
+      auto [write_ec] = co_await stream.write(boost::asio::buffer("unfinished", 10));
       EXPECT_FALSE(write_ec) << write_ec.message();
       co_await delay(50ms);
       {
@@ -340,7 +340,7 @@ TEST_P(QuicStreamsSmallWindow, WHEN_reader_is_slow_THEN_flow_control_holds_the_w
       auto connection = co_await connect();
       auto [ec, stream] = connection.open_stream();
       auto body = pattern(8 * window);
-      auto [write_ec] = co_await stream.write_eof(asio::buffer(body));
+      auto [write_ec] = co_await stream.write_eof(boost::asio::buffer(body));
       EXPECT_FALSE(write_ec) << write_ec.message();
       EXPECT_TRUE(reading) << "the write completed before the server started reading";
       std::ignore = co_await read_all(stream);
@@ -363,7 +363,7 @@ TEST_P(QuicStreamsSmallWindow, WHEN_peer_allows_no_more_streams_THEN_open_stream
       //
       // Once a stream is over, the server lets us open another one.
       //
-      std::ignore = co_await first.write_eof(asio::buffer("1", 1));
+      std::ignore = co_await first.write_eof(boost::asio::buffer("1", 1));
       auto [read_ec, body] = co_await read_all(first);
       EXPECT_EQ(body, "1");
       first.reset();
@@ -388,7 +388,7 @@ TEST_P(QuicStreams, WHEN_server_opens_a_stream_THEN_client_accepts_it)
       auto [ec, stream] = connection.open_stream();
       EXPECT_FALSE(ec) << ec.message();
       EXPECT_EQ(stream.id(), 1); // the first server-initiated bidirectional stream
-      std::ignore = co_await stream.write_eof(asio::buffer("push", 4));
+      std::ignore = co_await stream.write_eof(boost::asio::buffer("push", 4));
       auto [read_ec, body] = co_await read_all(stream);
       EXPECT_FALSE(read_ec) << read_ec.message();
       EXPECT_EQ(body, "ack");
@@ -402,7 +402,7 @@ TEST_P(QuicStreams, WHEN_server_opens_a_stream_THEN_client_accepts_it)
       auto [read_ec, body] = co_await read_all(stream);
       EXPECT_FALSE(read_ec) << read_ec.message();
       EXPECT_EQ(body, "push");
-      std::ignore = co_await stream.write_eof(asio::buffer("ack", 3));
+      std::ignore = co_await stream.write_eof(boost::asio::buffer("ack", 3));
       co_await delay(50ms);
    }());
 }
@@ -420,7 +420,7 @@ TEST_P(QuicStreams, WHEN_connection_is_closed_THEN_what_waits_on_it_fails)
    run([&]() -> Task<void> {
       auto connection = co_await connect();
       auto [ec, stream] = connection.open_stream();
-      std::ignore = co_await stream.write(asio::buffer("hi", 2));
+      std::ignore = co_await stream.write(boost::asio::buffer("hi", 2));
 
       auto [accept_ec, accepted] = co_await connection.accept_stream();
       EXPECT_EQ(accept_ec, errors::connection_aborted);
@@ -458,7 +458,7 @@ TEST_P(QuicStreams, WHEN_write_is_cancelled_THEN_the_stream_goes_on_with_a_short
       auto connection = co_await connect();
       auto [ec, stream] = connection.open_stream();
       auto copy = body;
-      auto result = co_await when_either(stream.write(asio::buffer(copy)), delay(100ms));
+      auto result = co_await when_either(stream.write(boost::asio::buffer(copy)), delay(100ms));
       EXPECT_EQ(result.index(), 1) << "the write completed, although nothing was read";
       copy.assign(copy.size(), '!'); // a cancelled write releases the buffer
 
@@ -468,7 +468,7 @@ TEST_P(QuicStreams, WHEN_write_is_cancelled_THEN_the_stream_goes_on_with_a_short
       // stream being blocked by flow control, it usually is. Otherwise the stream had to be
       // reset.
       //
-      auto [write_ec] = co_await stream.write_eof(asio::buffer("end", 3));
+      auto [write_ec] = co_await stream.write_eof(boost::asio::buffer("end", 3));
       if (GetParam() && write_ec)
          EXPECT_EQ(write_ec, errc::connection_reset);
       else
@@ -499,7 +499,7 @@ TEST_P(QuicStreams, WHEN_http3_is_on_the_same_port_THEN_both_work)
    run([&]() -> Task<void> {
       auto connection = co_await connect();
       auto [ec, stream] = connection.open_stream();
-      std::ignore = co_await stream.write_eof(asio::buffer("plain", 5));
+      std::ignore = co_await stream.write_eof(boost::asio::buffer("plain", 5));
       auto [read_ec, body] = co_await read_all(stream);
       EXPECT_EQ(body, "plain");
 
@@ -529,7 +529,7 @@ TEST_P(QuicStreams, WHEN_using_completion_tokens_THEN_the_same_works)
       auto [ec, stream] = co_await connection.async_accept_stream(as_tuple(use_awaitable));
       EXPECT_FALSE(ec) << ec.message();
       auto [read_ec, body] = co_await read_all(stream);
-      co_await stream.async_write_eof(asio::buffer(body), use_awaitable);
+      co_await stream.async_write_eof(boost::asio::buffer(body), use_awaitable);
       std::ignore = co_await connection.async_accept_stream(as_tuple(use_awaitable));
    };
 
@@ -537,7 +537,7 @@ TEST_P(QuicStreams, WHEN_using_completion_tokens_THEN_the_same_works)
       auto connection = co_await quic::async_connect(context.get_executor(), "127.0.0.2", port(),
                                                      client_config(), use_awaitable);
       auto [ec, stream] = connection.open_stream();
-      co_await stream.async_write_eof(asio::buffer("token", 5), use_awaitable);
+      co_await stream.async_write_eof(boost::asio::buffer("token", 5), use_awaitable);
       auto [read_ec, body] = co_await read_all(stream);
       EXPECT_EQ(body, "token");
    }());

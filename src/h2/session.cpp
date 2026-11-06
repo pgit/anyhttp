@@ -34,7 +34,7 @@ namespace http = boost::beast::http;
 
 // =================================================================================================
 
-namespace anyhttp::nghttp2
+namespace anyhttp::h2
 {
 
 static std::string_view frame_type(uint8_t type)
@@ -794,4 +794,4 @@ ANYHTTP_CLIENT_STREAMS(ANYHTTP_H2_CLIENT)
 
 // =================================================================================================
 
-} // namespace anyhttp::nghttp2
+} // namespace anyhttp::h2

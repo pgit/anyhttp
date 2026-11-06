@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-namespace anyhttp::nghttp2
+namespace anyhttp::h2v2
 {
 
 // =================================================================================================
@@ -98,7 +98,7 @@ public:
 
    Executor get_executor() const noexcept override;
    void content_length(std::optional<size_t> content_length) override;
-   void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) override;
+   void async_write(WriteHandler&& handler, boost::asio::const_buffer buffer, bool eof) override;
    void detach() override;
    std::string log_prefix() const override;
 
@@ -137,17 +137,20 @@ public:
     * As long as \c pending_read_buffers_ is non-empty, \c read_buffer_ is viewing the part of
     * the first pending read buffer that has not been delivered, yet.
     */
-   asio::const_buffer read_buffer_;
+   boost::asio::const_buffer read_buffer_;
    using Buffer = std::vector<uint8_t>;
    std::deque<Buffer> pending_read_buffers_;
 
-   Buffer make_buffer(asio::const_buffer buffer)
+   Buffer make_buffer(boost::asio::const_buffer buffer)
    {
       return {static_cast<const uint8_t*>(buffer.data()),
-              static_cast<const uint8_t*>(buffer.data()) + asio::buffer_size(buffer)};
+              static_cast<const uint8_t*>(buffer.data()) + boost::asio::buffer_size(buffer)};
    }
 
-   static bool is_empty(asio::const_buffer buffer) { return asio::buffer_size(buffer) == 0; }
+   static bool is_empty(boost::asio::const_buffer buffer)
+   {
+      return boost::asio::buffer_size(buffer) == 0;
+   }
 
    /**
     * Returns true if all data has been read by the user.
@@ -180,7 +183,7 @@ public:
    //
    static constexpr size_t write_chunk_size = 16 * 1024; // one DATA frame, one send loop pass
    const WriteMode write_mode;
-   asio::const_buffer write_buffer; // undefined unless write_handler is set
+   boost::asio::const_buffer write_buffer; // undefined unless write_handler is set
    WriteHandler write_handler;
    std::vector<uint8_t> write_chunk_; // Staged: the piece of the body nghttp2 is pointing into
    size_t offered_ = 0;
@@ -258,11 +261,11 @@ public:
    ReadSomeHandler read_handler_;
    boost::asio::mutable_buffer read_handler_buffer_;
    bool inside_call_read_handler_ = false;
-   void call_read_handler(asio::const_buffer buffer = {});
+   void call_read_handler(boost::asio::const_buffer buffer = {});
 
    // ----------------------------------------------------------------------------------------------
 
-   void async_write(WriteHandler handler, asio::const_buffer buffer, bool eof);
+   void async_write(WriteHandler handler, boost::asio::const_buffer buffer, bool eof);
 
    void resume();
 
@@ -310,4 +313,4 @@ nghttp2_data_reader make_data_reader();
 
 // =================================================================================================
 
-} // namespace anyhttp::nghttp2
+} // namespace anyhttp::h2v2

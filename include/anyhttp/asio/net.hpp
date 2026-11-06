@@ -35,16 +35,16 @@
 #include <utility>
 #include <vector>
 
-namespace anyhttp
+namespace anyhttp::inline asio
 {
 
 // =================================================================================================
 
-using TcpSocket = asio::ip::tcp::socket;
-using TcpAcceptor = asio::ip::tcp::acceptor;
-using TlsContext = asio::ssl::context;
-using TlsStream = asio::ssl::stream<TcpSocket>;
-using UdpSocket = asio::ip::udp::socket;
+using TcpSocket = boost::asio::ip::tcp::socket;
+using TcpAcceptor = boost::asio::ip::tcp::acceptor;
+using TlsContext = boost::asio::ssl::context;
+using TlsStream = boost::asio::ssl::stream<TcpSocket>;
+using UdpSocket = boost::asio::ip::udp::socket;
 
 /// What the server serves cleartext HTTP/1.1 and h2c over: for ASIO, the type-erased stream,
 /// which keeps it exercised.
@@ -291,14 +291,14 @@ inline void close(TcpAcceptor& acceptor) noexcept
 /// Accepts the next connection into \p socket: <tt>(error_code)</tt>.
 inline auto accept(TcpAcceptor& acceptor, TcpSocket& socket)
 {
-   return acceptor.async_accept(socket, asio::as_tuple);
+   return acceptor.async_accept(socket, boost::asio::as_tuple);
 }
 
 /// Turns off Nagle's algorithm, without which HTTP/2 is very slow (and the TLS handshake slower).
 inline void no_delay(TcpSocket& socket)
 {
    error_code ec;
-   socket.set_option(asio::ip::tcp::no_delay(true), ec);
+   socket.set_option(boost::asio::ip::tcp::no_delay(true), ec);
 }
 
 /// The kernel's send and receive buffer sizes of \p socket, for the log.
@@ -327,9 +327,9 @@ void set_peer_name(TlsStream& stream, const std::string& host);
 /// The TLS handshake, in the role given: <tt>(error_code)</tt>.
 inline auto handshake(TlsStream& stream, Role role)
 {
-   return stream.async_handshake(role == Role::server ? asio::ssl::stream_base::server
-                                                      : asio::ssl::stream_base::client,
-                                 asio::as_tuple);
+   return stream.async_handshake(role == Role::server ? boost::asio::ssl::stream_base::server
+                                                      : boost::asio::ssl::stream_base::client,
+                                 boost::asio::as_tuple);
 }
 
 /// The protocol ALPN has agreed on, empty for none.
@@ -339,7 +339,10 @@ std::string_view alpn(TlsStream& stream);
 std::string tls_info(TlsStream& stream);
 
 /// Whether a read has failed because the TLS connection ended without a "close_notify".
-inline bool is_truncated(const error_code& ec) { return ec == asio::ssl::error::stream_truncated; }
+inline bool is_truncated(const error_code& ec)
+{
+   return ec == boost::asio::ssl::error::stream_truncated;
+}
 
 //
 // UDP, for HTTP/3. The backend sends and receives on the native handle, with sendmsg() and
@@ -391,12 +394,12 @@ public:
    void notify() { std::ignore = channel_.try_send(error_code{}); }
 
    /// <tt>auto [ec] = co_await signal.wait();</tt>
-   auto wait() { return channel_.async_receive(asio::as_tuple); }
+   auto wait() { return channel_.async_receive(boost::asio::as_tuple); }
 
 private:
-   asio::experimental::concurrent_channel<void(error_code)> channel_;
+   boost::asio::experimental::concurrent_channel<void(error_code)> channel_;
 };
 
 // =================================================================================================
 
-} // namespace anyhttp
+} // namespace anyhttp::inline asio

@@ -18,6 +18,12 @@ Both build the same library and protocol sources. Only a thin runtime layer diff
 ``anyhttp/runtime.hpp`` and ``anyhttp/net.hpp`` with what they include from ``asio/`` or ``corosio/``.
 :src:`docs/corosio-port-plan.md` has how that came about.
 
+That layer is the inline namespace ``anyhttp::asio`` or ``anyhttp::corosio``. Its names are
+anyhttp's, :cpp:type:`Task` or :cpp:var:`errors::eof`, and a library of one runtime does not link
+with code compiled for the other. Because ``asio`` and ``corosio`` are names in ``anyhttp``, code
+that says ``using namespace anyhttp`` writes Boost's namespaces in full, as in
+``boost::asio::buffer()``: a namespace alias ``asio`` of its own would be ambiguous.
+
 .. _io-runtimes-vocabulary:
 
 What the names stand for
@@ -34,23 +40,23 @@ What the names stand for
      - ``-DANYHTTP_API=ASIO`` (default)
      - ``-DANYHTTP_API=COROSIO -DTLS_LIBRARY=OpenSSL``
    * - :cpp:type:`Task\<T\> <Task>`
-     - ``asio::awaitable<T>``
-     - ``capy::task<T>``
+     - ``boost::asio::awaitable<T>``
+     - ``boost::capy::task<T>``
    * - :cpp:type:`Executor`
-     - ``asio::any_io_executor``
-     - ``capy::any_executor``
+     - ``boost::asio::any_io_executor``
+     - ``boost::capy::any_executor``
    * - :cpp:type:`error_code`
      - ``boost::system::error_code``
      - ``std::error_code``
    * - :cpp:type:`results\<Ts...\> <results>`
      - ``std::tuple<error_code, Ts...>``
-     - ``capy::results<Ts...>``
+     - ``boost::capy::results<Ts...>``
    * - :cpp:type:`IoTask\<Ts...\> <IoTask>`
-     - ``asio::awaitable<results<Ts...>>``
-     - ``capy::task<results<Ts...>>``
+     - ``boost::asio::awaitable<results<Ts...>>``
+     - ``boost::capy::task<results<Ts...>>``
    * - :cpp:type:`TcpEndpoint`, :cpp:type:`UdpEndpoint`
-     - ``asio::ip::tcp::endpoint``, ``asio::ip::udp::endpoint``
-     - ``corosio::endpoint``
+     - ``boost::asio::ip::tcp::endpoint``, ``boost::asio::ip::udp::endpoint``
+     - ``boost::corosio::endpoint``
    * - Operations
      - ``async_x(..., token)`` and ``x()``
      - ``x()``
@@ -82,13 +88,13 @@ example, with the types of the library:
 
    // ASIO: the operation, which completes a handler of the signature void(error_code, size_t) ...
    template <typename CompletionToken = DefaultCompletionToken>
-   auto async_read_some(asio::mutable_buffer buffer, CompletionToken&& token = CompletionToken());
+   auto async_read_some(boost::asio::mutable_buffer buffer, CompletionToken&& token = CompletionToken());
 
    // ... and the coroutine around it.
-   IoTask<size_t> read_some(asio::mutable_buffer buffer);
+   IoTask<size_t> read_some(boost::asio::mutable_buffer buffer);
 
    // COROSIO: the coroutine.
-   IoTask<size_t> read_some(asio::mutable_buffer buffer);
+   IoTask<size_t> read_some(boost::asio::mutable_buffer buffer);
 
 The coroutine has the same declaration on both, so code that uses only coroutines builds with
 either, which is what the guide does. It yields :cpp:type:`results`, a tuple with the error first,
@@ -116,8 +122,8 @@ On ASIO, the implementation of each operation is hidden behind `any_completion_h
 <https://www.boost.org/doc/libs/release/doc/html/boost_asio/reference/any_completion_handler.html>`__,
 so that it can be compiled separately. On COROSIO, they are coroutines of `Capy
 <https://github.com/cppalliance/capy>`__, Corosio's base, cancelled through the awaiting chain's
-``std::stop_token``. :cpp:class:`Reader` and :cpp:class:`Writer` model ``capy::ReadStream`` and
-``capy::WriteStream``.
+``std::stop_token``. :cpp:class:`Reader` and :cpp:class:`Writer` model ``boost::capy::ReadStream`` and
+``boost::capy::WriteStream``.
 
 .. _io-runtimes-errors:
 
@@ -134,19 +140,19 @@ Where the two runtimes spell an error differently, the namespace ``anyhttp::erro
      - ASIO
      - COROSIO
    * - :cpp:var:`errors::eof`
-     - ``asio::error::eof``
-     - ``capy::error::eof``
+     - ``boost::asio::error::eof``
+     - ``boost::capy::error::eof``
    * - :cpp:var:`errors::partial_message`
      - ``beast::http::error::partial_message``
-     - ``capy::error::stream_truncated``
+     - ``boost::capy::error::stream_truncated``
    * - :cpp:var:`errors::canceled`
      - ``errc::operation_canceled``
-     - ``capy::error::canceled``
+     - ``boost::capy::error::canceled``
    * - :cpp:var:`errors::would_block`
-     - ``asio::error::would_block``
+     - ``boost::asio::error::would_block``
      - ``errc::operation_would_block``
    * - :cpp:var:`errors::connection_aborted`
-     - ``asio::error::connection_aborted``
+     - ``boost::asio::error::connection_aborted``
      - ``errc::connection_aborted``
    * - :cpp:var:`errors::header_limit`
      - ``beast::http::error::header_limit``

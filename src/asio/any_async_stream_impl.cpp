@@ -4,7 +4,7 @@
 //
 #include "anyhttp/asio/any_async_stream_impl.hpp"
 
-namespace anyhttp
+namespace anyhttp::inline asio
 {
 
 // =================================================================================================
@@ -47,12 +47,13 @@ void any_async_stream::shutdown(ShutdownHandler handler)
 // this translation unit, so that including the type-erased stream stays cheap.
 // =================================================================================================
 
-template class any_async_stream_impl<ip::tcp::socket>;
+template class any_async_stream_impl<boost::asio::ip::tcp::socket>;
 template class any_async_stream_impl<SslStream>;
 
-template any_async_stream make_any_async_stream<ip::tcp::socket>(ip::tcp::socket&&);
+template any_async_stream
+make_any_async_stream<boost::asio::ip::tcp::socket>(boost::asio::ip::tcp::socket&&);
 template any_async_stream make_any_async_stream<SslStream>(SslStream&&);
 
 // =================================================================================================
 
-} // namespace anyhttp
+} // namespace anyhttp::inline asio

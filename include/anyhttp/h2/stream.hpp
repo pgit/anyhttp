@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-namespace anyhttp::nghttp2
+namespace anyhttp::h2
 {
 
 // =================================================================================================
@@ -63,7 +63,7 @@ public:
 
    Executor get_executor() const noexcept override;
    void content_length(std::optional<size_t> content_length) override;
-   void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) override;
+   void async_write(WriteHandler&& handler, boost::asio::const_buffer buffer, bool eof) override;
    void detach() override;
    std::string log_prefix() const override;
 
@@ -108,17 +108,20 @@ public:
     * well. While in \c call_read_handler(), it may be viewing the newly received data that has not
     * been added to the pending read buffers, yet.
     */
-   asio::const_buffer read_buffer_;
+   boost::asio::const_buffer read_buffer_;
    using Buffer = std::vector<uint8_t>;
    std::deque<Buffer> pending_read_buffers_;
 
-   Buffer make_buffer(asio::const_buffer buffer)
+   Buffer make_buffer(boost::asio::const_buffer buffer)
    {
       return {static_cast<const uint8_t*>(buffer.data()),
-              static_cast<const uint8_t*>(buffer.data()) + asio::buffer_size(buffer)};
+              static_cast<const uint8_t*>(buffer.data()) + boost::asio::buffer_size(buffer)};
    }
 
-   static bool is_empty(asio::const_buffer buffer) { return asio::buffer_size(buffer) == 0; }
+   static bool is_empty(boost::asio::const_buffer buffer)
+   {
+      return boost::asio::buffer_size(buffer) == 0;
+   }
 
    /**
     * Returns true if all data has been read by the user.
@@ -137,7 +140,7 @@ public:
    //
    // async_write()
    //
-   asio::const_buffer write_buffer; // undefined unless write_handler is set
+   boost::asio::const_buffer write_buffer; // undefined unless write_handler is set
    WriteHandler write_handler;
    bool is_deferred = false;
 
@@ -205,11 +208,11 @@ public:
    ReadSomeHandler read_handler_;
    boost::asio::mutable_buffer read_handler_buffer_;
    bool inside_call_read_handler_ = false;
-   void call_read_handler(asio::const_buffer buffer = {});
+   void call_read_handler(boost::asio::const_buffer buffer = {});
 
    // ----------------------------------------------------------------------------------------------
 
-   void async_write(WriteHandler handler, asio::const_buffer buffer, bool eof);
+   void async_write(WriteHandler handler, boost::asio::const_buffer buffer, bool eof);
 
    void resume();
 
@@ -243,4 +246,4 @@ public:
 
 // =================================================================================================
 
-} // namespace anyhttp::nghttp2
+} // namespace anyhttp::h2

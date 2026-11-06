@@ -86,17 +86,19 @@ public:
     * \return What \p token makes of the operation.
     */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
-   auto async_read_some(asio::mutable_buffer buffer, CompletionToken&& token = CompletionToken())
+   auto async_read_some(boost::asio::mutable_buffer buffer,
+                        CompletionToken&& token = CompletionToken())
    {
       //
       // Binding an executor to the initiating function lets tokens that need one -- the timer
       // behind cancel_after -- find it here, see Writer.
       //
-      return asio::async_initiate<CompletionToken, ReadSome>(
-         asio::bind_executor(asio::get_associated_executor(token, get_executor()),
-                             [this](ReadSomeHandler handler, asio::mutable_buffer buffer) { //
-                                async_read_some_any(buffer, std::move(handler));
-                             }),
+      return boost::asio::async_initiate<CompletionToken, ReadSome>(
+         boost::asio::bind_executor(
+            boost::asio::get_associated_executor(token, get_executor()),
+            [this](ReadSomeHandler handler, boost::asio::mutable_buffer buffer) { //
+               async_read_some_any(buffer, std::move(handler));
+            }),
          token, buffer);
    }
 
@@ -112,16 +114,16 @@ public:
     */
    template <typename Buffers,
              BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadSome) CompletionToken = DefaultCompletionToken>
-      requires(asio::is_mutable_buffer_sequence<Buffers>::value &&
-               !std::convertible_to<const Buffers&, asio::mutable_buffer>)
+      requires(boost::asio::is_mutable_buffer_sequence<Buffers>::value &&
+               !std::convertible_to<const Buffers&, boost::asio::mutable_buffer>)
    auto async_read_some(const Buffers& buffers, CompletionToken&& token = CompletionToken())
    {
       for (auto& buffer : buffers)
          if (buffer.size() > 0)
-            return async_read_some(asio::mutable_buffer(buffer),
+            return async_read_some(boost::asio::mutable_buffer(buffer),
                                    std::forward<CompletionToken>(token));
 
-      return async_read_some(asio::mutable_buffer{}, std::forward<CompletionToken>(token));
+      return async_read_some(boost::asio::mutable_buffer{}, std::forward<CompletionToken>(token));
    }
 #endif
 
@@ -134,7 +136,7 @@ public:
    /// Reads a part of the incoming body: <tt>auto [ec, n] = co_await reader.read_some(buffer);</tt>
    /// \param buffer Where to put what has been read.
    /// \return The error, and how many bytes have been read.
-   IoTask<size_t> read_some(asio::mutable_buffer buffer);
+   IoTask<size_t> read_some(boost::asio::mutable_buffer buffer);
 
    /// \overload
    ///
@@ -143,14 +145,14 @@ public:
    /// \param buffers Where to put what has been read.
    /// \return The error, and how many bytes have been read.
    template <typename Buffers>
-      requires(asio::is_mutable_buffer_sequence<Buffers>::value &&
-               !std::convertible_to<const Buffers&, asio::mutable_buffer>)
+      requires(boost::asio::is_mutable_buffer_sequence<Buffers>::value &&
+               !std::convertible_to<const Buffers&, boost::asio::mutable_buffer>)
    IoTask<size_t> read_some(const Buffers& buffers)
    {
       for (auto& buffer : buffers)
          if (buffer.size() > 0)
-            return read_some(asio::mutable_buffer(buffer));
-      return read_some(asio::mutable_buffer{});
+            return read_some(boost::asio::mutable_buffer(buffer));
+      return read_some(boost::asio::mutable_buffer{});
    }
 
 #if ANYHTTP_COROSIO
@@ -163,8 +165,8 @@ public:
       for (auto it = capy::buffer_sequence_begin(buffers); it != capy::buffer_sequence_end(buffers);
            ++it)
          if (capy::mutable_buffer buffer = *it; buffer.size() > 0)
-            return read_some(asio::mutable_buffer(buffer.data(), buffer.size()));
-      return read_some(asio::mutable_buffer{});
+            return read_some(boost::asio::mutable_buffer(buffer.data(), buffer.size()));
+      return read_some(boost::asio::mutable_buffer{});
    }
 #endif
 
@@ -176,7 +178,7 @@ protected:
 
 private:
 #if ANYHTTP_ASIO
-   void async_read_some_any(asio::mutable_buffer buffer, ReadSomeHandler&& handler);
+   void async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler);
 #endif
 
    std::shared_ptr<Impl> impl_;

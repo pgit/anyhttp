@@ -20,7 +20,7 @@
 
 using namespace testing;
 
-namespace h1 = anyhttp::beast_impl::h1;
+namespace h1 = anyhttp::h1;
 
 // =================================================================================================
 
@@ -151,7 +151,7 @@ protected:
          EXPECT_GT(id, 0) << nghttp2_strerror(id);
       }
 
-      auto recv = [&](asio::const_buffer data) {
+      auto recv = [&](boost::asio::const_buffer data) {
          auto n = nghttp2_session_mem_recv2(session, static_cast<const uint8_t*>(data.data()),
                                             data.size());
          EXPECT_EQ(n, data.size()) << nghttp2_strerror(n);
@@ -173,7 +173,7 @@ protected:
             out.append(reinterpret_cast<const char*>(data), n);
          }
          if (!out.empty())
-            check(co_await io::write(socket, asio::buffer(out)));
+            check(co_await io::write(socket, boost::asio::buffer(out)));
          out.clear();
       };
 
@@ -181,11 +181,11 @@ protected:
       std::array<uint8_t, 16384> data;
       for (co_await send(); !done(); co_await send())
       {
-         auto [ec, n] = co_await io::read_some(socket, asio::buffer(data));
+         auto [ec, n] = co_await io::read_some(socket, boost::asio::buffer(data));
          EXPECT_FALSE(ec) << ec.message();
          if (ec)
             break;
-         recv(asio::buffer(data, n));
+         recv(boost::asio::buffer(data, n));
       }
 
       nghttp2_session_terminate_session(session, NGHTTP2_NO_ERROR);

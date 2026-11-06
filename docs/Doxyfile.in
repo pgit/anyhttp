@@ -42,6 +42,10 @@ PREDEFINED             = ANYHTTP_ASIO=1 \
                          "BOOST_ASIO_COMPLETION_TOKEN_FOR(x)=typename"
 SEARCH_INCLUDES        = NO
 
+# The runtime's vocabulary is in the inline namespace anyhttp::asio, or anyhttp::corosio, so that
+# the two runtimes do not link together. The API names it as anyhttp's, and so does the reference.
+INPUT_FILTER           = "sed -e 's/^namespace anyhttp::inline asio$/namespace anyhttp/'"
+
 # what is not documented is not finished
 QUIET                  = YES
 WARN_IF_UNDOCUMENTED   = YES

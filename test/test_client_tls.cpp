@@ -45,14 +45,13 @@ struct Peer
 #if ANYHTTP_COROSIO
 TlsContext make_peer_context(const Peer& peer)
 {
-   namespace corosio = boost::corosio;
    const server::Config config;
    TlsContext context;
    EXPECT_FALSE(context.use_certificate_chain_file(config.tls_certificate_chain));
    EXPECT_FALSE(
-      context.use_private_key_file(config.tls_private_key, corosio::tls_file_format::pem));
+      context.use_private_key_file(config.tls_private_key, boost::corosio::tls_file_format::pem));
    if (peer.tls12)
-      EXPECT_FALSE(context.set_max_protocol_version(corosio::tls_version::tls_1_2));
+      EXPECT_FALSE(context.set_max_protocol_version(boost::corosio::tls_version::tls_1_2));
    if (!peer.alpn.empty())
       EXPECT_FALSE(context.set_alpn({peer.alpn}));
    return context;
@@ -78,9 +77,9 @@ int select_alpn(SSL*, const unsigned char** out, unsigned char* outlen, const un
 TlsContext make_peer_context(const Peer& peer)
 {
    const server::Config config;
-   asio::ssl::context context{asio::ssl::context::tls_server};
+   boost::asio::ssl::context context{boost::asio::ssl::context::tls_server};
    context.use_certificate_chain_file(config.tls_certificate_chain);
-   context.use_private_key_file(config.tls_private_key, asio::ssl::context::pem);
+   context.use_private_key_file(config.tls_private_key, boost::asio::ssl::context::pem);
    if (peer.tls12)
       SSL_CTX_set_max_proto_version(context.native_handle(), TLS1_2_VERSION);
    if (!peer.alpn.empty())
@@ -132,13 +131,13 @@ protected:
       std::array<char, 1024> buffer;
       while (!head.contains("\r\n\r\n"))
       {
-         auto [ec, n] = co_await io::read_some(stream, asio::buffer(buffer));
+         auto [ec, n] = co_await io::read_some(stream, boost::asio::buffer(buffer));
          head.append(buffer.data(), n);
          if (ec)
             throw_error(ec);
       }
 
-      check(co_await io::write(stream, asio::buffer(peer.response)));
+      check(co_await io::write(stream, boost::asio::buffer(peer.response)));
 
       if (peer.close_notify)
          co_await async_teardown(stream);
@@ -283,7 +282,7 @@ protected:
       std::array<char, 16384> buffer;
       for (bool first = true;; first = false)
       {
-         auto [ec, n] = co_await io::read_some(stream, asio::buffer(buffer));
+         auto [ec, n] = co_await io::read_some(stream, boost::asio::buffer(buffer));
          received.append(buffer.data(), n);
          if (ec)
          {
@@ -296,10 +295,10 @@ protected:
          // make this fail. Neither does it matter if it does.
          //
          if (first && h2())
-            co_await io::write(stream,
-                               asio::buffer(then == Then::end_the_session ? settings_and_goaway
-                                            : then == Then::stall         ? big_windows
-                                                                          : settings));
+            co_await io::write(stream, boost::asio::buffer(then == Then::end_the_session
+                                                              ? settings_and_goaway
+                                                           : then == Then::stall ? big_windows
+                                                                                 : settings));
 
          if (then == Then::end_the_session)
          {
@@ -432,7 +431,7 @@ TEST_P(ClientTlsEnd, WHEN_write_is_stuck_THEN_shutdown_interrupts_it_and_says_so
          auto request = check(co_await session.submit(target, {}));
 
          auto write = [&]() -> Task<void> {
-            std::tie(write_result) = co_await request.write(asio::buffer(body));
+            std::tie(write_result) = co_await request.write(boost::asio::buffer(body));
          };
          auto end_it = [&]() -> Task<void> {
             co_await delay(50ms);
@@ -489,7 +488,7 @@ TEST_P(ClientShutdown, WHEN_request_is_open_THEN_it_fails_right_away)
 
       auto read = [&]() -> Task<void> {
          std::array<uint8_t, 1024> buffer;
-         auto [ec, n] = co_await response.read_some(asio::buffer(buffer));
+         auto [ec, n] = co_await response.read_some(boost::asio::buffer(buffer));
          EXPECT_TRUE(ec);
          EXPECT_NE(ec, errors::eof);
          EXPECT_EQ(n, 0);
@@ -501,7 +500,7 @@ TEST_P(ClientShutdown, WHEN_request_is_open_THEN_it_fails_right_away)
       };
       co_await when_both(read(), end());
 
-      auto [write_ec] = co_await request.write(asio::const_buffer("x", 1));
+      auto [write_ec] = co_await request.write(boost::asio::const_buffer("x", 1));
       EXPECT_TRUE(write_ec);
    };
 }

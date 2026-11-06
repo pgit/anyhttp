@@ -151,16 +151,16 @@ Types
 
    A coroutine, as the runtime runs it.
 
-   :ASIO: ``asio::awaitable<T>``
-   :COROSIO: ``capy::task<T>``
+   :ASIO: ``boost::asio::awaitable<T>``
+   :COROSIO: ``boost::capy::task<T>``
 
 .. cpp:type:: template <typename... Ts> anyhttp::IoTask
 
    An operation, as the coroutine that yields its :cpp:type:`results`: ``IoTask<size_t>`` is
    ``Task<results<size_t>>``, ``IoTask<>`` one that reports only its error.
 
-   :ASIO: ``asio::awaitable<std::tuple<error_code, Ts...>>``
-   :COROSIO: ``capy::task<capy::results<Ts...>>``
+   :ASIO: ``boost::asio::awaitable<std::tuple<error_code, Ts...>>``
+   :COROSIO: ``boost::capy::task<boost::capy::results<Ts...>>``
 
 .. cpp:type:: template <typename... Ts> anyhttp::results
 
@@ -169,7 +169,7 @@ Types
    when there is an error is up to the operation.
 
    :ASIO: ``std::tuple<error_code, Ts...>``
-   :COROSIO: ``capy::results<Ts...>``, which is ``std::tuple<std::error_code, Ts...>``
+   :COROSIO: ``boost::capy::results<Ts...>``, which is ``std::tuple<std::error_code, Ts...>``
 
 .. cpp:type:: anyhttp::error_code
 
@@ -189,29 +189,29 @@ Types
 
    What sessions, streams and their readers and writers run on.
 
-   :ASIO: ``asio::any_io_executor``
-   :COROSIO: ``capy::any_executor``
+   :ASIO: ``boost::asio::any_io_executor``
+   :COROSIO: ``boost::capy::any_executor``
 
 .. cpp:type:: anyhttp::IpAddress
 
    The runtime's own IP address, which the API speaks, too.
 
-   :ASIO: ``asio::ip::address``
-   :COROSIO: ``corosio::ip_address``
+   :ASIO: ``boost::asio::ip::address``
+   :COROSIO: ``boost::corosio::ip_address``
 
 .. cpp:type:: anyhttp::TcpEndpoint
 
    The runtime's own TCP endpoint.
 
-   :ASIO: ``asio::ip::tcp::endpoint``
-   :COROSIO: ``corosio::endpoint``
+   :ASIO: ``boost::asio::ip::tcp::endpoint``
+   :COROSIO: ``boost::corosio::endpoint``
 
 .. cpp:type:: anyhttp::UdpEndpoint
 
    The runtime's own UDP endpoint.
 
-   :ASIO: ``asio::ip::udp::endpoint``
-   :COROSIO: ``corosio::endpoint``, the same type as :cpp:type:`TcpEndpoint`
+   :ASIO: ``boost::asio::ip::udp::endpoint``
+   :COROSIO: ``boost::corosio::endpoint``, the same type as :cpp:type:`TcpEndpoint`
 
 .. doxygentypedef:: anyhttp::DefaultCompletionToken
 

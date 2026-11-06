@@ -362,7 +362,7 @@ Task<void> serve_file(server::Request request, server::Response response, fs::pa
    // last of them instead of costing a write of its own. An empty file, which cannot be mmap()ed
    // at all, is then simply an empty buffer and ends the same way.
    //
-   co_await response.write_eof(asio::buffer(file.bytes()));
+   co_await response.write_eof(boost::asio::buffer(file.bytes()));
 }
 
 } // namespace anyhttp

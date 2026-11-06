@@ -20,7 +20,7 @@
 
 #include <nghttp2v2/nghttp2.h>
 
-namespace anyhttp::nghttp2
+namespace anyhttp::h2v2
 {
 
 // =================================================================================================
@@ -94,7 +94,8 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
       {
          const auto bytes_to_write = static_cast<size_t>(nwrite);
          mylogd("send loop: writing {} bytes...", bytes_to_write);
-         auto [ec, written] = co_await io::write(stream_, asio::buffer(buffer.data(), nwrite));
+         auto [ec, written] =
+            co_await io::write(stream_, boost::asio::buffer(buffer.data(), nwrite));
          if (ec)
          {
             send_failed_ = true;
@@ -396,4 +397,4 @@ IoTask<> ClientSession<Stream>::shutdown()
 
 // =================================================================================================
 
-} // namespace anyhttp::nghttp2
+} // namespace anyhttp::h2v2

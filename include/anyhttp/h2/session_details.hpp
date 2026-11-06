@@ -19,7 +19,7 @@
 
 #include <nghttp2/nghttp2.h>
 
-namespace anyhttp::nghttp2
+namespace anyhttp::h2
 {
 
 // =================================================================================================
@@ -91,7 +91,8 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
       //
       if (nread && nread <= (buffer.capacity() - buffer.size()))
       {
-         auto copied = asio::buffer_copy(buffer.prepare(nread), asio::buffer(data, nread));
+         auto copied =
+            boost::asio::buffer_copy(buffer.prepare(nread), boost::asio::buffer(data, nread));
          assert(nread == copied);
          buffer.commit(nread);
          mylogd("send loop: buffered {} more bytes, total {}", nread, buffer.data().size());
@@ -104,8 +105,8 @@ Task<void> NGHttp2SessionImpl<Stream>::send_loop()
       //
       else if (const auto bytes_to_write = buffer.size() + nread; bytes_to_write > 0)
       {
-         const auto seq =
-            std::to_array<asio::const_buffer>({buffer.data(), asio::buffer(data, nread)});
+         const auto seq = std::to_array<boost::asio::const_buffer>(
+            {buffer.data(), boost::asio::buffer(data, nread)});
          mylogd("send loop: writing {} bytes...", bytes_to_write);
          auto [ec, written] = co_await io::write(stream_, seq);
          if (ec)
@@ -464,4 +465,4 @@ IoTask<> ClientSession<Stream>::shutdown()
 
 // =================================================================================================
 
-} // namespace anyhttp::nghttp2
+} // namespace anyhttp::h2

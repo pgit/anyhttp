@@ -15,7 +15,7 @@
 // (src/h3/client.cpp) differ only in the direction their messages travel, not in how an HTTP/3
 // stream is driven. What is about QUIC rather than HTTP/3 is in anyhttp/quic/common.hpp.
 //
-namespace anyhttp::http3
+namespace anyhttp::h3
 {
 
 // =================================================================================================
@@ -32,4 +32,4 @@ void log_headers(std::string_view log_prefix,
 
 // =================================================================================================
 
-} // namespace anyhttp::http3
+} // namespace anyhttp::h3

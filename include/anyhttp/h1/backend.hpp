@@ -13,7 +13,7 @@
 
 #include <memory>
 
-namespace anyhttp::beast_impl
+namespace anyhttp::h1
 {
 
 // =================================================================================================
@@ -48,4 +48,4 @@ ANYHTTP_CLIENT_STREAMS(ANYHTTP_H1_CLIENT)
 
 // =================================================================================================
 
-} // namespace anyhttp::beast_impl
+} // namespace anyhttp::h1

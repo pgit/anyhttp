@@ -95,9 +95,9 @@ public:
    auto async_submit(boost::urls::url target, const Fields& headers = {},
                      CompletionToken&& token = CompletionToken())
    {
-      auto executor = asio::get_associated_executor(token, get_executor());
-      return asio::async_initiate<CompletionToken, Submit>(
-         asio::bind_executor(
+      auto executor = boost::asio::get_associated_executor(token, get_executor());
+      return boost::asio::async_initiate<CompletionToken, Submit>(
+         boost::asio::bind_executor(
             executor,
             [this](auto&& handler, boost::urls::url url, const Fields& headers) { //
                async_submit_any(std::move(handler), "POST", std::move(url), headers);
@@ -129,14 +129,14 @@ public:
    auto async_submit(std::string_view method, boost::urls::url target, const Fields& headers = {},
                      CompletionToken&& token = CompletionToken())
    {
-      auto executor = asio::get_associated_executor(token, get_executor());
-      return asio::async_initiate<CompletionToken, Submit>(
-         asio::bind_executor(executor,
-                             [this](auto&& handler, const std::string& method, boost::urls::url url,
-                                    const Fields& headers) { //
-                                async_submit_any(std::move(handler), method, std::move(url),
-                                                 headers);
-                             }),
+      auto executor = boost::asio::get_associated_executor(token, get_executor());
+      return boost::asio::async_initiate<CompletionToken, Submit>(
+         boost::asio::bind_executor(
+            executor,
+            [this](auto&& handler, const std::string& method, boost::urls::url url,
+                   const Fields& headers) { //
+               async_submit_any(std::move(handler), method, std::move(url), headers);
+            }),
          token, std::string(method), std::move(target), headers);
    }
 #endif
@@ -179,9 +179,9 @@ public:
    auto async_get(boost::urls::url url, const Fields& headers = {},
                   CompletionToken&& token = CompletionToken())
    {
-      auto executor = asio::get_associated_executor(token, get_executor());
-      return asio::async_initiate<CompletionToken, Get>(
-         asio::bind_executor(
+      auto executor = boost::asio::get_associated_executor(token, get_executor());
+      return boost::asio::async_initiate<CompletionToken, Get>(
+         boost::asio::bind_executor(
             executor,
             [this](auto&& handler, boost::urls::url url, const Fields& headers) { //
                async_get_any(std::move(handler), std::move(url), headers);
@@ -218,12 +218,12 @@ public:
                 CompletionToken = DefaultCompletionToken>
    auto async_shutdown(CompletionToken&& token = CompletionToken())
    {
-      auto executor = asio::get_associated_executor(token, get_executor());
-      return asio::async_initiate<CompletionToken, SessionShutdown>(
-         asio::bind_executor(executor,
-                             [this](auto&& handler) { //
-                                async_shutdown_any(std::move(handler));
-                             }),
+      auto executor = boost::asio::get_associated_executor(token, get_executor());
+      return boost::asio::async_initiate<CompletionToken, SessionShutdown>(
+         boost::asio::bind_executor(executor,
+                                    [this](auto&& handler) { //
+                                       async_shutdown_any(std::move(handler));
+                                    }),
          token);
    }
 #endif

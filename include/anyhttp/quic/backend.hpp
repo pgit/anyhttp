@@ -26,11 +26,6 @@ using ApplicationFactory = std::function<std::unique_ptr<QuicApplication>(QuicSe
 /// Plain streams for QuicServer::add_application(): each connection goes to `handler`.
 ApplicationFactory make_stream_application(Config config, ConnectionHandler handler);
 
-} // namespace anyhttp::quic
-
-namespace anyhttp::server
-{
-
 // =================================================================================================
 
 //
@@ -61,8 +56,9 @@ public:
 
 /// Binds the UDP socket to `endpoint`, usually the address and port the TCP acceptor is already
 /// listening on, so that all three HTTP versions share one endpoint.
-std::shared_ptr<QuicServer> make_quic_server(Server::Impl& server, const UdpEndpoint& endpoint);
+std::shared_ptr<QuicServer> make_quic_server(server::Server::Impl& server,
+                                             const UdpEndpoint& endpoint);
 
 // =================================================================================================
 
-} // namespace anyhttp::server
+} // namespace anyhttp::quic

@@ -203,12 +203,12 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(GetResponse) CompletionToken = DefaultCompletionToken>
    auto async_get_response(CompletionToken&& token = CompletionToken())
    {
-      auto executor = asio::get_associated_executor(token, get_executor());
-      return asio::async_initiate<CompletionToken, GetResponse>(
-         asio::bind_executor(executor,
-                             [this](auto&& handler) { //
-                                async_get_response_any(std::move(handler));
-                             }),
+      auto executor = boost::asio::get_associated_executor(token, get_executor());
+      return boost::asio::async_initiate<CompletionToken, GetResponse>(
+         boost::asio::bind_executor(executor,
+                                    [this](auto&& handler) { //
+                                       async_get_response_any(std::move(handler));
+                                    }),
          token);
    }
 #endif
@@ -276,8 +276,8 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken = DefaultCompletionToken>
    auto async_connect(CompletionToken&& token = CompletionToken())
    {
-      auto executor = asio::get_associated_executor(token, get_executor());
-      return asio::async_initiate<CompletionToken, Connect>( //
+      auto executor = boost::asio::get_associated_executor(token, get_executor());
+      return boost::asio::async_initiate<CompletionToken, Connect>( //
          bind_executor(executor, [&](auto&& handler) { async_connect_any(std::move(handler)); }),
          token);
    }

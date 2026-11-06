@@ -72,14 +72,7 @@
 using namespace std::chrono_literals;
 using namespace boost::asio;
 
-using anyhttp::quic::Address;
-using anyhttp::quic::format_hex;
-using anyhttp::quic::msghdr_get_local_addr;
-using anyhttp::quic::QUIC_SCIDLEN;
-using anyhttp::quic::set_port;
-using anyhttp::quic::sockaddr_union;
-
-namespace anyhttp::server
+namespace anyhttp::quic
 {
 
 // =================================================================================================
@@ -112,7 +105,7 @@ struct TlsServerContext
    using AlpnSelectCallback = int (*)(SSL* ssl, const unsigned char** out, unsigned char* outlen,
                                       const unsigned char* in, unsigned int inlen, void* arg);
 
-   TlsServerContext(const Config& config, AlpnSelectCallback alpn_select_cb, void* arg)
+   TlsServerContext(const server::Config& config, AlpnSelectCallback alpn_select_cb, void* arg)
    {
       ctx = SSL_CTX_new(TLS_server_method());
       if (!ctx)
@@ -249,7 +242,7 @@ public:
    void destroy() noexcept override;
 
    //
-   // Interface used by the UDP demux in Server::Impl.
+   // Interface used by the UDP demux in server::Server::Impl.
    //
    int init(const ngtcp2_cid& dcid, const ngtcp2_cid& scid, uint32_t version,
             const ngtcp2_pkt_info& pi, std::span<const uint8_t> data);
@@ -320,14 +313,14 @@ struct QuicBatch
 //
 // The server's QUIC half (see anyhttp/quic/backend.hpp): the UDP socket every QUIC connection
 // shares, the receive loop de-multiplexing datagrams onto them by connection ID, and the table
-// doing that lookup. The sessions themselves are owned by Server::Impl's session registry, like
-// the TCP-based ones -- what is kept here is only what routing packets needs, and the
+// doing that lookup. The sessions themselves are owned by server::Server::Impl's session registry,
+// like the TCP-based ones -- what is kept here is only what routing packets needs, and the
 // applications to run on them.
 //
 class QuicServerImpl : public QuicServer, public std::enable_shared_from_this<QuicServerImpl>
 {
 public:
-   QuicServerImpl(Server::Impl& parent, const UdpEndpoint& endpoint);
+   QuicServerImpl(server::Server::Impl& parent, const UdpEndpoint& endpoint);
 
    /// For log lines that belong to no connection, see anyhttp::log_prefix().
    std::string log_prefix() const { return anyhttp::log_prefix(Role::server); }
@@ -343,8 +336,8 @@ public:
    // The server this is a part of. Sessions reach the configuration, the request handler and the
    // session registry through here.
    //
-   Server::Impl& parent() noexcept { return parent_; }
-   const Config& config() const noexcept { return parent_.config(); }
+   server::Server::Impl& parent() noexcept { return parent_; }
+   const server::Config& config() const noexcept { return parent_.config(); }
    Executor get_executor() const noexcept { return parent_.get_executor(); }
 
    //
@@ -372,11 +365,11 @@ private:
    int udp_on_read(Endpoint& ep);
    void process_quic_batch(const std::shared_ptr<QuicServerSession>& session, QuicBatch&& batch);
 
-   /// Keeps the owning Server::Impl alive for as long as a pending operation of ours runs.
-   std::shared_ptr<Server::Impl> owner() { return parent_.shared_from_this(); }
+   /// Keeps the owning server::Server::Impl alive for as long as a pending operation of ours runs.
+   std::shared_ptr<server::Server::Impl> owner() { return parent_.shared_from_this(); }
 
 private:
-   Server::Impl& parent_;
+   server::Server::Impl& parent_;
 
    //
    // What add_application() registered, in the order of the server's preference. Read by the ALPN
@@ -476,11 +469,11 @@ void QuicServerSession::do_destroy() noexcept
    //
    // Tear the streams down here, on the session's executor, rather than leaving it to the
    // destructor. The destructor runs wherever the last shared_ptr happens to drop -- at server
-   // shutdown that can be Server::Impl::~Impl() on a foreign thread -- and destroying streams
-   // detaches readers/writers and fires pending handlers, state that request-handler coroutines
-   // still running on this session's strand look at. Done here, that teardown is serialized
-   // with them; a handler that resumes afterwards finds its Reader/Writer detached and fails
-   // cleanly, exactly as in the single-threaded case.
+   // shutdown that can be server::Server::Impl::~Impl() on a foreign thread -- and destroying
+   // streams detaches readers/writers and fires pending handlers, state that request-handler
+   // coroutines still running on this session's strand look at. Done here, that teardown is
+   // serialized with them; a handler that resumes afterwards finds its Reader/Writer detached and
+   // fails cleanly, exactly as in the single-threaded case.
    //
    clear_streams();
 
@@ -492,7 +485,7 @@ void QuicServerSession::do_destroy() noexcept
    }
 
    //
-   // Explicit shutdown (e.g. the whole Server::Impl going away): let the peer know right
+   // Explicit shutdown (e.g. the whole server::Server::Impl going away): let the peer know right
    // away instead of leaving it to find out via idle timeout (up to 30s). Unlike
    // handle_error(), this doesn't linger for 3 PTO to handle retransmits of the CLOSE --
    // this is a clean, voluntary shutdown, not an error condition worth that effort.
@@ -786,7 +779,7 @@ void QuicServerSession::resend_conn_close()
 // QuicServerImpl: the UDP socket, the receive loop and the connection-ID demux.
 // =================================================================================================
 
-QuicServerImpl::QuicServerImpl(Server::Impl& parent, const UdpEndpoint& endpoint)
+QuicServerImpl::QuicServerImpl(server::Server::Impl& parent, const UdpEndpoint& endpoint)
    : parent_(parent), tls_(parent.config(), &QuicServerImpl::alpn_select_cb, this),
      executor_(config().use_strand ? new_strand(parent.get_executor()) : parent.get_executor()),
      socket_(io::make_udp_socket(executor_))
@@ -900,7 +893,7 @@ void QuicServerImpl::destroy()
    // The socket lives on its own strand and udp_receive_loop() keeps re-arming async_wait() on
    // it there -- asio sockets are not thread-safe, so the close has to go through the same
    // strand instead of racing that from here. The QUIC sessions have already been destroyed by
-   // Server::Impl at this point, each sending its final CONNECTION_CLOSE through its own
+   // server::Server::Impl at this point, each sending its final CONNECTION_CLOSE through its own
    // dup()ed fd, so closing this socket doesn't race that.
    //
    dispatch_to(executor_, [self = shared_from_this(), owner = owner()] {
@@ -1219,11 +1212,12 @@ Task<void> QuicServerImpl::udp_receive_loop()
 
 // =================================================================================================
 
-std::shared_ptr<QuicServer> make_quic_server(Server::Impl& server, const UdpEndpoint& endpoint)
+std::shared_ptr<QuicServer> make_quic_server(server::Server::Impl& server,
+                                             const UdpEndpoint& endpoint)
 {
    return std::make_shared<QuicServerImpl>(server, endpoint);
 }
 
 // =================================================================================================
 
-} // namespace anyhttp::server
+} // namespace anyhttp::quic

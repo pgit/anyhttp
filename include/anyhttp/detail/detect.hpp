@@ -29,10 +29,11 @@ boost::tribool buffer_sequence_starts_with(const ConstBufferSequence& buffers,
                                            std::string_view prefix)
 {
    std::size_t matched = 0;
-   const auto end = asio::buffer_sequence_end(buffers);
-   for (auto it = asio::buffer_sequence_begin(buffers); it != end && matched < prefix.size(); ++it)
+   const auto end = boost::asio::buffer_sequence_end(buffers);
+   for (auto it = boost::asio::buffer_sequence_begin(buffers); it != end && matched < prefix.size();
+        ++it)
    {
-      const asio::const_buffer buffer(*it);
+      const boost::asio::const_buffer buffer(*it);
       if (buffer.size() == 0)
          continue; // an empty buffer may well have a null pointer, which memcmp() must not get
       const auto to_compare = std::min(buffer.size(), prefix.size() - matched);
@@ -64,7 +65,7 @@ template <typename Socket, typename DynamicBuffer>
 IoTask<Detected> detect(Socket& socket, DynamicBuffer& buffer)
 {
    std::array<std::uint8_t, 1> first;
-   auto [ec, n] = co_await io::peek(socket, asio::buffer(first));
+   auto [ec, n] = co_await io::peek(socket, boost::asio::buffer(first));
    if (ec)
       co_return std::tuple{ec, Detected::h1};
    if (n == 1 && first[0] == 0x16)

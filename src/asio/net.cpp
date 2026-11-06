@@ -21,7 +21,7 @@
 
 #include <sys/socket.h>
 
-namespace anyhttp
+namespace anyhttp::inline asio
 {
 
 // =================================================================================================
@@ -70,12 +70,12 @@ static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned ch
 TlsContext make_server_tls_context(const std::string& certificate_chain,
                                    const std::string& private_key)
 {
-   asio::ssl::context ctx{asio::ssl::context::tlsv13};
+   boost::asio::ssl::context ctx{boost::asio::ssl::context::tlsv13};
    SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, nullptr);
    SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, nullptr);
 
    ctx.use_certificate_chain_file(certificate_chain);
-   ctx.use_private_key_file(private_key, asio::ssl::context::pem);
+   ctx.use_private_key_file(private_key, boost::asio::ssl::context::pem);
 
    return ctx;
 }
@@ -84,11 +84,11 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 
 TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol)
 {
-   asio::ssl::context ctx{asio::ssl::context::tls_client};
+   boost::asio::ssl::context ctx{boost::asio::ssl::context::tls_client};
    SSL_CTX_set_min_proto_version(ctx.native_handle(), TLS1_2_VERSION);
 
    tls_load_trusted_cas(ctx.native_handle(), ca_file);
-   ctx.set_verify_mode(asio::ssl::verify_peer);
+   ctx.set_verify_mode(boost::asio::ssl::verify_peer);
 
    // "http/1.1" is the tail of the list, what follows the three bytes of "h2".
    auto alpn = std::span<const unsigned char>{next_proto_list};
@@ -108,19 +108,20 @@ namespace io
 void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port)
 {
    acceptor.open(endpoint.protocol());
-   acceptor.set_option(asio::socket_base::reuse_address(true));
+   acceptor.set_option(boost::asio::socket_base::reuse_address(true));
    if (reuse_port)
-      acceptor.set_option(asio::detail::socket_option::boolean<SOL_SOCKET, SO_REUSEPORT>(true));
+      acceptor.set_option(
+         boost::asio::detail::socket_option::boolean<SOL_SOCKET, SO_REUSEPORT>(true));
 
    //
    // Accept IPv4 clients on an IPv6 listener, too. This has to go after open() -- there is no
    // socket to set it on before that -- and before bind(), which is when it takes effect. Not
    // fatal if it fails: most systems are dual-stack by default (net.ipv6.bindv6only=0) anyway.
    //
-   if (endpoint.protocol() == asio::ip::tcp::v6())
+   if (endpoint.protocol() == boost::asio::ip::tcp::v6())
    {
       error_code ec;
-      acceptor.set_option(asio::ip::v6_only(false), ec);
+      acceptor.set_option(boost::asio::ip::v6_only(false), ec);
       if (ec)
          logw("[{}] error enabling dual-stack on {}: {}", log_prefix(Role::server), endpoint,
               ec.what());
@@ -132,8 +133,8 @@ void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port)
 
 std::pair<int, int> buffer_sizes(TcpSocket& socket)
 {
-   asio::socket_base::send_buffer_size send;
-   asio::socket_base::receive_buffer_size receive;
+   boost::asio::socket_base::send_buffer_size send;
+   boost::asio::socket_base::receive_buffer_size receive;
    error_code ec;
    socket.get_option(send, ec);
    socket.get_option(receive, ec);
@@ -144,16 +145,16 @@ void set_buffer_sizes(TcpSocket& socket, int send, int receive)
 {
    error_code ec;
    if (send > 0)
-      socket.set_option(asio::socket_base::send_buffer_size(send), ec);
+      socket.set_option(boost::asio::socket_base::send_buffer_size(send), ec);
    if (receive > 0)
-      socket.set_option(asio::socket_base::receive_buffer_size(receive), ec);
+      socket.set_option(boost::asio::socket_base::receive_buffer_size(receive), ec);
 }
 
 IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, std::string port)
 {
-   asio::ip::tcp::resolver resolver(executor);
+   boost::asio::ip::tcp::resolver resolver(executor);
    auto [ec, results] = co_await resolver.async_resolve(
-      host, port, asio::ip::tcp::resolver::numeric_service, asio::as_tuple);
+      host, port, boost::asio::ip::tcp::resolver::numeric_service, boost::asio::as_tuple);
 
    std::vector<TcpEndpoint> endpoints;
    for (auto&& entry : results)
@@ -163,7 +164,7 @@ IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, st
 
 IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints)
 {
-   co_return co_await asio::async_connect(socket, endpoints, asio::as_tuple);
+   co_return co_await boost::asio::async_connect(socket, endpoints, boost::asio::as_tuple);
 }
 
 void set_peer_name(TlsStream& stream, const std::string& host)
@@ -197,7 +198,7 @@ IpAddress normalize(IpAddress address)
    {
       const auto v6 = address.to_v6();
       if (v6.is_v4_mapped())
-         return asio::ip::make_address_v4(asio::ip::v4_mapped, v6);
+         return boost::asio::ip::make_address_v4(boost::asio::ip::v4_mapped, v6);
    }
    return address;
 }
@@ -207,7 +208,7 @@ namespace io
 
 IpAddress make_address(std::string_view text, error_code& ec) noexcept
 {
-   return asio::ip::make_address(text, ec);
+   return boost::asio::ip::make_address(text, ec);
 }
 
 SocketAddress to_sockaddr(const UdpEndpoint& endpoint) noexcept
@@ -233,4 +234,4 @@ std::optional<UdpEndpoint> from_sockaddr(const sockaddr* address, socklen_t size
 
 // =================================================================================================
 
-} // namespace anyhttp
+} // namespace anyhttp::inline asio

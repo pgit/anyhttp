@@ -16,7 +16,7 @@
 
 using namespace boost::asio;
 
-namespace anyhttp::http3
+namespace anyhttp::h3
 {
 
 // =================================================================================================
@@ -287,4 +287,4 @@ void Http3Stream::delete_writer()
 
 // =================================================================================================
 
-} // namespace anyhttp::http3
+} // namespace anyhttp::h3
