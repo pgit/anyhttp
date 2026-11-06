@@ -1,92 +1,102 @@
+//
+// Sends one request, over HTTP/2 unless the server says otherwise, and counts the bytes of the
+// response body. Takes the URL, the method, POST by default, which sends a short body, and for a
+// server with a certificate of a private CA, the file that has that CA in it.
+//
 #include "anyhttp/client.hpp"
-#include "anyhttp/request_handlers.hpp" // for drain()
+#include "anyhttp/request_handlers.hpp" // for count_response()
 #include "anyhttp/session.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/as_tuple.hpp>
-#include <boost/asio/co_spawn.hpp>
-#include <boost/asio/deferred.hpp>
-#include <boost/asio/detached.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
+#if ANYHTTP_COROSIO
+#include <boost/corosio/io_context.hpp>
+#else
 #include <boost/asio/io_context.hpp>
-#include <boost/asio/signal_set.hpp>
-#include <boost/asio/use_awaitable.hpp>
+#endif
 
 #include <print>
+#include <string>
 
 using namespace anyhttp;
-using namespace anyhttp::client;
-using namespace boost::asio;
-using namespace std::chrono_literals;
 
-using namespace boost::asio::experimental::awaitable_operators;
+#if ANYHTTP_COROSIO
+using IoContext = boost::corosio::io_context;
+#else
+using IoContext = boost::asio::io_context;
+#endif
 
-static awaitable<void> send(Request& request, std::string_view hello)
+static Task<void> send(client::Request& request, std::string_view body)
 {
-   logd("send: sending string of {} bytes...", hello.size());
-   co_await request.async_write_eof(boost::asio::buffer(hello));
-   logd("send: sending string of {} bytes... done", hello.size());
+   logd("send: sending string of {} bytes...", body.size());
+   auto [ec] = co_await request.write_eof(boost::asio::buffer(body));
+   if (ec)
+      throw_error(ec);
+   logd("send: sending string of {} bytes... done", body.size());
 }
 
-static awaitable<void> do_request(Session& session, boost::urls::url url, std::string_view method)
+static Task<void> do_request(Session& session, boost::urls::url url, std::string_view method)
 {
-   const std::string hello = method == "POST" ? "Hello, World!\r\n" : "";
-#if 0
-   auto request = co_await session.async_submit(url, {{"Content-Length", std::format("{}", hello.size())}});
-#else
+   const std::string body = method == "POST" ? "Hello, World!\r\n" : "";
+
    Fields fields;
    fields.set("X-Custom-Header", "value");
-   auto request = co_await session.async_submit(method, url, fields);
-#endif
-#if 0
-   size_t bytes = 64 * 1024 - 1;
-   auto result = co_await (send(request, bytes) && receive(request));
-   assert(bytes == result);
-#else
-   const size_t bytes = co_await (send(request, hello) && count_response(request));
+   auto [ec, request] = co_await session.submit(method, url, fields);
+   if (ec)
+      throw_error(ec);
+
+   const size_t bytes = co_await when_both(send(request, body), count_response(request));
    logi("do_request: done, {} bytes of response body", bytes);
-#endif
 }
 
-static awaitable<void> do_requests(any_io_executor executor, Session session, boost::urls::url url,
-                                   std::string_view method)
+static Task<void> do_session(client::Client& client, boost::urls::url url, std::string_view method,
+                             int& result)
 {
-   for (size_t i = 0; i < 833; ++i)
-      co_await do_request(session, url, method);
-}
+   auto [ec, session] = co_await client.connect();
+   if (ec)
+   {
+      std::println(stderr, "connect: {}", ec.message());
+      co_return;
+   }
 
-static awaitable<void> do_session(Client& client, boost::urls::url url, std::string_view method)
-{
-   auto session = co_await client.async_connect();
-
-#if 1
-   for (size_t i = 0; i < 1; ++i)
+   try
+   {
       co_await do_request(session, url, method);
-#else
-   for (size_t i = 0; i < 3; ++i)
-      co_spawn(client.get_executor(), do_requests(client.get_executor(), session, url, method),
-               detached);
-#endif
-   logi("do_requests: done");
+   }
+   catch (const boost::system::system_error& ex)
+   {
+      std::println(stderr, "request: {}", ex.code().message());
+      co_return;
+   }
+
+   if (auto [shutdown_ec] = co_await session.shutdown(); shutdown_ec)
+      logw("shutdown: {}", shutdown_ec.message());
+
+   logi("do_session: done");
+   result = 0;
 }
 
 int main(int argc, char* argv[])
 {
-   if (argc < 2)
+   if (argc == 2 && (std::string_view(argv[1]) == "--help" || std::string_view(argv[1]) == "-h"))
    {
-      std::println("Usage: {} URL [METHOD]", argv[0]);
-      return 1;
+      std::println("Usage: {} URL [METHOD [CA-FILE]]", argv[0]);
+      return 0;
+   }
+   if (argc < 2 || argc > 4)
+   {
+      std::println(stderr, "Usage: {} URL [METHOD [CA-FILE]]", argv[0]);
+      return 2;
    }
 
    const std::string_view method = argc > 2 ? argv[2] : "POST";
 
-   io_context context;
-   Config config{.url = boost::urls::url(argv[1]), .protocol = Protocol::h2};
-   Client client(context.get_executor(), config);
+   IoContext context;
+   client::Config config{.url = boost::urls::url(argv[1]),
+                         .protocol = Protocol::h2,
+                         .tls_ca_file = argc > 3 ? argv[3] : ""};
+   client::Client client(context.get_executor(), config);
 
-   for (size_t i = 0; i < 1; ++i)
-      co_spawn(context, do_session(client, config.url, method), detached);
-
+   int result = 1;
+   launch(context.get_executor(), do_session(client, config.url, method, result));
    context.run();
-   return 0;
+   return result;
 }

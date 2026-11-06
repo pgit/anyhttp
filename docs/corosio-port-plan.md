@@ -216,7 +216,8 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
 7. **README**: the two I/O runtimes, the per-mode error table, the constraints (OpenSSL). The error table includes the resolver: corosio reports a host that does not resolve
    as `no_such_device_or_address` (`EAI_NONAME` mapped onto a generic code), ASIO as
    `netdb_errors::host_not_found`.
-8. Later: threads in COROSIO; `client_main` for COROSIO; upstream issues for corosio
+8. Later: threads in COROSIO; `client_main` for COROSIO (*done 2026-11-06*, on `Task`,
+   `launch()` and `when_both()` like the server); upstream issues for corosio
    (`openssl_stream` on AWS-LC, the read on an error event, the reactor's use-after-free with
    threads, and a TLS read that flushes what an earlier write left behind and fails with what that
    fails with: over TLS, a response that has already arrived can not be read once a write has
