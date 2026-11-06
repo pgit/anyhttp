@@ -19,7 +19,6 @@
 // same UDP port as HTTP/3.
 //
 
-#include "common.hpp"
 #include "reader.hpp"
 #include "writer.hpp"
 
@@ -34,7 +33,6 @@
 #include <functional>
 #include <memory>
 #include <string>
-#include <tuple>
 
 namespace anyhttp::quic
 {

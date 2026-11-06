@@ -585,7 +585,7 @@ void NGHttp2Stream::on_data(const uint8_t* data, size_t len)
    call_read_handler(asio::const_buffer(data, len));
 }
 
-void NGHttp2Stream::on_eof(nghttp2_session* session, int32_t id_)
+void NGHttp2Stream::on_eof(nghttp2_session*, int32_t id_)
 {
    assert(id == id_);
    assert(!eof_received);

@@ -191,7 +191,7 @@ public:
    using State = detail::CompletionState<Args...>;
 
    Completion() noexcept = default;
-   Completion(std::nullptr_t) noexcept {}
+   Completion(std::nullptr_t) noexcept {} // NOLINT(*-explicit-constructor)
    explicit Completion(State* state) noexcept : state_(state) {}
    Completion(Completion&& other) noexcept : state_(std::exchange(other.state_, nullptr)) {}
    Completion& operator=(Completion&& other) noexcept
@@ -307,7 +307,7 @@ public:
       return std::noop_coroutine();
    }
 
-   typename Traits::Result await_resume() { return std::move(*state_.result); }
+   Traits::Result await_resume() { return std::move(*state_.result); }
 
 private:
    template <typename... Args>
@@ -317,12 +317,12 @@ private:
    }
 
    Init init_;
-   typename Traits::State state_;
+   Traits::State state_;
 };
 
 } // namespace detail
 
-/// Starts an operation that completes a <tt>Completion<Signature></tt>, and waits for it.
+/// Starts an operation that completes a \c Completion, and waits for it.
 template <typename Signature, typename Init>
 auto initiate(Init&& init)
 {
@@ -341,8 +341,13 @@ inline void launch(const Executor& executor, Task<void> task, F&& on_done)
 {
    auto done = std::make_shared<std::decay_t<F>>(std::forward<F>(on_done));
    capy::run_async(
-      executor, [done]() noexcept { (*done)(std::exception_ptr{}); },
-      [done](std::exception_ptr ep) noexcept { (*done)(ep); })(std::move(task));
+      executor,
+      [done]() noexcept { //
+         (*done)(std::exception_ptr{});
+      },
+      [done](std::exception_ptr ep) noexcept { //
+         (*done)(ep);
+      })(std::move(task));
 }
 
 /**
@@ -360,11 +365,12 @@ inline void launch(const Executor& executor, IoTask<T...> task,
    auto shared = std::make_shared<Completion<void(error_code, T...)>>(std::move(handler));
    capy::run_async(
       executor, token,
-      [shared](results<T...> result) noexcept {
+      [shared](results<T...> result) noexcept { //
          std::apply(std::move(*shared), std::move(result));
       },
-      [shared](std::exception_ptr ep) noexcept { std::move (*shared)(code(ep), T{}...); })(
-      std::move(task));
+      [shared](std::exception_ptr ep) noexcept { //
+         std::move (*shared)(code(ep), T{}...);
+      })(std::move(task));
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -542,8 +548,6 @@ public:
    void set() { event_.set(); }
    void clear() noexcept { event_.clear(); }
    bool is_set() const noexcept { return event_.is_set(); }
-
-   /// <tt>auto [ec] = co_await event.wait();</tt>
    auto wait() { return event_.wait(); }
 
 private:

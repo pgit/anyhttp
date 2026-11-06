@@ -176,10 +176,7 @@ using system_error = boost::system::system_error;
 
 /// Throws \p ec, for code that reports errors as exceptions, as the runtime's own does.
 /// \param ec The error.
-[[noreturn]] inline void throw_error(const error_code& ec)
-{
-   throw boost::system::system_error(ec);
-}
+[[noreturn]] inline void throw_error(const error_code& ec) { throw system_error(ec); }
 
 /// \cond internal
 /// What `errno` holds, for code that calls the operating system itself.

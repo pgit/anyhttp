@@ -1,6 +1,5 @@
 #pragma once
 
-#include <anyhttp/common.hpp>
 #include <anyhttp/logging.hpp>
 #include <anyhttp/runtime.hpp>
 
@@ -16,7 +15,6 @@
 #include <chrono>
 #include <format>
 #include <iostream>
-#include <memory>
 #include <string_view>
 
 // =================================================================================================
@@ -81,7 +79,7 @@ public:
    /// \param value The value of the header field.
    template <typename T>
       requires std::formattable<const T&, char>
-   FieldValue(const T& value)
+   FieldValue(const T& value) // NOLINT(google-explicit-constructor)
    {
       if constexpr (std::convertible_to<const T&, std::string_view>)
          view = value;
@@ -103,7 +101,10 @@ public:
    /// \endcond
 
    /// \return The value, which lives as long as the FieldValue and what it refers to.
-   operator std::string_view() const noexcept { return view; }
+   operator std::string_view() const noexcept // NOLINT(google-explicit-constructor)
+   {
+      return view;
+   }
 
 private:
    std::string_view view;
@@ -248,7 +249,10 @@ std::string what(const anyhttp::error_code& ec);
 struct HttpDate
 {
    std::array<char, 29> chars;
-   operator std::string_view() const noexcept { return {chars.data(), chars.size()}; }
+   operator std::string_view() const noexcept // NOLINT(google-explicit-constructor)
+   {
+      return {chars.data(), chars.size()};
+   }
 };
 
 /// Formats \p tp as an HTTP date, clamped to the years 0000 to 9999 the format has room for.
