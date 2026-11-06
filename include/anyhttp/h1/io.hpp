@@ -62,8 +62,8 @@ inline error_code to_error_code(const boost::system::error_code& ec)
  * lost.
  */
 template <typename Stream, typename DynamicBuffer, bool isRequest>
-Task<std::tuple<error_code, size_t>> read_some(Stream& stream, DynamicBuffer& buffer,
-                                               http::basic_parser<isRequest>& parser)
+IoTask<size_t> read_some(Stream& stream, DynamicBuffer& buffer,
+                         http::basic_parser<isRequest>& parser)
 {
    size_t parsed = 0;
    boost::system::error_code ec;
@@ -110,8 +110,8 @@ Task<std::tuple<error_code, size_t>> read_some(Stream& stream, DynamicBuffer& bu
 
 /// Reads until the parser has the whole header, as Beast's \c http::async_read_header().
 template <typename Stream, typename DynamicBuffer, bool isRequest>
-Task<std::tuple<error_code, size_t>> read_header(Stream& stream, DynamicBuffer& buffer,
-                                                 http::basic_parser<isRequest>& parser)
+IoTask<size_t> read_header(Stream& stream, DynamicBuffer& buffer,
+                           http::basic_parser<isRequest>& parser)
 {
    size_t parsed = 0;
    while (!parser.is_header_done())
@@ -127,8 +127,7 @@ Task<std::tuple<error_code, size_t>> read_header(Stream& stream, DynamicBuffer& 
 
 /// Reads until the parser has the whole message, as Beast's \c http::async_read() with a parser.
 template <typename Stream, typename DynamicBuffer, bool isRequest>
-Task<std::tuple<error_code, size_t>> read(Stream& stream, DynamicBuffer& buffer,
-                                          http::basic_parser<isRequest>& parser)
+IoTask<size_t> read(Stream& stream, DynamicBuffer& buffer, http::basic_parser<isRequest>& parser)
 {
    size_t parsed = 0;
    while (!parser.is_done())
@@ -144,9 +143,8 @@ Task<std::tuple<error_code, size_t>> read(Stream& stream, DynamicBuffer& buffer,
 /// Reads a whole message into \p message, as Beast's \c http::async_read() with a message.
 template <typename Stream, typename DynamicBuffer, bool isRequest, typename Body,
           typename Allocator>
-Task<std::tuple<error_code, size_t>>
-read_message(Stream& stream, DynamicBuffer& buffer,
-             http::message<isRequest, Body, http::basic_fields<Allocator>>& message)
+IoTask<size_t> read_message(Stream& stream, DynamicBuffer& buffer,
+                            http::message<isRequest, Body, http::basic_fields<Allocator>>& message)
 {
    http::parser<isRequest, Body, Allocator> parser;
    parser.eager(true);
@@ -166,8 +164,7 @@ read_message(Stream& stream, DynamicBuffer& buffer,
  * but \c http::error::need_buffer, which is passed on here.
  */
 template <typename Stream, bool isRequest, typename Body, typename Fields>
-Task<std::tuple<error_code, size_t>>
-write_some(Stream& stream, http::serializer<isRequest, Body, Fields>& serializer)
+IoTask<size_t> write_some(Stream& stream, http::serializer<isRequest, Body, Fields>& serializer)
 {
    if (serializer.is_done())
       co_return std::tuple{error_code{}, size_t{0}};
@@ -197,8 +194,7 @@ write_some(Stream& stream, http::serializer<isRequest, Body, Fields>& serializer
  * here, this also stops when a \c buffer_body has been written that is not the last.
  */
 template <typename Stream, typename Serializer, typename Predicate>
-Task<std::tuple<error_code, size_t>> write_until(Stream& stream, Serializer& serializer,
-                                                 Predicate done)
+IoTask<size_t> write_until(Stream& stream, Serializer& serializer, Predicate done)
 {
    size_t written = 0;
    while (!done(serializer))
@@ -216,7 +212,7 @@ Task<std::tuple<error_code, size_t>> write_until(Stream& stream, Serializer& ser
 
 /// Writes the header, as Beast's \c http::async_write_header().
 template <typename Stream, typename Serializer>
-Task<std::tuple<error_code, size_t>> write_header(Stream& stream, Serializer& serializer)
+IoTask<size_t> write_header(Stream& stream, Serializer& serializer)
 {
    serializer.split(true);
    return h1::write_until(stream, serializer, [](auto& sr) { return sr.is_header_done(); });
@@ -224,15 +220,14 @@ Task<std::tuple<error_code, size_t>> write_header(Stream& stream, Serializer& se
 
 /// Writes all there is, as Beast's \c http::async_write() with a serializer.
 template <typename Stream, typename Serializer>
-Task<std::tuple<error_code, size_t>> write(Stream& stream, Serializer& serializer)
+IoTask<size_t> write(Stream& stream, Serializer& serializer)
 {
    return h1::write_until(stream, serializer, [](auto& sr) { return sr.is_done(); });
 }
 
 /// Writes all of \p message, as Beast's \c http::async_write() with a message.
 template <typename Stream, bool isRequest, typename Body, typename Fields>
-Task<std::tuple<error_code, size_t>> write_message(Stream& stream,
-                                                   http::message<isRequest, Body, Fields>& message)
+IoTask<size_t> write_message(Stream& stream, http::message<isRequest, Body, Fields>& message)
 {
    http::serializer<isRequest, Body, Fields> serializer{message};
    co_return co_await h1::write(stream, serializer);

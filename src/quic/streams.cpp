@@ -202,7 +202,7 @@ void StreamApplication::async_accept_stream(AcceptStreamHandler&& handler)
    accept_handler_ = std::move(handler);
 }
 
-std::tuple<error_code, Stream> StreamApplication::open_stream()
+results<Stream> StreamApplication::open_stream()
 {
    if (closed_ec_ || session_.closed() || !session_.application_ready())
       return {errors::connection_aborted, Stream{}};

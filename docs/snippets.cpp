@@ -109,7 +109,7 @@ Task<void> route(server::Request request, server::Response response)
 //
 
 // [read-all]
-Task<std::tuple<error_code, std::string>> read_all(Reader& reader)
+IoTask<std::string> read_all(Reader& reader)
 {
    std::string body;
    std::array<char, 16_k> buffer;
@@ -126,8 +126,7 @@ Task<std::tuple<error_code, std::string>> read_all(Reader& reader)
 // [read-all-end]
 
 // [post]
-Task<std::tuple<error_code, std::string>> post(Session& session, boost::urls::url url,
-                                               std::string body)
+IoTask<std::string> post(Session& session, boost::urls::url url, std::string body)
 {
    auto [submit_ec, request] =
       co_await session.submit(url, fields({{"Content-Length", body.size()}}));
@@ -220,8 +219,7 @@ Task<std::string> round_trip(Session& session, boost::urls::url url, std::string
 // [both-ways-end]
 
 // [would-block]
-Task<std::tuple<error_code, client::Request>> submit_patiently(Session& session,
-                                                               boost::urls::url url)
+IoTask<client::Request> submit_patiently(Session& session, boost::urls::url url)
 {
    for (;;)
    {
@@ -383,8 +381,8 @@ inline void quic_serve(server::Server& server)
 }
 
 // [quic-client]
-Task<std::tuple<error_code, std::string>> quic_hello(Executor executor, std::string host,
-                                                     std::string port, std::string ca_file)
+IoTask<std::string> quic_hello(Executor executor, std::string host, std::string port,
+                               std::string ca_file)
 {
    auto [connect_ec, connection] = co_await quic::connect(
       executor, std::move(host), std::move(port), {.alpn = "echo", .tls_ca_file = ca_file});

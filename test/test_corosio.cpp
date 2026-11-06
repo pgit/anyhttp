@@ -159,10 +159,10 @@ TEST(Corosio, BeastParserAndSerializer)
 // -------------------------------------------------------------------------------------------------
 
 //
-// Why each I/O runtime needs error constants of its own: a Boost.System code survives the conversion
-// to std::error_code -- Beast's errors stay comparable across it -- but asio's eof does not become
-// capy's. What docs/end-of-body.rst calls errors::eof at the end of a body is capy::error::eof in
-// COROSIO.
+// Why each I/O runtime needs error constants of its own: a Boost.System code survives the
+// conversion to std::error_code -- Beast's errors stay comparable across it -- but asio's eof does
+// not become capy's. What docs/end-of-body.rst calls errors::eof at the end of a body is
+// capy::error::eof in COROSIO.
 //
 TEST(Corosio, ErrorCodeInterop)
 {
@@ -232,7 +232,7 @@ TEST(CorosioRuntime, WHEN_parked_operation_is_completed_THEN_caller_resumes_with
 {
    corosio::io_context context;
    Parked parked;
-   std::optional<std::tuple<error_code, size_t>> result;
+   std::optional<results<size_t>> result;
 
    auto reader = [](Parked& parked, auto& result) -> Task<void> {
       result = co_await parked.read();
@@ -251,7 +251,7 @@ TEST(CorosioRuntime, WHEN_caller_is_stopped_THEN_parked_operation_is_cancelled)
    corosio::io_context context;
    Parked parked;
    std::stop_source stop;
-   std::optional<std::tuple<error_code, size_t>> result;
+   std::optional<results<size_t>> result;
 
    auto reader = [](Parked& parked, auto& result) -> Task<void> {
       result = co_await parked.read();
@@ -269,7 +269,7 @@ TEST(CorosioRuntime, WHEN_completion_is_dropped_THEN_caller_resumes_cancelled)
 {
    corosio::io_context context;
    Parked parked;
-   std::optional<std::tuple<error_code, size_t>> result;
+   std::optional<results<size_t>> result;
 
    auto reader = [](Parked& parked, auto& result) -> Task<void> {
       result = co_await parked.read();
@@ -285,9 +285,9 @@ TEST(CorosioRuntime, WHEN_completion_is_dropped_THEN_caller_resumes_cancelled)
 TEST(CorosioRuntime, WHEN_task_is_launched_for_a_completion_THEN_its_result_completes_it)
 {
    corosio::io_context context;
-   std::optional<std::tuple<error_code, size_t>> result;
+   std::optional<results<size_t>> result;
 
-   auto task = []() -> Task<std::tuple<error_code, size_t>> {
+   auto task = []() -> IoTask<size_t> {
       co_await yield_now();
       co_return std::tuple{errors::eof, size_t{7}};
    };
@@ -374,7 +374,7 @@ TEST(CorosioRuntime, WHEN_context_goes_away_with_a_task_launched_for_a_completio
    int destroyed = 0, resumed = 0;
    {
       corosio::io_context context;
-      auto task = [&]() -> Task<std::tuple<error_code, size_t>> {
+      auto task = [&]() -> IoTask<size_t> {
          FrameProbe probe{destroyed};
          co_await yield_now();
          ++resumed;

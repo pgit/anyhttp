@@ -211,7 +211,7 @@ public:
     *
     * \return The error and the stream.
     */
-   std::tuple<error_code, Stream> open_stream();
+   results<Stream> open_stream();
 
 #if ANYHTTP_ASIO
    /// Waits for the next stream the peer opens. Fails with \c errors::connection_aborted once the
@@ -233,7 +233,7 @@ public:
    /// \c async_accept_stream() as a coroutine: <tt>auto [ec, stream] = co_await
    /// connection.accept_stream();</tt>
    /// \return The error and the stream.
-   Task<std::tuple<error_code, Stream>> accept_stream();
+   IoTask<Stream> accept_stream();
 
    /// Closes the connection: CONNECTION_CLOSE with the application error \p code. What is still
    /// open fails with \c errc::connection_reset.
@@ -266,8 +266,7 @@ using ConnectHandler = Completion<Connect>;
 /// \param port The port of the server.
 /// \param config The protocol, and how to speak it.
 /// \return The error and the connection.
-Task<std::tuple<error_code, Connection>> connect(Executor executor, std::string host,
-                                                 std::string port, Config config);
+IoTask<Connection> connect(Executor executor, std::string host, std::string port, Config config);
 
 #if ANYHTTP_ASIO
 /// \cond internal

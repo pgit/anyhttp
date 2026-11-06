@@ -311,12 +311,10 @@ std::pair<int, int> buffer_sizes(TcpSocket& socket);
 void set_buffer_sizes(TcpSocket& socket, int send, int receive);
 
 /// Resolves \p host and \p port (a number): <tt>(error_code, endpoints)</tt>.
-Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,
-                                                               std::string port);
+IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, std::string port);
 
 /// Connects \p socket to the first of \p endpoints that takes it: <tt>(error_code, endpoint)</tt>.
-Task<std::tuple<error_code, TcpEndpoint>> connect(TcpSocket& socket,
-                                                  std::vector<TcpEndpoint> endpoints);
+IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints);
 
 inline TlsStream make_tls_stream(TcpSocket&& socket, TlsContext& context)
 {

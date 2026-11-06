@@ -268,7 +268,7 @@ public:
    /// \param status_code The status code of the response.
    /// \param headers The header fields of the response.
    /// \return The error.
-   Task<std::tuple<error_code>> submit(unsigned int status_code, Fields headers);
+   IoTask<> submit(unsigned int status_code, Fields headers);
 
 private:
 #if ANYHTTP_ASIO

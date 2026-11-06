@@ -9,7 +9,8 @@
 // public API front-ends and the test fixtures test ANYHTTP_ASIO or ANYHTTP_COROSIO: the protocol
 // backends are written once, against these names.
 //
-//    Task<T>, Executor, error_code, Completion<Signature>, system_error
+//    Task<T>, IoTask<Ts...>, results<Ts...>, Executor, error_code, Completion<Signature>,
+//    system_error
 //    IpAddress, TcpEndpoint, UdpEndpoint                       -- the runtime's own
 //    errc (portable error conditions), errors:: (the codes of the API contract), throw_error()
 //    last_error()                                              -- errno, as an error_code

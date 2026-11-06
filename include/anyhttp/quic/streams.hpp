@@ -90,7 +90,7 @@ public:
    //
    // What Connection offers.
    //
-   std::tuple<error_code, Stream> open_stream();
+   results<Stream> open_stream();
    void async_accept_stream(AcceptStreamHandler&& handler);
 
    /// Puts `stream` at the end of the write queue, unless it is in there already.

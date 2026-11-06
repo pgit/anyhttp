@@ -46,7 +46,7 @@ public:
    virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) = 0;
 
    /// async_write() as a coroutine, see Reader::Impl::read_some().
-   virtual Task<std::tuple<error_code>> write(asio::const_buffer buffer, bool eof)
+   virtual IoTask<> write(asio::const_buffer buffer, bool eof)
    {
       co_return co_await initiate<Write>([this, buffer, eof](WriteHandler handler) { //
          async_write(std::move(handler), buffer, eof);

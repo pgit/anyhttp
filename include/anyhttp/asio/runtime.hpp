@@ -90,6 +90,22 @@ using UdpEndpoint = asio::ip::udp::endpoint;
 /// What every operation reports its outcome with.
 using error_code = boost::system::error_code;
 
+/**
+ * What an operation yields: its error first, then what it has to report besides, which
+ * `auto [ec, n] = co_await reader.read_some(buffer);` takes apart. Whether that is meaningful
+ * when there is an error is up to the operation. Capy's `capy::results` with the runtime's
+ * #error_code, so that on COROSIO the two are the same type.
+ */
+template <typename... Ts>
+using results = std::tuple<error_code, Ts...>;
+
+/**
+ * An operation, as the coroutine that yields its #results: `IoTask<size_t>` is
+ * `Task<results<size_t>>`, `IoTask<>` one that reports only its error.
+ */
+template <typename... Ts>
+using IoTask = Task<results<Ts...>>;
+
 // =================================================================================================
 
 /**
@@ -280,7 +296,7 @@ inline void launch(const Executor& executor, Task<void> task, F&& on_done)
  * other runtime has no tokens, and returns such a task's result directly.
  */
 template <typename... T>
-inline void launch(const Executor& executor, Task<std::tuple<error_code, T...>> task,
+inline void launch(const Executor& executor, IoTask<T...> task,
                    Completion<void(error_code, T...)>&& handler)
 {
    auto slot = asio::get_associated_cancellation_slot(handler);
@@ -292,15 +308,14 @@ inline void launch(const Executor& executor, Task<std::tuple<error_code, T...>> 
    //
    asio::co_spawn(executor, std::move(task),
                   asio::bind_cancellation_slot(
-                     slot, asio::bind_executor(
-                              handler_executor, [handler = std::move(handler)](
-                                                   const std::exception_ptr& ep,
-                                                   std::tuple<error_code, T...> result) mutable {
-                                 if (ep)
-                                    std::move(handler)(code(ep), T{}...);
-                                 else
-                                    std::apply(std::move(handler), std::move(result));
-                              })));
+                     slot, asio::bind_executor(handler_executor, [handler = std::move(handler)](
+                                                                    const std::exception_ptr& ep,
+                                                                    results<T...> result) mutable {
+                        if (ep)
+                           std::move(handler)(code(ep), T{}...);
+                        else
+                           std::apply(std::move(handler), std::move(result));
+                     })));
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -437,7 +452,7 @@ public:
     * Waits for the event to be set: <tt>auto [ec] = co_await event.wait();</tt>. The wait can be
     * cancelled, and then completes with \c errors::canceled.
     */
-   Task<std::tuple<error_code>> wait()
+   IoTask<> wait()
    {
       if (set_)
          co_return error_code{};

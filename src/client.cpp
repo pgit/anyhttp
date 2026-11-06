@@ -39,15 +39,9 @@ Request::~Request() { reset(); }
 
 Request::Impl& Request::pimpl() const noexcept { return static_cast<Impl&>(Writer::pimpl()); }
 
-static Task<std::tuple<error_code, Response>> no_request()
-{
-   co_return std::tuple{errors::bad_descriptor, Response{}};
-}
+static IoTask<Response> no_request() { co_return std::tuple{errors::bad_descriptor, Response{}}; }
 
-Task<std::tuple<error_code, Response>> Request::get_response()
-{
-   return *this ? pimpl().get_response() : no_request();
-}
+IoTask<Response> Request::get_response() { return *this ? pimpl().get_response() : no_request(); }
 
 #if ANYHTTP_ASIO
 void Request::async_get_response_any(Request::GetResponseHandler&& handler)
@@ -105,7 +99,7 @@ Client::~Client() = default;
 
 // -------------------------------------------------------------------------------------------------
 
-Task<std::tuple<error_code, Session>> Client::connect()
+IoTask<Session> Client::connect()
 {
    try
    {

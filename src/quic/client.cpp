@@ -124,7 +124,7 @@ public:
                      const Fields& headers) override;
    Task<void> do_session(Buffer&& data) override;
    void destroy() noexcept override;
-   Task<std::tuple<error_code>> shutdown() override;
+   IoTask<> shutdown() override;
 
    //
    // Connect-time setup, with the application `factory` makes. Returns 0 on success.
@@ -304,7 +304,7 @@ Task<void> QuicClientSession::do_session(Buffer&&)
 
 void QuicClientSession::destroy() noexcept { close(); }
 
-Task<std::tuple<error_code>> QuicClientSession::shutdown()
+IoTask<> QuicClientSession::shutdown()
 {
    //
    // Nothing to wait for: CONNECTION_CLOSE is all there is to an orderly end, and no answer to it

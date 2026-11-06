@@ -156,6 +156,10 @@ something else, which :ref:`the table <io-runtimes-vocabulary>` has.
 
 .. doxygentypedef:: anyhttp::error_code
 
+.. doxygentypedef:: anyhttp::results
+
+.. doxygentypedef:: anyhttp::IoTask
+
 .. doxygentypedef:: anyhttp::system_error
 
 .. doxygentypedef:: anyhttp::DefaultCompletionToken

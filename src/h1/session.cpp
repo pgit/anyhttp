@@ -148,7 +148,7 @@ public:
    }
 
    /// Reads until something of the body has arrived in \p body_buffer, or the body has ended.
-   Task<std::tuple<error_code, size_t>> read_some(asio::mutable_buffer body_buffer) override
+   IoTask<size_t> read_some(asio::mutable_buffer body_buffer) override
    {
       assert(!reading);
 
@@ -314,7 +314,7 @@ public:
       launch(get_executor(), write(buffer, eof), std::move(handler));
    }
 
-   Task<std::tuple<error_code>> write(asio::const_buffer buffer, bool eof) override
+   IoTask<> write(asio::const_buffer buffer, bool eof) override
    {
       const bool empty = buffer.size() == 0;
 
@@ -459,7 +459,7 @@ public:
    // ----------------------------------------------------------------------------------------------
 
    /// Writes the header of the message, see submit_headers().
-   Task<std::tuple<error_code>> write_head()
+   IoTask<> write_head()
    {
       error_code ec;
       try
@@ -548,7 +548,7 @@ public:
       launch(super::get_executor(), submit(status_code, headers), std::move(handler));
    }
 
-   Task<std::tuple<error_code>> submit(unsigned int status_code, Fields headers) override
+   IoTask<> submit(unsigned int status_code, Fields headers) override
    {
       if (!session)
       {
@@ -687,7 +687,7 @@ public:
       launch(get_executor(), submit_head(headers), std::move(handler));
    }
 
-   Task<std::tuple<error_code>> submit_head(Fields headers)
+   IoTask<> submit_head(Fields headers)
    {
       if (!session)
       {
@@ -706,7 +706,7 @@ public:
       launch(get_executor(), get_response(), std::move(handler));
    }
 
-   Task<std::tuple<error_code, client::Response>> get_response() override
+   IoTask<client::Response> get_response() override
    {
       mlogd("async_get_response:");
 
@@ -1248,7 +1248,7 @@ Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-Task<std::tuple<error_code>> ClientSession<Stream>::shutdown()
+IoTask<> ClientSession<Stream>::shutdown()
 {
    if (std::exchange(shutting_down_, true))
       co_return std::tuple{error_code{}};
@@ -1301,8 +1301,8 @@ void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
 }
 
 template <typename Stream>
-Task<std::tuple<error_code, client::Request>>
-ClientSession<Stream>::submit(std::string method, boost::urls::url target, Fields headers)
+IoTask<client::Request> ClientSession<Stream>::submit(std::string method, boost::urls::url target,
+                                                      Fields headers)
 {
    //
    // Only one request can be incomplete at a time, see ClientSession. Instead of waiting for the

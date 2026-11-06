@@ -216,7 +216,7 @@ public:
    /// \c async_get_response() as a coroutine:
    /// <tt>auto [ec, response] = co_await request.get_response();</tt>
    /// \return The error and the response.
-   Task<std::tuple<error_code, Response>> get_response();
+   IoTask<Response> get_response();
 
 private:
 #if ANYHTTP_ASIO
@@ -285,7 +285,7 @@ public:
 
    /// \c async_connect() as a coroutine: <tt>auto [ec, session] = co_await client.connect();</tt>
    /// \return The error and the session.
-   Task<std::tuple<error_code, Session>> connect();
+   IoTask<Session> connect();
 
 private:
 #if ANYHTTP_ASIO

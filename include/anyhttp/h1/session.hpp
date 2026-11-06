@@ -247,10 +247,10 @@ public:
 
    void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
                      const Fields& headers) override;
-   Task<std::tuple<error_code, client::Request>> submit(std::string method, boost::urls::url url,
-                                                        Fields headers) override;
+   IoTask<client::Request> submit(std::string method, boost::urls::url url,
+                                  Fields headers) override;
    Task<void> do_session(Buffer&& data) override;
-   Task<std::tuple<error_code>> shutdown() override;
+   IoTask<> shutdown() override;
 
    // ----------------------------------------------------------------------------------------------
 

@@ -126,7 +126,7 @@ std::string Connection::log_prefix() const
    return impl_ ? impl_->session->log_prefix() : std::string{};
 }
 
-std::tuple<error_code, Stream> Connection::open_stream()
+results<Stream> Connection::open_stream()
 {
    if (!impl_)
       return {errors::bad_descriptor, Stream{}};
@@ -143,7 +143,7 @@ void Connection::async_accept_stream_any(AcceptStreamHandler&& handler)
    impl_->application.async_accept_stream(std::move(handler));
 }
 
-Task<std::tuple<error_code, Stream>> Connection::accept_stream()
+IoTask<Stream> Connection::accept_stream()
 {
    co_return co_await initiate<AcceptStream>([this](AcceptStreamHandler handler) { //
       async_accept_stream_any(std::move(handler));
@@ -162,8 +162,7 @@ void Connection::reset() noexcept { impl_.reset(); }
 // connect()
 // =================================================================================================
 
-Task<std::tuple<error_code, Connection>> connect(Executor executor, std::string host,
-                                                 std::string port, Config config)
+IoTask<Connection> connect(Executor executor, std::string host, std::string port, Config config)
 {
    if (config.alpn.empty() || config.alpn.size() > 255)
       co_return std::tuple{make_error_code(errc::invalid_argument), Connection{}};
