@@ -37,14 +37,14 @@ void Writer::content_length(std::optional<size_t> content_length)
    return impl_ ? impl_->content_length(content_length) : void{};
 }
 
-static Task<std::tuple<error_code>> no_writer() { co_return std::tuple{errors::bad_descriptor}; }
+static IoTask<> no_writer() { co_return std::tuple{errors::bad_descriptor}; }
 
-Task<std::tuple<error_code>> Writer::write(asio::const_buffer buffer)
+IoTask<> Writer::write(asio::const_buffer buffer)
 {
    return impl_ ? impl_->write(buffer, false) : no_writer();
 }
 
-Task<std::tuple<error_code>> Writer::write_eof(asio::const_buffer buffer)
+IoTask<> Writer::write_eof(asio::const_buffer buffer)
 {
    return impl_ ? impl_->write(buffer, true) : no_writer();
 }

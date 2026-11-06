@@ -76,9 +76,9 @@ static void test(bool with_nullptr)
 
 int main()
 {
-   std::cout << "--- GOOD -----------------" << std::endl;
+   std::cout << "--- GOOD -----------------\n";
    test(true);
-   std::cout << "--- BAD ------------------" << std::endl;
+   std::cout << "--- BAD ------------------\n";
    test(false);
-   std::cout << "--------------------------" << std::endl;
+   std::cout << "--------------------------\n";
 }

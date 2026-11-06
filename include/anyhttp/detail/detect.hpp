@@ -61,7 +61,7 @@ enum class Detected
  * \p buffer: the session that takes over the connection starts with what is in there.
  */
 template <typename Socket, typename DynamicBuffer>
-Task<std::tuple<error_code, Detected>> detect(Socket& socket, DynamicBuffer& buffer)
+IoTask<Detected> detect(Socket& socket, DynamicBuffer& buffer)
 {
    std::array<std::uint8_t, 1> first;
    auto [ec, n] = co_await io::peek(socket, asio::buffer(first));

@@ -63,7 +63,7 @@ Response::~Response() { reset(); }
 
 Response::Impl& Response::pimpl() const noexcept { return static_cast<Impl&>(Writer::pimpl()); }
 
-Task<std::tuple<error_code>> Response::submit(unsigned int status_code, Fields headers)
+IoTask<> Response::submit(unsigned int status_code, Fields headers)
 {
    return pimpl().submit(status_code, std::move(headers));
 }

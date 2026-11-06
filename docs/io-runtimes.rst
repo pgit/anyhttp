@@ -42,6 +42,12 @@ What the names stand for
    * - :cpp:type:`error_code`
      - ``boost::system::error_code``
      - ``std::error_code``
+   * - :cpp:type:`results\<Ts...\> <results>`
+     - ``std::tuple<error_code, Ts...>``
+     - ``capy::results<Ts...>``
+   * - :cpp:type:`IoTask\<Ts...\> <IoTask>`
+     - ``asio::awaitable<results<Ts...>>``
+     - ``capy::task<results<Ts...>>``
    * - :cpp:type:`TcpEndpoint`, :cpp:type:`UdpEndpoint`
      - ``asio::ip::tcp::endpoint``, ``asio::ip::udp::endpoint``
      - ``corosio::endpoint``
@@ -79,14 +85,15 @@ example, with the types of the library:
    auto async_read_some(asio::mutable_buffer buffer, CompletionToken&& token = CompletionToken());
 
    // ... and the coroutine around it.
-   Task<std::tuple<error_code, size_t>> read_some(asio::mutable_buffer buffer);
+   IoTask<size_t> read_some(asio::mutable_buffer buffer);
 
    // COROSIO: the coroutine.
-   Task<std::tuple<error_code, size_t>> read_some(asio::mutable_buffer buffer);
+   IoTask<size_t> read_some(asio::mutable_buffer buffer);
 
 The coroutine has the same declaration on both, so code that uses only coroutines builds with
-either, which is what the guide does. It yields a tuple with the error first, and reports what goes
-wrong instead of throwing it. Every operation has it: ``read_some``, ``write``, ``write_eof``,
+either, which is what the guide does. It yields :cpp:type:`results`, a tuple with the error first,
+and reports what goes wrong instead of throwing it; :cpp:type:`IoTask\<size_t\> <IoTask>` is short
+for ``Task<results<size_t>>``. Every operation has it: ``read_some``, ``write``, ``write_eof``,
 ``submit``, ``get_response``, ``connect``, ``get``, and the others. What it does not have is a
 completion token, so an ASIO build that wants one, for a callback, for ``cancel_after`` or to have
 errors thrown, uses the ``async_...`` shape, see :ref:`completion-tokens` in the guide.

@@ -131,13 +131,13 @@ public:
    /// Writes \p buffer as part of the body: <tt>auto [ec] = co_await writer.write(buffer);</tt>
    /// \param buffer What to write.
    /// \return The error.
-   Task<std::tuple<error_code>> write(asio::const_buffer buffer);
+   IoTask<> write(asio::const_buffer buffer);
 
    /// Writes \p buffer, if any, and ends the body: <tt>auto [ec] = co_await
    /// writer.write_eof();</tt>
    /// \param buffer What to write.
    /// \return The error.
-   Task<std::tuple<error_code>> write_eof(asio::const_buffer buffer = {});
+   IoTask<> write_eof(asio::const_buffer buffer = {});
 
 #if ANYHTTP_COROSIO
    /**
@@ -145,7 +145,7 @@ public:
     * this is what makes a Writer a \c capy::WriteStream. The body stays open, as with write().
     */
    template <capy::ConstBufferSequence Buffers>
-   Task<std::tuple<error_code, size_t>> write_some(Buffers buffers)
+   IoTask<size_t> write_some(Buffers buffers)
    {
       for (auto it = capy::buffer_sequence_begin(buffers); it != capy::buffer_sequence_end(buffers);
            ++it)

@@ -96,6 +96,11 @@ using UdpEndpoint = corosio::endpoint;
 
 using std::error_code;
 
+using capy::results;
+
+template <typename... Ts>
+using IoTask = Task<results<Ts...>>;
+
 // =================================================================================================
 
 /// Portable error conditions, see asio/runtime.hpp.
@@ -140,7 +145,7 @@ struct CompletionState
 {
    capy::continuation continuation;
    const capy::await_context* env = nullptr;
-   std::optional<std::tuple<error_code, Args...>> result;
+   std::optional<results<Args...>> result;
    std::optional<std::stop_callback<std::function<void()>>> on_stop;
    bool starting = false; // the operation is being started, see Initiation::await_suspend()
 
@@ -162,7 +167,7 @@ template <typename... Args>
 struct CompletionTraits<void(error_code, Args...)>
 {
    using State = CompletionState<Args...>;
-   using Result = std::tuple<error_code, Args...>;
+   using Result = results<Args...>;
 };
 
 } // namespace detail
@@ -186,7 +191,7 @@ public:
    using State = detail::CompletionState<Args...>;
 
    Completion() noexcept = default;
-   Completion(std::nullptr_t) noexcept {}
+   Completion(std::nullptr_t) noexcept {} // NOLINT(*-explicit-constructor)
    explicit Completion(State* state) noexcept : state_(state) {}
    Completion(Completion&& other) noexcept : state_(std::exchange(other.state_, nullptr)) {}
    Completion& operator=(Completion&& other) noexcept
@@ -302,22 +307,22 @@ public:
       return std::noop_coroutine();
    }
 
-   typename Traits::Result await_resume() { return std::move(*state_.result); }
+   Traits::Result await_resume() { return std::move(*state_.result); }
 
 private:
    template <typename... Args>
-   void canceled(std::type_identity<std::tuple<error_code, Args...>>)
+   void canceled(std::type_identity<results<Args...>>)
    {
       state_.result.emplace(errors::canceled, Args{}...);
    }
 
    Init init_;
-   typename Traits::State state_;
+   Traits::State state_;
 };
 
 } // namespace detail
 
-/// Starts an operation that completes a <tt>Completion<Signature></tt>, and waits for it.
+/// Starts an operation that completes a \c Completion, and waits for it.
 template <typename Signature, typename Init>
 auto initiate(Init&& init)
 {
@@ -336,8 +341,13 @@ inline void launch(const Executor& executor, Task<void> task, F&& on_done)
 {
    auto done = std::make_shared<std::decay_t<F>>(std::forward<F>(on_done));
    capy::run_async(
-      executor, [done]() noexcept { (*done)(std::exception_ptr{}); },
-      [done](std::exception_ptr ep) noexcept { (*done)(ep); })(std::move(task));
+      executor,
+      [done]() noexcept { //
+         (*done)(std::exception_ptr{});
+      },
+      [done](std::exception_ptr ep) noexcept { //
+         (*done)(ep);
+      })(std::move(task));
 }
 
 /**
@@ -345,7 +355,7 @@ inline void launch(const Executor& executor, Task<void> task, F&& on_done)
  * so cancelling the caller cancels the task.
  */
 template <typename... T>
-inline void launch(const Executor& executor, Task<std::tuple<error_code, T...>> task,
+inline void launch(const Executor& executor, IoTask<T...> task,
                    Completion<void(error_code, T...)>&& handler)
 {
    std::stop_token token;
@@ -355,11 +365,12 @@ inline void launch(const Executor& executor, Task<std::tuple<error_code, T...>> 
    auto shared = std::make_shared<Completion<void(error_code, T...)>>(std::move(handler));
    capy::run_async(
       executor, token,
-      [shared](std::tuple<error_code, T...> result) noexcept {
+      [shared](results<T...> result) noexcept { //
          std::apply(std::move(*shared), std::move(result));
       },
-      [shared](std::exception_ptr ep) noexcept { std::move (*shared)(code(ep), T{}...); })(
-      std::move(task));
+      [shared](std::exception_ptr ep) noexcept { //
+         std::move (*shared)(code(ep), T{}...);
+      })(std::move(task));
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -463,7 +474,7 @@ using value_t = std::conditional_t<std::is_void_v<T>, std::monostate, T>;
  * keeping its value. What it throws passes through.
  */
 template <typename T>
-capy::task<capy::results<>> as_io(Task<T> task, std::optional<value_t<T>>& result)
+capy::task<results<>> as_io(Task<T> task, std::optional<value_t<T>>& result)
 {
    if constexpr (std::is_void_v<T>)
    {
@@ -472,7 +483,7 @@ capy::task<capy::results<>> as_io(Task<T> task, std::optional<value_t<T>>& resul
    }
    else
       result.emplace(co_await std::move(task));
-   co_return capy::results<>{};
+   co_return results<>{};
 }
 } // namespace detail
 
@@ -537,8 +548,6 @@ public:
    void set() { event_.set(); }
    void clear() noexcept { event_.clear(); }
    bool is_set() const noexcept { return event_.is_set(); }
-
-   /// <tt>auto [ec] = co_await event.wait();</tt>
    auto wait() { return event_.wait(); }
 
 private:
@@ -615,7 +624,7 @@ auto write(Stream& stream, const ConstBufferSequence& buffers)
 /// Peeks at what has arrived on \p socket, without taking it. corosio has no flags for its
 /// receive operations, so this waits for readiness and peeks at the native socket.
 template <typename Socket>
-Task<std::tuple<error_code, size_t>> peek(Socket& socket, asio::mutable_buffer buffer)
+IoTask<size_t> peek(Socket& socket, asio::mutable_buffer buffer)
 {
    for (;;)
    {
@@ -636,7 +645,7 @@ Task<std::tuple<error_code, size_t>> peek(Socket& socket, asio::mutable_buffer b
 /// read_some(): corosio's datagram operations do not copy their buffer sequence, as its stream
 /// operations do, but point to it, so it has to outlive the operation.
 template <typename Socket>
-Task<std::tuple<error_code, size_t>> receive(Socket& socket, asio::mutable_buffer buffer)
+IoTask<size_t> receive(Socket& socket, asio::mutable_buffer buffer)
 {
    const capy::mutable_buffer buffers(buffer.data(), buffer.size());
    auto [ec, n] = co_await socket.recv(buffers);

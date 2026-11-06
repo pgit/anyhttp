@@ -15,7 +15,7 @@ namespace
 
 /// Reads \p reader to its end, or to the first error: what it had, and how it ended (success
 /// for a clean end).
-Task<std::tuple<error_code, std::string>> read_all(Reader& reader)
+IoTask<std::string> read_all(Reader& reader)
 {
    std::string body;
    std::array<char, 4096> buffer;

@@ -105,8 +105,7 @@ void set_buffer_sizes(TcpSocket& socket, int send, int receive)
       ::setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVBUF, &receive, sizeof(receive));
 }
 
-Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,
-                                                               std::string port)
+IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, std::string port)
 {
    corosio::resolver resolver(executor.context());
    auto [ec, results] =
@@ -118,8 +117,7 @@ Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor
    co_return std::tuple{ec, std::move(endpoints)};
 }
 
-Task<std::tuple<error_code, TcpEndpoint>> connect(TcpSocket& socket,
-                                                  std::vector<TcpEndpoint> endpoints)
+IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints)
 {
    error_code ec = make_error_code(errc::host_unreachable);
    for (const auto& endpoint : endpoints)

@@ -96,8 +96,8 @@ namespace
 // The implementation is held by shared_ptr: a Session released while the GET is still in flight
 // must not pull the ground out from under the operations still running on it.
 //
-Task<std::tuple<error_code, client::Message>> get_message(std::shared_ptr<Session::Impl> session,
-                                                          boost::urls::url url, Fields headers)
+IoTask<client::Message> get_message(std::shared_ptr<Session::Impl> session, boost::urls::url url,
+                                    Fields headers)
 {
    //
    // What an error leaves behind: an empty message that says status::unknown, rather than the 200
@@ -149,14 +149,14 @@ namespace
 {
 
 // The implementation is held by shared_ptr for the same reason as in get_message().
-Task<std::tuple<error_code>> shutdown_session(std::shared_ptr<Session::Impl> session)
+IoTask<> shutdown_session(std::shared_ptr<Session::Impl> session)
 {
    co_return co_await session->shutdown();
 }
 
 } // namespace
 
-Task<std::tuple<error_code>> Session::shutdown() { return shutdown_session(impl); }
+IoTask<> Session::shutdown() { return shutdown_session(impl); }
 
 #if ANYHTTP_ASIO
 void Session::async_shutdown_any(SessionShutdownHandler&& handler)
@@ -165,19 +165,18 @@ void Session::async_shutdown_any(SessionShutdownHandler&& handler)
 }
 #endif
 
-Task<std::tuple<error_code, client::Request>> Session::submit(boost::urls::url target,
-                                                              Fields headers)
+IoTask<client::Request> Session::submit(boost::urls::url target, Fields headers)
 {
    return impl->submit("POST", std::move(target), std::move(headers));
 }
 
-Task<std::tuple<error_code, client::Request>>
-Session::submit(std::string_view method, boost::urls::url target, Fields headers)
+IoTask<client::Request> Session::submit(std::string_view method, boost::urls::url target,
+                                        Fields headers)
 {
    return impl->submit(std::string(method), std::move(target), framed(method, std::move(headers)));
 }
 
-Task<std::tuple<error_code, client::Message>> Session::get(boost::urls::url url, Fields headers)
+IoTask<client::Message> Session::get(boost::urls::url url, Fields headers)
 {
 #if ANYHTTP_COROSIO
    //

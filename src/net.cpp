@@ -7,14 +7,11 @@
 
 #include <sys/socket.h>
 
-namespace anyhttp
-{
-
 // =================================================================================================
 // UDP, the same in both runtimes, see anyhttp/net.hpp.
 // =================================================================================================
 
-namespace io
+namespace anyhttp::io
 {
 
 error_code bind(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept
@@ -59,8 +56,4 @@ error_code send(UdpSocket& socket, asio::const_buffer buffer) noexcept
    return {};
 }
 
-} // namespace io
-
-// =================================================================================================
-
-} // namespace anyhttp
+} // namespace anyhttp::io

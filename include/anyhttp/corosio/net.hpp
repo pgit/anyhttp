@@ -263,11 +263,9 @@ std::pair<int, int> buffer_sizes(TcpSocket& socket);
 
 void set_buffer_sizes(TcpSocket& socket, int send, int receive);
 
-Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,
-                                                               std::string port);
+IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, std::string port);
 
-Task<std::tuple<error_code, TcpEndpoint>> connect(TcpSocket& socket,
-                                                  std::vector<TcpEndpoint> endpoints);
+IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints);
 
 inline TlsStream make_tls_stream(TcpSocket&& socket, TlsContext& context)
 {
@@ -320,7 +318,7 @@ public:
 
    void notify() { waker_.wake(); }
 
-   Task<std::tuple<error_code>> wait()
+   IoTask<> wait()
    {
       auto [ec] = co_await waker_.wait();
       co_return std::tuple{ec};

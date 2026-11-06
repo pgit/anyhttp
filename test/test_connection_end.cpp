@@ -329,7 +329,7 @@ protected:
     * an ASIO socket read once more after its end (see above), must fail a test, not hang it.
     */
    template <typename S>
-   Task<std::tuple<error_code, size_t>> read_some(S& stream, asio::mutable_buffer buffer)
+   IoTask<size_t> read_some(S& stream, asio::mutable_buffer buffer)
    {
       Timer timer(context.get_executor());
       timer.arm(timeout, [&stream] { io::cancel(stream); });

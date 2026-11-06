@@ -81,7 +81,7 @@ static void setup_logging()
  * <tt>auto request = check(co_await session.submit(url));</tt>
  */
 template <typename... T>
-auto check(std::tuple<error_code, T...>&& result)
+auto check(results<T...>&& result)
 {
    if (auto& ec = std::get<0>(result))
       throw_error(ec);

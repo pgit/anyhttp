@@ -49,7 +49,7 @@ public:
    // handler (HTTP/2, HTTP/3) makes the coroutine cheap, through initiate(). Doing the I/O in a
    // coroutine (HTTP/1.1) makes the handler shape cost a spawn, through launch().
    //
-   virtual Task<std::tuple<error_code, size_t>> read_some(asio::mutable_buffer buffer)
+   virtual IoTask<size_t> read_some(asio::mutable_buffer buffer)
    {
       co_return co_await initiate<ReadSome>([this, buffer](ReadSomeHandler handler) { //
          async_read_some(buffer, std::move(handler));

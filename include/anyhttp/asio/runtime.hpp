@@ -71,6 +71,9 @@ namespace anyhttp
 {
 namespace asio = boost::asio;
 
+// The reference declares the types from here to errc in docs/reference.rst, with what each is on
+// both runtimes: from here, Breathe would show the ASIO one only.
+
 /// A coroutine, as the runtime runs it.
 template <typename T = void>
 using Task = asio::awaitable<T>;
@@ -90,6 +93,22 @@ using UdpEndpoint = asio::ip::udp::endpoint;
 /// What every operation reports its outcome with.
 using error_code = boost::system::error_code;
 
+/**
+ * What an operation yields: its error first, then what it has to report besides, which
+ * `auto [ec, n] = co_await reader.read_some(buffer);` takes apart. Whether that is meaningful
+ * when there is an error is up to the operation. Capy's `capy::results` with the runtime's
+ * #error_code, so that on COROSIO the two are the same type.
+ */
+template <typename... Ts>
+using results = std::tuple<error_code, Ts...>;
+
+/**
+ * An operation, as the coroutine that yields its #results: `IoTask<size_t>` is
+ * `Task<results<size_t>>`, `IoTask<>` one that reports only its error.
+ */
+template <typename... Ts>
+using IoTask = Task<results<Ts...>>;
+
 // =================================================================================================
 
 /**
@@ -107,27 +126,43 @@ namespace errc = boost::system::errc;
 namespace errors
 {
 /// The end of an incoming body.
+/// \runtimes{asio::error::eof,capy::error::eof}
+/// \hideinitializer
 inline const error_code eof = asio::error::eof;
 
 /// An incoming body that ended before it was complete: a reset stream, a lost connection.
+/// \runtimes{beast::http::error::partial_message,capy::error::stream_truncated}
+/// \hideinitializer
 inline const error_code partial_message = boost::beast::http::error::partial_message;
 
 /// An operation that was cancelled before it completed.
+/// \runtimes{errc::operation_canceled,capy::error::canceled}
+/// \hideinitializer
 inline const error_code canceled = make_error_code(errc::operation_canceled);
 
 /// HTTP/1.1: a request or response that has to wait for an earlier one, see Session.
+/// \runtimes{asio::error::would_block,errc::operation_would_block}
+/// \hideinitializer
 inline const error_code would_block = asio::error::would_block;
 
 /// A connection that can not carry any more requests or responses.
+/// \runtimes{asio::error::connection_aborted,errc::connection_aborted}
+/// \hideinitializer
 inline const error_code connection_aborted = asio::error::connection_aborted;
 
 /// An operation on a Reader or Writer after its implementation has been released.
+/// \runtimes{asio::error::bad_descriptor,errc::bad_file_descriptor}
+/// \hideinitializer
 inline const error_code bad_descriptor = asio::error::bad_descriptor;
 
 /// An operation that may be in progress only once at a time.
+/// \runtimes{asio::error::already_started,errc::connection_already_in_progress}
+/// \hideinitializer
 inline const error_code already_started = asio::error::already_started;
 
 /// A header section larger than Config::max_header_size.
+/// \runtimes{beast::http::error::header_limit,beast::http::error::header_limit}
+/// \hideinitializer
 inline const error_code header_limit = boost::beast::http::error::header_limit;
 } // namespace errors
 
@@ -141,10 +176,7 @@ using system_error = boost::system::system_error;
 
 /// Throws \p ec, for code that reports errors as exceptions, as the runtime's own does.
 /// \param ec The error.
-[[noreturn]] inline void throw_error(const error_code& ec)
-{
-   throw boost::system::system_error(ec);
-}
+[[noreturn]] inline void throw_error(const error_code& ec) { throw system_error(ec); }
 
 /// \cond internal
 /// What `errno` holds, for code that calls the operating system itself.
@@ -280,7 +312,7 @@ inline void launch(const Executor& executor, Task<void> task, F&& on_done)
  * other runtime has no tokens, and returns such a task's result directly.
  */
 template <typename... T>
-inline void launch(const Executor& executor, Task<std::tuple<error_code, T...>> task,
+inline void launch(const Executor& executor, IoTask<T...> task,
                    Completion<void(error_code, T...)>&& handler)
 {
    auto slot = asio::get_associated_cancellation_slot(handler);
@@ -292,15 +324,14 @@ inline void launch(const Executor& executor, Task<std::tuple<error_code, T...>> 
    //
    asio::co_spawn(executor, std::move(task),
                   asio::bind_cancellation_slot(
-                     slot, asio::bind_executor(
-                              handler_executor, [handler = std::move(handler)](
-                                                   const std::exception_ptr& ep,
-                                                   std::tuple<error_code, T...> result) mutable {
-                                 if (ep)
-                                    std::move(handler)(code(ep), T{}...);
-                                 else
-                                    std::apply(std::move(handler), std::move(result));
-                              })));
+                     slot, asio::bind_executor(handler_executor, [handler = std::move(handler)](
+                                                                    const std::exception_ptr& ep,
+                                                                    results<T...> result) mutable {
+                        if (ep)
+                           std::move(handler)(code(ep), T{}...);
+                        else
+                           std::apply(std::move(handler), std::move(result));
+                     })));
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -437,7 +468,7 @@ public:
     * Waits for the event to be set: <tt>auto [ec] = co_await event.wait();</tt>. The wait can be
     * cancelled, and then completes with \c errors::canceled.
     */
-   Task<std::tuple<error_code>> wait()
+   IoTask<> wait()
    {
       if (set_)
          co_return error_code{};

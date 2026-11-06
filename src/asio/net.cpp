@@ -149,8 +149,7 @@ void set_buffer_sizes(TcpSocket& socket, int send, int receive)
       socket.set_option(asio::socket_base::receive_buffer_size(receive), ec);
 }
 
-Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor, std::string host,
-                                                               std::string port)
+IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, std::string port)
 {
    asio::ip::tcp::resolver resolver(executor);
    auto [ec, results] = co_await resolver.async_resolve(
@@ -162,8 +161,7 @@ Task<std::tuple<error_code, std::vector<TcpEndpoint>>> resolve(Executor executor
    co_return std::tuple{ec, std::move(endpoints)};
 }
 
-Task<std::tuple<error_code, TcpEndpoint>> connect(TcpSocket& socket,
-                                                  std::vector<TcpEndpoint> endpoints)
+IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints)
 {
    co_return co_await asio::async_connect(socket, endpoints, asio::as_tuple);
 }

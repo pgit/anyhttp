@@ -134,7 +134,7 @@ public:
    /// Reads a part of the incoming body: <tt>auto [ec, n] = co_await reader.read_some(buffer);</tt>
    /// \param buffer Where to put what has been read.
    /// \return The error, and how many bytes have been read.
-   Task<std::tuple<error_code, size_t>> read_some(asio::mutable_buffer buffer);
+   IoTask<size_t> read_some(asio::mutable_buffer buffer);
 
    /// \overload
    ///
@@ -145,7 +145,7 @@ public:
    template <typename Buffers>
       requires(asio::is_mutable_buffer_sequence<Buffers>::value &&
                !std::convertible_to<const Buffers&, asio::mutable_buffer>)
-   Task<std::tuple<error_code, size_t>> read_some(const Buffers& buffers)
+   IoTask<size_t> read_some(const Buffers& buffers)
    {
       for (auto& buffer : buffers)
          if (buffer.size() > 0)
@@ -158,7 +158,7 @@ public:
    ///
    /// For capy's buffer sequences, which is what makes a Reader a \c capy::ReadStream.
    template <capy::MutableBufferSequence Buffers>
-   Task<std::tuple<error_code, size_t>> read_some(Buffers buffers)
+   IoTask<size_t> read_some(Buffers buffers)
    {
       for (auto it = capy::buffer_sequence_begin(buffers); it != capy::buffer_sequence_end(buffers);
            ++it)

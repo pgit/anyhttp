@@ -253,7 +253,7 @@ public:
    ClientSession(client::Client::Impl& parent, Executor executor, Stream&& stream);
 
    Task<void> do_session(Buffer&& data) override;
-   Task<std::tuple<error_code>> shutdown() override;
+   IoTask<> shutdown() override;
 
    void on_alt_svc(std::string_view field_value) override { client().on_alt_svc(field_value); }
 };

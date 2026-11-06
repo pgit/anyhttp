@@ -238,8 +238,7 @@ public:
    /// \param target The URL of the request.
    /// \param headers The header fields of the request.
    /// \return The error and the request.
-   Task<std::tuple<error_code, client::Request>> submit(boost::urls::url target,
-                                                        Fields headers = {});
+   IoTask<client::Request> submit(boost::urls::url target, Fields headers = {});
 
    /// \c async_submit() with a method, as a coroutine:
    /// <tt>auto [ec, request] = co_await session.submit("GET", url, headers);</tt>
@@ -247,18 +246,18 @@ public:
    /// \param target The URL of the request.
    /// \param headers The header fields of the request.
    /// \return The error and the request.
-   Task<std::tuple<error_code, client::Request>>
-   submit(std::string_view method, boost::urls::url target, Fields headers = {});
+   IoTask<client::Request> submit(std::string_view method, boost::urls::url target,
+                                  Fields headers = {});
 
    /// \c async_get() as a coroutine: <tt>auto [ec, message] = co_await session.get(url);</tt>
    /// \param url The URL of the request.
    /// \param headers The header fields of the request.
    /// \return The error and the whole response.
-   Task<std::tuple<error_code, client::Message>> get(boost::urls::url url, Fields headers = {});
+   IoTask<client::Message> get(boost::urls::url url, Fields headers = {});
 
    /// \c async_shutdown() as a coroutine: <tt>auto [ec] = co_await session.shutdown();</tt>
    /// \return The error.
-   Task<std::tuple<error_code>> shutdown();
+   IoTask<> shutdown();
 
    /**
     * The protocol this session speaks, which over TLS the server has a say in: see

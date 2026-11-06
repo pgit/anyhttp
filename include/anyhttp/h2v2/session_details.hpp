@@ -369,7 +369,7 @@ Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-Task<std::tuple<error_code>> ClientSession<Stream>::shutdown()
+IoTask<> ClientSession<Stream>::shutdown()
 {
    if (std::exchange(this->shutdown_started_, true) || this->session_done_.is_set())
       co_return std::tuple{error_code{}};

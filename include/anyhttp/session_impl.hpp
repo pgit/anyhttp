@@ -23,15 +23,14 @@ public:
                              const Fields& headers) = 0;
 
    /// async_submit() as a coroutine, see Reader::Impl::read_some().
-   virtual Task<std::tuple<error_code, client::Request>>
-   submit(std::string method, boost::urls::url url, Fields headers)
+   virtual IoTask<client::Request> submit(std::string method, boost::urls::url url, Fields headers)
    {
       co_return co_await initiate<Submit>([&](SubmitHandler handler) {
          async_submit(std::move(handler), method, std::move(url), headers);
       });
    }
    /// See Session::async_shutdown(). Only a client's session has that, a server's ends by itself.
-   virtual Task<std::tuple<error_code>> shutdown()
+   virtual IoTask<> shutdown()
    {
       co_return std::tuple{make_error_code(errc::operation_not_supported)};
    }
