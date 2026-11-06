@@ -40,10 +40,9 @@
 #include <cstddef>
 #include <thread>
 
-namespace asio = boost::asio;
-using namespace asio;
-using namespace asio::experimental::awaitable_operators;
-using ip::tcp;
+using namespace boost::asio;
+using namespace boost::asio::experimental::awaitable_operators;
+using boost::asio::ip::tcp;
 
 /// The context the tests run their servers and clients on.
 using IoContext = boost::asio::io_context;

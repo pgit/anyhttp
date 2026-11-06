@@ -26,7 +26,7 @@
 using namespace testing;
 
 namespace http = boost::beast::http;
-namespace h1 = anyhttp::beast_impl::h1;
+namespace h1 = anyhttp::h1;
 
 // =================================================================================================
 
@@ -218,7 +218,7 @@ protected:
          std::array<uint8_t, 16 * 1024> data;
          while (!h2_.closed.contains(id))
          {
-            auto [ec, n] = co_await read_some(stream, asio::buffer(data));
+            auto [ec, n] = co_await read_some(stream, boost::asio::buffer(data));
             if (ec)
                throw_error(ec);
             h2_.input({data.data(), n});
@@ -258,7 +258,7 @@ protected:
       auto out = h2_.output();
       if (out.empty())
          co_return error_code{};
-      auto [ec, n] = co_await io::write(stream, asio::buffer(out));
+      auto [ec, n] = co_await io::write(stream, boost::asio::buffer(out));
       co_return ec;
    }
 
@@ -274,7 +274,7 @@ protected:
       std::array<uint8_t, 16 * 1024> data;
       for (;;)
       {
-         auto [ec, n] = co_await read_some(stream, asio::buffer(data));
+         auto [ec, n] = co_await read_some(stream, boost::asio::buffer(data));
          if (ec)
             co_return ec;
          if (h2())
@@ -318,7 +318,7 @@ protected:
 #if ANYHTTP_COROSIO
       auto [ec] = co_await stream.tls().shutdown();
 #else
-      auto [ec] = co_await stream.async_shutdown(asio::as_tuple);
+      auto [ec] = co_await stream.async_shutdown(boost::asio::as_tuple);
 #endif
       timer.cancel();
       co_return ec;
@@ -329,7 +329,7 @@ protected:
     * an ASIO socket read once more after its end (see above), must fail a test, not hang it.
     */
    template <typename S>
-   IoTask<size_t> read_some(S& stream, asio::mutable_buffer buffer)
+   IoTask<size_t> read_some(S& stream, boost::asio::mutable_buffer buffer)
    {
       Timer timer(context.get_executor());
       timer.arm(timeout, [&stream] { io::cancel(stream); });
@@ -350,7 +350,7 @@ protected:
       std::array<char, 1024> data;
       for (;;)
       {
-         auto [ec, n] = co_await read_some(socket_of(stream), asio::buffer(data));
+         auto [ec, n] = co_await read_some(socket_of(stream), boost::asio::buffer(data));
          if (ec)
             co_return ec;
          ADD_FAILURE() << std::format("{} bytes after the end of the stream", n);
@@ -428,7 +428,7 @@ protected:
       const std::string late(1000, 'x');
       for (int i = 0; i < 2; ++i)
       {
-         auto [ec, n] = co_await io::write(socket, asio::buffer(late));
+         auto [ec, n] = co_await io::write(socket, boost::asio::buffer(late));
          EXPECT_FALSE(ec) << std::format("write #{}: {}", i + 1, ec.message());
          co_await delay(100ms);
       }
@@ -475,7 +475,7 @@ protected:
 #if ANYHTTP_COROSIO
       stream.tls().set_hostname("127.0.0.2");
 #else
-      stream.set_verify_callback(asio::ssl::host_name_verification("127.0.0.2"));
+      stream.set_verify_callback(boost::asio::ssl::host_name_verification("127.0.0.2"));
 #endif
       check(co_await io::handshake(stream, Role::client));
       EXPECT_EQ(io::alpn(stream), h2() ? "h2" : "http/1.1");
@@ -485,11 +485,10 @@ protected:
 #if ANYHTTP_COROSIO
    static TlsContext make_context(Protocol protocol)
    {
-      namespace corosio = boost::corosio;
-      corosio::tls_context context;
-      throw_on_error(context.set_min_protocol_version(corosio::tls_version::tls_1_3));
+      boost::corosio::tls_context context;
+      throw_on_error(context.set_min_protocol_version(boost::corosio::tls_version::tls_1_3));
       throw_on_error(context.load_verify_file("pki/out/root.pem"));
-      throw_on_error(context.set_verify_mode(corosio::tls_verify_mode::peer));
+      throw_on_error(context.set_verify_mode(boost::corosio::tls_verify_mode::peer));
       throw_on_error(context.set_alpn({protocol == Protocol::h2 ? "h2" : "http/1.1"}));
       return context;
    }
@@ -502,9 +501,9 @@ protected:
 #else
    static TlsContext make_context(Protocol protocol)
    {
-      asio::ssl::context context{asio::ssl::context::tlsv13};
+      boost::asio::ssl::context context{boost::asio::ssl::context::tlsv13};
       context.load_verify_file("pki/out/root.pem");
-      context.set_verify_mode(asio::ssl::verify_peer);
+      context.set_verify_mode(boost::asio::ssl::verify_peer);
       const std::string_view alpn = protocol == Protocol::h2 ? "\x02h2" : "\x08http/1.1";
       EXPECT_EQ(SSL_CTX_set_alpn_protos(context.native_handle(),
                                         reinterpret_cast<const unsigned char*>(alpn.data()),

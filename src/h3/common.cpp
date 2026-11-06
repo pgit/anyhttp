@@ -7,7 +7,7 @@
 
 #include <spdlog/spdlog.h>
 
-namespace anyhttp::http3
+namespace anyhttp::h3
 {
 
 // =================================================================================================
@@ -40,4 +40,4 @@ void log_headers(std::string_view log_prefix,
 
 // =================================================================================================
 
-} // namespace anyhttp::http3
+} // namespace anyhttp::h3

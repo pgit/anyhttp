@@ -91,7 +91,7 @@ template <ByteRange Range>
 Task<void> send(Writer& request, Range range)
 {
    logd("send: (contiguous range)...");
-   if (auto [ec] = co_await request.write(asio::buffer(range.data(), range.size())); ec)
+   if (auto [ec] = co_await request.write(boost::asio::buffer(range.data(), range.size())); ec)
       throw_error(ec);
    logd("send: (contiguous range)... done");
 }
@@ -113,7 +113,7 @@ Task<void> send(Writer& request, Range range)
       for (; it != last && out != buffer.end(); ++it, ++out)
          *out = *it;
       const auto n = static_cast<size_t>(out - buffer.begin());
-      if (auto [ec] = co_await request.write(asio::buffer(buffer.data(), n)); ec)
+      if (auto [ec] = co_await request.write(boost::asio::buffer(buffer.data(), n)); ec)
       {
          if (ec == errc::operation_canceled)
             logd("[{}] send: (range) {} after {} bytes", request.log_prefix(), ec.message(), bytes);

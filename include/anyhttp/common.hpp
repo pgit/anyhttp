@@ -149,7 +149,7 @@ using StatusHandler = Completion<Status>;
 
 #if ANYHTTP_ASIO
 /// What an operation of a runtime that has completion tokens takes when it is given none.
-using DefaultCompletionToken = asio::default_completion_token_t<Executor>;
+using DefaultCompletionToken = boost::asio::default_completion_token_t<Executor>;
 #endif
 
 // =================================================================================================
@@ -196,8 +196,7 @@ Defer<F, T...> defer(F&& f, T&&... t)
    return Defer<F, T...>(std::forward<F>(f), std::forward<T>(t)...);
 }
 
-/// \p address, or the IPv4 address an IPv4-mapped IPv6 one maps. Defined by each runtime.
-IpAddress normalize(IpAddress address);
+/// \p endpoint, with its address normalized, see the runtime's normalize(IpAddress).
 TcpEndpoint normalize(const TcpEndpoint& endpoint);
 
 /// Which end of a connection a session is, for the colour of its log prefix.

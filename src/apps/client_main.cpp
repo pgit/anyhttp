@@ -24,7 +24,7 @@ using namespace boost::asio::experimental::awaitable_operators;
 static awaitable<void> send(Request& request, std::string_view hello)
 {
    logd("send: sending string of {} bytes...", hello.size());
-   co_await request.async_write_eof(asio::buffer(hello));
+   co_await request.async_write_eof(boost::asio::buffer(hello));
    logd("send: sending string of {} bytes... done", hello.size());
 }
 

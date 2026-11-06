@@ -11,7 +11,7 @@
 
 #include <format> // IWYU pragma: keep
 
-namespace anyhttp::http3
+namespace anyhttp::h3
 {
 
 // =================================================================================================
@@ -401,4 +401,4 @@ int Http3Application::h3_cb_reset_stream(nghttp3_conn*, int64_t stream_id, uint6
 
 // =================================================================================================
 
-} // namespace anyhttp::http3
+} // namespace anyhttp::h3

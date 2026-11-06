@@ -1,7 +1,7 @@
 #pragma once
 
 //
-// The fixtures of test_fixtures.hpp for the COROSIO runtime, on a corosio::io_context.
+// The fixtures of test_fixtures.hpp for the COROSIO runtime, on a boost::corosio::io_context.
 // test_fixtures_asio.hpp has the same names and members, in the same order. MULTITHREADED (defined
 // here, or on the compiler's command line) runs the tests on several threads, with a strand per
 // connection.

@@ -33,7 +33,7 @@ namespace http = boost::beast::http;
 
 // =================================================================================================
 
-namespace anyhttp::nghttp2
+namespace anyhttp::h2v2
 {
 
 //
@@ -718,16 +718,24 @@ void NGHttp2Session::handle_expiry()
 }
 
 // =================================================================================================
-// Factories, see anyhttp/h2/backend.hpp. Instantiating the session templates is kept to this
-// translation unit, so that the generic server and client never see an nghttp2 type.
+
+} // namespace anyhttp::h2v2
+
 // =================================================================================================
+// Factories, see anyhttp/h2/backend.hpp. They are declared in the version-neutral anyhttp::h2, so
+// that the generic server and client cannot tell the two backends apart. Instantiating the session
+// templates is kept to this translation unit, so that they never see an nghttp2 type either.
+// =================================================================================================
+
+namespace anyhttp::h2
+{
 
 template <SocketStream Stream>
 std::shared_ptr<Session::Impl> make_server_session(server::Server::Impl& server, Executor executor,
                                                    Stream&& stream, std::optional<Upgrade> upgrade)
 {
    auto session =
-      std::make_shared<ServerSession<Stream>>(server, std::move(executor), std::move(stream));
+      std::make_shared<h2v2::ServerSession<Stream>>(server, std::move(executor), std::move(stream));
    session->upgrade_ = std::move(upgrade);
    return session;
 }
@@ -736,7 +744,8 @@ template <SocketStream Stream>
 std::shared_ptr<Session::Impl> make_client_session(client::Client::Impl& client, Executor executor,
                                                    Stream&& stream)
 {
-   return std::make_shared<ClientSession<Stream>>(client, std::move(executor), std::move(stream));
+   return std::make_shared<h2v2::ClientSession<Stream>>(client, std::move(executor),
+                                                        std::move(stream));
 }
 
 #define ANYHTTP_H2_SERVER(Stream)                                                                  \
@@ -752,4 +761,4 @@ ANYHTTP_CLIENT_STREAMS(ANYHTTP_H2_CLIENT)
 
 // =================================================================================================
 
-} // namespace anyhttp::nghttp2
+} // namespace anyhttp::h2

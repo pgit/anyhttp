@@ -65,8 +65,8 @@ Server::Impl::Impl(Executor executor, Config config)
    // listen_tcp(): with port=0 the actual port is only known once the acceptor is bound.
    //
    auto tcp_ep = io::local_endpoint(acceptor_);
-   quic_ = make_quic_server(*this, UdpEndpoint{tcp_ep.address(), tcp_ep.port()});
-   quic_->add_application("h3", make_http3_application(*this));
+   quic_ = quic::make_quic_server(*this, UdpEndpoint{tcp_ep.address(), tcp_ep.port()});
+   quic_->add_application("h3", h3::make_http3_application(*this));
 
    //
    // Advertise that endpoint to HTTP/1.1 and HTTP/2 clients, see Config::alt_svc_max_age. The
@@ -246,16 +246,16 @@ Task<void> Server::Impl::handle_connection(Executor executor, TcpSocket socket)
       // buy nothing: HTTP/1.1 is what a connection without a negotiated protocol speaks anyway.
       //
       if (alpn == "h2")
-         session = nghttp2::make_server_session(*this, executor, std::move(tls));
+         session = h2::make_server_session(*this, executor, std::move(tls));
       else
-         session = beast_impl::make_server_session(*this, executor, std::move(tls));
+         session = h1::make_server_session(*this, executor, std::move(tls));
    }
 
    else if (detected == detail::Detected::h2c)
    {
       logi("[{}] new connection, h2c (prior knowledge, {} bytes buffered)", prefix, buffer.size());
       session =
-         nghttp2::make_server_session(*this, executor, make_plain_server_stream(std::move(socket)));
+         h2::make_server_session(*this, executor, make_plain_server_stream(std::move(socket)));
    }
 
    //
@@ -264,8 +264,8 @@ Task<void> Server::Impl::handle_connection(Executor executor, TcpSocket socket)
    else
    {
       logi("[{}] new connection, h1 (no HTTP/2 client preface)", prefix);
-      session = beast_impl::make_server_session(*this, executor,
-                                                make_plain_server_stream(std::move(socket)));
+      session =
+         h1::make_server_session(*this, executor, make_plain_server_stream(std::move(socket)));
    }
 
    //

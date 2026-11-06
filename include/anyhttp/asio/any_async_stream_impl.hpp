@@ -13,7 +13,7 @@
 
 #include <utility>
 
-namespace anyhttp
+namespace anyhttp::inline asio
 {
 
 // =================================================================================================
@@ -38,7 +38,7 @@ public:
    virtual void async_shutdown_impl(ShutdownHandler handler)
    {
 #if 1
-      asio::async_immediate(get_executor(), [handler = std::move(handler)]() mutable {
+      boost::asio::async_immediate(get_executor(), [handler = std::move(handler)]() mutable {
          std::move(handler)(boost::system::error_code());
       });
 #else
@@ -106,9 +106,9 @@ any_async_stream make_any_async_stream(Stream&& stream)
    return any_async_stream(std::make_unique<any_async_stream_impl<Stream>>(std::move(stream)));
 }
 
-extern template class any_async_stream_impl<ip::tcp::socket>;
+extern template class any_async_stream_impl<boost::asio::ip::tcp::socket>;
 extern template class any_async_stream_impl<SslStream>;
 
 // =================================================================================================
 
-} // namespace anyhttp
+} // namespace anyhttp::inline asio

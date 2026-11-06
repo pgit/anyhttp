@@ -42,12 +42,12 @@ using namespace boost::asio;
 namespace beast = boost::beast;
 namespace http = beast::http;
 
-namespace anyhttp::beast_impl
+namespace anyhttp::h1
 {
 
 // =================================================================================================
 
-using namespace asio;
+using namespace boost::asio;
 using namespace boost::beast;
 
 /**
@@ -142,13 +142,13 @@ public:
    // The I/O is done in a coroutine, see Reader::Impl::read_some(). As a task of its own, it is
    // what the caller's cancellation reaches.
    //
-   void async_read_some(asio::mutable_buffer body_buffer, ReadSomeHandler&& handler) override
+   void async_read_some(boost::asio::mutable_buffer body_buffer, ReadSomeHandler&& handler) override
    {
       launch(get_executor(), read_some(body_buffer), std::move(handler));
    }
 
    /// Reads until something of the body has arrived in \p body_buffer, or the body has ended.
-   IoTask<size_t> read_some(asio::mutable_buffer body_buffer) override
+   IoTask<size_t> read_some(boost::asio::mutable_buffer body_buffer) override
    {
       assert(!reading);
 
@@ -309,12 +309,12 @@ public:
    }
 
    /// The I/O is done in a coroutine, see Reader::Impl::read_some() and BeastReader.
-   void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) override
+   void async_write(WriteHandler&& handler, boost::asio::const_buffer buffer, bool eof) override
    {
       launch(get_executor(), write(buffer, eof), std::move(handler));
    }
 
-   IoTask<> write(asio::const_buffer buffer, bool eof) override
+   IoTask<> write(boost::asio::const_buffer buffer, bool eof) override
    {
       const bool empty = buffer.size() == 0;
 
@@ -928,9 +928,9 @@ void ServerSession<Stream>::destroy() noexcept
  * be read in HTTP/1.1 first, before switching protocols. Cleartext only, as h2 over TLS is
  * negotiated by ALPN instead.
  */
-static std::optional<nghttp2::Upgrade> h2c_upgrade(std::string_view log_prefix,
-                                                   const http::request<http::buffer_body>& request,
-                                                   const boost::urls::url& url, bool complete)
+static std::optional<h2::Upgrade> h2c_upgrade(std::string_view log_prefix,
+                                              const http::request<http::buffer_body>& request,
+                                              const boost::urls::url& url, bool complete)
 {
    //
    // nghttp2 version 2 dropped the h2c upgrade along with RFC 7540 -- there is no counterpart of
@@ -977,7 +977,7 @@ static std::optional<nghttp2::Upgrade> h2c_upgrade(std::string_view log_prefix,
    std::ranges::replace(encoded, '-', '+');
    std::ranges::replace(encoded, '_', '/');
 
-   nghttp2::Upgrade upgrade;
+   h2::Upgrade upgrade;
    upgrade.settings.resize(beast::detail::base64::decoded_size(encoded.size()));
    auto [written, read] =
       beast::detail::base64::decode(upgrade.settings.data(), encoded.data(), encoded.size());
@@ -1131,8 +1131,8 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          mlogi("upgrading to h2c, {} bytes in buffer", buffer_.size());
          // Stream is whatever this session runs on, but never a TLS one: h2c_upgrade() takes
          // cleartext requests only, as h2 over TLS is negotiated by ALPN instead.
-         upgraded_ = nghttp2::make_server_session(server(), super::get_executor(),
-                                                  std::move(stream_), std::move(*upgrade));
+         upgraded_ = h2::make_server_session(server(), super::get_executor(), std::move(stream_),
+                                             std::move(*upgrade));
          co_await upgraded_->do_session(std::move(buffer_));
          mlogi("h2c session done, served {} requests before upgrade", requestCounter - 1);
          co_return;
@@ -1438,4 +1438,4 @@ ANYHTTP_CLIENT_STREAMS(ANYHTTP_H1_CLIENT)
 
 // =================================================================================================
 
-} // namespace anyhttp::beast_impl
+} // namespace anyhttp::h1

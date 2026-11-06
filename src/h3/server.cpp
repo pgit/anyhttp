@@ -3,11 +3,11 @@
 //
 // Nearly everything that makes HTTP/3 work is shared with the client and lives in
 // anyhttp/h3/application.hpp and anyhttp/h3/stream.hpp, and everything about QUIC itself in
-// src/quic/: `Http3ServerApplication` is the `http3::Http3Application` the QUIC server runs for
-// connections that negotiate "h3", and `Http3ServerStream` is an `http3::Http3Stream` that reads a
+// src/quic/: `Http3ServerApplication` is the `h3::Http3Application` the QUIC server runs for
+// connections that negotiate "h3", and `Http3ServerStream` is an `h3::Http3Stream` that reads a
 // request and writes a response, where the client's does the opposite. Per-request state feeds an
 // `Http3Reader` (server::Request) and `Http3Writer` (server::Response) into the same
-// `RequestHandler` used by the HTTP/1.1 and HTTP/2 backends.
+// `server::RequestHandler` used by the HTTP/1.1 and HTTP/2 backends.
 //
 
 #include "anyhttp/formatter.hpp" // IWYU pragma: keep
@@ -30,10 +30,7 @@
 #include <utility>
 #include <vector>
 
-using anyhttp::http3::log_headers;
-using anyhttp::http3::make_nv;
-
-namespace anyhttp::server
+namespace anyhttp::h3
 {
 
 // =================================================================================================
@@ -44,10 +41,10 @@ namespace anyhttp::server
 namespace
 {
 
-class Http3ServerApplication : public http3::Http3Application
+class Http3ServerApplication : public h3::Http3Application
 {
 public:
-   Http3ServerApplication(quic::QuicSession& session, Server::Impl& server)
+   Http3ServerApplication(quic::QuicSession& session, server::Server::Impl& server)
       : Http3Application(session, server.config().max_header_size), server_(server)
    {
    }
@@ -65,15 +62,18 @@ public:
       params.initial_max_streams_bidi = server_.config().max_concurrent_streams;
    }
 
-   const RequestHandler& request_handler() const noexcept { return server_.request_handler(); }
+   const server::RequestHandler& request_handler() const noexcept
+   {
+      return server_.request_handler();
+   }
 
 private:
-   Server::Impl& server_;
+   server::Server::Impl& server_;
 };
 
 // -------------------------------------------------------------------------------------------------
 
-class Http3ServerStream : public http3::Http3Stream
+class Http3ServerStream : public h3::Http3Stream
 {
 public:
    Http3ServerStream(Http3ServerApplication& application, int64_t id);
@@ -105,12 +105,12 @@ namespace
 {
 
 //
-// The reading half of a server request: what http3::Http3Reader has for both roles, plus the
+// The reading half of a server request: what h3::Http3Reader has for both roles, plus the
 // request line, which only this role has. Its counterpart on the client is Http3ResponseReader.
 // Like the fields, the request line is moved out of the stream on detach(): a handler may well
 // look at it only after the session is gone, e.g. when it first runs during shutdown.
 //
-class Http3RequestReader final : public http3::Http3Reader<server::Request::Impl>
+class Http3RequestReader final : public h3::Http3Reader<server::Request::Impl>
 {
 public:
    using Http3Reader<server::Request::Impl>::Http3Reader;
@@ -140,7 +140,7 @@ private:
 // -------------------------------------------------------------------------------------------------
 
 Http3ServerStream::Http3ServerStream(Http3ServerApplication& app, int64_t stream_id)
-   : http3::Http3Stream(app, stream_id, quic::WriteMode::ZeroCopy)
+   : h3::Http3Stream(app, stream_id, quic::WriteMode::ZeroCopy)
 {
 }
 
@@ -174,7 +174,7 @@ void Http3ServerStream::on_headers_complete()
    // Build the user-facing Request/Response and dispatch through the shared handler.
    //
    server::Request request(std::make_unique<Http3RequestReader>(*this));
-   server::Response response(std::make_unique<http3::Http3Writer<server::Response::Impl>>(*this));
+   server::Response response(std::make_unique<h3::Http3Writer<server::Response::Impl>>(*this));
 
    auto& app = static_cast<Http3ServerApplication&>(application);
    if (header_limit_exceeded)
@@ -228,7 +228,7 @@ void Http3ServerStream::submit_response(unsigned int status, const Fields& user_
 
 // =================================================================================================
 
-quic::ApplicationFactory make_http3_application(Server::Impl& server)
+quic::ApplicationFactory make_http3_application(server::Server::Impl& server)
 {
    return [&server](quic::QuicSession& session) -> std::unique_ptr<quic::QuicApplication> {
       return std::make_unique<Http3ServerApplication>(session, server);
@@ -237,4 +237,4 @@ quic::ApplicationFactory make_http3_application(Server::Impl& server)
 
 // =================================================================================================
 
-} // namespace anyhttp::server
+} // namespace anyhttp::h3

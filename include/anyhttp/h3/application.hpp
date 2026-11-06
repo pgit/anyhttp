@@ -8,7 +8,7 @@
 #include <memory>
 #include <span>
 
-namespace anyhttp::http3
+namespace anyhttp::h3
 {
 
 class Http3Stream;
@@ -83,4 +83,4 @@ private:
 
 // =================================================================================================
 
-} // namespace anyhttp::http3
+} // namespace anyhttp::h3

@@ -123,7 +123,7 @@ public:
 
    Task<bool> write(std::string frames)
    {
-      auto [ec, written] = co_await io::write(socket_, asio::buffer(frames));
+      auto [ec, written] = co_await io::write(socket_, boost::asio::buffer(frames));
       co_return !ec;
    }
 
@@ -153,7 +153,7 @@ public:
             }
          }
 
-         auto [ec, n] = co_await io::read_some(socket_, asio::buffer(chunk));
+         auto [ec, n] = co_await io::read_some(socket_, boost::asio::buffer(chunk));
          if (ec)
             co_return std::nullopt;
          buffer_.append(chunk.data(), n);

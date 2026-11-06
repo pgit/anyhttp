@@ -40,7 +40,6 @@
 using namespace testing;
 
 namespace capy = boost::capy;
-namespace corosio = boost::corosio;
 namespace http = boost::beast::http;
 
 // =================================================================================================
@@ -54,7 +53,7 @@ namespace
 // leaves has to be offered again.
 //
 template <class Parser>
-capy::task<std::error_code> read_message(corosio::tcp_socket& socket, Parser& parser)
+capy::task<std::error_code> read_message(boost::corosio::tcp_socket& socket, Parser& parser)
 {
    std::array<char, 4096> buffer;
    while (!parser.is_done())
@@ -82,7 +81,8 @@ capy::task<std::error_code> read_message(corosio::tcp_socket& socket, Parser& pa
 // consume(), so their descriptors are copied out of the visitor and consumed after the write.
 //
 template <class Serializer>
-capy::task<std::error_code> write_message(corosio::tcp_socket& socket, Serializer& serializer)
+capy::task<std::error_code> write_message(boost::corosio::tcp_socket& socket,
+                                          Serializer& serializer)
 {
    while (!serializer.is_done())
    {
@@ -114,15 +114,15 @@ capy::task<std::error_code> write_message(corosio::tcp_socket& socket, Serialize
 //
 TEST(Corosio, BeastParserAndSerializer)
 {
-   corosio::io_context context;
-   auto [ec, server, client] = corosio::test::make_socket_pair(context);
+   boost::corosio::io_context context;
+   auto [ec, server, client] = boost::corosio::test::make_socket_pair(context);
    ASSERT_FALSE(ec);
 
    std::error_code server_ec, client_ec;
    http::request_parser<http::string_body> request_parser;
    http::response_parser<http::string_body> response_parser;
 
-   auto serve = [](corosio::tcp_socket& socket, auto& parser,
+   auto serve = [](boost::corosio::tcp_socket& socket, auto& parser,
                    std::error_code& result) -> capy::task<> {
       if ((result = co_await read_message(socket, parser)))
          co_return;
@@ -133,7 +133,7 @@ TEST(Corosio, BeastParserAndSerializer)
       result = co_await write_message(socket, serializer);
    };
 
-   auto request = [](corosio::tcp_socket& socket, auto& parser,
+   auto request = [](boost::corosio::tcp_socket& socket, auto& parser,
                      std::error_code& result) -> capy::task<> {
       http::request<http::string_body> request{http::verb::post, "/echo", 11, "hello, corosio"};
       request.chunked(true);
@@ -230,7 +230,7 @@ Task<void> finish_later(Parked& parked, size_t n)
 
 TEST(CorosioRuntime, WHEN_parked_operation_is_completed_THEN_caller_resumes_with_result)
 {
-   corosio::io_context context;
+   boost::corosio::io_context context;
    Parked parked;
    std::optional<results<size_t>> result;
 
@@ -248,7 +248,7 @@ TEST(CorosioRuntime, WHEN_parked_operation_is_completed_THEN_caller_resumes_with
 
 TEST(CorosioRuntime, WHEN_caller_is_stopped_THEN_parked_operation_is_cancelled)
 {
-   corosio::io_context context;
+   boost::corosio::io_context context;
    Parked parked;
    std::stop_source stop;
    std::optional<results<size_t>> result;
@@ -267,7 +267,7 @@ TEST(CorosioRuntime, WHEN_caller_is_stopped_THEN_parked_operation_is_cancelled)
 
 TEST(CorosioRuntime, WHEN_completion_is_dropped_THEN_caller_resumes_cancelled)
 {
-   corosio::io_context context;
+   boost::corosio::io_context context;
    Parked parked;
    std::optional<results<size_t>> result;
 
@@ -284,7 +284,7 @@ TEST(CorosioRuntime, WHEN_completion_is_dropped_THEN_caller_resumes_cancelled)
 
 TEST(CorosioRuntime, WHEN_task_is_launched_for_a_completion_THEN_its_result_completes_it)
 {
-   corosio::io_context context;
+   boost::corosio::io_context context;
    std::optional<results<size_t>> result;
 
    auto task = []() -> IoTask<size_t> {
@@ -325,7 +325,7 @@ TEST(CorosioRuntime,
 {
    int destroyed = 0, resumed = 0;
    {
-      corosio::io_context context;
+      boost::corosio::io_context context;
       auto inner = [&]() -> Task<void> {
          FrameProbe probe{destroyed};
          co_await yield_now();
@@ -347,7 +347,7 @@ TEST(CorosioRuntime, WHEN_context_goes_away_after_a_nested_completion_was_THEN_f
 {
    int destroyed = 0, resumed = 0;
    {
-      corosio::io_context context;
+      boost::corosio::io_context context;
       Completion<ReadSome> parked;
       auto inner = [&]() -> Task<void> {
          FrameProbe probe{destroyed};
@@ -373,7 +373,7 @@ TEST(CorosioRuntime, WHEN_context_goes_away_with_a_task_launched_for_a_completio
 {
    int destroyed = 0, resumed = 0;
    {
-      corosio::io_context context;
+      boost::corosio::io_context context;
       auto task = [&]() -> IoTask<size_t> {
          FrameProbe probe{destroyed};
          co_await yield_now();
@@ -402,7 +402,7 @@ TEST(CorosioRuntime, WHEN_context_goes_away_with_a_task_launched_for_a_completio
 
 TEST(CorosioRuntime, WHEN_event_is_set_before_and_while_waiting_THEN_waits_end)
 {
-   corosio::io_context context;
+   boost::corosio::io_context context;
    Event event;
    int woken = 0;
 
@@ -424,7 +424,7 @@ TEST(CorosioRuntime, WHEN_event_is_set_before_and_while_waiting_THEN_waits_end)
 
 TEST(CorosioRuntime, WHEN_timer_is_rearmed_or_cancelled_THEN_only_the_last_callback_runs)
 {
-   corosio::io_context context;
+   boost::corosio::io_context context;
    Timer timer(context.get_executor());
    std::vector<int> fired;
 
@@ -439,7 +439,7 @@ TEST(CorosioRuntime, WHEN_timer_is_rearmed_or_cancelled_THEN_only_the_last_callb
 
 TEST(CorosioRuntime, WHEN_both_tasks_run_THEN_when_both_waits_for_both)
 {
-   corosio::io_context context;
+   boost::corosio::io_context context;
    std::vector<int> done;
 
    auto one = [](std::vector<int>& done, int id) -> Task<void> {
@@ -458,20 +458,20 @@ TEST(CorosioRuntime, WHEN_both_tasks_run_THEN_when_both_waits_for_both)
 
 TEST(CorosioRuntime, WHEN_peeking_THEN_bytes_are_seen_but_not_taken)
 {
-   corosio::io_context context;
-   auto [ec, server, client] = corosio::test::make_socket_pair(context);
+   boost::corosio::io_context context;
+   auto [ec, server, client] = boost::corosio::test::make_socket_pair(context);
    ASSERT_FALSE(ec);
    std::string peeked, read;
 
-   auto run = [](corosio::tcp_socket& server, corosio::tcp_socket& client, std::string& peeked,
-                 std::string& read) -> Task<void> {
+   auto run = [](boost::corosio::tcp_socket& server, boost::corosio::tcp_socket& client,
+                 std::string& peeked, std::string& read) -> Task<void> {
       std::ignore = co_await capy::write(client, capy::const_buffer("\x16hello", 6));
       std::array<char, 1> first;
-      auto [ec, n] = co_await io::peek(server, asio::buffer(first));
+      auto [ec, n] = co_await io::peek(server, boost::asio::buffer(first));
       EXPECT_FALSE(ec);
       peeked.assign(first.data(), n);
       std::array<char, 16> all;
-      auto [read_ec, m] = co_await io::read_some(server, asio::buffer(all));
+      auto [read_ec, m] = co_await io::read_some(server, boost::asio::buffer(all));
       EXPECT_FALSE(read_ec);
       read.assign(all.data(), m);
    };

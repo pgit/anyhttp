@@ -77,7 +77,7 @@ protected:
          // the server gives up on the connection.
          //
          std::array<uint8_t, 1024> buffer;
-         auto [ec, n] = co_await request.read_some(asio::buffer(buffer));
+         auto [ec, n] = co_await request.read_some(boost::asio::buffer(buffer));
          handler_result.set_value(ec);
       });
 

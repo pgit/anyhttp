@@ -130,7 +130,7 @@ IoTask<client::Message> get_message(std::shared_ptr<Session::Impl> session, boos
    std::array<char, 16_k> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await response.read_some(asio::buffer(buffer));
+      auto [ec, n] = co_await response.read_some(boost::asio::buffer(buffer));
       body.append(buffer.data(), n);
 
       if (ec == errors::eof)

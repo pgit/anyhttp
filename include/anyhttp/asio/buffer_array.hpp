@@ -19,7 +19,7 @@
 #include <span>
 #include <utility>
 
-namespace anyhttp
+namespace anyhttp::inline asio
 {
 
 using boost::asio::const_buffer;
@@ -276,4 +276,4 @@ using const_buffer_array = buffer_array<N, true>;
 template <std::size_t N>
 using mutable_buffer_array = buffer_array<N, false>;
 
-} // namespace anyhttp
+} // namespace anyhttp::inline asio

@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-namespace anyhttp::http3
+namespace anyhttp::h3
 {
 
 class Http3Application;
@@ -181,4 +181,4 @@ public:
 
 // =================================================================================================
 
-} // namespace anyhttp::http3
+} // namespace anyhttp::h3

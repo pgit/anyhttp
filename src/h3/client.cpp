@@ -2,8 +2,8 @@
 // anyhttp HTTP/3 client.
 //
 // Almost all of it is shared with the server: `Http3ClientApplication` is an
-// `http3::Http3Application` (see anyhttp/h3/application.hpp) on a QUIC connection the client end
-// of src/quic/ makes, and `Http3ClientStream` is an `http3::Http3Stream` (anyhttp/h3/stream.hpp)
+// `h3::Http3Application` (see anyhttp/h3/application.hpp) on a QUIC connection the client end
+// of src/quic/ makes, and `Http3ClientStream` is an `h3::Http3Stream` (anyhttp/h3/stream.hpp)
 // that writes a request and reads a response, where the server's does the opposite.
 //
 // What is genuinely client-side here: async_submit(), which opens a stream and puts the request
@@ -40,10 +40,7 @@
 
 using namespace std::chrono_literals;
 
-using anyhttp::http3::log_headers;
-using anyhttp::http3::make_nv;
-
-namespace anyhttp::client
+namespace anyhttp::h3
 {
 
 // =================================================================================================
@@ -54,7 +51,7 @@ namespace anyhttp::client
 namespace
 {
 
-class Http3ClientApplication : public http3::Http3Application
+class Http3ClientApplication : public h3::Http3Application
 {
 public:
    using Http3Application::Http3Application;
@@ -76,7 +73,7 @@ public:
 namespace
 {
 
-class Http3ClientStream : public http3::Http3Stream
+class Http3ClientStream : public h3::Http3Stream
 {
 public:
    Http3ClientStream(Http3ClientApplication& application, int64_t id);
@@ -119,10 +116,10 @@ public:
 // The client's Request needs one thing the shared writer does not have: async_get_response(),
 // which client.hpp exposes and server::Response has no counterpart for.
 //
-class Http3ClientWriter : public http3::Http3Writer<client::Request::Impl>
+class Http3ClientWriter : public h3::Http3Writer<client::Request::Impl>
 {
 public:
-   using http3::Http3Writer<client::Request::Impl>::Http3Writer;
+   using h3::Http3Writer<client::Request::Impl>::Http3Writer;
 
    void async_get_response(client::Request::GetResponseHandler&& handler) override
    {
@@ -145,10 +142,10 @@ namespace
 {
 
 //
-// The reading half of a client response: what http3::Http3Reader has for both roles, plus the
+// The reading half of a client response: what h3::Http3Reader has for both roles, plus the
 // status code, which only this role has. Its counterpart on the server is Http3RequestReader.
 //
-class Http3ResponseReader final : public http3::Http3Reader<client::Response::Impl>
+class Http3ResponseReader final : public h3::Http3Reader<client::Response::Impl>
 {
 public:
    using Http3Reader<client::Response::Impl>::Http3Reader;
@@ -176,7 +173,7 @@ private:
 // -------------------------------------------------------------------------------------------------
 
 Http3ClientStream::Http3ClientStream(Http3ClientApplication& app, int64_t stream_id)
-   : http3::Http3Stream(app, stream_id, quic::WriteMode::Staged)
+   : h3::Http3Stream(app, stream_id, quic::WriteMode::Staged)
 {
 }
 
@@ -370,8 +367,9 @@ void Http3ClientApplication::async_submit(SubmitHandler&& handler, std::string_v
 // Entry point used by Client::Impl::async_connect() for Protocol::h3.
 // =================================================================================================
 
-Task<std::shared_ptr<Session::Impl>>
-async_connect_http3(Executor executor, std::vector<TcpEndpoint> endpoints, const Config& config)
+Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor,
+                                                         std::vector<TcpEndpoint> endpoints,
+                                                         const client::Config& config)
 {
    //
    // The certificate has to be valid for the origin, the host of the URL -- also when `endpoints`
@@ -392,4 +390,4 @@ async_connect_http3(Executor executor, std::vector<TcpEndpoint> endpoints, const
 
 // =================================================================================================
 
-} // namespace anyhttp::client
+} // namespace anyhttp::h3

@@ -70,7 +70,7 @@ void QuicStream::on_data_chunk(const uint8_t* data, size_t len)
    // reader could not take is parked for later.
    //
    auto self = shared_from_this(); // a resumed reader may drop the last reference to this stream
-   incoming = asio::const_buffer{data, len};
+   incoming = boost::asio::const_buffer{data, len};
    call_read_handler();
 
    if (incoming.size() > 0)
@@ -78,7 +78,7 @@ void QuicStream::on_data_chunk(const uint8_t* data, size_t len)
       auto* rest = static_cast<const uint8_t*>(incoming.data());
       pending_read.emplace_back(rest, rest + incoming.size());
       if (read_head.size() == 0)
-         read_head = asio::buffer(pending_read.front());
+         read_head = boost::asio::buffer(pending_read.front());
       incoming = {};
    }
 }
@@ -130,15 +130,15 @@ void QuicStream::call_read_handler()
          size_t copied = 0;
          while (dest.size() > 0 && read_head.size() > 0)
          {
-            auto n = asio::buffer_copy(dest, read_head);
+            auto n = boost::asio::buffer_copy(dest, read_head);
             dest += n;
             read_head += n;
             copied += n;
             if (read_head.size() == 0)
             {
                pending_read.pop_front();
-               read_head =
-                  pending_read.empty() ? asio::const_buffer{} : asio::buffer(pending_read.front());
+               read_head = pending_read.empty() ? boost::asio::const_buffer{}
+                                                : boost::asio::buffer(pending_read.front());
             }
          }
 
@@ -149,7 +149,7 @@ void QuicStream::call_read_handler()
          //
          if (dest.size() > 0 && incoming.size() > 0)
          {
-            auto n = asio::buffer_copy(dest, incoming);
+            auto n = boost::asio::buffer_copy(dest, incoming);
             incoming += n;
             copied += n;
          }
@@ -192,9 +192,9 @@ void QuicStream::call_read_handler()
 // Outgoing body
 // =================================================================================================
 
-void QuicStream::start_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof)
+void QuicStream::start_write(WriteHandler&& handler, boost::asio::const_buffer buffer, bool eof)
 {
-   auto n = asio::buffer_size(buffer);
+   auto n = boost::asio::buffer_size(buffer);
    mlogd("start_write: n={} eof={}", n, eof);
 
    auto complete_immediately = [&](error_code ec) { //
@@ -304,7 +304,7 @@ void QuicStream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
       if (write_token != token || !write_handler)
          return; // already completed naturally before the cancellation was delivered
 
-      if (write_is_eof && asio::buffer_size(write_source) == 0)
+      if (write_is_eof && boost::asio::buffer_size(write_source) == 0)
       {
          //
          // A bare end-of-body carries no memory of the caller's, and a FIN cannot be un-sent --
@@ -381,7 +381,7 @@ size_t QuicStream::pending_data(uint64_t from, std::span<ngtcp2_vec> vec, bool& 
    if (vec.empty() || closed || write_aborted)
       return 0;
 
-   const size_t total = asio::buffer_size(write_source);
+   const size_t total = boost::asio::buffer_size(write_source);
    const auto* source = static_cast<const uint8_t*>(write_source.data());
 
    //
@@ -451,7 +451,7 @@ void QuicStream::on_offered(uint64_t end, bool fin)
    // carries no memory of the caller's that we would have to keep alive until it is
    // acknowledged.
    //
-   if (write_active && asio::buffer_size(write_source) == 0)
+   if (write_active && boost::asio::buffer_size(write_source) == 0)
       finish_active_write();
 }
 
@@ -463,7 +463,7 @@ void QuicStream::on_sent(uint64_t end)
 
    if (write_mode != WriteMode::Staged || !write_active || tx_sent < tx_queued)
       return;
-   if (asio::buffer_size(write_source) == 0)
+   if (boost::asio::buffer_size(write_source) == 0)
       return; // a bare end-of-body completes when the FIN is handed over, see on_offered()
 
    //
@@ -473,7 +473,7 @@ void QuicStream::on_sent(uint64_t end)
    // Without telling it otherwise, any single async_write() larger than kWriteChunkSize would
    // stall here forever, with the body truncated and no FIN.
    //
-   if (write_copied == asio::buffer_size(write_source))
+   if (write_copied == boost::asio::buffer_size(write_source))
       finish_active_write();
    else
       on_writable();
@@ -500,8 +500,9 @@ void QuicStream::on_acked(uint64_t end)
    // The only notification that the peer is done with bytes we handed out by reference, and
    // hence that the caller's buffer may be released -- see WriteMode::ZeroCopy.
    //
-   if (write_mode == WriteMode::ZeroCopy && write_active && asio::buffer_size(write_source) > 0 &&
-       tx_acked >= write_base + asio::buffer_size(write_source))
+   if (write_mode == WriteMode::ZeroCopy && write_active &&
+       boost::asio::buffer_size(write_source) > 0 &&
+       tx_acked >= write_base + boost::asio::buffer_size(write_source))
       finish_active_write();
 }
 

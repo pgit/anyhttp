@@ -20,7 +20,7 @@
 using namespace testing;
 
 namespace http = boost::beast::http;
-namespace h1 = anyhttp::beast_impl::h1;
+namespace h1 = anyhttp::h1;
 
 // =================================================================================================
 
@@ -71,7 +71,7 @@ protected:
       std::array<char, 64> buffer;
       Timer timer(context.get_executor());
       timer.arm(5s, [&socket] { io::cancel(socket); });
-      auto [ec, n] = co_await io::read_some(socket, asio::buffer(buffer));
+      auto [ec, n] = co_await io::read_some(socket, boost::asio::buffer(buffer));
       timer.cancel();
       if (!ec)
          ADD_FAILURE() << std::format("{} bytes after the last response: '{}'", n,
@@ -183,7 +183,8 @@ TEST_F(ConnectionClose, WHEN_requests_follow_one_that_asks_to_close_THEN_they_ar
 
    run([&]() -> Task<void> {
       auto socket = co_await connect();
-      check(co_await io::write(socket, asio::buffer(raw_get("Connection: close\r\n") + raw_get())));
+      check(co_await io::write(socket,
+                               boost::asio::buffer(raw_get("Connection: close\r\n") + raw_get())));
 
       Response response;
       check(co_await h1::read_message(socket, buffer_, response));
@@ -210,7 +211,7 @@ TEST_F(ConnectionClose, WHEN_handler_says_close_THEN_stream_ends_and_the_rest_is
 
    run([&]() -> Task<void> {
       auto socket = co_await connect();
-      check(co_await io::write(socket, asio::buffer(raw_get() + raw_get())));
+      check(co_await io::write(socket, boost::asio::buffer(raw_get() + raw_get())));
 
       Response response;
       check(co_await h1::read_message(socket, buffer_, response));
@@ -255,7 +256,7 @@ TEST_F(ConnectionClose, WHEN_peer_resets_with_requests_pipelined_THEN_the_rest_a
       std::string requests;
       for (int i = 0; i < 3; ++i)
          requests += std::format("GET /custom HTTP/1.1\r\nHost: 127.0.0.2:{}\r\n\r\n", port());
-      check(co_await io::write(socket, asio::buffer(requests)));
+      check(co_await io::write(socket, boost::asio::buffer(requests)));
 
       //
       // Reset only once the server has the requests: data still in its receive queue may be lost
@@ -310,7 +311,7 @@ TEST_F(RejectedRequest, WHEN_request_is_rejected_THEN_the_response_arrives_anywa
       //
       Response response;
       auto send = [&]() -> Task<error_code> {
-         auto [ec, n] = co_await io::write(socket, asio::buffer(request));
+         auto [ec, n] = co_await io::write(socket, boost::asio::buffer(request));
          co_return ec;
       };
       auto receive = [&]() -> Task<error_code> {
@@ -343,7 +344,7 @@ protected:
 #if ANYHTTP_COROSIO
       stream.tls().set_hostname("127.0.0.2");
 #else
-      stream.set_verify_callback(asio::ssl::host_name_verification("127.0.0.2"));
+      stream.set_verify_callback(boost::asio::ssl::host_name_verification("127.0.0.2"));
 #endif
       check(co_await io::handshake(stream, Role::client));
       co_return stream;
@@ -351,18 +352,17 @@ protected:
 
 #if ANYHTTP_COROSIO
    TlsContext tls_ = std::invoke([] {
-      namespace corosio = boost::corosio;
-      corosio::tls_context context;
-      throw_on_error(context.set_min_protocol_version(corosio::tls_version::tls_1_3));
+      boost::corosio::tls_context context;
+      throw_on_error(context.set_min_protocol_version(boost::corosio::tls_version::tls_1_3));
       throw_on_error(context.load_verify_file("pki/out/root.pem"));
-      throw_on_error(context.set_verify_mode(corosio::tls_verify_mode::peer));
+      throw_on_error(context.set_verify_mode(boost::corosio::tls_verify_mode::peer));
       return context;
    });
 #else
    TlsContext tls_ = std::invoke([] {
-      asio::ssl::context context{asio::ssl::context::tlsv13};
+      boost::asio::ssl::context context{boost::asio::ssl::context::tlsv13};
       context.load_verify_file("pki/out/root.pem");
-      context.set_verify_mode(asio::ssl::verify_peer);
+      context.set_verify_mode(boost::asio::ssl::verify_peer);
       return context;
    });
 #endif

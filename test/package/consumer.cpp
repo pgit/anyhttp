@@ -29,14 +29,14 @@ static Task<void> respond(server::Request request, server::Response response)
    std::array<uint8_t, 1024> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await request.read_some(asio::buffer(buffer));
+      auto [ec, n] = co_await request.read_some(boost::asio::buffer(buffer));
       if (ec)
          break;
    }
 
    if (auto [ec] = co_await response.submit(200, {}); ec)
       co_return;
-   co_await response.write_eof(asio::buffer(body));
+   co_await response.write_eof(boost::asio::buffer(body));
 }
 
 static Task<void> get(client::Client& client, std::optional<server::Server>& server,

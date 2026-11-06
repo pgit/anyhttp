@@ -267,7 +267,7 @@ Task<void> QuicClientSession::do_session(Buffer&&)
    std::array<uint8_t, 64_k> buf;
    for (;;)
    {
-      auto [ec, n] = co_await io::receive(socket_, asio::buffer(buf));
+      auto [ec, n] = co_await io::receive(socket_, boost::asio::buffer(buf));
       if (ec)
       {
          if (ec != errc::operation_canceled)
@@ -376,7 +376,7 @@ int QuicClientSession::send_datagrams(const ngtcp2_path& /*path*/, std::span<con
    while (!data.empty())
    {
       auto len = std::min(gso_size, data.size());
-      auto ec = io::send(socket_, asio::buffer(data.data(), len));
+      auto ec = io::send(socket_, boost::asio::buffer(data.data(), len));
 
       //
       // ICMP reporting the peer's port unreachable, which the kernel tells whichever call comes

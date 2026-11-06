@@ -8,8 +8,10 @@
 //
 #if ANYHTTP_H2_V2
 #include <anyhttp/h2v2/common.hpp>
+namespace h2 = anyhttp::h2v2;
 #else
 #include <anyhttp/h2/common.hpp>
+namespace h2 = anyhttp::h2;
 #endif
 
 #include <boost/beast/http/field.hpp>
@@ -266,12 +268,12 @@ TEST(FormatterTest, NgHttp2NvParseEmptySpec)
 TEST(FormatterTest, NgHttp2NvNameOfValueOf)
 {
    auto nv = make_nghttp2_nv("content-type", "text/html");
-   EXPECT_EQ(anyhttp::name_of(nv), "content-type");
-   EXPECT_EQ(anyhttp::value_of(nv), "text/html");
+   EXPECT_EQ(h2::name_of(nv), "content-type");
+   EXPECT_EQ(h2::value_of(nv), "text/html");
 
    auto empty = make_nghttp2_nv("", "");
-   EXPECT_EQ(anyhttp::name_of(empty), "");
-   EXPECT_EQ(anyhttp::value_of(empty), "");
+   EXPECT_EQ(h2::name_of(empty), "");
+   EXPECT_EQ(h2::value_of(empty), "");
 }
 
 // =================================================================================================

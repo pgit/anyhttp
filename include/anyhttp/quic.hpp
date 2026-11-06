@@ -219,11 +219,11 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(AcceptStream) CompletionToken = DefaultCompletionToken>
    auto async_accept_stream(CompletionToken&& token = CompletionToken())
    {
-      return asio::async_initiate<CompletionToken, AcceptStream>(
-         asio::bind_executor(asio::get_associated_executor(token, get_executor()),
-                             [this](AcceptStreamHandler handler) { //
-                                async_accept_stream_any(std::move(handler));
-                             }),
+      return boost::asio::async_initiate<CompletionToken, AcceptStream>(
+         boost::asio::bind_executor(boost::asio::get_associated_executor(token, get_executor()),
+                                    [this](AcceptStreamHandler handler) { //
+                                       async_accept_stream_any(std::move(handler));
+                                    }),
          token);
    }
 #endif
@@ -283,9 +283,9 @@ template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Connect) CompletionToken = DefaultComp
 auto async_connect(Executor executor, std::string host, std::string port, Config config,
                    CompletionToken&& token = CompletionToken())
 {
-   auto handler_executor = asio::get_associated_executor(token, executor);
-   return asio::async_initiate<CompletionToken, Connect>(
-      asio::bind_executor(
+   auto handler_executor = boost::asio::get_associated_executor(token, executor);
+   return boost::asio::async_initiate<CompletionToken, Connect>(
+      boost::asio::bind_executor(
          handler_executor,
          [executor = std::move(executor), host = std::move(host), port = std::move(port),
           config = std::move(config)](ConnectHandler handler) mutable {

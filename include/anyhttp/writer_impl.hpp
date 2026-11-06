@@ -43,10 +43,10 @@ public:
    // while re-ending it with no data attached is an idempotent no-op. Only then do stream-level
    // failures (closed, cancelled) get their say.
    //
-   virtual void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) = 0;
+   virtual void async_write(WriteHandler&& handler, boost::asio::const_buffer buffer, bool eof) = 0;
 
    /// async_write() as a coroutine, see Reader::Impl::read_some().
-   virtual IoTask<> write(asio::const_buffer buffer, bool eof)
+   virtual IoTask<> write(boost::asio::const_buffer buffer, bool eof)
    {
       co_return co_await initiate<Write>([this, buffer, eof](WriteHandler handler) { //
          async_write(std::move(handler), buffer, eof);

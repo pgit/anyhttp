@@ -349,11 +349,11 @@ Task<void> serve_h2_with_altsvc(TcpSocket socket, std::string origin, std::strin
          auto n = nghttp2_session_mem_send2(raw, &data);
          if (n <= 0)
             break;
-         if (auto [ec, written] = co_await io::write(socket, asio::buffer(data, n)); ec)
+         if (auto [ec, written] = co_await io::write(socket, boost::asio::buffer(data, n)); ec)
             co_return;
       }
 
-      auto [ec, n] = co_await io::read_some(socket, asio::buffer(buffer));
+      auto [ec, n] = co_await io::read_some(socket, boost::asio::buffer(buffer));
       if (ec || nghttp2_session_mem_recv2(raw, buffer.data(), n) < 0)
          co_return;
    }

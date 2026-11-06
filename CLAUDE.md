@@ -142,6 +142,17 @@ runtime only is in `asio/` or `corosio/`, again in both; the library compiles th
 of its runtime and not the other. `src/apps/` has the `server` and `client` programs, `src/issues/` standalone
 reproducers of upstream bugs. Everything else at the top level is generic.
 
+Each of these directories is a namespace of the same name: `anyhttp::h1`, `h2`, `h2v2`, `quic`, `h3`,
+and what a backend header offers generic code is in it too (`h1::make_server_session()`,
+`quic::make_quic_server()`, `h3::async_connect_http3()`). The one exception is `h2v2/`, which
+defines the factories of `h2/backend.hpp` in `anyhttp::h2`, where they are declared, so that nothing
+above that header can tell the two backends apart. The runtimes are *inline* namespaces,
+`anyhttp::asio` and `anyhttp::corosio`: code names their vocabulary as anyhttp's (`Task`,
+`io::read_some()`), but the symbols carry the runtime, so objects of the two cannot link together.
+That takes the names `asio` and `corosio` inside anyhttp, so spell Boost's in full,
+`boost::asio::` and `boost::corosio::`. An alias of either name is ambiguous anywhere
+`using namespace anyhttp` reaches, and the tests and examples have it.
+
 What gets installed is the public headers, the ones reachable from `client.hpp`, `server.hpp`,
 `quic.hpp`, `session.hpp` and the like; `cmake/install.cmake` leaves out the protocol directories,
 `net.hpp` and `*_impl.hpp`. A public header that starts including one of those needs the list changed
@@ -251,6 +262,14 @@ or query the stored dep database with `ninja -C build -t deps <object>`.
 constructed, for TCP and QUIC alike, and keeps serving the old ones. curl then fails with
 `verify result: 20`; the HTTP/3 client (which reads its CA file on every connect) with "unable to
 get local issuer certificate".
+
+**Never reopen a runtime's namespace from generic code.** `namespace anyhttp::io {` (or `errors`,
+`detail`) outside `asio/` and `corosio/` ought to extend the runtime's `anyhttp::asio::io`, and does
+with GCC, but clang makes a namespace of its own: the declarations in it never meet their
+definitions, which shows only at link time. `anyhttp/net.hpp` and `src/net.cpp` open
+`anyhttp::inline asio::io` or `anyhttp::inline corosio::io` by `#if`. A function that a generic
+header would declare and each runtime would define (like `normalize(IpAddress)`) is declared in the
+runtime headers instead.
 
 **One nghttp2 per process.** Version 2 installs as its own package (`<nghttp2v2/nghttp2.h>`,
 `libnghttp2v2`), but still exports nine of version 1's symbol names -- `nghttp2_strerror`,

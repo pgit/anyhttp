@@ -78,13 +78,14 @@ public:
     * \return What \p token makes of the operation.
     */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
-   auto async_write(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
+   auto async_write(boost::asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
    {
-      return asio::async_initiate<CompletionToken, Write>(
-         asio::bind_executor(write_executor(token),
-                             [this](WriteHandler handler, asio::const_buffer buffer) { //
-                                async_write_any(std::move(handler), buffer, false);
-                             }),
+      return boost::asio::async_initiate<CompletionToken, Write>(
+         boost::asio::bind_executor(
+            write_executor(token),
+            [this](WriteHandler handler, boost::asio::const_buffer buffer) { //
+               async_write_any(std::move(handler), buffer, false);
+            }),
          token, buffer);
    }
 
@@ -102,13 +103,15 @@ public:
     * \return What \p token makes of the operation.
     */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
-   auto async_write_eof(asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
+   auto async_write_eof(boost::asio::const_buffer buffer,
+                        CompletionToken&& token = CompletionToken())
    {
-      return asio::async_initiate<CompletionToken, Write>(
-         asio::bind_executor(write_executor(token),
-                             [this](WriteHandler handler, asio::const_buffer buffer) { //
-                                async_write_any(std::move(handler), buffer, true);
-                             }),
+      return boost::asio::async_initiate<CompletionToken, Write>(
+         boost::asio::bind_executor(
+            write_executor(token),
+            [this](WriteHandler handler, boost::asio::const_buffer buffer) { //
+               async_write_any(std::move(handler), buffer, true);
+            }),
          token, buffer);
    }
 
@@ -118,7 +121,7 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
    auto async_write_eof(CompletionToken&& token = CompletionToken())
    {
-      return async_write_eof(asio::const_buffer{}, std::forward<CompletionToken>(token));
+      return async_write_eof(boost::asio::const_buffer{}, std::forward<CompletionToken>(token));
    }
 #endif
 
@@ -131,13 +134,13 @@ public:
    /// Writes \p buffer as part of the body: <tt>auto [ec] = co_await writer.write(buffer);</tt>
    /// \param buffer What to write.
    /// \return The error.
-   IoTask<> write(asio::const_buffer buffer);
+   IoTask<> write(boost::asio::const_buffer buffer);
 
    /// Writes \p buffer, if any, and ends the body: <tt>auto [ec] = co_await
    /// writer.write_eof();</tt>
    /// \param buffer What to write.
    /// \return The error.
-   IoTask<> write_eof(asio::const_buffer buffer = {});
+   IoTask<> write_eof(boost::asio::const_buffer buffer = {});
 
 #if ANYHTTP_COROSIO
    /**
@@ -151,7 +154,7 @@ public:
            ++it)
          if (capy::const_buffer buffer = *it; buffer.size() > 0)
          {
-            auto [ec] = co_await write(asio::const_buffer(buffer.data(), buffer.size()));
+            auto [ec] = co_await write(boost::asio::const_buffer(buffer.data(), buffer.size()));
             co_return std::tuple{ec, ec ? size_t{0} : buffer.size()};
          }
       co_return std::tuple{error_code{}, size_t{0}};
@@ -175,13 +178,13 @@ private:
    // executor at all, so an empty one here is never used.
    //
    template <typename CompletionToken>
-   asio::associated_executor_t<CompletionToken, executor_type>
+   boost::asio::associated_executor_t<CompletionToken, executor_type>
    write_executor(const CompletionToken& token) const noexcept
    {
-      return asio::get_associated_executor(token, get_executor());
+      return boost::asio::get_associated_executor(token, get_executor());
    }
 
-   void async_write_any(WriteHandler&& handler, asio::const_buffer buffer, bool eof);
+   void async_write_any(WriteHandler&& handler, boost::asio::const_buffer buffer, bool eof);
 #endif
 
    std::shared_ptr<Impl> impl_;

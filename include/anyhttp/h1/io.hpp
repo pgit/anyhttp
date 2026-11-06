@@ -29,7 +29,7 @@
 #include <cstddef>
 #include <tuple>
 
-namespace anyhttp::beast_impl::h1
+namespace anyhttp::h1
 {
 
 namespace http = boost::beast::http;
@@ -174,10 +174,10 @@ IoTask<size_t> write_some(Stream& stream, http::serializer<isRequest, Body, Fiel
    // not: take its descriptors out of the visitor.
    //
    boost::system::error_code ec;
-   boost::container::small_vector<asio::const_buffer, 16> buffers;
+   boost::container::small_vector<boost::asio::const_buffer, 16> buffers;
    serializer.next(ec, [&](boost::system::error_code& next_ec, const auto& sequence) {
       next_ec = {};
-      for (asio::const_buffer buffer : boost::beast::buffers_range_ref(sequence))
+      for (boost::asio::const_buffer buffer : boost::beast::buffers_range_ref(sequence))
          buffers.push_back(buffer);
    });
    if (ec)
@@ -199,7 +199,6 @@ IoTask<size_t> write_until(Stream& stream, Serializer& serializer, Predicate don
    size_t written = 0;
    while (!done(serializer))
    {
-
       auto [ec, n] = co_await h1::write_some(stream, serializer);
       written += n;
       if (ec == to_error_code(http::error::need_buffer))
@@ -235,4 +234,4 @@ IoTask<size_t> write_message(Stream& stream, http::message<isRequest, Body, Fiel
 
 // =================================================================================================
 
-} // namespace anyhttp::beast_impl::h1
+} // namespace anyhttp::h1

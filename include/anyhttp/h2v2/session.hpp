@@ -24,8 +24,11 @@
 
 #include <nghttp2v2/nghttp2.h>
 
-namespace anyhttp::nghttp2
+namespace anyhttp::h2v2
 {
+
+/// The backend interface is version-neutral, see anyhttp/h2/backend.hpp.
+using Upgrade = h2::Upgrade;
 
 // =================================================================================================
 
@@ -281,4 +284,4 @@ public:
 
 // =================================================================================================
 
-} // namespace anyhttp::nghttp2
+} // namespace anyhttp::h2v2

@@ -1,7 +1,7 @@
 #pragma once
 
 //
-// The runtime layer for Boost.Asio: completion tokens, asio::awaitable, any_io_executor. See
+// The runtime layer for Boost.Asio: completion tokens, boost::asio::awaitable, any_io_executor. See
 // anyhttp/runtime.hpp for what this is, and corosio/runtime.hpp for the other runtime, which
 // defines the same names.
 //
@@ -45,6 +45,9 @@
 #include <tuple>
 #include <utility>
 
+namespace anyhttp::inline asio
+{
+
 /// \cond internal
 /// The error code of what \p ptr holds, as thrown by the runtime.
 inline boost::system::error_code code(const std::exception_ptr& ptr)
@@ -67,28 +70,27 @@ inline boost::system::error_code code(const std::exception_ptr& ptr)
 
 /// \endcond
 
-namespace anyhttp
-{
-namespace asio = boost::asio;
-
 // The reference declares the types from here to errc in docs/reference.rst, with what each is on
 // both runtimes: from here, Breathe would show the ASIO one only.
 
 /// A coroutine, as the runtime runs it.
 template <typename T = void>
-using Task = asio::awaitable<T>;
+using Task = boost::asio::awaitable<T>;
 
 /// What sessions, streams and their readers and writers run on.
-using Executor = asio::any_io_executor;
+using Executor = boost::asio::any_io_executor;
 
 /// The runtime's own IP address, which the API speaks, too.
-using IpAddress = asio::ip::address;
+using IpAddress = boost::asio::ip::address;
 
 /// The runtime's own TCP endpoint.
-using TcpEndpoint = asio::ip::tcp::endpoint;
+using TcpEndpoint = boost::asio::ip::tcp::endpoint;
 
 /// The runtime's own UDP endpoint.
-using UdpEndpoint = asio::ip::udp::endpoint;
+using UdpEndpoint = boost::asio::ip::udp::endpoint;
+
+/// \p address, or the IPv4 address an IPv4-mapped IPv6 one maps. Defined in net.cpp.
+IpAddress normalize(IpAddress address);
 
 /// What every operation reports its outcome with.
 using error_code = boost::system::error_code;
@@ -126,9 +128,9 @@ namespace errc = boost::system::errc;
 namespace errors
 {
 /// The end of an incoming body.
-/// \runtimes{asio::error::eof,capy::error::eof}
+/// \runtimes{boost::asio::error::eof,capy::error::eof}
 /// \hideinitializer
-inline const error_code eof = asio::error::eof;
+inline const error_code eof = boost::asio::error::eof;
 
 /// An incoming body that ended before it was complete: a reset stream, a lost connection.
 /// \runtimes{beast::http::error::partial_message,capy::error::stream_truncated}
@@ -141,24 +143,24 @@ inline const error_code partial_message = boost::beast::http::error::partial_mes
 inline const error_code canceled = make_error_code(errc::operation_canceled);
 
 /// HTTP/1.1: a request or response that has to wait for an earlier one, see Session.
-/// \runtimes{asio::error::would_block,errc::operation_would_block}
+/// \runtimes{boost::asio::error::would_block,errc::operation_would_block}
 /// \hideinitializer
-inline const error_code would_block = asio::error::would_block;
+inline const error_code would_block = boost::asio::error::would_block;
 
 /// A connection that can not carry any more requests or responses.
-/// \runtimes{asio::error::connection_aborted,errc::connection_aborted}
+/// \runtimes{boost::asio::error::connection_aborted,errc::connection_aborted}
 /// \hideinitializer
-inline const error_code connection_aborted = asio::error::connection_aborted;
+inline const error_code connection_aborted = boost::asio::error::connection_aborted;
 
 /// An operation on a Reader or Writer after its implementation has been released.
-/// \runtimes{asio::error::bad_descriptor,errc::bad_file_descriptor}
+/// \runtimes{boost::asio::error::bad_descriptor,errc::bad_file_descriptor}
 /// \hideinitializer
-inline const error_code bad_descriptor = asio::error::bad_descriptor;
+inline const error_code bad_descriptor = boost::asio::error::bad_descriptor;
 
 /// An operation that may be in progress only once at a time.
-/// \runtimes{asio::error::already_started,errc::connection_already_in_progress}
+/// \runtimes{boost::asio::error::already_started,errc::connection_already_in_progress}
 /// \hideinitializer
-inline const error_code already_started = asio::error::already_started;
+inline const error_code already_started = boost::asio::error::already_started;
 
 /// A header section larger than Config::max_header_size.
 /// \runtimes{beast::http::error::header_limit,beast::http::error::header_limit}
@@ -190,7 +192,7 @@ inline error_code last_error() noexcept { return {errno, boost::system::system_c
  * them from their engines' callbacks.
  */
 template <typename Signature>
-using Completion = asio::any_completion_handler<Signature>;
+using Completion = boost::asio::any_completion_handler<Signature>;
 
 //
 // Completing a parked operation. Invoking a Completion directly resumes its caller right there,
@@ -214,12 +216,13 @@ inline void complete_immediately(Handler&& handler, const Executor& fallback, Ar
       return;
 
 #if 1
-   asio::async_immediate(fallback, [handler = std::forward<Handler>(handler),
-                                    ... args = std::forward<Args>(args)]() mutable { //
+   boost::asio::async_immediate(fallback, [handler = std::forward<Handler>(handler),
+                                           ... args = std::forward<Args>(args)]() mutable { //
       std::move(handler)(std::move(args)...);
    });
 #else
-   asio::any_completion_executor ex = asio::get_associated_immediate_executor(handler, fallback);
+   boost::asio::any_completion_executor ex =
+      boost::asio::get_associated_immediate_executor(handler, fallback);
    ex.execute([handler = std::forward<Handler>(handler),
                ... args = std::forward<Args>(args)]() mutable { //
       std::move(handler)(std::move(args)...);
@@ -235,8 +238,8 @@ inline void complete_immediately(Handler&& handler, const Executor& fallback, Ar
 template <typename Handler, typename... Args>
 inline void complete_later(Handler&& handler, const Executor& executor, Args&&... args)
 {
-   asio::post(executor, [handler = std::forward<Handler>(handler),
-                         ... args = std::forward<Args>(args)]() mutable { //
+   boost::asio::post(executor, [handler = std::forward<Handler>(handler),
+                                ... args = std::forward<Args>(args)]() mutable { //
       std::move(handler)(std::move(args)...);
    });
 }
@@ -250,11 +253,12 @@ inline void complete_later(Handler&& handler, const Executor& executor, Args&&..
 template <typename Signature, typename F>
 inline void on_cancel(Completion<Signature>& handler, F&& on_cancel)
 {
-   auto slot = asio::get_associated_cancellation_slot(handler);
+   auto slot = boost::asio::get_associated_cancellation_slot(handler);
    if (slot.is_connected() && !slot.has_handler())
-      slot.assign([on_cancel = std::forward<F>(on_cancel)](asio::cancellation_type_t) mutable { //
-         on_cancel();
-      });
+      slot.assign(
+         [on_cancel = std::forward<F>(on_cancel)](boost::asio::cancellation_type_t) mutable { //
+            on_cancel();
+         });
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -274,11 +278,12 @@ inline void on_cancel(Completion<Signature>& handler, F&& on_cancel)
 template <typename Signature, typename Init>
 auto initiate(Init&& init)
 {
-   return asio::async_initiate<const asio::as_tuple_t<asio::deferred_t>&, Signature>(
+   return boost::asio::async_initiate<const boost::asio::as_tuple_t<boost::asio::deferred_t>&,
+                                      Signature>(
       [init = std::forward<Init>(init)](Completion<Signature> handler) mutable {
          init(std::move(handler));
       },
-      asio::as_tuple(asio::deferred));
+      boost::asio::as_tuple(boost::asio::deferred));
 }
 
 /// \endcond
@@ -288,7 +293,7 @@ auto initiate(Init&& init)
 /// \param task What to run.
 inline void launch(const Executor& executor, Task<void> task)
 {
-   asio::co_spawn(executor, std::move(task), asio::detached);
+   boost::asio::co_spawn(executor, std::move(task), boost::asio::detached);
 }
 
 /// Starts \p task on \p executor and calls \p on_done with what it threw, if anything, when it
@@ -299,7 +304,7 @@ inline void launch(const Executor& executor, Task<void> task)
 template <typename F>
 inline void launch(const Executor& executor, Task<void> task, F&& on_done)
 {
-   asio::co_spawn(executor, std::move(task), std::forward<F>(on_done));
+   boost::asio::co_spawn(executor, std::move(task), std::forward<F>(on_done));
 }
 
 /// \cond internal
@@ -315,47 +320,48 @@ template <typename... T>
 inline void launch(const Executor& executor, IoTask<T...> task,
                    Completion<void(error_code, T...)>&& handler)
 {
-   auto slot = asio::get_associated_cancellation_slot(handler);
-   auto handler_executor = asio::get_associated_executor(handler, executor);
+   auto slot = boost::asio::get_associated_cancellation_slot(handler);
+   auto handler_executor = boost::asio::get_associated_executor(handler, executor);
 
    //
    // co_spawn() gives the task a cancellation slot of its own, so binding the caller's to it is
    // what makes cancelling the operation reach whatever the task is waiting for.
    //
-   asio::co_spawn(executor, std::move(task),
-                  asio::bind_cancellation_slot(
-                     slot, asio::bind_executor(handler_executor, [handler = std::move(handler)](
-                                                                    const std::exception_ptr& ep,
-                                                                    results<T...> result) mutable {
-                        if (ep)
-                           std::move(handler)(code(ep), T{}...);
-                        else
-                           std::apply(std::move(handler), std::move(result));
-                     })));
+   boost::asio::co_spawn(
+      executor, std::move(task),
+      boost::asio::bind_cancellation_slot(
+         slot, boost::asio::bind_executor(
+                  handler_executor, [handler = std::move(handler)](const std::exception_ptr& ep,
+                                                                   results<T...> result) mutable {
+                     if (ep)
+                        std::move(handler)(code(ep), T{}...);
+                     else
+                        std::apply(std::move(handler), std::move(result));
+                  })));
 }
 
 // -------------------------------------------------------------------------------------------------
 
 /// Lets whatever else is ready to run on the caller's executor run first.
-inline auto yield_now() { return asio::post(asio::deferred); }
+inline auto yield_now() { return boost::asio::post(boost::asio::deferred); }
 
 /// Calls \p function from \p executor's queue, after whatever is running now has returned.
 template <typename F>
 inline void run_later(const Executor& executor, F&& function)
 {
-   asio::post(executor, std::forward<F>(function));
+   boost::asio::post(executor, std::forward<F>(function));
 }
 
 /// Calls \p function on \p executor: right away if the caller runs on it already, later if not.
 template <typename F>
 inline void dispatch_to(const Executor& executor, F&& function)
 {
-   asio::dispatch(executor, std::forward<F>(function));
+   boost::asio::dispatch(executor, std::forward<F>(function));
 }
 
 /// A new strand on \p executor, for a connection that has to be serialized against itself
 /// while the io_context runs on several threads (\c server::Config::use_strand).
-inline Executor new_strand(const Executor& executor) { return asio::make_strand(executor); }
+inline Executor new_strand(const Executor& executor) { return boost::asio::make_strand(executor); }
 
 /// \endcond
 
@@ -365,9 +371,9 @@ inline Executor new_strand(const Executor& executor) { return asio::make_strand(
 /// \return The error, if the wait has been cancelled.
 inline Task<error_code> delay(std::chrono::steady_clock::duration duration)
 {
-   asio::steady_timer timer(co_await asio::this_coro::executor);
+   boost::asio::steady_timer timer(co_await boost::asio::this_coro::executor);
    timer.expires_after(duration);
-   auto [ec] = co_await timer.async_wait(asio::as_tuple);
+   auto [ec] = co_await timer.async_wait(boost::asio::as_tuple);
    co_return ec;
 }
 
@@ -383,7 +389,7 @@ inline Task<error_code> delay(std::chrono::steady_clock::duration duration)
 template <typename A, typename B>
 auto when_both(Task<A> a, Task<B> b)
 {
-   using namespace asio::experimental::awaitable_operators;
+   using namespace boost::asio::experimental::awaitable_operators;
    return std::move(a) && std::move(b);
 }
 
@@ -400,7 +406,7 @@ auto when_both(Task<A> a, Task<B> b)
 template <typename A, typename B>
 auto when_either(Task<A> a, Task<B> b)
 {
-   using namespace asio::experimental::awaitable_operators;
+   using namespace boost::asio::experimental::awaitable_operators;
    return std::move(a) || std::move(b);
 }
 
@@ -412,7 +418,7 @@ auto when_either(Task<A> a, Task<B> b)
  *
  * \return What to await.
  */
-inline auto reset_cancellation() { return asio::this_coro::reset_cancellation_state(); }
+inline auto reset_cancellation() { return boost::asio::this_coro::reset_cancellation_state(); }
 
 /**
  * Awaits \p task although the caller has been cancelled already, once reset_cancellation() has
@@ -473,9 +479,9 @@ public:
       if (set_)
          co_return error_code{};
 
-      executor_ = co_await asio::this_coro::executor;
-      co_return co_await asio::async_initiate<const asio::as_tuple_t<asio::deferred_t>&,
-                                              void(error_code)>(
+      executor_ = co_await boost::asio::this_coro::executor;
+      co_return co_await boost::asio::async_initiate<
+         const boost::asio::as_tuple_t<boost::asio::deferred_t>&, void(error_code)>(
          [this](Completion<void(error_code)> waiter) {
             assert(!waiter_);
             waiter_ = std::move(waiter);
@@ -484,7 +490,7 @@ public:
                   wake(errors::canceled);
             });
          },
-         asio::as_tuple(asio::deferred));
+         boost::asio::as_tuple(boost::asio::deferred));
    }
 
 private:
@@ -521,7 +527,7 @@ public:
    void cancel() { timer_.cancel(); }
 
 private:
-   asio::steady_timer timer_;
+   boost::asio::steady_timer timer_;
 };
 
 // =================================================================================================
@@ -539,9 +545,9 @@ namespace io
 
 /// Reads some bytes into \p buffer: <tt>(error_code, size_t)</tt>.
 template <typename Stream>
-auto read_some(Stream& stream, asio::mutable_buffer buffer)
+auto read_some(Stream& stream, boost::asio::mutable_buffer buffer)
 {
-   return stream.async_read_some(buffer, asio::as_tuple);
+   return stream.async_read_some(buffer, boost::asio::as_tuple);
 }
 
 /// Writes all of \p buffers, unless an error comes first: <tt>(error_code, size_t)</tt>.
@@ -553,27 +559,27 @@ auto write(Stream& stream, const ConstBufferSequence& buffers)
    // would split them into 64 KiB each. A large HTTP/1.1 header then takes several round trips
    // through the reactor, and a server that rejects it early catches the client in the middle.
    //
-   return asio::async_write(
+   return boost::asio::async_write(
       stream, buffers,
       [](const error_code& ec, size_t) -> size_t {
          return ec ? 0 : std::numeric_limits<size_t>::max();
       },
-      asio::as_tuple);
+      boost::asio::as_tuple);
 }
 
 /// Peeks at what has arrived on \p socket, without taking it: <tt>(error_code, size_t)</tt>.
 template <typename Socket>
-auto peek(Socket& socket, asio::mutable_buffer buffer)
+auto peek(Socket& socket, boost::asio::mutable_buffer buffer)
 {
-   return socket.async_receive(buffer, Socket::message_peek, asio::as_tuple);
+   return socket.async_receive(buffer, Socket::message_peek, boost::asio::as_tuple);
 }
 
 /// Receives a datagram into \p buffer, on a connected datagram socket: <tt>(error_code,
 /// size_t)</tt>.
 template <typename Socket>
-auto receive(Socket& socket, asio::mutable_buffer buffer)
+auto receive(Socket& socket, boost::asio::mutable_buffer buffer)
 {
-   return socket.async_receive(buffer, asio::as_tuple);
+   return socket.async_receive(buffer, boost::asio::as_tuple);
 }
 
 /// Waits until \p socket has something to read, for a caller that reads it by hand
@@ -581,7 +587,7 @@ auto receive(Socket& socket, asio::mutable_buffer buffer)
 template <typename Socket>
 auto wait_readable(Socket& socket)
 {
-   return socket.async_wait(Socket::wait_read, asio::as_tuple);
+   return socket.async_wait(Socket::wait_read, boost::asio::as_tuple);
 }
 
 } // namespace io
@@ -590,4 +596,4 @@ auto wait_readable(Socket& socket)
 
 /// \endcond
 
-} // namespace anyhttp
+} // namespace anyhttp::inline asio

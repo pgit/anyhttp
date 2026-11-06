@@ -22,32 +22,30 @@
 #include <memory>
 #include <type_traits>
 
-namespace asio = boost::asio;
-namespace ip = asio::ip;
-
-namespace anyhttp
+namespace anyhttp::inline asio
 {
 
 // =================================================================================================
 
 using ReadWrite = void(boost::system::error_code, std::size_t);
-using ReadWriteHandler = asio::any_completion_handler<ReadWrite>;
+using ReadWriteHandler = boost::asio::any_completion_handler<ReadWrite>;
 
 using ConstBufferVector = const_buffer_array<16>;
 using MutableBufferVector = mutable_buffer_array<16>;
 
 using Shutdown = void(boost::system::error_code);
-using ShutdownHandler = asio::any_completion_handler<Shutdown>;
+using ShutdownHandler = boost::asio::any_completion_handler<Shutdown>;
 
 /**
  * The socket underneath a stream, as far as the sessions care about it: enough for shutdown() and
  * close(), which is all they do with it. A TLS stream hands out its \c lowest_layer(), which is
- * this rather than the full ip::tcp::socket, so this is what the type-erased stream offers, too.
+ * this rather than the full boost::asio::ip::tcp::socket, so this is what the type-erased stream
+ * offers, too.
  */
-using TcpSocketBase = asio::basic_socket<ip::tcp, asio::any_io_executor>;
+using TcpSocketBase = boost::asio::basic_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>;
 
 /// The TLS stream the server and client run on, spelled out often enough to deserve a name.
-using SslStream = asio::ssl::stream<ip::tcp::socket>;
+using SslStream = boost::asio::ssl::stream<boost::asio::ip::tcp::socket>;
 
 /**
  * Attempt to create a type-erased async stream with ASIO.
@@ -56,8 +54,9 @@ using SslStream = asio::ssl::stream<ip::tcp::socket>;
  * buffer_array, a fixed-capacity, non-allocating array of buffer descriptors that is itself a
  * buffer sequence. This seems to work reasonably well.
  *
- * There is also \c asio::buffer_sequence_adapter and \c linearise(), which seem to be used in ASIO
- * SSL code as well. It merges a set of buffers into a new, contiguous buffer. But that is slow.
+ * There is also \c boost::asio::buffer_sequence_adapter and \c linearise(), which seem to be used
+ * in ASIO SSL code as well. It merges a set of buffers into a new, contiguous buffer. But that is
+ * slow.
  */
 class any_async_stream
 {
@@ -85,8 +84,9 @@ public:
    // The requirements for ConstBufferSequence are defined here:
    // https://live.boost.org/doc/libs/1_88_0/doc/html/boost_asio/reference/ConstBufferSequence.html
    //
-   // The iterators returned by asio::buffer_sequence_{begin,end} must be 'bidirectional', but are
-   // not required to be 'contiguous'. So those iterators cannot be simply converted to a span.
+   // The iterators returned by boost::asio::buffer_sequence_{begin,end} must be 'bidirectional',
+   // but are not required to be 'contiguous'. So those iterators cannot be simply converted to a
+   // span.
    //
    // * https://en.cppreference.com/w/cpp/iterator/bidirectional_iterator
    // * https://en.cppreference.com/w/cpp/iterator/contiguous_iterator.html
@@ -98,8 +98,8 @@ public:
    // just results in a shorter transfer.
    //
    template <ConstBufferSequence Buffers,
-             BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite)
-                CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
+             BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite) CompletionToken =
+                boost::asio::default_completion_token_t<boost::asio::any_io_executor>>
    auto async_write_some(const Buffers& buffers, CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
@@ -113,8 +113,8 @@ public:
    // async_read_some
    //
    template <MutableBufferSequence Buffers,
-             BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite)
-                CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
+             BOOST_ASIO_COMPLETION_TOKEN_FOR(ReadWrite) CompletionToken =
+                boost::asio::default_completion_token_t<boost::asio::any_io_executor>>
    auto async_read_some(const Buffers& buffers, CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, ReadWrite>(
@@ -131,8 +131,8 @@ public:
    // in anyhttp/asio/net.hpp, which is how the sessions reach this. For a stream that has
    // nothing to end, this completes immediately and successfully.
    //
-   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Shutdown)
-                CompletionToken = asio::default_completion_token_t<asio::any_io_executor>>
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Shutdown) CompletionToken =
+                boost::asio::default_completion_token_t<boost::asio::any_io_executor>>
    auto async_shutdown(CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, Shutdown>(initiate_shutdown{this}, token);
@@ -180,9 +180,10 @@ template <typename Stream>
    requires(!std::is_reference_v<Stream>)
 any_async_stream make_any_async_stream(Stream&& stream);
 
-extern template any_async_stream make_any_async_stream<ip::tcp::socket>(ip::tcp::socket&&);
+extern template any_async_stream
+make_any_async_stream<boost::asio::ip::tcp::socket>(boost::asio::ip::tcp::socket&&);
 extern template any_async_stream make_any_async_stream<SslStream>(SslStream&&);
 
 // =================================================================================================
 
-} // namespace anyhttp
+} // namespace anyhttp::inline asio

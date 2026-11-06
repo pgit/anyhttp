@@ -14,6 +14,15 @@ namespace anyhttp
 class Session;
 }
 
+//
+// The QUIC half of the server, behind anyhttp/quic/backend.hpp: it owns the UDP socket and
+// everything QUIC, so that nothing of ngtcp2/nghttp3 reaches this header.
+//
+namespace anyhttp::quic
+{
+class QuicServer;
+}
+
 namespace anyhttp::server
 {
 
@@ -55,12 +64,6 @@ public:
 };
 
 // =================================================================================================
-
-//
-// The QUIC half of the server, behind anyhttp/quic/backend.hpp: it owns the UDP socket and
-// everything QUIC, so that nothing of ngtcp2/nghttp3 reaches this header.
-//
-class QuicServer;
 
 class Server::Impl : public std::enable_shared_from_this<Server::Impl>
 {
@@ -123,7 +126,7 @@ private:
    std::mutex session_mutex_;
    std::set<std::shared_ptr<Session::Impl>> sessions_;
 
-   std::shared_ptr<QuicServer> quic_;
+   std::shared_ptr<quic::QuicServer> quic_;
 
    RequestHandler request_handler_;
    bool destroyed_ = false;

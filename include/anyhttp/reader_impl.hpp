@@ -31,7 +31,7 @@ public:
 
    //
    // Reads at most one buffer worth of the incoming body. The end of the body is reported the
-   // way ASIO reports it everywhere else: \c asio::error::eof with zero bytes, and again for
+   // way ASIO reports it everywhere else: \c boost::asio::error::eof with zero bytes, and again for
    // every further read -- including reads issued after the underlying stream object is long
    // gone. A body that ends before it was supposed to -- a reset stream, a connection that went
    // away mid-message -- is reported as \c http::error::partial_message instead, so the two
@@ -40,7 +40,7 @@ public:
    // An empty buffer is not a request to do anything; it completes immediately with success and
    // zero bytes, wherever the body stands.
    //
-   virtual void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) = 0;
+   virtual void async_read_some(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler) = 0;
 
    //
    // Every operation comes in two shapes: completing a handler (async_*()), which the completion
@@ -49,7 +49,7 @@ public:
    // handler (HTTP/2, HTTP/3) makes the coroutine cheap, through initiate(). Doing the I/O in a
    // coroutine (HTTP/1.1) makes the handler shape cost a spawn, through launch().
    //
-   virtual IoTask<size_t> read_some(asio::mutable_buffer buffer)
+   virtual IoTask<size_t> read_some(boost::asio::mutable_buffer buffer)
    {
       co_return co_await initiate<ReadSome>([this, buffer](ReadSomeHandler handler) { //
          async_read_some(buffer, std::move(handler));

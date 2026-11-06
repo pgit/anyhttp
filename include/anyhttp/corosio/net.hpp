@@ -37,15 +37,15 @@
 #include <utility>
 #include <vector>
 
-namespace anyhttp
+namespace anyhttp::inline corosio
 {
 
 // =================================================================================================
 
-using TcpSocket = corosio::tcp_socket;
-using TcpAcceptor = corosio::tcp_acceptor;
-using TlsContext = corosio::tls_context;
-using UdpSocket = corosio::udp_socket;
+using TcpSocket = boost::corosio::tcp_socket;
+using TcpAcceptor = boost::corosio::tcp_acceptor;
+using TlsContext = boost::corosio::tls_context;
+using UdpSocket = boost::corosio::udp_socket;
 
 /**
  * TLS over a TCP socket. corosio's TLS stream erases the type of what it runs on, so it can not
@@ -82,7 +82,7 @@ public:
    }
 
    TcpSocket& socket() noexcept { return *socket_; }
-   corosio::openssl_stream& tls() noexcept { return tls_; }
+   boost::corosio::openssl_stream& tls() noexcept { return tls_; }
 
 private:
    /// The most a TLS record holds: anything that does not fill one is worth a copy.
@@ -110,7 +110,7 @@ private:
    }
 
    std::unique_ptr<TcpSocket> socket_;
-   corosio::openssl_stream tls_;
+   boost::corosio::openssl_stream tls_;
    std::unique_ptr<std::byte[]> linearized_;
 };
 
@@ -176,9 +176,9 @@ enum class Shutdown
 template <SocketStream Stream>
 error_code shutdown(Stream& stream, Shutdown what) noexcept
 {
-   return get_socket(stream).shutdown(what == Shutdown::receive ? corosio::shutdown_receive
-                                      : what == Shutdown::send  ? corosio::shutdown_send
-                                                                : corosio::shutdown_both);
+   return get_socket(stream).shutdown(what == Shutdown::receive ? boost::corosio::shutdown_receive
+                                      : what == Shutdown::send  ? boost::corosio::shutdown_send
+                                                                : boost::corosio::shutdown_both);
 }
 
 template <SocketStream Stream>
@@ -217,7 +217,8 @@ Task<error_code> async_teardown(Stream& stream)
 {
    if constexpr (std::same_as<Stream, TlsStream>)
    {
-      auto [ec] = co_await corosio::timeout(stream.tls().shutdown(), std::chrono::seconds(2));
+      auto [ec] =
+         co_await boost::corosio::timeout(stream.tls().shutdown(), std::chrono::seconds(2));
       co_return ec;
    }
    else
@@ -256,7 +257,7 @@ inline auto accept(TcpAcceptor& acceptor, TcpSocket& socket) { return acceptor.a
 /// As with ASIO, a failure here is not worth an error.
 inline void no_delay(TcpSocket& socket)
 {
-   std::ignore = socket.set_option(corosio::socket_option::no_delay(true));
+   std::ignore = socket.set_option(boost::corosio::socket_option::no_delay(true));
 }
 
 std::pair<int, int> buffer_sizes(TcpSocket& socket);
@@ -280,8 +281,8 @@ inline void set_peer_name(TlsStream& stream, const std::string& host)
 
 inline auto handshake(TlsStream& stream, Role role)
 {
-   return stream.tls().handshake(role == Role::server ? corosio::tls_role::server
-                                                      : corosio::tls_role::client);
+   return stream.tls().handshake(role == Role::server ? boost::corosio::tls_role::server
+                                                      : boost::corosio::tls_role::client);
 }
 
 inline std::string_view alpn(TlsStream& stream) { return stream.tls().alpn_protocol(); }
@@ -296,7 +297,8 @@ inline UdpSocket make_udp_socket(const Executor& executor) { return UdpSocket(ex
 /// corosio opens every socket non-blocking.
 inline error_code open(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept
 {
-   return socket.open(endpoint.address().is_v6() ? corosio::family::v6 : corosio::family::v4);
+   return socket.open(endpoint.address().is_v6() ? boost::corosio::family::v6
+                                                 : boost::corosio::family::v4);
 }
 
 inline void cancel(UdpSocket& socket) noexcept { socket.cancel(); }
@@ -330,4 +332,4 @@ private:
 
 // =================================================================================================
 
-} // namespace anyhttp
+} // namespace anyhttp::inline corosio

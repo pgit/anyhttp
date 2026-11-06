@@ -6,7 +6,7 @@
 #include <concepts>
 #include <functional>
 
-namespace anyhttp
+namespace anyhttp::inline asio
 {
 
 template <typename T>
@@ -40,4 +40,4 @@ concept AsyncReadStream =
       stream.async_read_some(buffer, handler);
    };
 
-} // namespace anyhttp
+} // namespace anyhttp::inline asio

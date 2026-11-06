@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-namespace anyhttp::beast_impl
+namespace anyhttp::h1
 {
 
 // =================================================================================================
@@ -217,16 +217,16 @@ class RequestWriter;
  *
  * Operations that would have to wait for an earlier request or response don't. Waiting would
  * deadlock as soon as the earlier one is taken care of by the same code, after the operation that
- * waits for it. Instead, they fail immediately with \c asio::error::would_block, so they can be
- * retried later:
+ * waits for it. Instead, they fail immediately with \c boost::asio::error::would_block, so they can
+ * be retried later:
  *
  * - async_submit(), while the previous request is not complete yet, and
  * - async_get_response(), while the responses to earlier requests have not been read completely.
  *
  * When a request can not be completed -- a write fails, or the request goes away without being
  * complete -- nothing can be sent after it any more: later calls to async_submit() fail with
- * \c asio::error::connection_aborted. Likewise, when a response can not be read completely -- a
- * read fails, the response goes away before it has been read, or a request goes away without
+ * \c boost::asio::error::connection_aborted. Likewise, when a response can not be read completely
+ * -- a read fails, the response goes away before it has been read, or a request goes away without
  * asking for its response -- getting any later response fails.
  */
 template <typename Stream>
@@ -279,4 +279,4 @@ public:
 
 // =================================================================================================
 
-} // namespace anyhttp::beast_impl
+} // namespace anyhttp::h1

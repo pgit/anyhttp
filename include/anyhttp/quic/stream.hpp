@@ -83,11 +83,11 @@ public:
    // for it.
    //
    std::deque<std::vector<uint8_t>> pending_read;
-   asio::const_buffer read_head; // view of pending_read.front() not yet delivered
-   asio::const_buffer incoming; // chunk on_data_chunk() is delivering, not yet taken
+   boost::asio::const_buffer read_head; // view of pending_read.front() not yet delivered
+   boost::asio::const_buffer incoming; // chunk on_data_chunk() is delivering, not yet taken
    bool eof_received = false;
    ReadSomeHandler read_handler;
-   asio::mutable_buffer read_handler_buffer;
+   boost::asio::mutable_buffer read_handler_buffer;
    bool call_read_handler_active = false; // re-entrancy guard, see call_read_handler()
 
    //
@@ -95,14 +95,14 @@ public:
    // handler before issuing another (same contract as e.g. Beast) -- so this is flat per-stream
    // state rather than a queue of pending writes.
    //
-   // write_source is the caller's buffer, referenced, not copied, the way asio::async_write
+   // write_source is the caller's buffer, referenced, not copied, the way boost::asio::async_write
    // generally requires: it must stay valid until write_handler fires. What completes the write
    // depends on write_mode: all of it acknowledged in ZeroCopy, all of it copied out and handed
    // over in Staged. See WriteMode.
    //
    const WriteMode write_mode;
    bool write_active = false;
-   asio::const_buffer write_source;
+   boost::asio::const_buffer write_source;
    //
    // Whether the active write ends the body. The FIN then goes out with the write's last bytes
    // -- one QUIC STREAM frame carrying both the tail of the body and the FIN -- rather than
@@ -162,7 +162,7 @@ public:
    //
    // Data flow from user land to the stack (outgoing body).
    //
-   void start_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof);
+   void start_write(WriteHandler&& handler, boost::asio::const_buffer buffer, bool eof);
 
    //
    // Points `vec` at what there is to send from body offset `from` on, and returns how many
@@ -256,14 +256,14 @@ public:
 
    std::optional<size_t> content_length() const noexcept override { return std::nullopt; }
 
-   void async_read_some(asio::mutable_buffer buffer, ReadSomeHandler&& handler) override
+   void async_read_some(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler) override
    {
       //
       // An empty buffer is not a request to read anything: complete right away, without looking
       // at whether the body has ended or the stream is even still there -- as ASIO does for a
       // zero-length read.
       //
-      if (asio::buffer_size(buffer) == 0)
+      if (boost::asio::buffer_size(buffer) == 0)
       {
          complete_immediately(std::move(handler), executor, error_code{}, size_t{0});
          return;
@@ -341,7 +341,7 @@ public:
 
    void content_length(std::optional<size_t>) override {}
 
-   void async_write(WriteHandler&& handler, asio::const_buffer buffer, bool eof) override
+   void async_write(WriteHandler&& handler, boost::asio::const_buffer buffer, bool eof) override
    {
       if (stream)
       {
@@ -358,7 +358,7 @@ public:
       // body that was cleanly ended keeps answering as such -- bare re-end idempotent, data
       // broken_pipe -- and only a stream that vanished mid-body is a connection error.
       //
-      const bool empty = asio::buffer_size(buffer) == 0;
+      const bool empty = boost::asio::buffer_size(buffer) == 0;
       error_code ec;
       if (empty && !eof)
          ec = {};

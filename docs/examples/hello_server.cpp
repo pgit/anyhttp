@@ -24,7 +24,7 @@ static Task<void> hello(server::Request request, server::Response response)
    if (auto [ec] = co_await response.submit(200, fields({{"Content-Length", body.size()}})); ec)
       co_return;
 
-   std::ignore = co_await response.write_eof(asio::buffer(body));
+   std::ignore = co_await response.write_eof(boost::asio::buffer(body));
 }
 
 int main(int argc, char* argv[])

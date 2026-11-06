@@ -42,7 +42,7 @@ protected:
          EXPECT_EQ(co_await drain(request), 0); // a GET has no body
          check(co_await response.submit(
             200, fields({{"Content-Length", body.size()}, {"X-Answer", 42}})));
-         check(co_await response.write_eof(asio::buffer(body)));
+         check(co_await response.write_eof(boost::asio::buffer(body)));
       };
    }
 
@@ -210,13 +210,13 @@ TEST(AsyncGetRaw, WHEN_get_THEN_request_line_says_GET)
       std::array<char, 1024> buffer;
       while (!head.contains("\r\n\r\n"))
       {
-         auto [ec, n] = co_await io::read_some(socket, asio::buffer(buffer));
+         auto [ec, n] = co_await io::read_some(socket, boost::asio::buffer(buffer));
          head.append(buffer.data(), n);
          if (ec)
             throw_error(ec);
       }
       constexpr auto response = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"sv;
-      check(co_await io::write(socket, asio::buffer(response)));
+      check(co_await io::write(socket, boost::asio::buffer(response)));
       io::shutdown(socket, io::Shutdown::send);
    };
    launch(context.get_executor(), peer());
@@ -256,7 +256,7 @@ protected:
       std::array<char, 1_k> buffer;
       for (;;)
       {
-         auto [ec, n] = co_await response.read_some(asio::buffer(buffer));
+         auto [ec, n] = co_await response.read_some(boost::asio::buffer(buffer));
          body.append(buffer.data(), n);
          if (ec == errors::eof)
             co_return body;
@@ -282,7 +282,7 @@ TEST_P(SubmitMethod, WHEN_method_is_given_THEN_the_server_sees_it)
    };
    clientSession = [this](Session session) -> Task<void> {
       auto request = check(co_await session.submit("PUT", url));
-      check(co_await request.write_eof(asio::buffer("body"sv)));
+      check(co_await request.write_eof(boost::asio::buffer("body"sv)));
       auto response = check(co_await request.get_response());
       EXPECT_EQ(response.status_code(), 200);
       EXPECT_EQ(co_await read_all(response), "body");
@@ -303,7 +303,7 @@ TEST_P(SubmitMethod, WHEN_get_stops_reading_at_a_limit_THEN_status_and_fields_ar
       std::vector<char> chunk(16_k);
       for (;;)
       {
-         auto [ec] = co_await response.write(asio::buffer(chunk));
+         auto [ec] = co_await response.write(boost::asio::buffer(chunk));
          if (ec)
             break;
          sent += chunk.size();
@@ -323,7 +323,7 @@ TEST_P(SubmitMethod, WHEN_get_stops_reading_at_a_limit_THEN_status_and_fields_ar
       std::array<char, 16_k> buffer;
       size_t total = 0;
       while (total < limit)
-         total += check(co_await response.read_some(asio::buffer(buffer)));
+         total += check(co_await response.read_some(boost::asio::buffer(buffer)));
       EXPECT_LE(total, limit + buffer.size());
 
       //
@@ -363,7 +363,7 @@ TEST_P(SubmitMethod, WHEN_response_is_released_early_THEN_only_http11_loses_the_
       }
       check(co_await response.submit(200, {}));
       std::vector<char> chunk(16_k);
-      while (!std::get<0>(co_await response.write(asio::buffer(chunk))))
+      while (!std::get<0>(co_await response.write(boost::asio::buffer(chunk))))
          ;
       stopped = true;
    };
@@ -374,7 +374,7 @@ TEST_P(SubmitMethod, WHEN_response_is_released_early_THEN_only_http11_loses_the_
          check(co_await request.write_eof());
          auto response = check(co_await request.get_response());
          std::array<char, 1_k> buffer;
-         check(co_await response.read_some(asio::buffer(buffer)));
+         check(co_await response.read_some(boost::asio::buffer(buffer)));
       }
 
       auto next = url;

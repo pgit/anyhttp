@@ -167,7 +167,8 @@ Task<Session> Client::Impl::async_connect()
          auto alt_host = alt->host.empty() ? host : alt->host;
          mlogi("connecting to {}:{} over HTTP/3, as advertised by Alt-Svc", alt_host, alt->port);
          endpoints = co_await resolve(alt_host, alt->port);
-         co_return Session{co_await async_connect_http3(executor_, std::move(endpoints), config())};
+         co_return Session{
+            co_await h3::async_connect_http3(executor_, std::move(endpoints), config())};
       }
 
       endpoints = co_await resolve(host, port);
@@ -178,7 +179,8 @@ Task<Session> Client::Impl::async_connect()
    // handshake, ...) than the TCP-based h1/h2 paths below.
    //
    if (config().protocol == Protocol::h3)
-      co_return Session{co_await async_connect_http3(executor_, std::move(endpoints), config())};
+      co_return Session{
+         co_await h3::async_connect_http3(executor_, std::move(endpoints), config())};
 
    //
    // Initiate connection.
@@ -196,8 +198,8 @@ Task<Session> Client::Impl::async_connect()
 
    //
    // After connect(), not before: the socket a client starts with is not open yet, and
-   // asio::async_connect() closes and reopens it for every endpoint it tries, which would throw
-   // away anything set on it. Zero, the default, leaves the kernel's autotuning alone; see
+   // boost::asio::async_connect() closes and reopens it for every endpoint it tries, which would
+   // throw away anything set on it. Zero, the default, leaves the kernel's autotuning alone; see
    // Config::socket_send_buffer_size for why a test would want them pinned.
    //
    io::set_buffer_sizes(socket, config().socket_send_buffer_size,
@@ -264,11 +266,11 @@ Session Client::Impl::start_session(Protocol protocol, Stream&& stream)
    switch (protocol)
    {
    case Protocol::h1:
-      impl = beast_impl::make_client_session(*this, executor_, std::forward<Stream>(stream));
+      impl = h1::make_client_session(*this, executor_, std::forward<Stream>(stream));
       break;
 
    case Protocol::h2:
-      impl = nghttp2::make_client_session(*this, executor_, std::forward<Stream>(stream));
+      impl = h2::make_client_session(*this, executor_, std::forward<Stream>(stream));
       break;
 
    case anyhttp::Protocol::h3:

@@ -27,7 +27,7 @@ protected:
          EXPECT_EQ(request.url().encoded_host(), host);
          co_await drain(request);
          check(co_await response.submit(200, fields({{"Content-Length", body.size()}})));
-         check(co_await response.write_eof(asio::buffer(body)));
+         check(co_await response.write_eof(boost::asio::buffer(body)));
       };
    }
 };
