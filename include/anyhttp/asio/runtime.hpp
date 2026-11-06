@@ -71,6 +71,9 @@ namespace anyhttp
 {
 namespace asio = boost::asio;
 
+// The reference declares the types from here to errc in docs/reference.rst, with what each is on
+// both runtimes: from here, Breathe would show the ASIO one only.
+
 /// A coroutine, as the runtime runs it.
 template <typename T = void>
 using Task = asio::awaitable<T>;
@@ -123,27 +126,43 @@ namespace errc = boost::system::errc;
 namespace errors
 {
 /// The end of an incoming body.
+/// \runtimes{asio::error::eof,capy::error::eof}
+/// \hideinitializer
 inline const error_code eof = asio::error::eof;
 
 /// An incoming body that ended before it was complete: a reset stream, a lost connection.
+/// \runtimes{beast::http::error::partial_message,capy::error::stream_truncated}
+/// \hideinitializer
 inline const error_code partial_message = boost::beast::http::error::partial_message;
 
 /// An operation that was cancelled before it completed.
+/// \runtimes{errc::operation_canceled,capy::error::canceled}
+/// \hideinitializer
 inline const error_code canceled = make_error_code(errc::operation_canceled);
 
 /// HTTP/1.1: a request or response that has to wait for an earlier one, see Session.
+/// \runtimes{asio::error::would_block,errc::operation_would_block}
+/// \hideinitializer
 inline const error_code would_block = asio::error::would_block;
 
 /// A connection that can not carry any more requests or responses.
+/// \runtimes{asio::error::connection_aborted,errc::connection_aborted}
+/// \hideinitializer
 inline const error_code connection_aborted = asio::error::connection_aborted;
 
 /// An operation on a Reader or Writer after its implementation has been released.
+/// \runtimes{asio::error::bad_descriptor,errc::bad_file_descriptor}
+/// \hideinitializer
 inline const error_code bad_descriptor = asio::error::bad_descriptor;
 
 /// An operation that may be in progress only once at a time.
+/// \runtimes{asio::error::already_started,errc::connection_already_in_progress}
+/// \hideinitializer
 inline const error_code already_started = asio::error::already_started;
 
 /// A header section larger than Config::max_header_size.
+/// \runtimes{beast::http::error::header_limit,beast::http::error::header_limit}
+/// \hideinitializer
 inline const error_code header_limit = boost::beast::http::error::header_limit;
 } // namespace errors
 

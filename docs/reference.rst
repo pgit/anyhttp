@@ -141,26 +141,77 @@ The runtime
 
    #include <anyhttp/runtime.hpp>
 
-What the interface is written in, and what each name is on ASIO. On COROSIO the same names are
-something else, which :ref:`the table <io-runtimes-vocabulary>` has.
+What the interface is written in. The names are the same on both I/O runtimes, and what each
+stands for is the runtime's own, given here for both, as in :ref:`the table <io-runtimes-vocabulary>`.
 
-.. doxygentypedef:: anyhttp::Task
+Types
+^^^^^
 
-.. doxygentypedef:: anyhttp::Executor
+.. cpp:type:: template <typename T = void> anyhttp::Task
 
-.. doxygentypedef:: anyhttp::IpAddress
+   A coroutine, as the runtime runs it.
 
-.. doxygentypedef:: anyhttp::TcpEndpoint
+   :ASIO: ``asio::awaitable<T>``
+   :COROSIO: ``capy::task<T>``
 
-.. doxygentypedef:: anyhttp::UdpEndpoint
+.. cpp:type:: template <typename... Ts> anyhttp::IoTask
 
-.. doxygentypedef:: anyhttp::error_code
+   An operation, as the coroutine that yields its :cpp:type:`results`: ``IoTask<size_t>`` is
+   ``Task<results<size_t>>``, ``IoTask<>`` one that reports only its error.
 
-.. doxygentypedef:: anyhttp::results
+   :ASIO: ``asio::awaitable<std::tuple<error_code, Ts...>>``
+   :COROSIO: ``capy::task<capy::results<Ts...>>``
 
-.. doxygentypedef:: anyhttp::IoTask
+.. cpp:type:: template <typename... Ts> anyhttp::results
 
-.. doxygentypedef:: anyhttp::system_error
+   What an operation yields: its error first, then what it has to report besides, which
+   ``auto [ec, n] = co_await reader.read_some(buffer);`` takes apart. Whether that is meaningful
+   when there is an error is up to the operation.
+
+   :ASIO: ``std::tuple<error_code, Ts...>``
+   :COROSIO: ``capy::results<Ts...>``, which is ``std::tuple<std::error_code, Ts...>``
+
+.. cpp:type:: anyhttp::error_code
+
+   What every operation reports its outcome with.
+
+   :ASIO: ``boost::system::error_code``
+   :COROSIO: ``std::error_code``
+
+.. cpp:type:: anyhttp::system_error
+
+   What the runtime throws an :cpp:type:`error_code` as.
+
+   :ASIO: ``boost::system::system_error``
+   :COROSIO: ``std::system_error``
+
+.. cpp:type:: anyhttp::Executor
+
+   What sessions, streams and their readers and writers run on.
+
+   :ASIO: ``asio::any_io_executor``
+   :COROSIO: ``capy::any_executor``
+
+.. cpp:type:: anyhttp::IpAddress
+
+   The runtime's own IP address, which the API speaks, too.
+
+   :ASIO: ``asio::ip::address``
+   :COROSIO: ``corosio::ip_address``
+
+.. cpp:type:: anyhttp::TcpEndpoint
+
+   The runtime's own TCP endpoint.
+
+   :ASIO: ``asio::ip::tcp::endpoint``
+   :COROSIO: ``corosio::endpoint``
+
+.. cpp:type:: anyhttp::UdpEndpoint
+
+   The runtime's own UDP endpoint.
+
+   :ASIO: ``asio::ip::udp::endpoint``
+   :COROSIO: ``corosio::endpoint``, the same type as :cpp:type:`TcpEndpoint`
 
 .. doxygentypedef:: anyhttp::DefaultCompletionToken
 
@@ -169,8 +220,8 @@ something else, which :ref:`the table <io-runtimes-vocabulary>` has.
 Errors
 ^^^^^^
 
-Where the two runtimes spell an error differently, see :ref:`the table <io-runtimes-errors>`. Anything
-else compares against ``errc::``.
+The codes anyhttp reports where the two runtimes spell them differently. Anything else compares
+against ``errc::``, which is ``boost::system::errc`` on ASIO and ``std::errc`` on COROSIO.
 
 .. doxygenvariable:: anyhttp::errors::eof
 

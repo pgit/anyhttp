@@ -30,6 +30,7 @@ EXCLUDE_SYMBOLS        = Impl \
 
 # the first sentence of a comment is its summary, there is no need to say so with \brief
 JAVADOC_AUTOBRIEF      = YES
+ALIASES                = "runtimes{2}=\verbatim embed:rst^^:ASIO: ``\1``^^:COROSIO: ``\2``^^\endverbatim"
 
 # Doxygen does not compile anything, so what a compiler would get from config.hpp and from Asio's
 # headers is said here -- which is also why the reference takes neither Boost nor a configured
