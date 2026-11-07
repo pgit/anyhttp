@@ -30,6 +30,9 @@ namespace anyhttp
 
 // =================================================================================================
 
+/// The receive window that socket \p fd has advertised last, if the kernel says, see tcp_info.cpp.
+std::optional<uint32_t> advertised_receive_window(int fd);
+
 namespace
 {
 
@@ -312,6 +315,8 @@ protected:
          //
          if (then == Then::stall)
          {
+            co_await until_full(stream);
+            stalled.set();
             co_await delay(h2() ? 2200ms : 200ms);
             break;
          }
@@ -321,6 +326,31 @@ protected:
          co_await async_teardown(stream);
       io::close(stream);
       peer_done.set();
+   }
+
+   ///
+   /// Returns once \p stream has closed its receive window to the client, on two samples in a row.
+   /// The window stays closed, as nothing is read any more, and the second sample gives the client
+   /// the time to fill its send buffer behind it: then its write is stuck for good.
+   ///
+   /// A fixed time is not enough for that: the client may get to run so little that its write is
+   /// still under way when shutdown() is called, and the GOAWAY fits in after it. Neither is a
+   /// receive queue that has stopped growing: it does so for tens of milliseconds at a time.
+   ///
+   Task<void> until_full(TlsStream& stream)
+   {
+      const auto fd = get_socket(stream).native_handle();
+      for (int closed = 0; closed < 2;)
+      {
+         co_await delay(10ms);
+         auto window = advertised_receive_window(fd);
+         if (!window)
+         {
+            ADD_FAILURE() << "the kernel does not report the receive window";
+            break;
+         }
+         closed = *window == 0 ? closed + 1 : 0;
+      }
    }
 
    /// Whether a frame of \p type has arrived, of the HTTP/2 the peer has received.
@@ -351,6 +381,7 @@ protected:
    boost::urls::url target;
    std::string received;
    error_code end;
+   Event stalled; ///< set once the client's write is stuck, with Then::stall
    Event peer_done;
 };
 
@@ -434,7 +465,7 @@ TEST_P(ClientTlsEnd, WHEN_write_is_stuck_THEN_shutdown_interrupts_it_and_says_so
             std::tie(write_result) = co_await request.write(boost::asio::buffer(body));
          };
          auto end_it = [&]() -> Task<void> {
-            co_await delay(50ms);
+            co_await stalled.wait();
             std::tie(result) = co_await session.shutdown();
          };
          co_await when_both(write(), end_it());
