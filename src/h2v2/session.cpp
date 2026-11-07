@@ -417,7 +417,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    if (!conn || closing_)
    {
       mloge("submit: session already gone!");
-      std::move(handler)(errors::canceled, client::Request{nullptr});
+      complete_immediately(std::move(handler), get_executor(), errors::canceled,
+                           client::Request{nullptr});
       return;
    }
 
@@ -489,7 +490,7 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
       // a request that only has to wait for a free stream is normal back pressure, not a problem
       logwd(ec != errors::would_block, "[{}] submit: nghttp2_conn_submit_request: {}",
             stream->log_prefix(), nghttp2_strerror(rv));
-      std::move(handler)(ec, client::Request{nullptr});
+      complete_immediately(std::move(handler), get_executor(), ec, client::Request{nullptr});
       return;
    }
 
@@ -498,8 +499,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
 
    logd("[{}] submit: new stream ID: {}", stream->log_prefix(), id);
    streams_.emplace(id, stream);
-   complete_later(std::move(handler), get_executor(), error_code{},
-                  client::Request{std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)});
+   complete(std::move(handler), get_executor(), error_code{},
+            client::Request{std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)});
    start_write();
 }
 

@@ -212,12 +212,12 @@ struct Parked
          on_cancel(handler, [this] {
             ++cancelled;
             if (handler)
-               complete_later(std::move(handler), Executor{}, errors::canceled, size_t{0});
+               complete(std::move(handler), Executor{}, errors::canceled, size_t{0});
          });
       });
    }
 
-   void finish(size_t n) { complete_later(std::move(handler), Executor{}, error_code{}, n); }
+   void finish(size_t n) { complete(std::move(handler), Executor{}, error_code{}, n); }
 };
 
 Task<void> finish_later(Parked& parked, size_t n)

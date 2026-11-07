@@ -129,7 +129,7 @@ void StreamApplication::on_closed(error_code ec)
    accept_queue_.clear();
    write_queue_.clear();
    if (accept_handler_)
-      complete_later(std::move(accept_handler_), session_.get_executor(), closed_ec_, Stream{});
+      complete(std::move(accept_handler_), session_.get_executor(), closed_ec_, Stream{});
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -166,8 +166,8 @@ void StreamApplication::deliver_accepted()
    auto stream = std::move(accept_queue_.front());
    accept_queue_.pop_front();
    // posted: this is reached from inside ngtcp2
-   complete_later(std::move(accept_handler_), session_.get_executor(), error_code{},
-                  make_handle(*stream));
+   complete(std::move(accept_handler_), session_.get_executor(), error_code{},
+            make_handle(*stream));
 }
 
 void StreamApplication::async_accept_stream(AcceptStreamHandler&& handler)
@@ -196,8 +196,7 @@ void StreamApplication::async_accept_stream(AcceptStreamHandler&& handler)
 
    on_cancel(handler, [this] {
       if (accept_handler_)
-         complete_later(std::move(accept_handler_), session_.get_executor(), errors::canceled,
-                        Stream{});
+         complete(std::move(accept_handler_), session_.get_executor(), errors::canceled, Stream{});
    });
    accept_handler_ = std::move(handler);
 }

@@ -318,7 +318,7 @@ void QuicStream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
          // pointing into freed memory.
          //
          mlogd("async_write: \x1b[1;31mcancelled\x1b[0m, FIN still pending");
-         complete_later(std::move(write_handler), get_executor(), errors::canceled);
+         complete(std::move(write_handler), get_executor(), errors::canceled);
          return;
       }
       mlogd("async_write: \x1b[1;31mcancelled\x1b[0m");
@@ -369,7 +369,7 @@ void QuicStream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
       write_active = false;
       write_source = {};
       // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
-      complete_later(std::move(write_handler), get_executor(), errors::canceled);
+      complete(std::move(write_handler), get_executor(), errors::canceled);
    });
 }
 
@@ -678,7 +678,7 @@ void QuicStream::abort_writing(error_code ec)
    write_active = false;
    write_source = {};
    if (write_handler)
-      complete_later(std::move(write_handler), get_executor(), ec);
+      complete(std::move(write_handler), get_executor(), ec);
 }
 
 void QuicStream::maybe_close()

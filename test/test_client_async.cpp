@@ -829,11 +829,24 @@ TEST_P(ClientAsync, Recursion)
       EXPECT_EQ(s0, s1);
 
 #if ANYHTTP_ASIO
-      // however, ASIO allows us to control this behavior using "immediate executors"
-      auto ex = co_await this_coro::executor;
-      co_await response.async_read_some(boost::asio::buffer(empty), bind_immediate_executor(ex));
-      auto s2 = stack_remaining_bytes().value();
-      EXPECT_GT(s1, s2);
+      //
+      // However, ASIO lets the caller choose to be completed inline, by binding an "immediate
+      // executor": then each read runs on top of the one before. The second read is what tells
+      // nesting from a path that merely has more frames, which the first would show as well.
+      //
+      // Not over HTTP/1.1, which reads in a task of its own (launch()) that starts with a post:
+      // its reads never complete immediately, so there is nothing for the binding to choose.
+      //
+      if (GetParam() != Protocol::h1)
+      {
+         auto ex = co_await this_coro::executor;
+         co_await response.async_read_some(buffer(empty), bind_immediate_executor(ex));
+         auto s2 = stack_remaining_bytes().value();
+         co_await response.async_read_some(buffer(empty), bind_immediate_executor(ex));
+         auto s3 = stack_remaining_bytes().value();
+         EXPECT_GT(s1, s2);
+         EXPECT_GT(s2, s3) << "a bound immediate executor does not complete inline";
+      }
 #endif
    };
 }

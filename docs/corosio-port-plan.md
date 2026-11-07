@@ -129,7 +129,7 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
      use it.
 
    *2a–2c done 2026-09-30* (`fa8b4d5`..`63d0894`). `runtime.hpp` has `Task`, `Executor`,
-   `error_code`, `Completion`, `errc`/`errors`, `complete_immediately`/`complete_later`,
+   `error_code`, `Completion`, `errc`/`errors`, `complete_immediately`/`complete`,
    `on_cancel`, `run_later`, `dispatch_to`, `new_strand`, `launch`, `when_both`, `Event`, `Timer`,
    and `io::read_some`/`write`/`receive`/`wait_readable`. Two findings:
    - `Event::set()` posts in ASIO too, as capy's does, because h3 signals from inside ngtcp2.

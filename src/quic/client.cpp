@@ -421,7 +421,8 @@ void QuicClientSession::async_submit(SubmitHandler&& handler, std::string_view m
    if (closed() || !ready())
    {
       mloge("async_submit: session not ready");
-      std::move(handler)(errors::canceled, client::Request{nullptr});
+      complete_immediately(std::move(handler), get_executor(), errors::canceled,
+                           client::Request{nullptr});
       return;
    }
    application_->async_submit(std::move(handler), method, std::move(url), headers);

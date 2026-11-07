@@ -126,7 +126,7 @@ void NGHttp2Reader<Base>::async_read_some(boost::asio::mutable_buffer buffer,
    on_cancel(handler, [this] {
       logd("[{}] async_read_some: \x1b[1;31m{}\x1b[0m", stream->log_prefix(), "cancelled");
       if (stream->read_handler_)
-         complete_later(std::move(stream->read_handler_), get_executor(), errors::canceled, 0);
+         complete(std::move(stream->read_handler_), get_executor(), errors::canceled, 0);
    });
 #endif
 
@@ -254,7 +254,7 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    if (!stream)
    {
       mlogw("async_submit: stream already gone");
-      std::move(handler)(errors::connection_aborted);
+      std::move(handler)(errors::connection_aborted); // inline like success, see below
       return;
    }
 
@@ -311,6 +311,14 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
    nghttp2_submit_response2(stream->parent.session, stream->id, nva.data(), nva.size(), &prd);
    stream->parent.start_write();
 
+   //
+   // Inline, against the rule of complete_immediately(), which a plain callback relies on. The
+   // requests that arrive together on a connection start their handlers together, and what they
+   // write goes out in one send if all of them have written before the write pass runs. A queued
+   // completion, whether ahead of the write pass or behind it, lets the pass run in the middle of
+   // that: with ten streams per connection, three times the sends, and 19-27% less throughput
+   // (h2load, 2026-11-06). With one stream it makes no difference.
+   //
    std::move(handler)(error_code{});
 }
 
@@ -350,7 +358,8 @@ void NGHttp2Writer<Base>::async_get_response(client::Request::GetResponseHandler
    if (!stream)
    {
       mlogw("async_get_response: stream already gone");
-      std::move(handler)(errors::connection_aborted, client::Response{nullptr});
+      complete_immediately(std::move(handler), get_executor(), errors::connection_aborted,
+                           client::Response{nullptr});
    }
    else
       stream->async_get_response(std::move(handler));
@@ -696,7 +705,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, boost::asio::const_buffer 
       mlogd("async_write: \x1b[1;31m{}\x1b[0m", "cancelled");
       // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
       if (write_handler)
-         complete_later(std::move(write_handler), get_executor(), errors::canceled);
+         complete(std::move(write_handler), get_executor(), errors::canceled);
    });
 
    resume();
@@ -738,8 +747,8 @@ void NGHttp2Stream::async_get_response(client::Request::GetResponseHandler&& han
    on_cancel(handler, [this] {
       mlogd("async_get_response: \x1b[1;31m{}\x1b[0m", "cancelled");
       if (response_handler)
-         complete_later(std::move(response_handler), get_executor(), errors::canceled,
-                        client::Response{nullptr});
+         complete(std::move(response_handler), get_executor(), errors::canceled,
+                  client::Response{nullptr});
    });
 
    response_handler = std::move(handler);

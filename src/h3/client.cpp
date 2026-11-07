@@ -125,7 +125,8 @@ public:
    {
       if (!stream)
       {
-         std::move(handler)(make_error_code(errc::connection_aborted), client::Response{nullptr});
+         complete_immediately(std::move(handler), this->get_executor(),
+                              make_error_code(errc::connection_aborted), client::Response{nullptr});
          return;
       }
       static_cast<Http3ClientStream*>(stream)->async_get_response(std::move(handler));
@@ -281,8 +282,8 @@ void Http3ClientStream::async_get_response(client::Request::GetResponseHandler&&
    on_cancel(handler, [this] {
       mlogd("async_get_response: cancelled");
       if (response_handler)
-         complete_later(std::move(response_handler), get_executor(), errors::canceled,
-                        client::Response{nullptr});
+         complete(std::move(response_handler), get_executor(), errors::canceled,
+                  client::Response{nullptr});
    });
 
    //
@@ -339,12 +340,14 @@ void Http3ClientApplication::async_submit(SubmitHandler&& handler, std::string_v
       if (rv == NGTCP2_ERR_STREAM_ID_BLOCKED)
       {
          mlogd("async_submit: no stream available, peer's limit reached");
-         std::move(handler)(errors::would_block, client::Request{nullptr});
+         complete_immediately(std::move(handler), session_.get_executor(), errors::would_block,
+                              client::Request{nullptr});
          return;
       }
 
       mloge("async_submit: ngtcp2_conn_open_bidi_stream: {}", ngtcp2_strerror(rv));
-      std::move(handler)(make_error_code(errc::invalid_argument), client::Request{nullptr});
+      complete_immediately(std::move(handler), session_.get_executor(),
+                           make_error_code(errc::invalid_argument), client::Request{nullptr});
       return;
    }
 
@@ -352,15 +355,16 @@ void Http3ClientApplication::async_submit(SubmitHandler&& handler, std::string_v
    if (!stream->submit_request(method, url, headers))
    {
       session_.erase_stream(stream_id);
-      std::move(handler)(make_error_code(errc::invalid_argument), client::Request{nullptr});
+      complete_immediately(std::move(handler), session_.get_executor(),
+                           make_error_code(errc::invalid_argument), client::Request{nullptr});
       return;
    }
 
    logd("[{}] async_submit: new stream ID: {}", stream->log_prefix_, stream_id);
    session_.wake_write();
 
-   complete_later(std::move(handler), session_.get_executor(), error_code{},
-                  client::Request{std::make_unique<Http3ClientWriter>(*stream)});
+   complete(std::move(handler), session_.get_executor(), error_code{},
+            client::Request{std::make_unique<Http3ClientWriter>(*stream)});
 }
 
 // =================================================================================================

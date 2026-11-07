@@ -239,7 +239,7 @@ inline void complete_immediately(Handler&& handler, const Executor&, Args&&... a
 }
 
 template <typename Handler, typename... Args>
-inline void complete_later(Handler&& handler, const Executor&, Args&&... args)
+inline void complete(Handler&& handler, const Executor&, Args&&... args)
 {
    if (handler)
       std::move(handler)(std::forward<Args>(args)...);
