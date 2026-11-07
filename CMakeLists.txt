@@ -266,7 +266,10 @@ if (ENABLE_COVERAGE)
     set(COVERAGE_HTML_DIR "${PROJECT_BINARY_DIR}/coverage_report")
     set(COVERAGE_MERGE_SCRIPT "${PROJECT_SOURCE_DIR}/cmake/merge_profraw.cmake")
     set(COVERAGE_TEST_BIN "${PROJECT_BINARY_DIR}/test/test_all")
-    set(LLVM_COV_IGNORE_REGEX "/usr/|${PROJECT_BINARY_DIR}/|${PROJECT_SOURCE_DIR}/test/")
+    # The code the guide shows (docs/snippets.cpp) is linked into test_all, but it is there to be
+    # read, not tested, much like test/: a snippet may be compiled and never run.
+    set(LLVM_COV_IGNORE_REGEX
+        "/usr/|${PROJECT_BINARY_DIR}/|${PROJECT_SOURCE_DIR}/test/|${PROJECT_SOURCE_DIR}/docs/")
 
     add_custom_target(coverage
         COMMAND ${CMAKE_COMMAND} -E rm -rf ${COVERAGE_RAW_DIR} ${COVERAGE_HTML_DIR}
