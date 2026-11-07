@@ -55,7 +55,8 @@ public:
    explicit constexpr operator bool() const noexcept { return static_cast<bool>(impl_); }
 
    /// \return The executor of the session this message belongs to, or an empty one after
-   /// \c reset().
+   /// \c reset(), with what that means for an operation started then, see
+   /// \c Reader::get_executor().
    executor_type get_executor() const noexcept;
 
    /// \return The <tt>[proto:address:port.stream]</tt> tag the library's log lines carry for this
