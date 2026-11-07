@@ -51,7 +51,7 @@ Task<std::string> read_to_end(Reader& reader, Token token)
    std::array<char, 1024> buffer;
    for (;;)
    {
-      auto [ec, n] = co_await reader.async_read_some(asio::buffer(buffer), token);
+      auto [ec, n] = co_await reader.async_read_some(boost::asio::buffer(buffer), token);
       body.append(buffer.data(), n);
       if (ec == errors::eof)
          co_return body;
@@ -68,14 +68,14 @@ Task<void> echo(server::Request request, server::Response response, Token token)
    auto body = co_await read_to_end(request, token);
    auto [submit_ec] = co_await response.async_submit(200, {}, token);
    EXPECT_FALSE(submit_ec) << submit_ec.message();
-   auto [write_ec] = co_await response.async_write(asio::buffer(body), token);
+   auto [write_ec] = co_await response.async_write(boost::asio::buffer(body), token);
    EXPECT_FALSE(write_ec) << write_ec.message();
    //
    // Not checked: over HTTP/3, the server's writes complete when the peer acknowledges them, and a
    // client that has read all of the response may close the connection before it acknowledges the
    // last of it.
    //
-   std::ignore = co_await response.async_write_eof(asio::buffer("!", 1), token);
+   std::ignore = co_await response.async_write_eof(boost::asio::buffer("!", 1), token);
 }
 
 /// The client's side of an exchange, with \p token on every operation, ending with a shutdown.
@@ -84,9 +84,9 @@ Task<void> exchange(Session& session, boost::urls::url url, Token token)
 {
    auto [submit_ec, request] = co_await session.async_submit(url, {}, token);
    EXPECT_FALSE(submit_ec) << submit_ec.message();
-   auto [write_ec] = co_await request.async_write(asio::buffer("Hello, ", 7), token);
+   auto [write_ec] = co_await request.async_write(boost::asio::buffer("Hello, ", 7), token);
    EXPECT_FALSE(write_ec) << write_ec.message();
-   auto [eof_ec] = co_await request.async_write_eof(asio::buffer("World", 5), token);
+   auto [eof_ec] = co_await request.async_write_eof(boost::asio::buffer("World", 5), token);
    EXPECT_FALSE(eof_ec) << eof_ec.message();
 
    auto [response_ec, response] = co_await request.async_get_response(token);
@@ -258,7 +258,7 @@ protected:
       if (tls())
       {
          auto& stream = tls_peer.emplace(std::move(socket), tls_context);
-         co_await stream.async_handshake(asio::ssl::stream_base::server, use_awaitable);
+         co_await stream.async_handshake(boost::asio::ssl::stream_base::server, use_awaitable);
          co_await read_on(stream);
       }
       else
@@ -270,12 +270,13 @@ protected:
    Task<void> read_on(Stream& stream)
    {
       if (protocol() == Protocol::h2)
-         co_await asio::async_write(stream, asio::buffer("\0\0\0\x04\0\0\0\0\0"sv), use_awaitable);
+         co_await boost::asio::async_write(stream, boost::asio::buffer("\0\0\0\x04\0\0\0\0\0"sv),
+                                           use_awaitable);
 
       std::array<char, 4096> buffer;
       for (;;)
       {
-         auto [ec, n] = co_await stream.async_read_some(asio::buffer(buffer), as_tuple);
+         auto [ec, n] = co_await stream.async_read_some(boost::asio::buffer(buffer), as_tuple);
          if (ec)
             break;
       }
@@ -289,11 +290,11 @@ protected:
    }
 
    IoContext context;
-   tcp::acceptor acceptor{context, {asio::ip::make_address("127.0.0.2"), 0}};
-   asio::ssl::context tls_context = make_server_tls_context(server::Config{}.tls_certificate_chain,
-                                                            server::Config{}.tls_private_key);
+   tcp::acceptor acceptor{context, {boost::asio::ip::make_address("127.0.0.2"), 0}};
+   boost::asio::ssl::context tls_context = make_server_tls_context(
+      server::Config{}.tls_certificate_chain, server::Config{}.tls_private_key);
    std::optional<tcp::socket> peer;
-   std::optional<asio::ssl::stream<tcp::socket>> tls_peer;
+   std::optional<boost::asio::ssl::stream<tcp::socket>> tls_peer;
 };
 
 INSTANTIATE_TEST_SUITE_P(AsioTokensSilentPeer, AsioTokensSilentPeer,
@@ -359,9 +360,10 @@ TEST_F(AsioTokensEmptyHandle, WHEN_awaited_THEN_operations_fail_with_bad_descrip
    co_spawn(
       context,
       [this]() -> Task<void> {
-         auto [read_ec, n] = co_await response.async_read_some(asio::buffer(buffer), as_tuple);
+         auto [read_ec, n] =
+            co_await response.async_read_some(boost::asio::buffer(buffer), as_tuple);
          EXPECT_EQ(read_ec, errors::bad_descriptor);
-         auto [write_ec] = co_await request.async_write(asio::buffer(buffer), as_tuple);
+         auto [write_ec] = co_await request.async_write(boost::asio::buffer(buffer), as_tuple);
          EXPECT_EQ(write_ec, errors::bad_descriptor);
          auto [eof_ec] = co_await request.async_write_eof(as_tuple);
          EXPECT_EQ(eof_ec, errors::bad_descriptor);

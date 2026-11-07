@@ -557,7 +557,7 @@ TEST_P(QuicStreams, WHEN_accept_stream_takes_cancel_after_THEN_it_can_be_cancell
          co_await connection.async_accept_stream(cancel_after(10s, as_tuple));
       EXPECT_FALSE(accept_ec) << accept_ec.message();
       auto [read_ec, body] = co_await read_all(stream);
-      co_await stream.async_write_eof(asio::buffer(body), use_awaitable);
+      co_await stream.async_write_eof(boost::asio::buffer(body), use_awaitable);
       std::ignore = co_await connection.async_accept_stream(as_tuple(use_awaitable));
    };
 
@@ -566,7 +566,7 @@ TEST_P(QuicStreams, WHEN_accept_stream_takes_cancel_after_THEN_it_can_be_cancell
                                                      client_config(), use_awaitable);
       co_await delay(200ms); // the server's first accept has given up by now
       auto [ec, stream] = connection.open_stream();
-      co_await stream.async_write_eof(asio::buffer("late", 4), use_awaitable);
+      co_await stream.async_write_eof(boost::asio::buffer("late", 4), use_awaitable);
       auto [read_ec, body] = co_await read_all(stream);
       EXPECT_EQ(body, "late");
    }());
