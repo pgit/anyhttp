@@ -543,6 +543,35 @@ TEST_P(QuicStreams, WHEN_using_completion_tokens_THEN_the_same_works)
    }());
 }
 
+//
+// An accept that nothing arrives for ends with cancel_after(), and the connection goes on
+// accepting: the stream the client opens later is not lost.
+//
+TEST_P(QuicStreams, WHEN_accept_stream_takes_cancel_after_THEN_it_can_be_cancelled)
+{
+   serverConnection = [](quic::Connection connection) -> Task<void> {
+      auto [ec, none] = co_await connection.async_accept_stream(cancel_after(100ms, as_tuple));
+      EXPECT_EQ(ec, errc::operation_canceled);
+
+      auto [accept_ec, stream] =
+         co_await connection.async_accept_stream(cancel_after(10s, as_tuple));
+      EXPECT_FALSE(accept_ec) << accept_ec.message();
+      auto [read_ec, body] = co_await read_all(stream);
+      co_await stream.async_write_eof(boost::asio::buffer(body), use_awaitable);
+      std::ignore = co_await connection.async_accept_stream(as_tuple(use_awaitable));
+   };
+
+   run([&]() -> Task<void> {
+      auto connection = co_await quic::async_connect(context.get_executor(), "127.0.0.2", port(),
+                                                     client_config(), use_awaitable);
+      co_await delay(200ms); // the server's first accept has given up by now
+      auto [ec, stream] = connection.open_stream();
+      co_await stream.async_write_eof(boost::asio::buffer("late", 4), use_awaitable);
+      auto [read_ec, body] = co_await read_all(stream);
+      EXPECT_EQ(body, "late");
+   }());
+}
+
 #endif
 
 // =================================================================================================

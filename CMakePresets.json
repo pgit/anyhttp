@@ -150,6 +150,19 @@
             ]
         },
         {
+            "name": "build-coverage",
+            "displayName": "Coverage",
+            "description": "What CI's Coverage job publishes: 'cmake --build build-coverage --target coverage' runs the tests and writes build-coverage/coverage_report/",
+            "inherits": [
+                "clang",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ENABLE_COVERAGE": "ON"
+            }
+        },
+        {
             "name": "build-openssl",
             "displayName": "OpenSSL",
             "inherits": [
@@ -316,6 +329,10 @@
             "configurePreset": "build-ubsan"
         },
         {
+            "name": "build-coverage",
+            "configurePreset": "build-coverage"
+        },
+        {
             "name": "build-openssl",
             "configurePreset": "build-openssl"
         },
@@ -401,6 +418,11 @@
         {
             "name": "build-ubsan",
             "configurePreset": "build-ubsan",
+            "inherits": "base"
+        },
+        {
+            "name": "build-coverage",
+            "configurePreset": "build-coverage",
             "inherits": "base"
         },
         {

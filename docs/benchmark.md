@@ -15,6 +15,7 @@ never against a number in this file.
 - [HTTP/2: nghttpd vs anyhttp](#http2-nghttpd-vs-anyhttp)
 - [Threads: one shared context or one context per thread](#threads-one-shared-context-or-one-context-per-thread)
 - [ASIO vs COROSIO](#asio-vs-corosio)
+- [Completing an operation inline or posted](#completing-an-operation-inline-or-posted)
 - [Earlier findings](#earlier-findings)
 - [Bugs found while benchmarking](#bugs-found-while-benchmarking)
 
@@ -371,6 +372,71 @@ posts everything. `server --inline-budget N` / `--unassisted-budget N` (COROSIO 
 ### Reproduce
 
 `scripts/bench.sh` (single-threaded), and `scripts/bench.sh -P` for cleartext.
+
+---------------------------------------------------------------------------------------------------
+
+## Completing an operation inline or posted
+
+*2026-11-06, on `b489baa` plus the uncommitted completion-token work.* What an operation that has
+nothing left to wait for costs, depending on how it completes: by calling its handler from the
+initiating function, or through `complete_immediately()` / `complete()`, which post.
+
+### What `complete_immediately()` does
+
+It completes through the handler's own immediate executor, so the caller decides: a handler that
+has one bound (`bind_immediate_executor()`) may be completed inline, any other is posted to the
+fallback with `blocking.never`. From `44851a7` until now it handed `asio::async_immediate()` a
+lambda that wraps the handler instead, and `async_immediate()` asks what it is given for its
+immediate executor: the lambda has none, so everything was posted and a caller's binding was
+ignored. `experiments/immediate_binding.cpp` shows the difference; the comment in
+`complete_immediately()` says why it does not use `async_immediate()`. The `Recursion` test in
+`test_client_async.cpp` passed throughout, through the extra frames of the binder's path; it now
+reads twice and requires the second read to nest deeper than the first.
+
+### Results
+
+`experiments/immediate_completion.cpp`, Release, one thread: a coroutine awaits a trivial
+operation in a loop, as a reader does that drains a body which has already arrived. Three runs
+each, ns per operation:
+
+| completion | back to back | with a post after each |
+|---|---|---|
+| handler called inline | 133-169 | 146-148 |
+| `complete_immediately()` before the fix (`async_immediate()`) | 69-75 | 167-174 |
+| `complete()` | 73-76 | 171-174 |
+| `complete_immediately()` now, nothing bound | 81-82 | 190-192 |
+
+- **Inline nests.** An ASIO coroutine resumed from inside the initiating function runs on top of
+  it: about 416 bytes of stack per operation with `as_tuple(use_awaitable)`, 576 with an immediate
+  executor bound, 752 through the `#else` branch with one. Back to back, the stack is gone after
+  some 20,000 operations (8 MiB); the inline numbers in that column include faulting in fresh
+  stack. Every posted mode stays flat.
+- **Where nothing nests, inline saves about 25 ns** per operation over a post (the second
+  column: each operation is followed by a real post, as a server's coroutine waits for the
+  network sooner or later). A request costs about 3 us of CPU, so that is under 1% even for an
+  operation that every request goes through.
+- **Honouring the binding costs 10-20 ns** per operation over a plain post, for the
+  `any_completion_executor` in between. The server does not show it: five interleaved rounds of
+  `h2load -c 32` (HTTP/1.1 `-m 1`, HTTP/2 and HTTP/3 `-m 10`) on `/`, and three of a 64 KiB upload
+  to `/upload`, were within noise of the build that still used `async_immediate()` (2026-11-07).
+
+### What it means
+
+Calling a handler inline is safe where the caller cannot loop on it without waiting for something
+real in between: once per response or per request, not once per read of a buffered body. What it
+buys there is not the post, but ordering. `Response::async_submit()` on HTTP/2 and HTTP/3 completes
+inline because the requests that arrive together on a connection start their handlers together,
+and their responses go out in one send only if every handler has written before the write pass
+runs. A queued completion, ahead of the write pass or behind it, lets the pass run in the middle:
+with `h2load -c 32 -m 10`, sends per request went from 0.11 to 0.31, and throughput fell by 19-27%
+(HTTP/2) and 16-41% (HTTP/3). With `-m 1`, one stream per connection, it made no difference
+(1.01 sends per request either way).
+
+### Reproduce
+
+The command is in the header of `experiments/immediate_completion.cpp`. Arguments: the number of
+operations, then `posted` (leave out the modes that nest, so that the count can be large) or
+`unwind` (a post after each operation).
 
 ---------------------------------------------------------------------------------------------------
 

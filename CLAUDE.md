@@ -50,6 +50,11 @@ FetchContent subproject, in `build-package/`. Run it after changing anything in 
 or what a public header includes: each tree here builds the library with the tree's own directory
 flags, so a usage requirement that is missing from the `anyhttp` target shows up only out there.
 
+`build-coverage/` is the report CI publishes at https://pgit.github.io/anyhttp/coverage/: Debug,
+clang with `ENABLE_COVERAGE`. `cmake --build build-coverage --target coverage` runs the suite and
+writes `build-coverage/coverage_report/index.html`. It counts the library only: `test/` and `docs/`
+(the snippets are linked into `test_all`) are left out.
+
 Every tree is a preset of its own name in [CMakePresets.json](CMakePresets.json) -- that is where
 the options of each one live, and the options of a new tree belong there rather than in a command
 line. `cmake --list-presets` names them all. Do not configure a tree by hand: `cc` and `c++` are

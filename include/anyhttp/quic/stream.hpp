@@ -282,8 +282,8 @@ public:
 
       on_cancel(handler, [this] {
          if (stream && stream->read_handler)
-            complete_later(std::move(stream->read_handler), stream->get_executor(),
-                           errors::canceled, size_t{0});
+            complete(std::move(stream->read_handler), stream->get_executor(), errors::canceled,
+                     size_t{0});
       });
 
       assert(!stream->read_handler);

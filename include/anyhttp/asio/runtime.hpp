@@ -215,9 +215,15 @@ inline void complete_immediately(Handler&& handler, const Executor& fallback, Ar
    if (!handler)
       return;
 
-#if 1
-   boost::asio::async_immediate(fallback, [handler = std::forward<Handler>(handler),
-                                           ... args = std::forward<Args>(args)]() mutable { //
+   //
+   // Not async_immediate(): it asks the handler it is given for its immediate executor, and that is
+   // the lambda here, which has none -- the one bound to \p handler is never fetched, so the caller
+   // could not choose to be completed inline. Both post to \p fallback for a handler without one.
+   // See experiments/immediate_binding.cpp.
+   //
+#if 0
+   asio::async_immediate(fallback, [handler = std::forward<Handler>(handler),
+                                    ... args = std::forward<Args>(args)]() mutable { //
       std::move(handler)(std::move(args)...);
    });
 #else
@@ -236,7 +242,7 @@ inline void complete_immediately(Handler&& handler, const Executor& fallback, Ar
  * application inside nghttp2 or ngtcp2 would let it call back into the engine from inside it.
  */
 template <typename Handler, typename... Args>
-inline void complete_later(Handler&& handler, const Executor& executor, Args&&... args)
+inline void complete(Handler&& handler, const Executor& executor, Args&&... args)
 {
    boost::asio::post(executor, [handler = std::forward<Handler>(handler),
                                 ... args = std::forward<Args>(args)]() mutable { //
@@ -247,7 +253,7 @@ inline void complete_later(Handler&& handler, const Executor& executor, Args&&..
 /**
  * Calls \p on_cancel when the caller of the operation \p handler stands for cancels it. The
  * callback runs on the caller's side, which may be another thread with a strand, so all it may do
- * is take the parked handler back and complete it with \ref complete_later. Does nothing if the
+ * is take the parked handler back and complete it with \ref complete. Does nothing if the
  * caller has no way of cancelling.
  */
 template <typename Signature, typename F>
@@ -494,7 +500,7 @@ public:
    }
 
 private:
-   void wake(error_code ec) { complete_later(std::move(waiter_), executor_, ec); }
+   void wake(error_code ec) { complete(std::move(waiter_), executor_, ec); }
 
    bool set_ = false;
    Completion<void(error_code)> waiter_;

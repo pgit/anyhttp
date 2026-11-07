@@ -171,10 +171,15 @@ public:
    {
       if (!stream || stream->closed)
       {
-         std::move(handler)(make_error_code(errc::connection_reset));
+         std::move(handler)(make_error_code(errc::connection_reset)); // inline like success
          return;
       }
       stream->submit_response(status_code, fields);
+      //
+      // Inline, against the rule of complete_immediately(), so that the responses of the requests
+      // that arrived together go out together, as with HTTP/2 (NGHttp2Writer::async_submit()).
+      // Queueing the completion cost 16-41% of throughput (h2load, 2026-11-06).
+      //
       std::move(handler)(error_code{});
    }
 };

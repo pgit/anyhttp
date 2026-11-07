@@ -60,8 +60,15 @@ public:
    /// \return Whether this handle has an implementation: not after \c reset(), or being moved from.
    explicit constexpr operator bool() const noexcept { return static_cast<bool>(impl_); }
 
-   /// \return The executor of the session this message belongs to, or an empty one after
-   /// \c reset().
+   /**
+    * \return The executor of the session this message belongs to, or an empty one after
+    * \c reset().
+    *
+    * Without one, what is started on an empty handle with a completion token cannot complete the
+    * way ASIO promises: it fails with \c errors::bad_descriptor from inside the call, and a token
+    * that needs an executor of the operation, as \c cancel_after does for its timer, throws
+    * \c bad_executor instead. Awaited, it just fails.
+    */
    executor_type get_executor() const noexcept;
 
    /// \return The <tt>[proto:address:port.stream]</tt> tag the library's log lines carry for this

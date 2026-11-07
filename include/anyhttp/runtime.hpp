@@ -7,21 +7,19 @@
 //
 // Apart from the runtime layer (this header, anyhttp/net.hpp and what they include), only the
 // public API front-ends and the test fixtures test ANYHTTP_ASIO or ANYHTTP_COROSIO: the protocol
-// backends are written once, against these names.
+// backends are written once, against these names. asio/runtime.hpp declares them in these
+// sections and documents each, corosio/runtime.hpp follows it:
 //
-//    Task<T>, IoTask<Ts...>, results<Ts...>, Executor, error_code, Completion<Signature>,
-//    system_error
-//    IpAddress, TcpEndpoint, UdpEndpoint                       -- the runtime's own
-//    errc (portable error conditions), errors:: (the codes of the API contract), throw_error()
-//    last_error()                                              -- errno, as an error_code
-//    complete_immediately(), complete_later(), on_cancel()     -- parked operations
-//    initiate<Signature>(), launch()                           -- the two directions between them
-//    yield_now(), run_later(), dispatch_to(), new_strand(), delay(), when_both(), when_either()
-//    reset_cancellation(), shielded()
-//    Event, Timer
-//    io::read_some(), io::write(), io::peek(), io::receive(), io::wait_readable()
-//
-// asio/runtime.hpp has the documentation of each.
+//    types        Task<T>, Executor, IpAddress, TcpEndpoint, UdpEndpoint, error_code,
+//                 results<Ts...>, IoTask<Ts...>; asio:: for the buffers, which stay Asio's
+//    errors       errc, errors::, system_error, throw_error(), last_error(), and ::code() of an
+//                 exception_ptr; multithreaded_runtime
+//    completions  Completion<Signature>, complete_immediately(), complete(), on_cancel(),
+//                 and to and from coroutines: initiate<Signature>(), launch()
+//    scheduling   yield_now(), run_later(), dispatch_to(), new_strand(), delay(), when_both(),
+//                 when_either(), reset_cancellation(), shielded()
+//    engines      Event, Timer
+//    I/O          io::read_some(), io::write(), io::peek(), io::receive(), io::wait_readable()
 //
 
 #include "anyhttp/config.hpp"

@@ -183,19 +183,20 @@ jobs:
 
       - name: Configure CMake with Coverage
         run: |
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_COVERAGE=ON
+          cmake --preset build-coverage
 
-      - *build
+      - name: Build
+        run: cmake --build --preset build-coverage
 
       - name: Generate Coverage Report
         run: |
-          cmake --build build --target coverage
+          cmake --build --preset build-coverage --target coverage
 
       - name: Prepare Pages directory
         if: github.ref == 'refs/heads/master' && github.event_name == 'push'
         run: |
           mkdir -p pages/coverage
-          cp -r build/coverage_report/* pages/coverage/
+          cp -r build-coverage/coverage_report/* pages/coverage/
 
       - name: Get the documentation
         if: github.ref == 'refs/heads/master' && github.event_name == 'push'
@@ -208,7 +209,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: coverage-report
-          path: build/coverage_report/
+          path: build-coverage/coverage_report/
           retention-days: 30
 
       - name: Upload coverage and documentation to GitHub Pages

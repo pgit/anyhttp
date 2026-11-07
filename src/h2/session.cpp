@@ -501,13 +501,15 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    if (!session)
    {
       mloge("submit: session already gone!");
-      std::move(handler)(errors::canceled, client::Request{nullptr});
+      complete_immediately(std::move(handler), get_executor(), errors::canceled,
+                           client::Request{nullptr});
       return;
    }
    if (!nghttp2_session_check_request_allowed(session))
    {
       mloge("submit: request not allowed!");
-      std::move(handler)(errors::canceled, client::Request{nullptr});
+      complete_immediately(std::move(handler), get_executor(), errors::canceled,
+                           client::Request{nullptr});
       return;
    }
 
@@ -525,7 +527,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    if (streams_.size() >= limit)
    {
       mlogd("submit: {} streams in progress, peer allows {}", streams_.size(), limit);
-      std::move(handler)(errors::would_block, client::Request{nullptr});
+      complete_immediately(std::move(handler), get_executor(), errors::would_block,
+                           client::Request{nullptr});
       return;
    }
 
@@ -588,7 +591,9 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
    {
       mloge("submit: nghttp2_submit_request: ERROR: {}", id);
       using namespace boost::system;
-      std::move(handler)(make_error_code(errc::invalid_argument), client::Request{nullptr});
+      complete_immediately(std::move(handler), get_executor(),
+                           make_error_code(errc::invalid_argument), client::Request{nullptr});
+      return;
    }
 
    stream->id = id;
@@ -596,8 +601,8 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
 
    logd("[{}] submit: new stream ID: {}", stream->log_prefix(), id);
    streams_.emplace(id, stream);
-   complete_later(std::move(handler), get_executor(), error_code{},
-                  client::Request{std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)});
+   complete(std::move(handler), get_executor(), error_code{},
+            client::Request{std::make_unique<NGHttp2Writer<client::Request::Impl>>(*stream)});
    start_write();
 }
 

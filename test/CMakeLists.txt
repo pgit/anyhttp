@@ -43,6 +43,8 @@ endif()
 add_executable(test_all ${SRC_FILES})
 # not a test: lets TSAN see weak_ptr's synchronization, see there
 target_sources(test_all PRIVATE tsan_libcxx.cpp)
+# not a test either: what a test needs of <linux/tcp.h>, which clashes with Asio's includes
+target_sources(test_all PRIVATE tcp_info.cpp)
 target_link_libraries(test_all PRIVATE GTest::gtest_main GTest::gmock)
 target_link_libraries(test_all PRIVATE spdlog::spdlog_header_only)
 

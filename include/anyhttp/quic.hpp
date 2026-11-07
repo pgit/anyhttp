@@ -119,7 +119,8 @@ public:
    /// The executor type, for what looks for one.
    using executor_type = Executor;
 
-   /// \return The executor of the connection, or an empty one after \c reset().
+   /// \return The executor of the connection, or an empty one after \c reset(), with what that
+   /// means for an operation started then, see \c Reader::get_executor().
    executor_type get_executor() const noexcept;
 
    /// \return The <tt>[quic:address:port.stream]</tt> tag the library's log lines carry for this
@@ -193,7 +194,8 @@ public:
    /// The executor type, for what looks for one.
    using executor_type = Executor;
 
-   /// \return The executor of the connection, which all of it is to be used on.
+   /// \return The executor of the connection, which all of it is to be used on, or an empty one
+   /// for a handle without a connection, see \c Reader::get_executor().
    executor_type get_executor() const noexcept;
 
    /// \return The <tt>[quic:address:port]</tt> tag the library's log lines carry for this
