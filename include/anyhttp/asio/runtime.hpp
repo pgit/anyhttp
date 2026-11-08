@@ -255,16 +255,25 @@ inline void complete(Handler&& handler, const Executor& executor, Args&&... args
  * callback runs on the caller's side, which may be another thread with a strand, so all it may do
  * is take the parked handler back and complete it with \ref complete. Does nothing if the
  * caller has no way of cancelling.
+ *
+ * Only a request with the \c terminal bit counts: that is the one kind of cancellation there is,
+ * the same as a stop request on COROSIO, and it completes right away, whatever it leaves behind. A
+ * request for \c partial or \c total alone promises a state that is not always there to keep, so it
+ * is ignored, which is what Asio asks of an operation that does not support a type. Asio's own
+ * coroutines filter the same way by default, \c cancel_after sends \c terminal and \c || sends all
+ * three.
  */
 template <typename Signature, typename F>
 inline void on_cancel(Completion<Signature>& handler, F&& on_cancel)
 {
    auto slot = boost::asio::get_associated_cancellation_slot(handler);
    if (slot.is_connected() && !slot.has_handler())
-      slot.assign(
-         [on_cancel = std::forward<F>(on_cancel)](boost::asio::cancellation_type_t) mutable { //
+      slot.assign([on_cancel = std::forward<F>(on_cancel)](
+                     boost::asio::cancellation_type_t type) mutable { //
+         if ((type & boost::asio::cancellation_type::terminal) !=
+             boost::asio::cancellation_type::none)
             on_cancel();
-         });
+      });
 }
 
 // -------------------------------------------------------------------------------------------------
