@@ -51,7 +51,10 @@ one (``partial_message``), without touching the connection that is gone.
 Cancellation
 ------------
 
-Cancelling ``write_eof()`` does not take the end of the body back. The end is declared the moment the
-operation starts, and no protocol can un-send a FIN. Cancellation detaches the handler, and issuing
-``write_eof()`` again adopts the end that is already on its way rather than failing. Intent and
-delivery are tracked separately for exactly this reason.
+Cancelling ``write_eof()`` takes the end of the body back if the protocol stack has not been given
+it yet: the body is open again, and what the write has not taken can follow. Once the stack has it,
+the end stands, as no protocol can un-send a FIN, and issuing ``write_eof()`` again is the
+idempotent re-end of rule 2 -- or, over HTTP/3, adopts the end that is still on its way. Which of the
+two a cancelled ``write_eof()`` leaves depends on how far it had come, so going on with
+``write_eof(buffer + n)``, where ``n`` is what it has taken, is right either way. See
+:doc:`cancellation`.
