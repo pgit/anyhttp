@@ -165,10 +165,10 @@ TEST_P(ClientAsync, WHEN_session_is_gone_THEN_request_reports_error)
       auto request = check(co_await session.submit(url.set_path("echo"), {}));
       session.reset();
 
-      auto [ec] = co_await request.write(boost::asio::buffer("Hello"sv));
+      auto [ec, written] = co_await request.write(boost::asio::buffer("Hello"sv));
       EXPECT_TRUE(is_connection_error(ec)) << what(ec);
 
-      std::tie(ec) = co_await request.write_eof();
+      std::tie(ec, written) = co_await request.write_eof();
       EXPECT_TRUE(is_connection_error(ec)) << what(ec);
 
       auto [ec2, response] = co_await request.get_response();
@@ -206,7 +206,7 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
          auto [ec] = co_await response.submit(200, {});
          EXPECT_TRUE(is_connection_error(ec)) << what(ec);
 
-         std::tie(ec) = co_await response.write(boost::asio::buffer("Hello"sv));
+         std::tie(ec, std::ignore) = co_await response.write(boost::asio::buffer("Hello"sv));
          EXPECT_TRUE(is_connection_error(ec)) << what(ec);
 
          responded->notify();
@@ -311,7 +311,7 @@ TEST_P(ClientAsync,
       request1.reset();
       session.reset();
 
-      auto [ec] = co_await request2.write(boost::asio::buffer("Hello"sv));
+      auto [ec, written] = co_await request2.write(boost::asio::buffer("Hello"sv));
       EXPECT_TRUE(is_connection_error(ec)) << what(ec);
    };
 }
@@ -593,16 +593,16 @@ TEST_P(ClientAsync, WHEN_written_after_eof_THEN_reports_broken_pipe)
       check(co_await response.submit(200, fields({{"Content-Length", hello.size()}})));
       check(co_await response.write_eof(boost::asio::buffer(hello)));
 
-      auto [ec] = co_await response.write_eof();
+      auto [ec, written] = co_await response.write_eof();
       EXPECT_FALSE(ec);
 
-      std::tie(ec) = co_await response.write({});
+      std::tie(ec, written) = co_await response.write({});
       EXPECT_FALSE(ec);
 
-      std::tie(ec) = co_await response.write(boost::asio::buffer(hello));
+      std::tie(ec, written) = co_await response.write(boost::asio::buffer(hello));
       EXPECT_EQ(ec, errc::broken_pipe);
 
-      std::tie(ec) = co_await response.write_eof(boost::asio::buffer(hello));
+      std::tie(ec, written) = co_await response.write_eof(boost::asio::buffer(hello));
       EXPECT_EQ(ec, errc::broken_pipe);
    };
    clientSession = [this](Session session) -> Task<void> {
@@ -671,9 +671,9 @@ TEST_P(ClientAsync, WHEN_server_cancels_write_eof_THEN_client_sees_truncated_bod
       // this is over, so the write is guaranteed to still be in progress when it is cancelled.
       //
 #if ANYHTTP_COROSIO
-      auto [ec] = co_await stop_after(50ms, response.write_eof(boost::asio::buffer(body)));
+      auto [ec, written] = co_await stop_after(50ms, response.write_eof(boost::asio::buffer(body)));
 #else
-      auto [ec] =
+      auto [ec, written] =
          co_await response.async_write_eof(boost::asio::buffer(body), cancel_after(50ms, as_tuple));
 #endif
       EXPECT_EQ(ec, errc::operation_canceled);
@@ -1146,9 +1146,9 @@ TEST_P(ClientAsync, WHEN_request_has_no_body_THEN_it_is_complete_after_submit)
       auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
       check(co_await request2.write_eof(boost::asio::buffer(body2)));
 
-      auto [ec] = co_await request1.write_eof();
+      auto [ec, written] = co_await request1.write_eof();
       EXPECT_FALSE(ec) << what(ec);
-      std::tie(ec) = co_await request1.write(boost::asio::buffer(body1));
+      std::tie(ec, written) = co_await request1.write(boost::asio::buffer(body1));
       EXPECT_EQ(ec, errc::broken_pipe) << what(ec);
 
       auto response1 = check(co_await request1.get_response());

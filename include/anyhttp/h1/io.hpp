@@ -157,14 +157,27 @@ IoTask<size_t> read_message(Stream& stream, DynamicBuffer& buffer,
 // -------------------------------------------------------------------------------------------------
 
 /**
+ * Counts how many of the bytes written come from \c range, the caller's body buffer, which the
+ * serializer hands out by reference among the header and the chunk framing. That is how much of
+ * the body a write that stops short has taken.
+ */
+struct BodyWatch
+{
+   boost::asio::const_buffer range;
+   size_t written = 0;
+};
+
+/**
  * Writes what \p serializer has to offer next, as Beast's \c http::async_write_some(). Yields the
- * number of bytes written, which is not the size of the body that went with them.
+ * number of bytes written, which is not the size of the body that went with them: \p watch, if
+ * given, counts those.
  *
  * With a \c buffer_body, a serializer that has used up the body buffer it was given offers nothing
  * but \c http::error::need_buffer, which is passed on here.
  */
 template <typename Stream, bool isRequest, typename Body, typename Fields>
-IoTask<size_t> write_some(Stream& stream, http::serializer<isRequest, Body, Fields>& serializer)
+IoTask<size_t> write_some(Stream& stream, http::serializer<isRequest, Body, Fields>& serializer,
+                          BodyWatch* watch = nullptr)
 {
    if (serializer.is_done())
       co_return std::tuple{error_code{}, size_t{0}};
@@ -186,6 +199,21 @@ IoTask<size_t> write_some(Stream& stream, http::serializer<isRequest, Body, Fiel
    auto [write_ec, n] = co_await io::write(stream, buffers);
    if (!write_ec)
       serializer.consume(n);
+
+   if (watch)
+   {
+      const auto* begin = static_cast<const char*>(watch->range.data());
+      const auto* end = begin + watch->range.size();
+      size_t left = n;
+      for (const auto& buffer : buffers)
+      {
+         const auto size = std::min(left, buffer.size());
+         const auto* data = static_cast<const char*>(buffer.data());
+         if (size && data >= begin && data + buffer.size() <= end)
+            watch->written += size;
+         left -= size;
+      }
+   }
    co_return std::tuple{write_ec, n};
 }
 
@@ -194,12 +222,13 @@ IoTask<size_t> write_some(Stream& stream, http::serializer<isRequest, Body, Fiel
  * here, this also stops when a \c buffer_body has been written that is not the last.
  */
 template <typename Stream, typename Serializer, typename Predicate>
-IoTask<size_t> write_until(Stream& stream, Serializer& serializer, Predicate done)
+IoTask<size_t> write_until(Stream& stream, Serializer& serializer, Predicate done,
+                           BodyWatch* watch = nullptr)
 {
    size_t written = 0;
    while (!done(serializer))
    {
-      auto [ec, n] = co_await h1::write_some(stream, serializer);
+      auto [ec, n] = co_await h1::write_some(stream, serializer, watch);
       written += n;
       if (ec == to_error_code(http::error::need_buffer))
          break;
@@ -219,9 +248,9 @@ IoTask<size_t> write_header(Stream& stream, Serializer& serializer)
 
 /// Writes all there is, as Beast's \c http::async_write() with a serializer.
 template <typename Stream, typename Serializer>
-IoTask<size_t> write(Stream& stream, Serializer& serializer)
+IoTask<size_t> write(Stream& stream, Serializer& serializer, BodyWatch* watch = nullptr)
 {
-   return h1::write_until(stream, serializer, [](auto& sr) { return sr.is_done(); });
+   return h1::write_until(stream, serializer, [](auto& sr) { return sr.is_done(); }, watch);
 }
 
 /// Writes all of \p message, as Beast's \c http::async_write() with a message.

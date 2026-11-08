@@ -27,7 +27,7 @@ using IoContext = boost::asio::io_context;
 static Task<void> send(client::Request& request, std::string_view body)
 {
    logd("send: sending string of {} bytes...", body.size());
-   auto [ec] = co_await request.write_eof(boost::asio::buffer(body));
+   auto [ec, written] = co_await request.write_eof(boost::asio::buffer(body));
    if (ec)
       throw_error(ec);
    logd("send: sending string of {} bytes... done", body.size());

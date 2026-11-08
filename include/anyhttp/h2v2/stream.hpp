@@ -188,6 +188,12 @@ public:
    std::vector<uint8_t> write_chunk_; // Staged: the piece of the body nghttp2 is pointing into
    size_t offered_ = 0;
    size_t written_ = 0;
+   /// How much of the write in progress is taken, what it completes with when it stops short:
+   /// copied out of the caller's buffer in Staged, framed from it in ZeroCopy.
+   size_t write_taken() const noexcept
+   {
+      return write_handler ? (write_mode == WriteMode::Staged ? offered_ : written_) : 0;
+   }
    bool is_deferred = false;
 
    //
@@ -202,8 +208,9 @@ public:
    // data_reader() turns that into NGHTTP2_READ_DATA_FLAG_EOF on the very DATA frame that carries
    // the write's last bytes -- so a body that ends with data needs no second, empty frame.
    // \c eof_requested says the user has ended the body (only a bare re-end is accepted after
-   // that), \c eof_submitted that nghttp2 has actually been told; between the two lies a
-   // cancelled async_write_eof(), whose re-issue delivers the still-owed EOF flag.
+   // that), \c eof_submitted that nghttp2 has actually been told. Cancelling an
+   // async_write_eof() before nghttp2 has been told takes the intent back, so the body stays open
+   // for the rest of the buffer, as it does over HTTP/3.
    //
    bool eof_requested = false;
    bool eof_submitted = false;

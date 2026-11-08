@@ -462,7 +462,7 @@ TEST_P(ClientTlsEnd, WHEN_write_is_stuck_THEN_shutdown_interrupts_it_and_says_so
          auto request = check(co_await session.submit(target, {}));
 
          auto write = [&]() -> Task<void> {
-            std::tie(write_result) = co_await request.write(boost::asio::buffer(body));
+            std::tie(write_result, std::ignore) = co_await request.write(boost::asio::buffer(body));
          };
          auto end_it = [&]() -> Task<void> {
             co_await stalled.wait();
@@ -531,7 +531,7 @@ TEST_P(ClientShutdown, WHEN_request_is_open_THEN_it_fails_right_away)
       };
       co_await when_both(read(), end());
 
-      auto [write_ec] = co_await request.write(boost::asio::const_buffer("x", 1));
+      auto [write_ec, written] = co_await request.write(boost::asio::const_buffer("x", 1));
       EXPECT_TRUE(write_ec);
    };
 }

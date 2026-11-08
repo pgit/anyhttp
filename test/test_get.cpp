@@ -303,7 +303,7 @@ TEST_P(SubmitMethod, WHEN_get_stops_reading_at_a_limit_THEN_status_and_fields_ar
       std::vector<char> chunk(16_k);
       for (;;)
       {
-         auto [ec] = co_await response.write(boost::asio::buffer(chunk));
+         auto [ec, written] = co_await response.write(boost::asio::buffer(chunk));
          if (ec)
             break;
          sent += chunk.size();

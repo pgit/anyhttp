@@ -43,10 +43,14 @@ public:
    // while re-ending it with no data attached is an idempotent no-op. Only then do stream-level
    // failures (closed, cancelled) get their say.
    //
+   // The size it completes with is how much of \p buffer the writer has taken: all of it on
+   // success, none when the entry ladder answers, and what it got to otherwise -- copied, framed
+   // or on the wire, whichever means the caller must not hand it over again.
+   //
    virtual void async_write(WriteHandler&& handler, boost::asio::const_buffer buffer, bool eof) = 0;
 
    /// async_write() as a coroutine, see Reader::Impl::read_some().
-   virtual IoTask<> write(boost::asio::const_buffer buffer, bool eof)
+   virtual IoTask<size_t> write(boost::asio::const_buffer buffer, bool eof)
    {
       co_return co_await initiate<Write>([this, buffer, eof](WriteHandler handler) { //
          async_write(std::move(handler), buffer, eof);

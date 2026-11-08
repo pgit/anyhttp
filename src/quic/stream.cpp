@@ -47,7 +47,10 @@ void QuicStream::detach_all()
    if (read_handler)
       swap_and_invoke(read_handler, make_error_code(errc::connection_reset), 0);
    if (write_active && write_handler)
-      swap_and_invoke(write_handler, make_error_code(errc::connection_reset));
+   {
+      const auto taken = write_taken();
+      swap_and_invoke(write_handler, make_error_code(errc::connection_reset), taken);
+   }
 }
 
 Executor QuicStream::get_executor() const noexcept { return session.get_executor(); }
@@ -198,7 +201,7 @@ void QuicStream::start_write(WriteHandler&& handler, boost::asio::const_buffer b
    mlogd("start_write: n={} eof={}", n, eof);
 
    auto complete_immediately = [&](error_code ec) { //
-      anyhttp::complete_immediately(std::move(handler), get_executor(), ec);
+      anyhttp::complete_immediately(std::move(handler), get_executor(), ec, size_t{0});
    };
 
    //
@@ -318,10 +321,11 @@ void QuicStream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
          // pointing into freed memory.
          //
          mlogd("async_write: \x1b[1;31mcancelled\x1b[0m, FIN still pending");
-         complete(std::move(write_handler), get_executor(), errors::canceled);
+         complete(std::move(write_handler), get_executor(), errors::canceled, size_t{0});
          return;
       }
       mlogd("async_write: \x1b[1;31mcancelled\x1b[0m");
+      const auto taken = write_taken(); // before the bookkeeping below moves on
 
       if (write_mode == WriteMode::ZeroCopy)
       {
@@ -369,7 +373,7 @@ void QuicStream::bind_write_cancellation(WriteHandler& handler, uint64_t token)
       write_active = false;
       write_source = {};
       // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
-      complete(std::move(write_handler), get_executor(), errors::canceled);
+      complete(std::move(write_handler), get_executor(), errors::canceled, taken);
    });
 }
 
@@ -515,6 +519,7 @@ void QuicStream::finish_active_write()
    // nothing points into it any more: every byte acknowledged (ZeroCopy), copied out (Staged), or
    // no bytes at all (the EOF marker).
    //
+   const auto taken = boost::asio::buffer_size(write_source);
    write_source = {};
    auto handler = std::move(write_handler);
    write_active = false;
@@ -530,9 +535,8 @@ void QuicStream::finish_active_write()
    // write pass this is nested in and at worst trips ngtcp2's own "time must not go backwards"
    // assertion. Post instead -- one hop, on a path that is not latency critical.
    //
-   run_later(get_executor(), [self = shared_from_this(), handler = std::move(handler)]() mutable {
-      std::move(handler)(error_code{});
-   });
+   run_later(get_executor(), [self = shared_from_this(), handler = std::move(handler),
+                              taken]() mutable { std::move(handler)(error_code{}, taken); });
 }
 
 // =================================================================================================
@@ -573,10 +577,11 @@ void QuicStream::fail(error_code ec)
    //
    if (write_active)
    {
+      const auto taken = write_taken();
       write_active = false;
       write_source = {};
       if (write_handler)
-         swap_and_invoke(write_handler, ec ? ec : make_error_code(errc::connection_reset));
+         swap_and_invoke(write_handler, ec ? ec : make_error_code(errc::connection_reset), taken);
    }
 
    maybe_close();
@@ -675,10 +680,11 @@ void QuicStream::abort_writing(error_code ec)
    // buffer is free -- in ZeroCopy as much as in Staged mode. Posted, as this is reached from
    // inside ngtcp2.
    //
+   const auto taken = write_taken();
    write_active = false;
    write_source = {};
    if (write_handler)
-      complete(std::move(write_handler), get_executor(), ec);
+      complete(std::move(write_handler), get_executor(), ec, taken);
 }
 
 void QuicStream::maybe_close()

@@ -139,8 +139,10 @@ using ReadSomeHandler = Completion<ReadSome>;
 using WriteSome = void(error_code, size_t);
 using WriteSomeHandler = Completion<WriteSome>;
 
-/// The completion signature of \c Writer::async_write and \ref Writer::async_write_eof.
-using Write = void(error_code);
+/// The completion signature of \c Writer::async_write and \ref Writer::async_write_eof, with the
+/// error and how many bytes of the buffer the writer has taken -- all of them, unless it failed or
+/// was cancelled. Those are the caller's no longer, so what is left to write starts after them.
+using Write = void(error_code, size_t);
 using WriteHandler = Completion<Write>;
 
 /// The completion signature of an operation that has nothing to report but how it went.

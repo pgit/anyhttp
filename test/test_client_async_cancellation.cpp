@@ -353,9 +353,9 @@ TEST_P(SmallSocketBuffers, WHEN_client_write_with_cancel_after_THEN_cancelled)
 
       const std::vector<uint8_t> body(8_m, 'x');
 #if ANYHTTP_COROSIO
-      auto [ec] = co_await stop_after(100ms, request.write(boost::asio::buffer(body)));
+      auto [ec, written] = co_await stop_after(100ms, request.write(boost::asio::buffer(body)));
 #else
-      auto [ec] =
+      auto [ec, written] =
          co_await request.async_write(boost::asio::buffer(body), cancel_after(100ms, as_tuple));
 #endif
       EXPECT_EQ(ec, errc::operation_canceled);

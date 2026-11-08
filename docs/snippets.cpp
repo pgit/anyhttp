@@ -64,7 +64,8 @@ Task<void> serve_echo(server::Request request, server::Response response)
       if (ec)
          co_return;
 
-      if (auto [write_ec] = co_await response.write(boost::asio::buffer(buffer, n)); write_ec)
+      if (auto [write_ec, written] = co_await response.write(boost::asio::buffer(buffer, n));
+          write_ec)
          co_return;
    }
 
@@ -133,7 +134,7 @@ IoTask<std::string> post(Session& session, boost::urls::url url, std::string bod
    if (submit_ec)
       co_return std::tuple{submit_ec, std::string{}};
 
-   if (auto [ec] = co_await request.write_eof(boost::asio::buffer(body)); ec)
+   if (auto [ec, written] = co_await request.write_eof(boost::asio::buffer(body)); ec)
       co_return std::tuple{ec, std::string{}};
 
    auto [response_ec, response] = co_await request.get_response();
@@ -189,10 +190,10 @@ Task<size_t> read_at_most(Session session, boost::urls::url url, size_t limit)
 Task<void> upload(Writer& writer, std::string_view body)
 {
    for (; !body.empty(); body.remove_prefix(std::min(body.size(), size_t{16_k})))
-      if (auto [ec] = co_await writer.write(boost::asio::buffer(body.substr(0, 16_k))); ec)
+      if (auto [ec, written] = co_await writer.write(boost::asio::buffer(body.substr(0, 16_k))); ec)
          throw_error(ec);
 
-   if (auto [ec] = co_await writer.write_eof(); ec)
+   if (auto [ec, written] = co_await writer.write_eof(); ec)
       throw_error(ec);
 }
 
@@ -358,7 +359,8 @@ Task<void> quic_echo(quic::Stream stream)
       if (ec)
          co_return;
 
-      if (auto [write_ec] = co_await stream.write(boost::asio::buffer(buffer, n)); write_ec)
+      if (auto [write_ec, written] = co_await stream.write(boost::asio::buffer(buffer, n));
+          write_ec)
          co_return;
    }
    std::ignore = co_await stream.write_eof();
@@ -393,7 +395,7 @@ IoTask<std::string> quic_hello(Executor executor, std::string host, std::string 
    if (open_ec)
       co_return std::tuple{open_ec, std::string{}};
 
-   if (auto [ec] = co_await stream.write_eof(boost::asio::buffer("hello", 5)); ec)
+   if (auto [ec, written] = co_await stream.write_eof(boost::asio::buffer("hello", 5)); ec)
       co_return std::tuple{ec, std::string{}};
 
    co_return co_await read_all(stream);

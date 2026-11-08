@@ -349,7 +349,7 @@ void NGHttp2Writer<Base>::async_write(WriteHandler&& handler, boost::asio::const
       mlogw("async_write: stream already gone");
       ec = errors::connection_aborted;
    }
-   complete_immediately(std::move(handler), executor, ec);
+   complete_immediately(std::move(handler), executor, ec, size_t{0});
 }
 
 template <typename Base>
@@ -632,7 +632,7 @@ NGHttp2Stream::~NGHttp2Stream()
    if (write_handler)
    {
       mlogw("Stream: dtor... cancelling async_write()");
-      swap_and_invoke(write_handler, errors::canceled);
+      swap_and_invoke(write_handler, errors::canceled, write_taken());
    }
 
    mlogd("\x1b[33mStream: dtor... done\x1b[0m");
@@ -652,7 +652,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, boost::asio::const_buffer 
    //
    if (empty && !eof)
    {
-      complete_immediately(std::move(handler), get_executor(), error_code{});
+      complete_immediately(std::move(handler), get_executor(), error_code{}, size_t{0});
       return;
    }
 
@@ -662,20 +662,20 @@ void NGHttp2Stream::async_write(WriteHandler handler, boost::asio::const_buffer 
       {
          mloge("async_write: body has already been ended");
          complete_immediately(std::move(handler), get_executor(),
-                              make_error_code(errc::broken_pipe));
+                              make_error_code(errc::broken_pipe), size_t{0});
          return;
       }
 
       //
       // A bare re-end. If nghttp2 already knows about the end, there is nothing left to do. If
-      // not -- a cancelled async_write_eof() leaves the intent standing but takes its handler
-      // away, so the flag never reached the producer callback -- fall through to the normal path
-      // below: the re-issued write picks up where the cancelled one left off, which is what lets
-      // an upload be ended once the peer's flow control window reopens.
+      // not, fall through to the normal path below, which delivers the flag. (A cancelled
+      // async_write_eof() no longer gets here: it takes its intent back, so re-ending after it is
+      // an ordinary first end, which is what lets an upload be ended once the peer's flow control
+      // window reopens.)
       //
       if (eof_submitted)
       {
-         complete_immediately(std::move(handler), get_executor(), error_code{});
+         complete_immediately(std::move(handler), get_executor(), error_code{}, size_t{0});
          return;
       }
    }
@@ -689,7 +689,7 @@ void NGHttp2Stream::async_write(WriteHandler handler, boost::asio::const_buffer 
    {
       mlogw("async_write: stream already closed");
       complete_immediately(std::move(handler), get_executor(),
-                           make_error_code(errc::connection_reset));
+                           make_error_code(errc::connection_reset), size_t{0});
       return;
    }
 
@@ -698,14 +698,21 @@ void NGHttp2Stream::async_write(WriteHandler handler, boost::asio::const_buffer 
    mlogd("async_write: buffer={} eof={} is_deferred={}", buffer.size(), eof, is_deferred);
 
    write_buffer = buffer;
+   write_size = buffer.size();
    eof_requested |= eof;
    write_handler = std::move(handler);
 
    on_cancel(write_handler, [this] {
       mlogd("async_write: \x1b[1;31m{}\x1b[0m", "cancelled");
+      //
+      // What nghttp2 has copied stays taken, the rest is the caller's again. An end of the body
+      // that nghttp2 has not been told about is taken back with it, see eof_requested.
+      //
+      if (!eof_submitted)
+         eof_requested = false;
       // make sure to post this -- otherwise "MAIN COROUTINE DID NOT COMPLETE" happens
       if (write_handler)
-         complete(std::move(write_handler), get_executor(), errors::canceled);
+         complete(std::move(write_handler), get_executor(), errors::canceled, write_taken());
    });
 
    resume();
@@ -808,7 +815,7 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
          }
 
          mlogd("write callback: running handler...");
-         swap_and_invoke(write_handler, error_code{});
+         swap_and_invoke(write_handler, error_code{}, write_size);
          if (write_handler)
             mlogd("write callback: running handler... done -- RESPAWNED");
          else
@@ -824,7 +831,7 @@ ssize_t NGHttp2Stream::producer_callback(uint8_t* buf, size_t length, uint32_t* 
       mlogd("write callback: EOF");
       eof_submitted = true;
       *data_flags |= NGHTTP2_DATA_FLAG_EOF;
-      swap_and_invoke(write_handler, error_code{});
+      swap_and_invoke(write_handler, error_code{}, size_t{0});
    }
 
    return copied;

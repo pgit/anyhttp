@@ -40,7 +40,7 @@ TEST_P(CoroutineApi, WHEN_exchanging_a_body_THEN_both_sides_see_all_of_it)
 
       auto [submit_ec] = co_await response.submit(200, {});
       EXPECT_FALSE(submit_ec) << submit_ec.message();
-      auto [write_ec] = co_await response.write(boost::asio::buffer(body));
+      auto [write_ec, written] = co_await response.write(boost::asio::buffer(body));
       EXPECT_FALSE(write_ec) << write_ec.message();
       //
       // Not checked: over HTTP/3, the server's writes complete when the peer acknowledges them,
@@ -54,9 +54,9 @@ TEST_P(CoroutineApi, WHEN_exchanging_a_body_THEN_both_sides_see_all_of_it)
       auto [ec, request] = co_await session.submit(url);
       EXPECT_FALSE(ec) << ec.message();
 
-      auto [write_ec] = co_await request.write(boost::asio::buffer("Hello, ", 7));
+      auto [write_ec, written] = co_await request.write(boost::asio::buffer("Hello, ", 7));
       EXPECT_FALSE(write_ec) << write_ec.message();
-      auto [eof_ec] = co_await request.write_eof(boost::asio::buffer("World", 5));
+      auto [eof_ec, eof_written] = co_await request.write_eof(boost::asio::buffer("World", 5));
       EXPECT_FALSE(eof_ec) << eof_ec.message();
 
       auto [response_ec, response] = co_await request.get_response();
@@ -92,7 +92,7 @@ TEST_P(CoroutineApi, WHEN_writing_after_the_end_THEN_error_is_reported_not_throw
       EXPECT_FALSE(ec) << ec.message();
       EXPECT_FALSE(std::get<0>(co_await request.write_eof()));
 
-      auto [write_ec] = co_await request.write(boost::asio::buffer("late", 4));
+      auto [write_ec, written] = co_await request.write(boost::asio::buffer("late", 4));
       EXPECT_EQ(write_ec, errc::broken_pipe);
 
       auto [response_ec, response] = co_await request.get_response();
