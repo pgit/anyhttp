@@ -455,3 +455,161 @@ TEST_P(ClientAsyncCancellation, DISABLED_SpawnAndForget)
 }
 
 // =================================================================================================
+
+//
+// The contract of a cancelled operation, see docs/cancellation.rst: it completes right away, says
+// how much of its buffer it has taken, and leaves the message usable or not, which the next
+// operation tells.
+//
+
+#if ANYHTTP_ASIO
+//
+// Only the terminal kind of cancellation counts. A request for partial or total alone promises a
+// state that is not always there to keep, so it is ignored, as Asio asks of an operation that does
+// not support it.
+//
+TEST_P(ClientAsyncCancellation, WHEN_only_partial_or_total_is_requested_THEN_read_some_ignores_it)
+{
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      auto response = check(co_await request.get_response());
+
+      std::array<uint8_t, 1024> buffer;
+      std::optional<std::tuple<error_code, size_t>> result;
+      boost::asio::cancellation_signal cancel;
+      response.async_read_some(
+         boost::asio::buffer(buffer),
+         boost::asio::bind_cancellation_slot(cancel.slot(), [&result](error_code ec, size_t n) { //
+            result.emplace(ec, n);
+         }));
+
+      cancel.emit(boost::asio::cancellation_type::partial | boost::asio::cancellation_type::total);
+      co_await sleep(50ms);
+      EXPECT_FALSE(result) << "completed with " << std::get<0>(*result).message();
+
+      cancel.emit(boost::asio::cancellation_type::terminal);
+      for (int i = 0; !result && i < 1000; ++i)
+         co_await sleep(1ms);
+      if (!result)
+      {
+         ADD_FAILURE() << "terminal cancellation did not complete the read";
+         co_return;
+      }
+      EXPECT_EQ(std::get<0>(*result), errc::operation_canceled);
+      EXPECT_EQ(std::get<1>(*result), 0u);
+   };
+}
+#endif
+
+//
+// A cancelled read leaves the body where it was: what arrives afterwards is read as usual.
+//
+TEST_P(ClientAsyncCancellation, WHEN_read_some_is_cancelled_THEN_the_body_can_still_be_read)
+{
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url.set_path("echo"), {}));
+      auto response = check(co_await request.get_response());
+
+      std::array<uint8_t, 1024> buffer;
+#if ANYHTTP_COROSIO
+      auto [ec, n] = co_await stop_after(50ms, response.read_some(boost::asio::buffer(buffer)));
+#else
+      auto [ec, n] = co_await response.async_read_some(boost::asio::buffer(buffer),
+                                                       cancel_after(50ms, as_tuple));
+#endif
+      EXPECT_EQ(ec, errc::operation_canceled);
+      EXPECT_EQ(n, 0u);
+
+      constexpr auto msg = "Hello, Client!"sv;
+      check(co_await request.write_eof(boost::asio::buffer(msg)));
+      EXPECT_EQ(co_await read(response), msg);
+   };
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// A write cancelled while the peer is not reading says how much of its buffer it has taken. Where
+// that leaves the request usable, writing what is left after it and ending the body -- the drain
+// after the cancel -- gets the whole body across, intact. That holds for write_eof() as much as for
+// write(): an end of the body the protocol stack has not been given yet is taken back with it.
+//
+// HTTP/1.1 sends a body by reference, without a copy, so its cancelled write ends the connection
+// instead, and there is no rest to follow.
+//
+class CancelledWrite : public ClientAsyncCancellation
+{
+protected:
+   static const std::vector<uint8_t>& body()
+   {
+      static const std::vector<uint8_t> body = [] {
+         std::vector<uint8_t> result(8_m);
+         for (size_t i = 0; i < result.size(); ++i)
+            result[i] = uint8_t(i * 7 + i / 251);
+         return result;
+      }();
+      return body;
+   }
+
+   void cancel_then_finish(bool eof)
+   {
+      //
+      // The server does not read until the write has been cancelled, so far more than the window
+      // is outstanding when it is. Then it reads the body and says whether it is the one sent.
+      //
+      requestHandler = [](server::Request request, server::Response response) -> Task<void> {
+         co_await sleep(300ms);
+         const auto received = co_await read(request);
+         const bool intact = std::ranges::equal(received, body(), [](char a, uint8_t b) { //
+            return uint8_t(a) == b;
+         });
+         const auto answer = std::format("{} {}", received.size(), intact ? "intact" : "broken");
+         check(co_await response.submit(200, {}));
+         check(co_await response.write_eof(boost::asio::buffer(answer)));
+      };
+
+      clientSession = [this, eof](Session session) -> Task<void> {
+         auto request = check(co_await session.submit(url, {}));
+         const auto buffer = boost::asio::buffer(body());
+
+         error_code ec;
+         size_t n = 0;
+#if ANYHTTP_COROSIO
+         if (eof)
+            std::tie(ec, n) = co_await stop_after(100ms, request.write_eof(buffer));
+         else
+            std::tie(ec, n) = co_await stop_after(100ms, request.write(buffer));
+#else
+         if (eof)
+            std::tie(ec, n) =
+               co_await request.async_write_eof(buffer, cancel_after(100ms, as_tuple));
+         else
+            std::tie(ec, n) = co_await request.async_write(buffer, cancel_after(100ms, as_tuple));
+#endif
+         EXPECT_EQ(ec, errc::operation_canceled);
+         EXPECT_GT(n, 0u);
+         EXPECT_LT(n, buffer.size());
+         std::println("cancelled after taking {} of {} bytes", n, buffer.size());
+
+         check(co_await request.write_eof(buffer + n));
+         auto response = check(co_await request.get_response());
+         EXPECT_EQ(co_await read(response), std::format("{} intact", buffer.size()));
+      };
+   }
+};
+
+INSTANTIATE_TEST_SUITE_P(CancelledWrite, CancelledWrite, ValuesIn(protocols()), NameGenerator);
+
+TEST_P(CancelledWrite, WHEN_write_is_cancelled_THEN_the_rest_can_follow)
+{
+   if (GetParam() == anyhttp::Protocol::h1)
+      GTEST_SKIP(); // a cancelled write ends the connection, see above
+   cancel_then_finish(false);
+}
+
+TEST_P(CancelledWrite, WHEN_write_eof_is_cancelled_THEN_the_rest_can_follow)
+{
+   if (GetParam() == anyhttp::Protocol::h1)
+      GTEST_SKIP(); // a cancelled write ends the connection, see above
+   cancel_then_finish(true);
+}
