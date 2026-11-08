@@ -132,21 +132,22 @@ public:
    // with either runtime -- the library's own request handlers, the shared tests -- uses this.
    //
 
-   /// Writes \p buffer as part of the body: <tt>auto [ec] = co_await writer.write(buffer);</tt>
+   /// Writes \p buffer as part of the body: <tt>auto [ec, n] = co_await writer.write(buffer);</tt>
    /// \param buffer What to write.
-   /// \return The error.
-   IoTask<> write(boost::asio::const_buffer buffer);
+   /// \return The error, and how many bytes of \p buffer the writer has taken, see \c Write.
+   IoTask<size_t> write(boost::asio::const_buffer buffer);
 
-   /// Writes \p buffer, if any, and ends the body: <tt>auto [ec] = co_await
+   /// Writes \p buffer, if any, and ends the body: <tt>auto [ec, n] = co_await
    /// writer.write_eof();</tt>
    /// \param buffer What to write.
-   /// \return The error.
-   IoTask<> write_eof(boost::asio::const_buffer buffer = {});
+   /// \return The error, and how many bytes of \p buffer the writer has taken, see \c Write.
+   IoTask<size_t> write_eof(boost::asio::const_buffer buffer = {});
 
 #if ANYHTTP_COROSIO
    /**
-    * Writes the first non-empty buffer of \p buffers as part of the body, and yields its size:
-    * this is what makes a Writer a \c capy::WriteStream. The body stays open, as with write().
+    * Writes the first non-empty buffer of \p buffers as part of the body, and yields how much of
+    * it the writer has taken: this is what makes a Writer a \c capy::WriteStream. The body stays
+    * open, as with write().
     */
    template <capy::ConstBufferSequence Buffers>
    IoTask<size_t> write_some(Buffers buffers)
@@ -154,10 +155,7 @@ public:
       for (auto it = capy::buffer_sequence_begin(buffers); it != capy::buffer_sequence_end(buffers);
            ++it)
          if (capy::const_buffer buffer = *it; buffer.size() > 0)
-         {
-            auto [ec] = co_await write(boost::asio::const_buffer(buffer.data(), buffer.size()));
-            co_return std::tuple{ec, ec ? size_t{0} : buffer.size()};
-         }
+            co_return co_await write(boost::asio::const_buffer(buffer.data(), buffer.size()));
       co_return std::tuple{error_code{}, size_t{0}};
    }
 #endif

@@ -668,7 +668,8 @@ void NGHttp2Session::close_stream(int32_t stream_id)
    if (stream->write_handler)
    {
       // Use the same error code as reported by the underlying TCP connection used in HTTP/1.1.
-      swap_and_invoke(stream->write_handler, make_error_code(errc::connection_reset));
+      const auto taken = stream->write_taken();
+      swap_and_invoke(stream->write_handler, make_error_code(errc::connection_reset), taken);
    }
 
    //

@@ -125,6 +125,18 @@ public:
    //
    uint64_t write_base = 0; // where write_source begins
    size_t write_copied = 0; // Staged: how much of write_source went into chunks
+
+   /// How much of the active write is taken, what it completes with when it stops short: copied
+   /// into chunks in Staged, handed to the stack in ZeroCopy.
+   size_t write_taken() const noexcept
+   {
+      if (!write_active)
+         return 0;
+      if (write_mode == WriteMode::Staged)
+         return write_copied;
+      const uint64_t size = boost::asio::buffer_size(write_source);
+      return tx_offered > write_base ? size_t(std::min(tx_offered - write_base, size)) : 0;
+   }
    uint64_t tx_queued = 0;
    uint64_t tx_offered = 0;
    uint64_t tx_sent = 0;
@@ -366,7 +378,7 @@ public:
          ec = empty ? error_code{} : make_error_code(errc::broken_pipe);
       else
          ec = make_error_code(errc::connection_reset);
-      complete_immediately(std::move(handler), executor, ec);
+      complete_immediately(std::move(handler), executor, ec, size_t{0});
    }
 
    void detach() override

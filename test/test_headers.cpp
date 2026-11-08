@@ -240,7 +240,7 @@ protected:
          fields.set("Content-Length", "0");
          auto [ec] = co_await response.submit(200, fields);
          if (!ec)
-            std::tie(ec) = co_await response.write_eof();
+            std::tie(ec, std::ignore) = co_await response.write_eof();
          logi("server: {}", what(ec));
       };
    }

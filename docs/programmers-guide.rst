@@ -335,19 +335,12 @@ against something else, with :cpp:func:`when_either`, which cancels the loser:
    :start-after: // [timeout]
    :end-before: // [timeout-end]
 
-A cancelled operation completes with an error that compares equal to ``errc::operation_canceled``,
-which is the way to ask, as a timer of the runtime has its own spelling of it. What that leaves behind
-depends on how far it had come, and on the protocol:
-
-* A cancelled :cpp:func:`get_response() <client::Request::get_response>` can be started again.
-* Cancelling :cpp:func:`Writer::write_eof` does not take the end of the body back, see
-  :ref:`end-of-body-cancellation`.
-* A write that has started putting data on a TCP connection leaves part of a message behind. Over
-  HTTP/1.1, that is the end of the connection for further requests, see
-  :doc:`concurrent-requests`.
-* The response of a server over HTTP/2 version 2 and HTTP/3 is handed to the protocol stack by
-  reference, without a copy, until the peer has it. As that can't be taken back, cancelling a write
-  with bytes outstanding resets the stream. A request body is copied, so it can go on afterwards.
+A cancelled operation completes right away, with an error that compares equal to
+``errc::operation_canceled``, which is the way to ask, as a timer of the runtime has its own spelling
+of it. A cancelled write also says how much of its buffer it has taken. Whether the message can go on
+afterwards depends on the operation and the protocol: a cancelled read can always be followed by
+another, a cancelled write over HTTP/1.1 ends the connection. :doc:`cancellation` has all of it, and
+how to finish a message after a cancelled write.
 
 A coroutine that has been cancelled and wants to clean up by awaiting something else, as a last
 ``write_eof()``, needs :cpp:func:`reset_cancellation` and :cpp:func:`shielded` to get there.

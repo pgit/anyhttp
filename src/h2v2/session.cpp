@@ -590,9 +590,11 @@ void NGHttp2Session::close_stream(int64_t stream_id)
    //
    if (stream->write_handler)
    {
-      swap_and_invoke(stream->write_handler, stream->write_cancelled_
-                                                ? errors::canceled
-                                                : make_error_code(errc::connection_reset));
+      const auto taken = stream->write_taken();
+      swap_and_invoke(stream->write_handler,
+                      stream->write_cancelled_ ? errors::canceled
+                                               : make_error_code(errc::connection_reset),
+                      taken);
    }
 
    //

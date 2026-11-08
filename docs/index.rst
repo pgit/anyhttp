@@ -35,6 +35,7 @@ report <https://pgit.github.io/anyhttp/coverage/>`__.
    :caption: How it works
 
    io-runtimes
+   cancellation
    end-of-body
    concurrent-requests
    alt-svc

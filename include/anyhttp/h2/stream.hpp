@@ -141,7 +141,14 @@ public:
    // async_write()
    //
    boost::asio::const_buffer write_buffer; // undefined unless write_handler is set
+   size_t write_size = 0; // of the write in progress, so it can say what it took
    WriteHandler write_handler;
+   /// How much of the write in progress nghttp2 has copied, which is what it completes with when
+   /// it stops short.
+   size_t write_taken() const noexcept
+   {
+      return write_handler ? write_size - write_buffer.size() : 0;
+   }
    bool is_deferred = false;
 
    //
@@ -149,8 +156,9 @@ public:
    // producer callback turns that into NGHTTP2_DATA_FLAG_EOF on the very DATA frame that carries
    // the write's last bytes -- so a body that ends with data needs no second, empty frame.
    // \c eof_requested says the user has ended the body (only a bare re-end is accepted after
-   // that), \c eof_submitted that nghttp2 has actually been told; between the two lies a
-   // cancelled async_write_eof(), whose re-issue delivers the still-owed EOF flag.
+   // that), \c eof_submitted that nghttp2 has actually been told. Cancelling an
+   // async_write_eof() before nghttp2 has been told takes the intent back, so the body stays open
+   // for the rest of the buffer, as it does over HTTP/3.
    //
    bool eof_requested = false;
    bool eof_submitted = false;

@@ -103,7 +103,8 @@ Task<void> echo(server::Request request, server::Response response)
       if (ec)
          co_return; // a body cut short, see not ending ours below
 
-      if (auto [write_ec] = co_await response.write(boost::asio::buffer(buffer, n)); write_ec)
+      if (auto [write_ec, written] = co_await response.write(boost::asio::buffer(buffer, n));
+          write_ec)
          co_return;
    }
 
@@ -279,7 +280,7 @@ Task<expected<size_t>> try_read_response(client::Request& request)
 
 Task<void> send_eof(Writer& writer)
 {
-   if (auto [ec] = co_await writer.write_eof(); ec)
+   if (auto [ec, n] = co_await writer.write_eof(); ec)
       throw_error(ec);
 }
 

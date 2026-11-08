@@ -68,7 +68,7 @@ Task<void> echo(server::Request request, server::Response response, Token token)
    auto body = co_await read_to_end(request, token);
    auto [submit_ec] = co_await response.async_submit(200, {}, token);
    EXPECT_FALSE(submit_ec) << submit_ec.message();
-   auto [write_ec] = co_await response.async_write(boost::asio::buffer(body), token);
+   auto [write_ec, written] = co_await response.async_write(boost::asio::buffer(body), token);
    EXPECT_FALSE(write_ec) << write_ec.message();
    //
    // Not checked: over HTTP/3, the server's writes complete when the peer acknowledges them, and a
@@ -84,9 +84,11 @@ Task<void> exchange(Session& session, boost::urls::url url, Token token)
 {
    auto [submit_ec, request] = co_await session.async_submit(url, {}, token);
    EXPECT_FALSE(submit_ec) << submit_ec.message();
-   auto [write_ec] = co_await request.async_write(boost::asio::buffer("Hello, ", 7), token);
+   auto [write_ec, written] =
+      co_await request.async_write(boost::asio::buffer("Hello, ", 7), token);
    EXPECT_FALSE(write_ec) << write_ec.message();
-   auto [eof_ec] = co_await request.async_write_eof(boost::asio::buffer("World", 5), token);
+   auto [eof_ec, eof_written] =
+      co_await request.async_write_eof(boost::asio::buffer("World", 5), token);
    EXPECT_FALSE(eof_ec) << eof_ec.message();
 
    auto [response_ec, response] = co_await request.async_get_response(token);
@@ -363,9 +365,10 @@ TEST_F(AsioTokensEmptyHandle, WHEN_awaited_THEN_operations_fail_with_bad_descrip
          auto [read_ec, n] =
             co_await response.async_read_some(boost::asio::buffer(buffer), as_tuple);
          EXPECT_EQ(read_ec, errors::bad_descriptor);
-         auto [write_ec] = co_await request.async_write(boost::asio::buffer(buffer), as_tuple);
+         auto [write_ec, written] =
+            co_await request.async_write(boost::asio::buffer(buffer), as_tuple);
          EXPECT_EQ(write_ec, errors::bad_descriptor);
-         auto [eof_ec] = co_await request.async_write_eof(as_tuple);
+         auto [eof_ec, eof_written] = co_await request.async_write_eof(as_tuple);
          EXPECT_EQ(eof_ec, errors::bad_descriptor);
          auto [response_ec, r] = co_await request.async_get_response(as_tuple);
          EXPECT_EQ(response_ec, errors::bad_descriptor);

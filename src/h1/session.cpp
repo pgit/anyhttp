@@ -314,7 +314,7 @@ public:
       launch(get_executor(), write(buffer, eof), std::move(handler));
    }
 
-   IoTask<> write(boost::asio::const_buffer buffer, bool eof) override
+   IoTask<size_t> write(boost::asio::const_buffer buffer, bool eof) override
    {
       const bool empty = buffer.size() == 0;
 
@@ -326,25 +326,25 @@ public:
       // Only then does it matter that the session, and with it the stream, may be gone.
       //
       if (empty && !eof)
-         co_return std::tuple{error_code{}};
+         co_return std::tuple{error_code{}, size_t{0}};
 
       if (eof_submitted)
       {
          if (!empty)
             mloge("async_write: body has already been ended");
-         co_return std::tuple{empty ? error_code{} : make_error_code(errc::broken_pipe)};
+         co_return std::tuple{empty ? error_code{} : make_error_code(errc::broken_pipe), size_t{0}};
       }
 
       if (!session)
       {
          mlogw("async_write: session already gone");
-         co_return std::tuple{errors::connection_aborted};
+         co_return std::tuple{errors::connection_aborted, size_t{0}};
       }
 
       if (cancelled)
       {
          mloge("async_write: already canceled");
-         co_return std::tuple{errors::canceled};
+         co_return std::tuple{errors::canceled, size_t{0}};
       }
 
       assert(!writing);
@@ -377,13 +377,14 @@ public:
       auto self = Parent::shared_from_this();
       const auto expected = buffer.size();
 
-      // 'n' is the number of bytes written to the stream, not the number taken from the buffer
+      // 'n' is the number of bytes written to the stream, 'body' counts those taken from the buffer
       error_code ec;
       size_t n = 0;
+      h1::BodyWatch body{buffer};
       try
       {
          const auto op = session->write_op();
-         std::tie(ec, n) = co_await h1::write(stream, serializer);
+         std::tie(ec, n) = co_await h1::write(stream, serializer, &body);
       }
       catch (const system_error& e) // a cancelled coroutine throws from its next co_await
       {
@@ -447,7 +448,7 @@ public:
       // effect immediately, not only when this task is gone.
       //
       self.reset();
-      co_return std::tuple{ec};
+      co_return std::tuple{ec, ec ? body.written : expected};
    }
 
    /// Called when a write has ended the body, before its handler is invoked.

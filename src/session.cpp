@@ -114,7 +114,7 @@ IoTask<client::Message> get_message(std::shared_ptr<Session::Impl> session, boos
    if (ec)
       co_return failed(ec);
 
-   if (auto [ec] = co_await request.write_eof(); ec)
+   if (auto [ec, n] = co_await request.write_eof(); ec)
       co_return failed(ec);
 
    auto [response_ec, response] = co_await request.get_response();

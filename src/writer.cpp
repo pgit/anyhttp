@@ -37,14 +37,14 @@ void Writer::content_length(std::optional<size_t> content_length)
    return impl_ ? impl_->content_length(content_length) : void{};
 }
 
-static IoTask<> no_writer() { co_return std::tuple{errors::bad_descriptor}; }
+static IoTask<size_t> no_writer() { co_return std::tuple{errors::bad_descriptor, size_t{0}}; }
 
-IoTask<> Writer::write(boost::asio::const_buffer buffer)
+IoTask<size_t> Writer::write(boost::asio::const_buffer buffer)
 {
    return impl_ ? impl_->write(buffer, false) : no_writer();
 }
 
-IoTask<> Writer::write_eof(boost::asio::const_buffer buffer)
+IoTask<size_t> Writer::write_eof(boost::asio::const_buffer buffer)
 {
    return impl_ ? impl_->write(buffer, true) : no_writer();
 }
@@ -55,7 +55,7 @@ void Writer::async_write_any(WriteHandler&& handler, boost::asio::const_buffer b
    if (impl_)
       impl_->async_write(std::move(handler), buffer, eof);
    else
-      std::move(handler)(errors::bad_descriptor);
+      std::move(handler)(errors::bad_descriptor, size_t{0});
 }
 #endif
 
