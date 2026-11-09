@@ -422,21 +422,6 @@ TEST(CorosioRuntime, WHEN_event_is_set_before_and_while_waiting_THEN_waits_end)
    EXPECT_EQ(woken, 2);
 }
 
-TEST(CorosioRuntime, WHEN_timer_is_rearmed_or_cancelled_THEN_only_the_last_callback_runs)
-{
-   boost::corosio::io_context context;
-   Timer timer(context.get_executor());
-   std::vector<int> fired;
-
-   timer.arm(std::chrono::milliseconds(1), [&] { fired.push_back(1); });
-   timer.arm(std::chrono::milliseconds(2), [&] { fired.push_back(2); });
-   Timer other(context.get_executor());
-   other.arm(std::chrono::milliseconds(1), [&] { fired.push_back(3); });
-   other.cancel();
-   context.run();
-   EXPECT_THAT(fired, ElementsAre(2));
-}
-
 TEST(CorosioRuntime, WHEN_both_tasks_run_THEN_when_both_waits_for_both)
 {
    boost::corosio::io_context context;

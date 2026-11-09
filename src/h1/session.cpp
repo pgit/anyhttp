@@ -866,7 +866,7 @@ Task<void> BeastSession<Stream>::end_connection(bool notify)
    //
    if (auto ec = io::shutdown(stream_, io::Shutdown::send); !ec)
    {
-      if (auto drained = co_await io::drain(stream_, get_executor(), 2s))
+      if (auto drained = co_await io::drain(stream_, this->weak_from_this(), get_executor(), 2s))
          mlogd("dropped {} bytes the peer sent after the last message", drained);
    }
    else if (ec != errc::not_connected) // the peer may be gone already

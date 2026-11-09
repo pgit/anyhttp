@@ -22,6 +22,7 @@
 #include <chrono>
 #include <exception>
 #include <optional>
+#include <vector>
 
 using namespace anyhttp;
 using namespace std::chrono_literals;
@@ -165,3 +166,20 @@ TEST(Runtime, WHEN_partial_or_total_cancellation_alone_is_requested_THEN_delay_r
    EXPECT_FALSE(*result) << result->message();
 }
 #endif
+
+// =================================================================================================
+
+TEST(Runtime, WHEN_timer_is_rearmed_or_cancelled_THEN_only_the_last_callback_runs)
+{
+   IoContext context;
+   Timer timer(context.get_executor());
+   std::vector<int> fired;
+
+   timer.arm(1ms, [&] { fired.push_back(1); });
+   timer.arm(2ms, [&] { fired.push_back(2); });
+   Timer other(context.get_executor());
+   other.arm(1ms, [&] { fired.push_back(3); });
+   other.cancel();
+   context.run();
+   EXPECT_THAT(fired, ElementsAre(2));
+}
