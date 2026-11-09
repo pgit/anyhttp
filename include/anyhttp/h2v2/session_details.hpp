@@ -234,7 +234,8 @@ Task<void> NGHttp2SessionImpl<Stream>::end_connection()
    //
    if (auto ec = io::shutdown(stream_, io::Shutdown::send); !ec)
    {
-      if (auto drained = co_await io::drain(stream_, this->get_executor(), std::chrono::seconds(2)))
+      if (auto drained = co_await io::drain(stream_, this->weak_from_this(), this->get_executor(),
+                                            std::chrono::seconds(2)))
          mlogd("dropped {} bytes the peer sent after the session ended", drained);
    }
    else if (ec != errc::not_connected) // the peer may be gone already
@@ -388,7 +389,11 @@ IoTask<> ClientSession<Stream>::shutdown()
    this->start_write();
 
    Timer timer(this->get_executor());
-   timer.arm(std::chrono::seconds(2), [this] { io::cancel(stream_); });
+   timer.arm(std::chrono::seconds(2), [weak = this->weak_from_this()] {
+      // may come late, see Timer
+      if (auto self = std::static_pointer_cast<ClientSession>(weak.lock()))
+         io::cancel(self->stream_);
+   });
    co_await this->session_done_.wait();
    timer.cancel();
 

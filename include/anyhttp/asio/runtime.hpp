@@ -521,8 +521,13 @@ private:
 /**
  * A timer that calls back when it expires, which is what an engine with timeouts of its own
  * (ngtcp2) needs: it tells when, and wants to be called then. Arming the timer again replaces
- * both the expiry and the callback, and a callback that has been replaced or cancelled is never
- * called. Callbacks run on the timer's executor.
+ * both the expiry and the callback. Callbacks run on the timer's executor.
+ *
+ * Arming it again, cancel() and the destructor stop a wait that is still pending, but no
+ * asynchronous operation can be taken back once it has completed: when the delay has expired
+ * already, the callback is on its way, and it still runs, once, soon after. So a callback holds
+ * what it uses rather than refer to it -- a `weak_ptr` to its session, not `this` -- and a call
+ * that is late does no harm.
  */
 class Timer
 {

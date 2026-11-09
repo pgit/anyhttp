@@ -43,6 +43,7 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string_view>
 
@@ -70,13 +71,20 @@ namespace anyhttp::inline asio::io
  *
  * The data is of no interest, not even decrypted: this reads the socket itself, by hand, as that
  * is what every stream type has in common.
+ *
+ * \p owner is what keeps \p stream alive: a timeout that expires as the peer ends its side may
+ * still cancel the stream after this has returned (see Timer), and does nothing once \p owner is
+ * gone.
  */
 template <SocketStream Stream>
-Task<size_t> drain(Stream& stream, const Executor& executor,
+Task<size_t> drain(Stream& stream, std::weak_ptr<const void> owner, const Executor& executor,
                    std::chrono::steady_clock::duration timeout)
 {
    Timer timer(executor);
-   timer.arm(timeout, [&stream] { io::cancel(stream); });
+   timer.arm(timeout, [&stream, weak = std::move(owner)] {
+      if (auto self = weak.lock())
+         io::cancel(stream);
+   });
 
    auto& socket = get_socket(stream);
    std::array<char, 16 * 1024> buffer;
