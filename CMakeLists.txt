@@ -163,11 +163,11 @@ elseif (ANYHTTP_API STREQUAL "COROSIO")
     endforeach()
     FetchContent_Declare(capy
         GIT_REPOSITORY https://github.com/cppalliance/capy.git
-        GIT_TAG bdadc6adef8c8eb79da6454373175bb1428be524
+        GIT_TAG d62f5de1684389682ff4201a6171eec646165036
         EXCLUDE_FROM_ALL)
     FetchContent_Declare(corosio
         GIT_REPOSITORY https://github.com/cppalliance/corosio.git
-        GIT_TAG fd8e95a7125047d5385068a4c640da8232b9588e
+        GIT_TAG 13bcf933adf8c5ce8576bd3349ae58d2e46e5c53
         EXCLUDE_FROM_ALL)
     FetchContent_MakeAvailable(capy corosio)
     message(STATUS "Using I/O runtime: COROSIO (capy/corosio)")
