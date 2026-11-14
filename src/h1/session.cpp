@@ -132,8 +132,17 @@ public:
    {
       const auto& message = parser->get();
       fields_ = copy_fields(message);
+
+      //
+      // What the message announced as its body length. A response to HEAD has no payload whatever
+      // its 'Content-Length' says, but that is still what it announced, and what HTTP/2 and HTTP/3
+      // report for it.
+      //
+      const auto& content_length = message.metadata().content_length;
       if (message.payload() == http::payload::size)
          content_length_ = message.payload_size();
+      else if (content_length.count && !content_length.ec)
+         content_length_ = content_length.value;
       else if (message.payload() == http::payload::none)
          content_length_ = 0;
       complete = parser->is_complete();

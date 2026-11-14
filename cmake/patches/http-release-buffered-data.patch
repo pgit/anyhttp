@@ -23,7 +23,7 @@ index 2edf97b..dfe0c9c 100644
  
          @see @ref metadata::upgrade, @ref metadata::connection.
 diff --git a/src/parser.cpp b/src/parser.cpp
-index e73cb3b..25d000a 100644
+index e73cb3b..29aac77 100644
 --- a/src/parser.cpp
 +++ b/src/parser.cpp
 @@ -33,6 +33,7 @@
@@ -34,7 +34,7 @@ index e73cb3b..25d000a 100644
  #include <array>
  #include <memory>
  
-@@ -1303,6 +1304,43 @@ public:
+@@ -1303,6 +1304,45 @@ public:
              body_avail_);
      }
  
@@ -70,15 +70,17 @@ index e73cb3b..25d000a 100644
 +        core::string_view leftover(p + skip, cb0_.size() - skip);
 +
 +        // released: no longer part of what the parser holds, but
-+        // the storage stays as it is until the next modifying call
-+        cb0_ = { const_cast<char*>(p), cb0_.max_size(), skip };
++        // the storage stays as it is until the next modifying call.
++        // What is left is the body, and that is all the buffer
++        // may claim: p is not the base of the storage.
++        cb0_ = { const_cast<char*>(p), skip, skip };
 +        return leftover;
 +    }
 +
      bool
      has_buffered_data() const noexcept
      {
-@@ -1564,8 +1602,8 @@ core::string_view
+@@ -1564,8 +1604,8 @@ core::string_view
  parser::
  release_buffered_data() noexcept
  {
