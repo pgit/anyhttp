@@ -11,8 +11,8 @@ protocols of your own. It runs on either `Asio
    **THIS REPOSITORY IS PURELY EXPERIMENTAL.** It is not meant for production use, and anything in it
    can change or break at any time, without notice.
 
-None of the protocols is implemented from scratch. The library is a wrapper around `Beast
-<https://github.com/boostorg/beast>`__ (its parser and serializer), `nghttp2
+None of the protocols is implemented from scratch. The library is a wrapper around `Boost.HTTP
+<https://github.com/cppalliance/http>`__ (its parser, serializer and header fields), `nghttp2
 <https://github.com/nghttp2/nghttp2>`__ or `nghttp2 version 2
 <https://github.com/nghttp2/nghttp2-v2>`__, and `ngtcp2 <https://github.com/ngtcp2/ngtcp2>`__ with
 `nghttp3 <https://github.com/ngtcp2/nghttp3>`__.

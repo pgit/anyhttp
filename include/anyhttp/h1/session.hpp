@@ -8,9 +8,9 @@
 
 #include <boost/asio/buffer.hpp>
 
-#include <boost/beast/http/buffer_body.hpp>
-#include <boost/beast/http/parser.hpp>
-#include <boost/beast/http/serializer.hpp>
+#include <boost/http/request_parser.hpp>
+#include <boost/http/response_parser.hpp>
+#include <boost/http/serializer.hpp>
 
 #include <utility>
 #include <vector>
@@ -56,14 +56,20 @@ private:
 
 // =================================================================================================
 
+/**
+ * What the server and client sessions have in common: the stream, and what goes on and comes off
+ * it. That is one message at a time in each direction, so a session has one parser (in the role's
+ * own session) and one serializer, which the readers and writers use in turn: each of them
+ * allocates all the memory it will ever need when it is made, and keeps it for every message.
+ */
 template <typename Stream>
-class BeastSession : public ::anyhttp::Session::Impl
+class H1Session : public ::anyhttp::Session::Impl
 {
 protected:
-   BeastSession(std::string_view log_prefix, Executor executor, Stream&& stream);
+   H1Session(std::string_view log_prefix, Executor executor, Stream&& stream);
 
 public:
-   ~BeastSession() override;
+   ~H1Session() override;
 
    std::string_view log_prefix() const { return log_prefix_; }
 
@@ -120,7 +126,12 @@ public:
    std::string log_prefix_;
    Executor executor_;
    Stream stream_;
-   Buffer buffer_;
+
+   /// What the session started with, see do_session(), on its way into the parser.
+   Buffer pending_;
+
+   boost::http::serializer serializer_;
+
    bool closed_ = false;
    bool stream_closed_ = false; ///< set by end_connection(), with nothing left for destroy() to do
    std::shared_ptr<StreamOps> stream_ops_ = std::make_shared<StreamOps>();
@@ -150,16 +161,17 @@ private:
 };
 
 template <typename Stream>
-class ServerSession : public ServerSessionBase, public BeastSession<Stream>
+class ServerSession : public ServerSessionBase, public H1Session<Stream>
 {
-   using super = BeastSession<Stream>;
+   using super = H1Session<Stream>;
 
    // FIXME: maybe use CRTP or something similar to avoid this?
-   using super::buffer_;
    using super::closed_;
    using super::detach_readers;
    using super::detach_writers;
    using super::log_prefix;
+   using super::pending_;
+   using super::serializer_;
    using super::stream_;
 
 public:
@@ -169,6 +181,9 @@ public:
    void async_submit(SubmitHandler&& handler, std::string_view method, boost::urls::url url,
                      const Fields& headers) override;
    Task<void> do_session(Buffer&& data) override;
+
+   /// The requests, one after the other.
+   boost::http::request_parser parser_;
 
 private:
    /// Takes over the stream after an upgrade to h2c, see do_session().
@@ -230,15 +245,15 @@ class RequestWriter;
  * asking for its response -- getting any later response fails.
  */
 template <typename Stream>
-class ClientSession : public ClientSessionBase, public BeastSession<Stream>
+class ClientSession : public ClientSessionBase, public H1Session<Stream>
 {
-   using super = BeastSession<Stream>;
+   using super = H1Session<Stream>;
 
    // FIXME: maybe use CRTP or something similar to avoid this?
-   using super::buffer_;
    using super::detach_readers;
    using super::detach_writers;
    using super::log_prefix;
+   using super::pending_;
    using super::stream_;
    using super::stream_ops_;
 
@@ -275,6 +290,13 @@ public:
    bool send_failed_ = false; ///< set when a request could not be completed
    bool receive_failed_ = false; ///< set when a response could not be read completely
    bool shutting_down_ = false; ///< set by shutdown()
+
+   /// The responses, one after the other.
+   boost::http::response_parser parser_;
+
+   /// Whether the parser has been started on the response that is read next. A read of a header
+   /// that was cancelled before anything arrived leaves it started, see get_response().
+   bool parser_started_ = false;
 };
 
 // =================================================================================================

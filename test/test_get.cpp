@@ -15,13 +15,13 @@
 
 using namespace testing;
 
-namespace http = boost::beast::http;
+namespace http = boost::http;
 
 // =================================================================================================
 
 //
 // Session::async_get(): a whole GET request as a single operation, with the response handed back
-// as a plain Beast message -- status, fields and the body as a string.
+// as a client::Message -- status, fields and the body as a string.
 //
 class AsyncGet : public ClientAsync
 {
@@ -59,9 +59,9 @@ TEST_P(AsyncGet, WHEN_get_THEN_message_has_status_fields_and_body)
    respond_with("Hello, World!");
    clientSession = [this](Session session) -> Task<void> {
       auto message = check(co_await session.get(url));
-      EXPECT_EQ(message.result(), http::status::ok);
-      EXPECT_EQ(message.result_int(), 200);
-      EXPECT_EQ(message["x-answer"], "42");
+      EXPECT_EQ(message.status(), http::status::ok);
+      EXPECT_EQ(message.status_int(), 200);
+      EXPECT_EQ(message.value_or("x-answer", ""), "42");
       EXPECT_EQ(message.body(), "Hello, World!");
    };
 }
@@ -101,7 +101,7 @@ TEST_P(AsyncGet, WHEN_response_has_no_body_THEN_body_is_empty)
    respond_with("");
    clientSession = [this](Session session) -> Task<void> {
       auto message = check(co_await session.get(url));
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
       EXPECT_THAT(message.body(), IsEmpty());
    };
 }
@@ -114,7 +114,7 @@ TEST_P(AsyncGet, WHEN_path_is_unknown_THEN_message_says_404)
 {
    clientSession = [this](Session session) -> Task<void> {
       auto message = check(co_await session.get(url.set_path("unknown")));
-      EXPECT_EQ(message.result(), http::status::not_found);
+      EXPECT_EQ(message.status(), http::status::not_found);
    };
 }
 
@@ -124,7 +124,7 @@ TEST_P(AsyncGet, WHEN_body_is_large_THEN_all_of_it_arrives)
    respond_with(body);
    clientSession = [this, body](Session session) -> Task<void> {
       auto message = check(co_await session.get(url));
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
       EXPECT_EQ(message.body().size(), body.size());
       EXPECT_EQ(message.body(), body);
    };
@@ -133,15 +133,15 @@ TEST_P(AsyncGet, WHEN_body_is_large_THEN_all_of_it_arrives)
 TEST_P(AsyncGet, WHEN_headers_are_given_THEN_they_arrive_with_the_request)
 {
    requestHandler = [](server::Request request, server::Response response) -> Task<void> {
-      EXPECT_EQ(request.fields()["x-question"], "what?");
-      EXPECT_EQ(request.fields()["content-length"], "0");
+      EXPECT_EQ(request.fields().value_or("x-question", ""), "what?");
+      EXPECT_EQ(request.fields().value_or("content-length", ""), "0");
       co_await drain(request);
       check(co_await response.submit(200, fields({{"Content-Length", 0}})));
       check(co_await response.write_eof());
    };
    clientSession = [this](Session session) -> Task<void> {
       auto message = check(co_await session.get(url, fields({{"X-Question", "what?"}})));
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
    };
 }
 
@@ -156,7 +156,7 @@ TEST_P(AsyncGet, WHEN_two_requests_in_a_row_THEN_both_are_answered)
       for (size_t i = 0; i < 2; ++i)
       {
          auto message = check(co_await session.get(url));
-         EXPECT_EQ(message.result_int(), 200);
+         EXPECT_EQ(message.status_int(), 200);
          EXPECT_EQ(message.body(), "Hello, World!");
       }
    };
@@ -184,7 +184,7 @@ TEST_P(AsyncGet, WHEN_cancelled_THEN_completes_with_operation_canceled_and_empty
       auto [ec, message] = co_await session.async_get(url, {}, cancel_after(100ms, as_tuple));
 #endif
       EXPECT_EQ(ec, errc::operation_canceled);
-      EXPECT_EQ(message.result_int(), 0);
+      EXPECT_EQ(message.status_int(), 0);
       EXPECT_THAT(message.body(), IsEmpty());
    };
 }
@@ -228,7 +228,7 @@ TEST(AsyncGetRaw, WHEN_get_THEN_request_line_says_GET)
    auto get = [&]() -> Task<void> {
       auto session = check(co_await client.connect());
       auto message = check(co_await session.get(url.set_path("/index.html")));
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
       EXPECT_EQ(message.body(), "hello");
    };
    launch(context.get_executor(), get(),
@@ -318,7 +318,7 @@ TEST_P(SubmitMethod, WHEN_get_stops_reading_at_a_limit_THEN_status_and_fields_ar
       check(co_await request.write_eof());
       auto response = check(co_await request.get_response());
       EXPECT_EQ(response.status_code(), 200);
-      EXPECT_EQ(response.fields()["x-answer"], "42");
+      EXPECT_EQ(response.fields().value_or("x-answer", ""), "42");
 
       std::array<char, 16_k> buffer;
       size_t total = 0;
@@ -385,7 +385,7 @@ TEST_P(SubmitMethod, WHEN_response_is_released_early_THEN_only_http11_loses_the_
       else
       {
          EXPECT_EQ(ec, error_code{}) << ec.message();
-         EXPECT_EQ(message.result_int(), 200);
+         EXPECT_EQ(message.status_int(), 200);
          for (int i = 0; i < 2000 && !stopped; ++i)
             co_await sleep(1ms);
          EXPECT_TRUE(stopped) << "the server is still sending on the stream that was released";
@@ -410,7 +410,7 @@ TEST_P(SubmitMethod, WHEN_method_is_head_THEN_response_ends_after_its_header)
       check(co_await request.write_eof());
       auto response = check(co_await request.get_response());
       EXPECT_EQ(response.status_code(), 200);
-      EXPECT_EQ(response.fields()["content-length"], "5");
+      EXPECT_EQ(response.fields().value_or("content-length", ""), "5");
       EXPECT_EQ(co_await read_all(response), "");
    };
 }

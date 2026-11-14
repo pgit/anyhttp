@@ -27,9 +27,6 @@
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/asio/write.hpp>
 
-#include <boost/beast/core/error.hpp>
-#include <boost/beast/http/error.hpp>
-
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <boost/system/system_error.hpp>

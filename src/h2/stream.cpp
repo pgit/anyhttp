@@ -11,9 +11,6 @@
 
 #include <boost/asio/buffer.hpp>
 
-#include <boost/beast/http/error.hpp>
-#include <boost/beast/http/status.hpp>
-
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
 
@@ -258,9 +255,7 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
       return;
    }
 
-   using namespace boost::beast::http;
-   logd("[{}] {} {}", stream->log_prefix(), status_code,
-        obsolete_reason(int_to_status(status_code)));
+   logd("[{}] {} {}", stream->log_prefix(), status_code, reason_phrase(status_code));
 
    const auto status_code_str = std::to_string(status_code);
    const auto date = http_date_now();
@@ -280,10 +275,10 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
 
    for (auto&& item : headers)
    {
-      if (item.name_string().starts_with(':'))
-         logw("[{}] async_submit: invalid header '{}'", stream->log_prefix(), item.name_string());
+      if (item.name.starts_with(':'))
+         logw("[{}] async_submit: invalid header '{}'", stream->log_prefix(), item.name);
 
-      nva.push_back(make_nv_ls(item.name_string(), item.value()));
+      nva.push_back(make_nv_ls(item.name, item.value));
    }
 
    std::string length_str;

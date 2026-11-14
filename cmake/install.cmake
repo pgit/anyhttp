@@ -51,7 +51,13 @@ endif()
 
 set(anyhttp_cmake_dir ${CMAKE_INSTALL_LIBDIR}/cmake/anyhttp)
 
-install(TARGETS anyhttp
+#
+# Boost.HTTP's core is a library of its own, see cmake/http.cmake, and its headers come along: Fields
+# is its container. So does capy, which it is written against: both are FetchContent'd, and a
+# subproject added EXCLUDE_FROM_ALL installs nothing of its own, so they are part of this package,
+# as anyhttp::http and anyhttp::capy.
+#
+install(TARGETS anyhttp anyhttp_http boost_capy
     EXPORT anyhttp-targets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT Development
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT Development
@@ -77,6 +83,9 @@ install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/anyhttp
     PATTERN "*_impl.hpp" EXCLUDE
     PATTERN "any_async_stream.hpp" EXCLUDE
     PATTERN "buffer_array.hpp" EXCLUDE)
+install(DIRECTORY ${http_SOURCE_DIR}/include/boost ${capy_SOURCE_DIR}/include/boost
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT Development
+    FILES_MATCHING PATTERN "*.hpp")
 install(FILES ${PROJECT_BINARY_DIR}/include/anyhttp/config.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/anyhttp COMPONENT Development)
 

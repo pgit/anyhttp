@@ -6,8 +6,6 @@
 #include "anyhttp/h2/backend.hpp"
 #include "anyhttp/h3/backend.hpp"
 
-#include <boost/beast/core/flat_buffer.hpp>
-#include <boost/beast/http/message.hpp>
 #include <boost/scope/scope_exit.hpp>
 
 #include <boost/system/system_error.hpp>
@@ -279,7 +277,7 @@ Session Client::Impl::start_session(Protocol protocol, Stream&& stream)
    };
 
    //
-   // FIXME: Do we really need to "run" a session here? For nghttp2, yes. For beast, not so much,
+   // FIXME: Do we really need to "run" a session here? For nghttp2, yes. For HTTP/1.1, not so much,
    //        as there is no communication outside the current request right now, but that may
    //        still come with pipelining or if it is refactored to have the parser and serializer
    //        in the session object itself.

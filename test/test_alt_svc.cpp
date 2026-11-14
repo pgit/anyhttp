@@ -4,7 +4,7 @@
 
 #include "anyhttp/alt_svc.hpp"
 
-#include <boost/beast/http/field.hpp>
+#include <boost/http/field.hpp>
 
 #include <nghttp2/nghttp2.h>
 
@@ -13,7 +13,7 @@
 
 using namespace testing;
 
-namespace http = boost::beast::http;
+namespace http = boost::http;
 
 // =================================================================================================
 // Parsing the field value, which is the same for the header field and the HTTP/2 ALTSVC frame.
@@ -128,7 +128,7 @@ constexpr auto http3_server = "anyhttp-quic/0.1"sv;
 
 static bool served_over_http3(const client::Message& message)
 {
-   return message[http::field::server] == http3_server;
+   return message.value_or(http::field::server, "") == http3_server;
 }
 
 class AltSvcUpgrade : public ClientAsync
@@ -155,14 +155,14 @@ TEST_P(AltSvcUpgrade, WHEN_the_server_advertises_h3_THEN_the_next_connection_use
 {
    clientSession = [this](Session session) -> Task<void> {
       auto first = check(co_await session.get(echo()));
-      EXPECT_EQ(first.result_int(), 200);
+      EXPECT_EQ(first.status_int(), 200);
       EXPECT_FALSE(served_over_http3(first));
-      EXPECT_THAT(std::string(first[http::field::alt_svc]), HasSubstr("h3="));
+      EXPECT_THAT(std::string(first.value_or(http::field::alt_svc, "")), HasSubstr("h3="));
 
       auto second = check(co_await check(co_await client->connect()).get(echo()));
-      EXPECT_EQ(second.result_int(), 200);
+      EXPECT_EQ(second.status_int(), 200);
       EXPECT_TRUE(served_over_http3(second)) << "the second connection is not HTTP/3";
-      EXPECT_EQ(second[http::field::alt_svc], "")
+      EXPECT_EQ(second.value_or(http::field::alt_svc, ""), "")
          << "HTTP/3 has no alternative to advertise, it is the alternative";
    };
 }
@@ -188,11 +188,13 @@ TEST_P(AltSvcUpgrade, WHEN_the_server_clears_the_alternative_THEN_it_is_not_used
    };
 
    clientSession = [this](Session session) -> Task<void> {
-      EXPECT_THAT(std::string((check(co_await session.get(echo())))[http::field::alt_svc]),
-                  HasSubstr("h3="));
+      EXPECT_THAT(
+         std::string(check(co_await session.get(echo())).value_or(http::field::alt_svc, "")),
+         HasSubstr("h3="));
 
       auto cleared = check(co_await session.get(url)); // "/custom", the handler above
-      EXPECT_EQ(cleared[http::field::alt_svc], "clear") << "the handler's field beats ours";
+      EXPECT_EQ(cleared.value_or(http::field::alt_svc, ""), "clear")
+         << "the handler's field beats ours";
 
       auto second = check(co_await check(co_await client->connect()).get(echo()));
       EXPECT_FALSE(served_over_http3(second)) << "the alternative should have been forgotten";
@@ -221,7 +223,7 @@ TEST_P(AltSvcWithEndpoints, WHEN_endpoints_are_given_THEN_the_alternative_is_not
 {
    clientSession = [this](Session session) -> Task<void> {
       auto first = check(co_await session.get(echo()));
-      EXPECT_THAT(std::string(first[http::field::alt_svc]), HasSubstr("h3="));
+      EXPECT_THAT(std::string(first.value_or(http::field::alt_svc, "")), HasSubstr("h3="));
 
       auto second = check(co_await check(co_await client->connect()).get(echo()));
       EXPECT_FALSE(served_over_http3(second));
@@ -248,7 +250,7 @@ TEST_P(AltSvcIgnored, WHEN_the_client_does_not_follow_alt_svc_THEN_it_keeps_its_
       target.set_path("/echo");
 
       auto first = check(co_await session.get(target));
-      EXPECT_THAT(std::string(first[http::field::alt_svc]), HasSubstr("h3="));
+      EXPECT_THAT(std::string(first.value_or(http::field::alt_svc, "")), HasSubstr("h3="));
 
       auto second = check(co_await check(co_await client->connect()).get(target));
       EXPECT_FALSE(served_over_http3(second));
@@ -277,7 +279,7 @@ TEST_P(AltSvcDisabled, WHEN_the_server_advertises_nothing_THEN_the_client_stays_
       target.set_path("/echo");
 
       auto first = check(co_await session.get(target));
-      EXPECT_EQ(first[http::field::alt_svc], "");
+      EXPECT_EQ(first.value_or(http::field::alt_svc, ""), "");
 
       auto second = check(co_await check(co_await client->connect()).get(target));
       EXPECT_FALSE(served_over_http3(second));
@@ -402,11 +404,11 @@ TEST_P(AltSvcFrame, WHEN_an_altsvc_frame_arrives_THEN_the_next_connection_uses_i
       // from the frame that arrived before the request was even sent.
       //
       auto first = check(co_await check(co_await client.connect()).get(target));
-      EXPECT_EQ(first.result_int(), 200);
-      EXPECT_EQ(first[http::field::alt_svc], "");
+      EXPECT_EQ(first.status_int(), 200);
+      EXPECT_EQ(first.value_or(http::field::alt_svc, ""), "");
 
       auto second = check(co_await check(co_await client.connect()).get(target));
-      EXPECT_EQ(second.result_int(), 200);
+      EXPECT_EQ(second.status_int(), 200);
       EXPECT_TRUE(served_over_http3(second)) << "the second connection is not HTTP/3";
    };
    launch(client.get_executor(), client_main(), [&](const std::exception_ptr& ex) {

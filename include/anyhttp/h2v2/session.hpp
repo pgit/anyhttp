@@ -17,7 +17,6 @@
 #include "anyhttp/session_impl.hpp"
 
 #include <boost/asio/buffer.hpp>
-#include <boost/beast/core/flat_buffer.hpp>
 
 #include <map>
 #include <optional>
