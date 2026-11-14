@@ -411,6 +411,7 @@ TEST_P(SubmitMethod, WHEN_method_is_head_THEN_response_ends_after_its_header)
       auto response = check(co_await request.get_response());
       EXPECT_EQ(response.status_code(), 200);
       EXPECT_EQ(response.fields().value_or("content-length", ""), "5");
+      EXPECT_EQ(response.content_length(), 5) << "announced, even if nothing follows";
       EXPECT_EQ(co_await read_all(response), "");
    };
 }

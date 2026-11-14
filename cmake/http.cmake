@@ -22,12 +22,18 @@ set(anyhttp_http_patches
     ${CMAKE_CURRENT_LIST_DIR}/patches/http-release-buffered-data.patch
     ${CMAKE_CURRENT_LIST_DIR}/patches/http-reserve-bytes-alignment.patch)
 
-# Applied once: a patch that applies in reverse is there already, from an earlier configure.
-set(anyhttp_http_patch_command)
+#
+# The patch step runs when the source is fetched, and again whenever its command changes -- not when
+# a patch file does, so each command carries the hash of its patch. Every run starts from the
+# pristine files: a patch that has changed does not apply over its earlier version.
+#
+set(anyhttp_http_patch_command COMMAND git checkout --quiet -- .)
 foreach (patch IN LISTS anyhttp_http_patches)
+    file(SHA256 ${patch} anyhttp_http_patch_hash)
     list(APPEND anyhttp_http_patch_command COMMAND sh -c
-        "git apply --reverse --check '${patch}' 2>/dev/null || git apply '${patch}'")
+        "git apply '${patch}' # ${anyhttp_http_patch_hash}")
 endforeach()
+unset(anyhttp_http_patch_hash)
 list(POP_FRONT anyhttp_http_patch_command) # the first COMMAND is PATCH_COMMAND itself
 
 FetchContent_Declare(http
