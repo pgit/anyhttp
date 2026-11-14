@@ -4,7 +4,7 @@ applyTo: '**'
 AnyHTTP is an experimental, low-level C++23 HTTP client and server library with a type-erasing
 interface: one API for HTTP/1.1, HTTP/2 and HTTP/3 (QUIC), hence the *any* in the name -- plus
 plain QUIC streams next to HTTP/3. None of the protocols are implemented from scratch; it wraps
-Boost.Beast (parser and serializer), nghttp2, and ngtcp2/nghttp3.
+Boost.HTTP (cppalliance/http: parser, serializer and header fields), nghttp2, and ngtcp2/nghttp3.
 
 Everything is asynchronous and written with C++20 coroutines. Every operation is a coroutine
 (`read_some`, `write`, `write_eof`, `submit`, `get_response`, `connect`, `get`) that yields a
@@ -24,7 +24,7 @@ the runtime only through `anyhttp/runtime.hpp`, `anyhttp/net.hpp` and `anyhttp/f
 includes nothing else from Boost.Asio but `<boost/asio/buffer.hpp>`.
 
 Each protocol has a directory of its own, again under both `include/anyhttp/` and `src/`: `h1/`
-(Beast), `h2/` (nghttp2), `quic/` (ngtcp2) and `h3/` (nghttp3, on top of `quic/`). Only files in
+(Boost.HTTP), `h2/` (nghttp2), `quic/` (ngtcp2) and `h3/` (nghttp3, on top of `quic/`). Only files in
 `h2/` include `<nghttp2/*>`, only `quic/` and `h3/` `<ngtcp2/*>`, only `h3/` `<nghttp3/*>`.
 Generic code reaches a protocol through that protocol's `backend.hpp`. Keep these boundaries.
 

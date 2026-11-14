@@ -1,0 +1,17 @@
+diff --git a/src/fields_base.cpp b/src/fields_base.cpp
+index dc4b16b..0d87141 100644
+--- a/src/fields_base.cpp
++++ b/src/fields_base.cpp
+@@ -161,6 +161,12 @@ op_t::
+ reserve(
+     std::size_t n)
+ {
++    // the table of entries is at the end of the
++    // buffer, so the capacity has to keep it
++    // aligned, as header::bytes_needed() does
++    auto const al = alignof(entry);
++    n = (n + al - 1) & ~(al - 1);
++
+     // TODO: consider using a growth factor
+     if(n > self_.max_cap_)
+     {

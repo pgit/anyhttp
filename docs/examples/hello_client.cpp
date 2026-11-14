@@ -35,7 +35,7 @@ static Task<void> fetch(client::Client& client, boost::urls::url url, int& resul
       co_return;
    }
 
-   std::println("{} over {}: {}", message.result_int(), to_string(session.protocol()),
+   std::println("{} over {}: {}", message.status_int(), to_string(session.protocol()),
                 message.body());
    result = 0;
 }

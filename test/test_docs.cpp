@@ -38,7 +38,7 @@ TEST_P(Guide, Route)
 
       auto [missing_ec, missing] = co_await session.get(url.set_path("/missing"));
       EXPECT_FALSE(missing_ec) << missing_ec.message();
-      EXPECT_EQ(missing.result_int(), 404);
+      EXPECT_EQ(missing.status_int(), 404);
    };
 }
 

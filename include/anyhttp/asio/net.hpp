@@ -3,12 +3,12 @@
 //
 // The network half of the runtime layer for Boost.Asio, see anyhttp/net.hpp.
 //
-// The sessions are templates over the stream they run on, and there are four of those: a plain
-// TCP socket, a TLS stream on top of one, beast's tcp_stream and the type-erased any_async_stream.
-// Beyond the async read and write operations, which all of them have in common already, a session
-// needs three more things from its stream: the underlying socket, to shut it down or close it, an
-// executor to run its loops on, and whether it is encrypted (which tells h2 from h2c). None of them
-// is spelled the same way by all four, so they are reached through this trait instead. Ending the
+// The sessions are templates over the stream they run on, and there are three of those: a plain
+// TCP socket, a TLS stream on top of one and the type-erased any_async_stream. Beyond the async
+// read and write operations, which all of them have in common already, a session needs three more
+// things from its stream: the underlying socket, to shut it down or close it, an executor to run
+// its loops on, and whether it is encrypted (which tells h2 from h2c). None of them is spelled the
+// same way by all three, so they are reached through this trait instead. Ending the
 // stream itself, which only TLS has to do, is async and comes as a free function below.
 //
 
@@ -25,7 +25,6 @@
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/error.hpp>
 #include <boost/asio/ssl/stream.hpp>
-#include <boost/beast/core/tcp_stream.hpp>
 
 #include <chrono>
 #include <concepts>
@@ -93,17 +92,6 @@ struct stream_traits<boost::asio::ssl::stream<Layer>>
    static auto& get_socket(stream_type& stream) noexcept { return stream.lowest_layer(); }
    static auto get_executor(stream_type& stream) noexcept { return stream.get_executor(); }
    static bool is_tls(const stream_type&) noexcept { return true; }
-};
-
-/// Beast's stream, which wraps a socket to add timeouts and a rate policy.
-template <typename Protocol, typename Executor, typename RatePolicy>
-struct stream_traits<boost::beast::basic_stream<Protocol, Executor, RatePolicy>>
-{
-   using stream_type = boost::beast::basic_stream<Protocol, Executor, RatePolicy>;
-
-   static auto& get_socket(stream_type& stream) noexcept { return stream.socket(); }
-   static auto get_executor(stream_type& stream) noexcept { return stream.get_executor(); }
-   static bool is_tls(const stream_type&) noexcept { return false; }
 };
 
 /// The type-erased stream already offers all three, its implementation has to provide them.
@@ -246,7 +234,6 @@ Task<error_code> async_teardown(Stream& stream)
 
 static_assert(SocketStream<boost::asio::ip::tcp::socket>);
 static_assert(SocketStream<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>);
-static_assert(SocketStream<boost::beast::tcp_stream>);
 static_assert(SocketStream<any_async_stream>);
 static_assert(!SocketStream<boost::asio::ip::tcp::socket&>); // rvalues only, see above
 

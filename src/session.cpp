@@ -66,10 +66,10 @@ namespace
 //
 Fields framed(std::string_view method, Fields headers)
 {
-   if ((method == "GET" || method == "HEAD") &&
-       !headers.count(boost::beast::http::field::content_length) &&
-       !headers.count(boost::beast::http::field::transfer_encoding))
-      headers.set(boost::beast::http::field::content_length, "0");
+   using boost::http::field;
+   if ((method == "GET" || method == "HEAD") && !headers.count(field::content_length) &&
+       !headers.count(field::transfer_encoding))
+      headers.set(field::content_length, "0");
    return headers;
 }
 
@@ -100,12 +100,12 @@ IoTask<client::Message> get_message(std::shared_ptr<Session::Impl> session, boos
                                     Fields headers)
 {
    //
-   // What an error leaves behind: an empty message that says status::unknown, rather than the 200
-   // a default-constructed Beast response would claim.
+   // What an error leaves behind: an empty message with a status of 0, rather than the 200 a
+   // default-constructed response would claim.
    //
    auto failed = [](error_code ec) {
       client::Message message;
-      message.result(boost::beast::http::status::unknown);
+      message.set_start_line(0, "");
       return std::tuple{ec, std::move(message)};
    };
 
@@ -122,9 +122,10 @@ IoTask<client::Message> get_message(std::shared_ptr<Session::Impl> session, boos
       co_return failed(response_ec);
 
    client::Message message;
-   message.result(static_cast<unsigned>(response.status_code()));
+   const auto status_code = static_cast<unsigned short>(response.status_code());
+   message.set_start_line(status_code, reason_phrase(status_code));
    for (auto&& field : response.fields())
-      message.insert(field.name_string(), field.value()); // insert(), so repeated fields survive
+      message.append(field.name, field.value); // append(), so repeated fields survive
 
    auto& body = message.body();
    std::array<char, 16_k> buffer;
@@ -139,7 +140,7 @@ IoTask<client::Message> get_message(std::shared_ptr<Session::Impl> session, boos
          co_return failed(ec);
    }
 
-   logd("async_get: {} {}, {} bytes", message.result_int(), message.reason(), body.size());
+   logd("async_get: {} {}, {} bytes", message.status_int(), message.reason(), body.size());
    co_return std::tuple{error_code{}, std::move(message)};
 }
 

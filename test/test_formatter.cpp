@@ -14,8 +14,8 @@ namespace h2 = anyhttp::h2v2;
 namespace h2 = anyhttp::h2;
 #endif
 
-#include <boost/beast/http/field.hpp>
 #include <boost/core/detail/string_view.hpp>
+#include <boost/http/field.hpp>
 #include <boost/url/authority_view.hpp>
 #include <boost/url/pct_string_view.hpp>
 
@@ -115,26 +115,26 @@ TEST(FormatterTest, EndpointIPv6Full)
 }
 
 // =================================================================================================
-// Test boost::beast::http::field formatter
+// Test boost::http::field formatter
 // =================================================================================================
 
 TEST(FormatterTest, HttpField)
 {
-   auto field = boost::beast::http::field::content_type;
+   auto field = boost::http::field::content_type;
    auto formatted = std::format("{}", field);
    EXPECT_EQ(formatted, "Content-Type");
 }
 
 TEST(FormatterTest, HttpFieldAccept)
 {
-   auto field = boost::beast::http::field::accept;
+   auto field = boost::http::field::accept;
    auto formatted = std::format("{}", field);
    EXPECT_EQ(formatted, "Accept");
 }
 
 TEST(FormatterTest, HttpFieldUserAgent)
 {
-   auto field = boost::beast::http::field::user_agent;
+   auto field = boost::http::field::user_agent;
    auto formatted = std::format("{}", field);
    EXPECT_EQ(formatted, "User-Agent");
 }

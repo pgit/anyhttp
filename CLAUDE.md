@@ -13,6 +13,15 @@ benchmark with the latter, never with `build/`. Both use clang, which builds aga
 the libraries in `/opt/libc++` (`USE_LIBCXX`, `LIBCXX_ROOT`); `build-gcc/` is GCC with libstdc++
 and `/usr/local`. Keep `build/` on clang: clangd reads its `compile_commands.json`.
 
+HTTP/1.1 is [Boost.HTTP](https://github.com/cppalliance/http) (cppalliance/http, not in a Boost
+release yet), and its `fields` are anyhttp's `Fields`. Every tree FetchContents it, and capy with
+it, at a pinned SHA of `develop`; `cmake/http.cmake` builds its protocol core as `anyhttp_http`,
+with the patches in `cmake/patches/` applied, each of them proposed upstream. Its parser and
+serializer are sans-I/O: `h1/io.hpp` has the loops that drive them on the runtime layer, as
+Boost.HTTP's own (`parser::read()`, `serializer::sink`) need a capy stream. Leave chunking and
+`Content-Length` to the library, even where it copies: a body is copied into the serializer's
+buffer, there is no zero-copy path yet.
+
 `build-corosio/` is the COROSIO I/O runtime (`-DANYHTTP_API=COROSIO -DTLS_LIBRARY=OpenSSL`, see
 [docs/corosio-port-plan.md](docs/corosio-port-plan.md)); capy and corosio are FetchContent'd at
 pinned SHAs. Both runtimes build the same library sources and test files; what belongs to one
@@ -142,7 +151,7 @@ buffer (see `WriteMode`), and `build-h2v2-asan/` is the version 2 ASAN tree for 
 
 ## Source layout
 
-Each protocol lives in a directory of its own, `h1/` (Beast/HTTP/1.1), `h2/` (nghttp2), `quic/`
+Each protocol lives in a directory of its own, `h1/` (Boost.HTTP), `h2/` (nghttp2), `quic/`
 (ngtcp2) and `h3/` (nghttp3, on top of `quic/`), in both `include/anyhttp/` and `src/`. **Only
 files in `h2/` may include `<nghttp2/*>`, only files in `h2v2/` `<nghttp2v2/*>`, only files in
 `quic/` and `h3/` `<ngtcp2/*>`, only files in `h3/` `<nghttp3/*>`.** What belongs to one async
@@ -209,8 +218,9 @@ Only objects in `h2/`, `quic/` and `h3/` of the library may appear in the first 
 in `h3/` in the second: that is what proves the QUIC transport has no HTTP in it. (Test objects
 may: the h2c upgrade and formatter tests drive nghttp2 by hand.)
 
-**Generic and protocol code include nothing from Boost.Asio but `<boost/asio/buffer.hpp>`**, which
-Beast's parser, serializer and `Fields` bring anyway, and nothing from capy or corosio. They reach
+**Generic and protocol code include nothing from Boost.Asio but `<boost/asio/buffer.hpp>`**, and
+nothing from capy or corosio but what Boost.HTTP brings along: its parser and serializer are
+written in terms of capy's buffers, which `h1/io.hpp` converts at the boundary. They reach
 the runtime through `anyhttp/runtime.hpp`, `anyhttp/net.hpp` and `anyhttp/formatter.hpp`, which
 include the `asio/` or `corosio/` header of the build's runtime. Addresses and endpoints are the
 runtime's own (`IpAddress`, `TcpEndpoint`, `UdpEndpoint`); where the two differ, `net.hpp` declares

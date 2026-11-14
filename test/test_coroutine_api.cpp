@@ -4,7 +4,7 @@
 
 using namespace testing;
 
-namespace http = boost::beast::http;
+namespace http = boost::http;
 
 // =================================================================================================
 
@@ -144,7 +144,7 @@ TEST_P(CoroutineApi, WHEN_connecting_and_getting_THEN_message_arrives)
 
       auto [get_ec, message] = co_await session.get(url);
       EXPECT_FALSE(get_ec) << get_ec.message();
-      EXPECT_EQ(message.result(), http::status::ok);
+      EXPECT_EQ(message.status(), http::status::ok);
       EXPECT_EQ(message.body(), "ok");
    };
 }

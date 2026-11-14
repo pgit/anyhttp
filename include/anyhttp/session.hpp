@@ -165,9 +165,9 @@ public:
     * Any error along the way completes this operation: the ones \ref async_submit() describes,
     * \c errors::header_limit for a response header section over
     * \c client::Config::max_header_size, and \c errors::partial_message for a body cut
-    * short. The message that comes with an error is empty, and says \c status::unknown rather
-    * than the 200 a default-constructed Beast response would claim. A response that says 404, on
-    * the other hand, is not an error -- it is a response, and arrives as one.
+    * short. The message that comes with an error is empty, and has a status of 0 rather than
+    * the 200 a default-constructed response would claim. A response that says 404, on the other
+    * hand, is not an error -- it is a response, and arrives as one.
     *
     * \param url The URL of the request.
     * \param headers The header fields of the request.

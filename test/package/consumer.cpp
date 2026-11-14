@@ -54,8 +54,8 @@ static Task<void> get(client::Client& client, std::optional<server::Server>& ser
       auto [get_ec, message] = co_await session.get(url);
       if (get_ec)
          result = std::format("get: {}", get_ec.message());
-      else if (message.result_int() != 200 || message.body() != body)
-         result = std::format("{}: '{}'", message.result_int(), message.body());
+      else if (message.status_int() != 200 || message.body() != body)
+         result = std::format("{}: '{}'", message.status_int(), message.body());
       else
          result = "ok";
    }
