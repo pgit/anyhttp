@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <csignal>
+#include <cstdlib>
 #include <expected>
 #include <iostream>
 #include <print>
@@ -90,6 +91,12 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
    opts("key",
         po::value(&config.server.tls_private_key)->default_value(config.server.tls_private_key),
         "PEM file with the server's private key");
+   if (const char* keylog = std::getenv("SSLKEYLOGFILE"))
+      config.server.tls_keylog_file = keylog;
+   opts("keylog",
+        po::value(&config.server.tls_keylog_file)->default_value(config.server.tls_keylog_file),
+        "file to append the TLS secrets of every handshake to, for Wireshark (default: "
+        "$SSLKEYLOGFILE)");
    long alt_svc_max_age = config.server.alt_svc_max_age.count();
    opts("alt-svc-max-age", po::value(&alt_svc_max_age)->default_value(alt_svc_max_age),
         "how long clients may remember the HTTP/3 endpoint advertised as 'Alt-Svc' over HTTP/1.1 "

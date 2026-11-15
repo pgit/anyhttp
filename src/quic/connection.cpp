@@ -172,6 +172,7 @@ IoTask<Connection> connect(Executor executor, std::string host, std::string port
       ClientConfig client_config{.alpn = config.alpn,
                                  .host = host,
                                  .tls_ca_file = config.tls_ca_file,
+                                 .tls_keylog_file = config.tls_keylog_file,
                                  .idle_timeout = config.idle_timeout};
       auto session = co_await async_connect(
          std::move(executor), std::move(host), std::move(port), std::move(client_config),

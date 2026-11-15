@@ -13,6 +13,7 @@
 #include <boost/asio/io_context.hpp>
 #endif
 
+#include <cstdlib>
 #include <print>
 #include <string>
 
@@ -93,6 +94,10 @@ int main(int argc, char* argv[])
    client::Config config{.url = boost::urls::url(argv[1]),
                          .protocol = Protocol::h2,
                          .tls_ca_file = argc > 3 ? argv[3] : ""};
+
+   // Where curl and the browsers log their TLS secrets to, for Wireshark.
+   if (const char* keylog = std::getenv("SSLKEYLOGFILE"))
+      config.tls_keylog_file = keylog;
    client::Client client(context.get_executor(), config);
 
    int result = 1;
