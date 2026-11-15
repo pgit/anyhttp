@@ -23,9 +23,22 @@ namespace anyhttp::inline corosio
 
 // =================================================================================================
 
-TlsContext make_server_tls_context(const std::string& certificate_chain,
-                                   const std::string& private_key)
+//
+// corosio's tls_context builds its SSL_CTX on the first handshake, and neither it nor the stream
+// hands it out, so there is nothing to install a keylog callback on. Say so rather than fail: it
+// is a debugging aid, and HTTP/3 logs all the same, on an SSL_CTX of our own.
+//
+static void warn_no_keylog(const std::string& keylog_file, Role role)
 {
+   if (!keylog_file.empty())
+      logw("[{}] TLS key log '{}': not supported by corosio's TLS stream, only HTTP/3 logs",
+           log_prefix(role), keylog_file);
+}
+
+TlsContext make_server_tls_context(const std::string& certificate_chain,
+                                   const std::string& private_key, const std::string& keylog_file)
+{
+   warn_no_keylog(keylog_file, Role::server);
    TlsContext ctx;
    if (auto ec = ctx.set_min_protocol_version(boost::corosio::tls_version::tls_1_3))
       throw_error(ec);
@@ -39,8 +52,10 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 
 // -------------------------------------------------------------------------------------------------
 
-TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol)
+TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol,
+                                   const std::string& keylog_file)
 {
+   warn_no_keylog(keylog_file, Role::client);
    TlsContext ctx;
    if (auto ec = ctx.set_min_protocol_version(boost::corosio::tls_version::tls_1_2))
       throw_error(ec);

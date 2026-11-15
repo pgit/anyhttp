@@ -214,7 +214,8 @@ Task<Session> Client::Impl::async_connect()
    //
    if (is_https(config().url))
    {
-      auto tls_context = make_client_tls_context(config().tls_ca_file, config().protocol);
+      auto tls_context =
+         make_client_tls_context(config().tls_ca_file, config().protocol, config().tls_keylog_file);
       auto tls = io::make_tls_stream(std::move(socket), tls_context);
       io::set_peer_name(tls, host);
       if (auto [ec] = co_await io::handshake(tls, Role::client); ec)

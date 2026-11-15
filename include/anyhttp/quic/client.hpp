@@ -30,6 +30,9 @@ struct ClientConfig
    /// The CA certificates to verify the server with, see client::Config::tls_ca_file.
    std::string tls_ca_file;
 
+   /// Where to log the TLS secrets, see client::Config::tls_keylog_file.
+   std::string tls_keylog_file{};
+
    /// How long the connection may be silent before it is considered dead.
    std::chrono::nanoseconds idle_timeout = std::chrono::seconds{30};
 };

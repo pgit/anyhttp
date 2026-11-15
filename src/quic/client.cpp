@@ -91,6 +91,7 @@ struct TlsClientContext
 
       tls_load_trusted_cas(ctx, config.tls_ca_file);
       SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
+      tls_set_keylog_file(ctx, config.tls_keylog_file);
    }
 
    ~TlsClientContext()

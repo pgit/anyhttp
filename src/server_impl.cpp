@@ -50,7 +50,8 @@ static void destroy_on_its_executor(const std::shared_ptr<Session::Impl>& sessio
 
 Server::Impl::Impl(Executor executor, Config config)
    : config_(std::move(config)), executor_(std::move(executor)),
-     tls_context_(make_server_tls_context(config_.tls_certificate_chain, config_.tls_private_key)),
+     tls_context_(make_server_tls_context(config_.tls_certificate_chain, config_.tls_private_key,
+                                          config_.tls_keylog_file)),
      acceptor_(io::make_acceptor(executor_))
 {
    mlogi("ctor");

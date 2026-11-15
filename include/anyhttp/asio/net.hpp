@@ -241,17 +241,21 @@ static_assert(!SocketStream<boost::asio::ip::tcp::socket&>); // rvalues only, se
 
 /**
  * The server's TLS context, from the certificate chain and private key in the PEM files given.
- * ALPN offers "h2" and "http/1.1", and our order of preference wins over the client's.
+ * ALPN offers "h2" and "http/1.1", and our order of preference wins over the client's. The secrets
+ * of its handshakes go to \p keylog_file, if not empty, see \c server::Config::tls_keylog_file.
  */
 TlsContext make_server_tls_context(const std::string& certificate_chain,
-                                   const std::string& private_key);
+                                   const std::string& private_key,
+                                   const std::string& keylog_file = {});
 
 /**
  * A client's TLS context: TLS 1.2 and up, the server's certificate verified against \p ca_file as
  * \c client::Config::tls_ca_file describes. ALPN offers "http/1.1", preceded by "h2" if that is
- * what \p protocol asks for. Throws if the CA certificates cannot be loaded.
+ * what \p protocol asks for. Secrets go to \p keylog_file, as with the server's. Throws if the CA
+ * certificates or the key log cannot be loaded.
  */
-TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol);
+TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol,
+                                   const std::string& keylog_file = {});
 
 namespace io
 {
