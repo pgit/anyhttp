@@ -210,6 +210,8 @@ start_server() {
       printf -v line '%q ' "${cmd[@]}"
       echo "\$ ${line% }" >&2
    fi
+   # Created here, not by the redirection: that happens in the child, which the first grep can beat.
+   : >"$log"
    "${cmd[@]}" >"$log" 2>&1 &
    server_pid=$!
    for _ in $(seq 50); do
