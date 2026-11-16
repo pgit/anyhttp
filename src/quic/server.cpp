@@ -35,6 +35,7 @@
 #include "anyhttp/quic/session.hpp"
 #include "anyhttp/server_impl.hpp"
 #include "anyhttp/session_impl.hpp"
+#include "anyhttp/tls.hpp"
 
 #include <boost/container/container_fwd.hpp>
 #include <boost/container/flat_map.hpp>
@@ -127,6 +128,8 @@ struct TlsServerContext
 
       if (SSL_CTX_check_private_key(ctx) != 1)
          throw std::runtime_error("SSL_CTX_check_private_key");
+
+      tls_set_keylog_file(ctx, config.tls_keylog_file);
    }
 
    ~TlsServerContext()

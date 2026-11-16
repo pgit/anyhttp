@@ -4,9 +4,14 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <format>
+#include <fstream>
+#include <set>
+#include <sstream>
 #include <stop_token>
 #include <string>
 
@@ -307,6 +312,146 @@ INSTANTIATE_TEST_SUITE_P(ClientTlsWrongHost, ClientTlsWrongHost, all_protocols, 
 TEST_P(ClientTlsWrongHost, WHEN_certificate_is_for_another_host_THEN_connect_fails)
 {
    expect_failure(connect());
+   EXPECT_FALSE(protocol);
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// Both ends log the secrets of their handshakes, see server::Config::tls_keylog_file, each to a
+// file of its own here. They have done the same handshake, so they have to log the same secrets.
+//
+// Once the handshake is *done*, that is: a QUIC client is connected as soon as it has its own
+// keys, before the server has seen its Finished, which is when a server on OpenSSL logs the
+// client's traffic secret. A response is proof that it has: the server reads the request with it.
+//
+class ClientTlsKeyLog : public ClientTls
+{
+protected:
+   error_code get()
+   {
+      error_code result;
+      launch(client->get_executor(), get(this, result));
+      run();
+      return result;
+   }
+
+   static Task<void> get(ClientTlsKeyLog* self, error_code& result)
+   {
+      auto [ec, session] = co_await self->client->connect();
+      if (!ec)
+      {
+         auto url = self->url;
+         url.set_path("/echo");
+         std::tie(ec, std::ignore) = co_await session.get(std::move(url));
+      }
+      result = ec;
+      self->server.reset();
+   }
+
+   ~ClientTlsKeyLog() override
+   {
+      std::filesystem::remove(server_file);
+      std::filesystem::remove(client_file);
+   }
+
+   void configure_server(server::Config& config) override
+   {
+      config.tls_keylog_file = server_file.string();
+   }
+
+   void configure_client(client::Config& config) override
+   {
+      config.tls_keylog_file = client_file.string();
+   }
+
+   /// The lines of \p file, sorted, or none if there is no such file.
+   static std::multiset<std::string> lines(const std::filesystem::path& file)
+   {
+      std::multiset<std::string> result;
+      std::ifstream in(file);
+      for (std::string line; std::getline(in, line);)
+         result.insert(line);
+      return result;
+   }
+
+   static std::filesystem::path path(std::string_view role)
+   {
+      const auto* test = UnitTest::GetInstance()->current_test_info();
+      auto name = std::format("anyhttp-keylog-{}-{}-{}.txt", ::getpid(), test->name(), role);
+      std::ranges::replace(name, '/', '-');
+      return std::filesystem::temp_directory_path() / name;
+   }
+
+   const std::filesystem::path server_file = path("server");
+   const std::filesystem::path client_file = path("client");
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientTlsKeyLog, ClientTlsKeyLog, all_protocols, NameGenerator);
+
+TEST_P(ClientTlsKeyLog, WHEN_keylog_file_is_set_THEN_both_ends_log_the_same_secrets)
+{
+   ASSERT_EQ(get(), error_code{});
+
+#if ANYHTTP_COROSIO
+   if (GetParam() != anyhttp::Protocol::h3)
+   {
+      // corosio's TLS stream has no keylog; the server's QUIC context opened the file all the same
+      EXPECT_THAT(lines(client_file), IsEmpty());
+      EXPECT_THAT(lines(server_file), IsEmpty());
+      return;
+   }
+#endif
+
+   const auto logged = lines(client_file);
+   EXPECT_EQ(logged, lines(server_file));
+
+   //
+   // TLS 1.3, which our server insists on, in the NSS key log format: a label, the client random
+   // (32 bytes) and the secret, both in hex.
+   //
+   std::set<std::string> labels;
+   for (const auto& line : logged)
+   {
+      std::istringstream fields(line);
+      std::string label, client_random, secret;
+      fields >> label >> client_random >> secret;
+      EXPECT_EQ(client_random.size(), 64u) << line;
+      EXPECT_FALSE(secret.empty()) << line;
+      labels.insert(label);
+   }
+   EXPECT_THAT(labels,
+               IsSupersetOf({"CLIENT_HANDSHAKE_TRAFFIC_SECRET", "SERVER_HANDSHAKE_TRAFFIC_SECRET",
+                             "CLIENT_TRAFFIC_SECRET_0", "SERVER_TRAFFIC_SECRET_0"}));
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// A key log that can't be opened fails the connect, as a CA file that can't be loaded does: the
+// caller asked for the secrets, and would not otherwise notice that they are not there.
+//
+class ClientTlsBadKeyLog : public ClientTls
+{
+protected:
+   void configure_client(client::Config& config) override
+   {
+      config.tls_keylog_file = "no/such/directory/keylog.txt";
+   }
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientTlsBadKeyLog, ClientTlsBadKeyLog,
+                         Values(anyhttp::Protocol::h3
+#if ANYHTTP_ASIO
+                                ,
+                                anyhttp::Protocol::h1, anyhttp::Protocol::h2
+#endif
+                                ),
+                         NameGenerator);
+
+TEST_P(ClientTlsBadKeyLog, WHEN_keylog_file_cannot_be_opened_THEN_connect_fails)
+{
+   EXPECT_TRUE(connect());
    EXPECT_FALSE(protocol);
 }
 

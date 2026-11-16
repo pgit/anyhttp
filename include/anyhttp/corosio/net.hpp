@@ -230,12 +230,17 @@ static_assert(SocketStream<TlsStream>);
 
 // -------------------------------------------------------------------------------------------------
 
-/// The server's TLS context, see asio/net.hpp. corosio prefers our order for ALPN.
+/**
+ * The server's TLS context, see asio/net.hpp. corosio prefers our order for ALPN. It has no
+ * keylog: a \p keylog_file is ignored, with a warning.
+ */
 TlsContext make_server_tls_context(const std::string& certificate_chain,
-                                   const std::string& private_key);
+                                   const std::string& private_key,
+                                   const std::string& keylog_file = {});
 
-/// A client's TLS context, see asio/net.hpp.
-TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol);
+/// A client's TLS context, see asio/net.hpp, and without a keylog, as the server's.
+TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol,
+                                   const std::string& keylog_file = {});
 
 namespace io
 {

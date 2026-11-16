@@ -1,3 +1,5 @@
+.. cpp:namespace:: anyhttp
+
 Capturing traffic
 =================
 
@@ -38,7 +40,14 @@ Have the client write its session secrets to a key log (the NSS format), and giv
    tshark -r ssl.pcap -o tls.keylog_file:keylog.log
 
 * curl, h2load and nghttp honour ``SSLKEYLOGFILE``, and so do browsers and Python's
-  ``ssl.create_default_context()``. Our own client and server do not write a key log.
+  ``ssl.create_default_context()``. So do our own ``server`` and ``client`` programs (``server
+  --keylog FILE`` too). The library does not look at the variable: a program asks for a key log with
+  :cpp:member:`server::Config::tls_keylog_file` and :cpp:member:`client::Config::tls_keylog_file`
+  (``quic::Config::tls_keylog_file`` for a plain QUIC client), for TLS over TCP and QUIC alike.
+  With the COROSIO I/O runtime only QUIC is logged: corosio's TLS stream does not let the key log
+  in, and says so with a warning.
+* Server and client can share a key log with each other and with curl: each line is appended in one
+  write. The file is created with mode 0600, as whoever can read it can read the traffic.
 * The same key log decrypts HTTP/3: ``curl --http3-only ...``.
 * The client appends to the file, and secrets of earlier sessions do no harm. But ``export`` makes
   every TLS client started from that shell write its secrets there: ``unset SSLKEYLOGFILE``
