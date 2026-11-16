@@ -2,7 +2,7 @@
 #
 # Runs h2load against the standalone server of the ASIO and the COROSIO release builds, over
 # HTTP/1.1, HTTP/2 and HTTP/3 (all TLS), and prints a summary table. Each row names the server
-# program, its I/O runtime and the protocol implementation: Beast for HTTP/1.1, nghttp2 (or
+# program, its I/O runtime and the protocol implementation: Boost.HTTP for HTTP/1.1, nghttp2 (or
 # nghttp2v2) for HTTP/2, ngtcp2+nghttp3 for HTTP/3. Both builds use OpenSSL, as
 # COROSIO has to, so that the TLS library is not part of the comparison: build-openssl-release/
 # is the ASIO one (build-release/ is ASIO on AWS-LC).
@@ -89,7 +89,7 @@ declare -A program=([asio]=anyhttp [corosio]=anyhttp [asio-h2v2]=anyhttp [corosi
    [nghttpd]=nghttpd)
 declare -A runtime=([asio]=asio [corosio]=corosio [asio-h2v2]=asio [corosio-h2v2]=corosio
    [nghttpd]=libev)
-declare -A impl=([h1]=beast [h2]=nghttp2 [h3]=ngtcp2+nghttp3 [asio-h2v2,h2]=nghttp2v2
+declare -A impl=([h1]=boost.http [h2]=nghttp2 [h3]=ngtcp2+nghttp3 [asio-h2v2,h2]=nghttp2v2
    [corosio-h2v2,h2]=nghttp2v2)
 
 # Prints the implementation of protocol $2 in server $1
@@ -99,7 +99,7 @@ impl_of() {
 
 # SGR colours (256-colour palette) of the runtimes, of nghttpd, and of the implementations
 declare -A color=([asio]='38;5;33' [corosio]='38;5;208' [libev]='38;5;245' [nghttpd]='38;5;245'
-   [beast]='38;5;141' [nghttp2]='38;5;37' [nghttp2v2]='38;5;44' [ngtcp2+nghttp3]='38;5;170'
+   [boost.http]='38;5;141' [nghttp2]='38;5;37' [nghttp2v2]='38;5;44' [ngtcp2+nghttp3]='38;5;170'
    [better]='38;5;70' [worse]='38;5;160')
 color_out=0 color_err=0
 if [[ ! -v NO_COLOR ]]; then
