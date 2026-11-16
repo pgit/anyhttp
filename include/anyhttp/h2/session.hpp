@@ -78,6 +78,9 @@ public:
    // has run out of data to send, whether nghttp2 still wants to read or not.
    bool recv_done_ = false;
 
+   // Set once a GOAWAY of ours has gone out, see recv_loop().
+   bool goaway_sent_ = false;
+
    // Set when writing to the stream has failed, for which a TLS "close_notify" comes too late.
    bool send_failed_ = false;
 
@@ -86,9 +89,6 @@ public:
 
    // Set once a client session's do_session() is over.
    Event session_done_;
-
-   // Set once a GOAWAY of ours has gone out, see recv_loop().
-   bool goaway_sent_ = false;
 
    void start_write();
 
