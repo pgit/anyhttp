@@ -85,8 +85,6 @@ class NGHttp2Stream : public std::enable_shared_from_this<NGHttp2Stream>
 public:
    size_t bytesRead = 0;
    size_t bytesWritten = 0; // TODO: not used, yet
-   size_t pending = 0; // TODO: not used, yet
-   size_t unhandled = 0; // TODO: not used, yet
 
    // ----------------------------------------------------------------------------------------------
 

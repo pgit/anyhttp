@@ -289,6 +289,32 @@
             }
         },
         {
+            "name": "build-corosio-h2v2-release",
+            "displayName": "COROSIO, nghttp2 v2, Release",
+            "description": "So that bench.sh -2 has nghttp2 version 2 on both I/O runtimes, beside build-h2v2-release/",
+            "inherits": [
+                "clang",
+                "corosio",
+                "h2v2",
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "build-corosio-h2v2-asan",
+            "displayName": "COROSIO, nghttp2 v2, AddressSanitizer",
+            "description": "h2v2/ on the other runtime: its write path hands nghttp2 a pointer into the caller's buffer, and COROSIO resumes the writers differently",
+            "inherits": [
+                "clang",
+                "corosio",
+                "h2v2",
+                "asan",
+                "base"
+            ]
+        },
+        {
             "name": "build-deploy",
             "displayName": "For cmake --install",
             "description": "Release, without the tests and thus without cfssl and the test PKI, and without the code of the guide. On AWS-LC, which links statically: a TLS library the target machine does not have to provide",
@@ -371,6 +397,14 @@
         {
             "name": "build-h2v2-release",
             "configurePreset": "build-h2v2-release"
+        },
+        {
+            "name": "build-corosio-h2v2-release",
+            "configurePreset": "build-corosio-h2v2-release"
+        },
+        {
+            "name": "build-corosio-h2v2-asan",
+            "configurePreset": "build-corosio-h2v2-asan"
         },
         {
             "name": "build-deploy",
@@ -473,6 +507,16 @@
         {
             "name": "build-h2v2-release",
             "configurePreset": "build-h2v2-release",
+            "inherits": "base"
+        },
+        {
+            "name": "build-corosio-h2v2-release",
+            "configurePreset": "build-corosio-h2v2-release",
+            "inherits": "base"
+        },
+        {
+            "name": "build-corosio-h2v2-asan",
+            "configurePreset": "build-corosio-h2v2-asan",
             "inherits": "base"
         }
     ]

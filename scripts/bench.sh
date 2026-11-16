@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
 # Runs h2load against the standalone server of the ASIO and the COROSIO release builds, over
-# HTTP/1.1, HTTP/2 and HTTP/3 (all TLS), and prints a summary table. Both builds use OpenSSL, as
+# HTTP/1.1, HTTP/2 and HTTP/3 (all TLS), and prints a summary table. Each row names the server
+# program, its I/O runtime and the protocol implementation: Beast for HTTP/1.1, nghttp2 (or
+# nghttp2v2) for HTTP/2, ngtcp2+nghttp3 for HTTP/3. Both builds use OpenSSL, as
 # COROSIO has to, so that the TLS library is not part of the comparison: build-openssl-release/
 # is the ASIO one (build-release/ is ASIO on AWS-LC).
 #
@@ -11,9 +13,14 @@
 # gets as many workers, an event loop each, to which its accepting thread hands the connections
 # round robin -- closer to -i than to one shared context.
 #
-# With -2 the ASIO build over nghttp2 version 2, the rewrite, runs an HTTP/2 row as well:
-# build-h2v2-release/, on OpenSSL again, so that the HTTP/2 library is all that differs from the
-# asio row. Only HTTP/2 -- its HTTP/1.1 and HTTP/3 are the same backends as that row's.
+# With -2 the builds over nghttp2 version 2, the rewrite, run an HTTP/2 row each as well:
+# build-h2v2-release/ (ASIO) and build-corosio-h2v2-release/ (COROSIO), both on OpenSSL again, so
+# that the HTTP/2 library is all that differs from the nghttp2 row of the same runtime. Only
+# HTTP/2 -- their HTTP/1.1 and HTTP/3 are the same backends as the other rows'.
+#
+# On a terminal the runtimes and implementations are in colour, asio blue, corosio orange and
+# nghttpd grey, and so are the ratios that differ from asio by more than 5%, green or red.
+# NO_COLOR turns that off.
 #
 # Usage: scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-M depth] [-t threads] [-i]
 #                         [-p port] [-u path] [-P] [-2] [-n] [-N] [-v]
@@ -28,7 +35,7 @@
 #   -p  port (default 18080)
 #   -u  request path (default /)
 #   -P  plaintext: HTTP/1.1 and HTTP/2 (prior knowledge) without TLS; no HTTP/3
-#   -2  also run the nghttp2 version 2 build, for HTTP/2
+#   -2  also run the nghttp2 version 2 builds, for HTTP/2
 #   -n  don't build the servers first (otherwise a missing tree is configured with
 #       scripts/configure.sh)
 #   -N  leave out nghttpd
@@ -75,12 +82,56 @@ done
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
+# A server here is one build, or nghttpd: what it is made of is in the columns of the table.
 declare -A trees=([asio]=build-openssl-release [corosio]=build-corosio-release
-   [h2v2]=build-h2v2-release)
+   [asio-h2v2]=build-h2v2-release [corosio-h2v2]=build-corosio-h2v2-release)
+declare -A program=([asio]=anyhttp [corosio]=anyhttp [asio-h2v2]=anyhttp [corosio-h2v2]=anyhttp
+   [nghttpd]=nghttpd)
+declare -A runtime=([asio]=asio [corosio]=corosio [asio-h2v2]=asio [corosio-h2v2]=corosio
+   [nghttpd]=libev)
+declare -A impl=([h1]=beast [h2]=nghttp2 [h3]=ngtcp2+nghttp3 [asio-h2v2,h2]=nghttp2v2
+   [corosio-h2v2,h2]=nghttp2v2)
+
+# Prints the implementation of protocol $2 in server $1
+impl_of() {
+   if [[ -v impl[$1,$2] ]]; then echo "${impl[$1,$2]}"; else echo "${impl[$2]}"; fi
+}
+
+# SGR colours (256-colour palette) of the runtimes, of nghttpd, and of the implementations
+declare -A color=([asio]='38;5;33' [corosio]='38;5;208' [libev]='38;5;245' [nghttpd]='38;5;245'
+   [beast]='38;5;141' [nghttp2]='38;5;37' [nghttp2v2]='38;5;44' [ngtcp2+nghttp3]='38;5;170'
+   [better]='38;5;70' [worse]='38;5;160')
+color_out=0 color_err=0
+if [[ ! -v NO_COLOR ]]; then
+   [[ -t 1 ]] && color_out=1
+   [[ -t 2 ]] && color_err=1
+fi
+
+# Prints $3 padded to $2 columns, in the colour of $4 (default: of $3) if $1 is 1. Padding first,
+# so that the escape sequences do not count towards the width.
+paint() {
+   local text key=${4:-$3}
+   printf -v text "%-${2}s" "$3"
+   if (($1)) && [[ -v color[$key] ]]; then
+      printf '\e[%sm%s\e[0m' "${color[$key]}" "$text"
+   else
+      printf '%s' "$text"
+   fi
+}
+
+# Prints the columns that tell the servers apart: the program and runtime of server $2 and its
+# implementation of protocol $3, in colour if $1 is 1
+columns() {
+   paint "$1" 8 "${program[$2]}"
+   printf ' '
+   paint "$1" 8 "${runtime[$2]}"
+   printf ' '
+   paint "$1" 15 "$(impl_of "$2" "$3")"
+}
 protocols=(h1 h2 h3)
 [[ $scheme == http ]] && protocols=(h1 h2)
 servers=(asio corosio)
-((h2v2)) && servers+=(h2v2)
+((h2v2)) && servers+=(asio-h2v2 corosio-h2v2)
 if ((nghttpd)); then
    if command -v nghttpd >/dev/null; then
       servers+=(nghttpd)
@@ -171,7 +222,7 @@ start_server() {
       kill -0 "$server_pid" 2>/dev/null || break
       sleep 0.1
    done
-   echo "error: $server server did not come up on port $port, see $log" >&2
+   echo "error: ${program[$server]} (${runtime[$server]}) did not come up on port $port, see $log" >&2
    exit 1
 }
 
@@ -192,15 +243,15 @@ declare -A results
 for server in "${servers[@]}"; do
    start_server "$server"
    for proto in "${protocols[@]}"; do
-      # nghttpd serves HTTP/2 only, and the h2v2 build is the asio one below HTTP/2
-      [[ $server == @(nghttpd|h2v2) && $proto != h2 ]] && continue
+      # nghttpd serves HTTP/2 only, and the h2v2 builds differ from the others only in HTTP/2
+      [[ $server == @(nghttpd|*-h2v2) && $proto != h2 ]] && continue
       args=(-D "$duration" -c "$clients" -m "$streams" -t "$h2load_threads")
       case $proto in
       h1) args=(--h1 -D "$duration" -c "$clients" -m "$pipeline" -t "$h2load_threads") ;;
       h3) args+=(--h3) ;;
       esac
       log=$out/h2load-$server-$proto.log
-      printf '%-8s %-3s ... ' "$server" "$proto" >&2
+      { printf '%-5s ' "$proto"; columns $color_err "$server" "$proto"; printf ' ... '; } >&2
       if h2load "${args[@]}" "$scheme://127.0.0.1:$port$path" >"$log" 2>&1; then
          results[$server,$proto]=$(parse "$log")
          echo "$(cut -d' ' -f1 <<<"${results[$server,$proto]}") req/s" >&2
@@ -216,27 +267,33 @@ echo
 echo "h2load -D ${duration}s -c $clients -m $streams -t $h2load_threads (h1: -m $pipeline)," \
    "$scheme://127.0.0.1:$port$path, server threads: $threads${independent:+ (independent)}"
 echo
-row='%-8s %-5s %12s %11s %10s %7s %9s %9s\n'
-printf "$row" server proto req/s MB/s succeeded failed median p99
-printf "$row" -------- ----- ------------ ----------- ---------- ------- --------- ---------
+row='%-5s %-8s %-8s %-15s %12s %11s %10s %7s %9s %9s\n'
+printf "$row" proto server runtime impl req/s MB/s succeeded failed median p99
+printf "$row" ----- -------- -------- --------------- ------------ ----------- ---------- ------- \
+   --------- ---------
 for proto in "${protocols[@]}"; do
    for server in "${servers[@]}"; do
       [[ -v results[$server,$proto] ]] || continue
       read -r rps mbs ok failed median p99 <<<"${results[$server,$proto]}"
-      printf "$row" "$server" "$proto" "$rps" "$mbs" "$ok" "$failed" "$median" "$p99"
+      printf '%-5s %s %12s %11s %10s %7s %9s %9s\n' "$proto" \
+         "$(columns $color_out "$server" "$proto")" "$rps" "$mbs" "$ok" "$failed" "$median" "$p99"
    done
 done
 
-# corosio and nghttpd relative to asio, per protocol
+# Every other row's req/s relative to the asio build's, per protocol
 echo
+echo "req/s relative to anyhttp on asio with $(impl_of asio h1), $(impl_of asio h2)," \
+   "$(impl_of asio h3):"
 for proto in "${protocols[@]}"; do
    a=$(cut -d' ' -f1 <<<"${results[asio,$proto]}")
    for server in "${servers[@]:1}"; do
       [[ -v results[$server,$proto] ]] || continue
       b=$(cut -d' ' -f1 <<<"${results[$server,$proto]}")
       if [[ $a != - && $b != - ]]; then
-         awk -v p="$proto" -v s="$server" -v a="$a" -v b="$b" \
-            'BEGIN { printf "%s: %s/asio = %.2f\n", p, s, (a > 0 ? b / a : 0) }'
+         ratio=$(awk -v a="$a" -v b="$b" 'BEGIN { printf "%.2f", (a > 0 ? b / a : 0) }')
+         key=$(awk -v r="$ratio" 'BEGIN { print (r >= 1.05 ? "better" : r <= 0.95 ? "worse" : "") }')
+         printf '%-5s %s %s\n' "$proto" "$(columns $color_out "$server" "$proto")" \
+            "$(paint $color_out 5 "$ratio" "$key")"
       fi
    done
 done

@@ -41,7 +41,10 @@ RFC 7540). What `test/CMakeLists.txt` leaves out of that tree is the three tests
 nghttp2 session by hand -- `test_alt_svc`, `test_connection_end`, `test_h2c_upgrade` -- which are
 written against version 1's API and would not link.
 `build-h2v2-release/` is its Release tree, on OpenSSL so that `scripts/bench.sh -2` can put its
-HTTP/2 beside the other two servers' with the HTTP/2 library as the only difference.
+HTTP/2 beside the other two servers' with the HTTP/2 library as the only difference;
+`build-corosio-h2v2-release/` is the same on COROSIO, and `build-corosio-h2v2-asan/` its ASAN tree:
+the two runtimes resume a handler at different points of a connection's end, and some bugs of
+`h2v2/` show on COROSIO only.
 
 `build-deploy/` is what gets installed: Release, on AWS-LC, without the tests and so without cfssl
 and the test PKI. `scripts/check_package.sh` installs it, moves the result and runs the programs

@@ -26,13 +26,17 @@ never against a number in this file.
 ### `scripts/bench.sh`
 
 ```
-scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-t threads] [-i] [-p port] [-u path] [-P] [-n] [-N] [-v]
+scripts/bench.sh [-D seconds] [-c clients] [-m streams] [-M depth] [-t threads] [-i] [-p port] [-u path] [-P] [-2] [-n] [-N] [-v]
 ```
 
 It builds and starts the server of `build-openssl-release/` (ASIO) and `build-corosio-release/`
 (COROSIO) one after the other, configuring a missing tree with `scripts/configure.sh`, runs h2load
 over HTTP/1.1, HTTP/2 and HTTP/3 against each, and prints a table of req/s, MB/s, failures and
-median/p99 latency, plus COROSIO/ASIO per protocol.
+median/p99 latency, plus every row's req/s relative to the ASIO row of its protocol.
+A row names what it measures in three columns: the server program (`anyhttp` or `nghttpd`), its
+I/O runtime (`asio`, `corosio`; `libev` for nghttpd) and the protocol implementation (`beast` for
+HTTP/1.1, `nghttp2` or `nghttp2v2` for HTTP/2, `ngtcp2+nghttp3` for HTTP/3), so that runtime and
+implementation are never folded into one name.
 Both trees use OpenSSL, because COROSIO has to; `build-release/` is ASIO on AWS-LC, which is
 faster on its own (see [TLS library](#tls-library-aws-lc-vs-openssl)) and would skew the
 comparison.
@@ -43,12 +47,20 @@ the server program on `/` ("Hello, World!") and `/test/*`; other paths are 404s 
 as failed. With `-t N` it runs N workers, each an event loop to which the accepting thread hands
 connections round robin, which is closer to `-i` than to a shared context.
 
+`-2` adds the trees over nghttp2 version 2 as two more HTTP/2 rows: `build-h2v2-release/` (ASIO)
+and `build-corosio-h2v2-release/` (COROSIO), both on OpenSSL, implementation `nghttp2v2`, so that
+the HTTP/2 library is the only difference from the `nghttp2` row of the same runtime.
+
+On a terminal the runtimes are in colour (asio blue, corosio orange, nghttpd grey), and so are the
+implementations and the ratios that differ from ASIO by more than 5%; `NO_COLOR` turns that off.
+
 | option | meaning |
 |---|---|
 | `-t N` | the servers run on N threads, h2load gets as many (up to the clients) |
 | `-i` | with `-t`: one I/O context and one server per thread instead of one shared context, see below |
 | `-M N` | h1 pipelining depth, default 1 (no pipelining), see below |
 | `-P` | plaintext HTTP/1.1 and HTTP/2 (prior knowledge), no HTTP/3 |
+| `-2` | also the nghttp2 version 2 builds, for HTTP/2 |
 | `-u path` | request path, default `/` ("Hello, World!", nothing else) |
 | `-n` | don't build first |
 | `-N` | leave out nghttpd |
