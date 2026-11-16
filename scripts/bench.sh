@@ -267,15 +267,15 @@ echo
 echo "h2load -D ${duration}s -c $clients -m $streams -t $h2load_threads (h1: -m $pipeline)," \
    "$scheme://127.0.0.1:$port$path, server threads: $threads${independent:+ (independent)}"
 echo
-row='%-5s %-8s %-8s %-15s %12s %10s %10s %7s %9s %9s\n'
+row='%-5s %-8s %-8s %-15s %12s %11s %10s %7s %9s %9s\n'
 printf "$row" proto server runtime impl req/s MB/s succeeded failed median p99
-printf "$row" ----- -------- -------- --------------- ------------ ---------- ---------- ------- \
+printf "$row" ----- -------- -------- --------------- ------------ ----------- ---------- ------- \
    --------- ---------
 for proto in "${protocols[@]}"; do
    for server in "${servers[@]}"; do
       [[ -v results[$server,$proto] ]] || continue
       read -r rps mbs ok failed median p99 <<<"${results[$server,$proto]}"
-      printf '%-5s %s %12s %10s %10s %7s %9s %9s\n' "$proto" \
+      printf '%-5s %s %12s %11s %10s %7s %9s %9s\n' "$proto" \
          "$(columns $color_out "$server" "$proto")" "$rps" "$mbs" "$ok" "$failed" "$median" "$p99"
    done
 done
