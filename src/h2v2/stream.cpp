@@ -272,6 +272,19 @@ void NGHttp2Writer<Base>::async_submit(StatusHandler&& handler, unsigned int sta
       return;
    }
 
+   //
+   // A stream that has been closed has no say in nghttp2 any more, which would refuse the response
+   // anyway. Nor need there be an nghttp2 to ask: when the connection ends, the send loop closes
+   // the streams that are left and do_session() deletes the connection, while a handler that is
+   // yet to submit can still hold one of them. Which of the two it meets is up to the scheduler.
+   //
+   if (stream->closed)
+   {
+      mlogw("async_submit: stream already closed");
+      std::move(handler)(errors::connection_aborted);
+      return;
+   }
+
    using namespace boost::beast::http;
    logd("[{}] {} {}", stream->log_prefix(), status_code,
         obsolete_reason(int_to_status(status_code)));
@@ -497,7 +510,8 @@ void NGHttp2Stream::call_read_handler(boost::asio::const_buffer view)
    // The connection window was already reopened where the data arrived, see on_recv_data(): only
    // the stream-level credit is what the reader's pace is allowed to hold back.
    //
-   if (consumed)
+   // Not for a closed stream, whose rest of the body may be read after the connection is gone.
+   if (consumed && !closed)
    {
       nghttp2_conn_extend_max_stream_offset(parent.conn, id, consumed);
       mlogd("consumed {} bytes", consumed);
