@@ -363,8 +363,9 @@ mismatch leads to a RST_STREAM, which surfaces as `stream_truncated`.
 - Build the HTTP/3 layer in `recv_rx_key(1RTT)`: the control and QPACK uni streams need 1-RTT keys.
 - `NGTCP2_ERR_STREAM_NOT_FOUND` needs both shutdown and block, plus a guard against being handed
   the same stream a second time.
-- Use `ngtcp2_conn_write_aggregate_pkt` rather than `_pkt2`, which anyhttp uses. It clamps the
-  batch to the send quantum and handles pacing itself.
+- Use `ngtcp2_conn_write_aggregate_pkt` rather than `_pkt2`. It clamps the batch to the send
+  quantum and sets the pacing time itself; `_pkt2` does neither, and anyhttp ran without pacing
+  until it switched.
 - **Not every `read_pkt` error may be answered.** `DROP_CONN`, `RETRY` and idle timeouts close
   silently. Record the error with `ngtcp2_ccerr_set_liberr`, and
   `ngtcp2_conn_write_connection_close` writes nothing for those types.

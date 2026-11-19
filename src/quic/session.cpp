@@ -180,16 +180,14 @@ void QuicSession::wake_write()
    //
    if (write_posted_)
       return;
-   write_posted_ = true;
 
+   write_posted_ = true;
    run_later(get_executor(), [self = weak_from_this()] {
-      auto session = std::static_pointer_cast<QuicSession>(self.lock());
-      if (!session)
-         return;
-      session->write_posted_ = false;
-      if (session->closed_)
-         return;
-      session->flush_write();
+      if (auto session = std::static_pointer_cast<QuicSession>(self.lock()))
+      {
+         session->write_posted_ = false;
+         session->flush_write();
+      }
    });
 }
 
@@ -216,7 +214,7 @@ ngtcp2_ssize QuicSession::write_pkt_cb(ngtcp2_conn*, ngtcp2_path* path, ngtcp2_p
 
 //
 // Writes a single QUIC packet's worth of stream data into [dest, dest+destlen[. Called repeatedly
-// by ngtcp2_conn_write_aggregate_pkt2() (once per packet it wants to pack into the shared TX
+// by ngtcp2_conn_write_aggregate_pkt() (once per packet it wants to pack into the shared TX
 // buffer), so this must never send anything itself -- write_streams() decides when and how the
 // accumulated packets go out.
 //
@@ -229,7 +227,7 @@ ngtcp2_ssize QuicSession::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uint
    for (;;)
    {
       //
-      // Everything below runs inside ngtcp2_conn_write_aggregate_pkt2(), which hands us the one
+      // Everything below runs inside ngtcp2_conn_write_aggregate_pkt(), which hands us the one
       // timestamp of this whole write pass and calls back once per packet it wants to pack. Should
       // the connection have been closed in between -- a handler resumed from a stream close or a
       // deferred consume can get there -- stop packing rather than feeding ngtcp2 a `ts` that is
@@ -242,7 +240,7 @@ ngtcp2_ssize QuicSession::write_pkt(ngtcp2_path* path, ngtcp2_pkt_info* pi, uint
       bool fin = false;
       ngtcp2_ssize sveccnt = 0;
 
-      if (application_ready_ && ngtcp2_conn_get_max_data_left(conn_))
+      if (application_ready_ && ngtcp2_conn_get_max_data_left2(conn_))
       {
          sveccnt = application_->next_stream_data(stream_id, fin, vec);
          if (sveccnt < 0)
@@ -324,19 +322,23 @@ int QuicSession::write_streams()
    if (ngtcp2_conn_in_closing_period(conn_) || ngtcp2_conn_in_draining_period(conn_))
       return 0;
 
-   mlogd("write_streams: max_data_left={}", ngtcp2_conn_get_max_data_left(conn_));
+   mlogd("write_streams: max_data_left={}", ngtcp2_conn_get_max_data_left2(conn_));
 
    ngtcp2_path_storage ps;
    ngtcp2_pkt_info pi;
    ngtcp2_path_storage_zero(&ps);
 
+   //
+   // Not _pkt2(): this one keeps the batch to the send quantum and sets the pacing time, which
+   // ngtcp2_conn_get_expiry2() then includes, so update_timer() comes back when the pacer would
+   // send the next one.
+   //
    size_t gso_size = 0;
-   auto nwrite =
-      ngtcp2_conn_write_aggregate_pkt2(conn_, &ps.path, &pi, tx_buf_.data(), tx_buf_.size(),
-                                       &gso_size, &write_pkt_cb, 0, timestamp());
+   auto nwrite = ngtcp2_conn_write_aggregate_pkt(
+      conn_, &ps.path, &pi, tx_buf_.data(), tx_buf_.size(), &gso_size, &write_pkt_cb, timestamp());
    if (nwrite < 0)
    {
-      mloge("ngtcp2_conn_write_aggregate_pkt2: {}", ngtcp2_strerror(static_cast<int>(nwrite)));
+      mloge("ngtcp2_conn_write_aggregate_pkt: {}", ngtcp2_strerror(static_cast<int>(nwrite)));
       if (!last_error_.error_code)
          ngtcp2_ccerr_set_liberr(&last_error_, static_cast<int>(nwrite), nullptr, 0);
       return handle_error(static_cast<int>(nwrite));
