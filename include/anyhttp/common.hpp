@@ -3,10 +3,9 @@
 #include <anyhttp/logging.hpp>
 #include <anyhttp/runtime.hpp>
 
-#include <boost/beast/http/fields.hpp>
-
-#include <boost/beast/http/fields_fwd.hpp>
-#include <boost/beast/http/type_traits.hpp>
+#include <boost/http/field.hpp>
+#include <boost/http/fields.hpp>
+#include <boost/http/status.hpp>
 #include <boost/system/system_error.hpp>
 #include <boost/url/authority_view.hpp>
 #include <boost/url/pct_string_view.hpp>
@@ -44,9 +43,28 @@ std::ostream& operator<<(std::ostream& str, Protocol protocol);
 
 // =================================================================================================
 
-/// The header fields of a message, in both directions: Beast's container for them.
-using Fields = boost::beast::http::fields;
-static_assert(boost::beast::http::is_fields<Fields>::value);
+/**
+ * The header fields of a message, in both directions: Boost.HTTP's container for them.
+ *
+ * It checks what goes into it: a name that is not a token, or a value with a line break or a NUL
+ * in it, makes \c set() and \c append() throw -- or report it, with the overloads that take an
+ * error code. Values lose their leading and trailing whitespace.
+ */
+using Fields = boost::http::fields;
+
+/**
+ * The reason phrase HTTP/1.1 has for a status code, for the logs: HTTP/2 and HTTP/3 have none.
+ *
+ * \param status_code The status code.
+ * \return The phrase, or an empty string for a code that has none.
+ */
+inline std::string_view reason_phrase(unsigned int status_code)
+{
+   const auto status = boost::http::int_to_status(status_code);
+   if (status == boost::http::status::unknown)
+      return {};
+   return boost::http::to_string(status);
+}
 
 /// Default for \c server::Config::max_header_size and \c client::Config::max_header_size.
 inline constexpr size_t default_max_header_size = 64 * 1024;
@@ -70,7 +88,7 @@ constexpr size_t header_field_size(std::string_view name, std::string_view value
  * \c std::format can turn into a string, so sizes and counts need no conversion at the call site.
  *
  * String-like values are only referenced, never copied: a FieldValue lives just long enough for
- * \c fields() to hand the bytes to Beast, which copies them. Only formatted values need storage.
+ * \c fields() to hand the bytes to the Fields, which copy them. Only formatted values need storage.
  */
 class FieldValue
 {
@@ -112,8 +130,8 @@ private:
 };
 
 /**
- * Beast's fields have no initializer-list constructor, so building a small, fixed set of headers
- * takes a statement per header. This lets it be spelled inline:
+ * Fields have no initializer-list constructor, so building a small, fixed set of headers takes a
+ * statement per header. This lets it be spelled inline:
  *
  * \code
  * fields({{"Content-Length", body.size()}, {"Content-Type", "text/plain"}})

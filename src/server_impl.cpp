@@ -7,8 +7,6 @@
 #include "anyhttp/h3/backend.hpp"
 #include "anyhttp/quic/backend.hpp"
 
-#include <boost/beast/core/flat_buffer.hpp>
-
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
 
@@ -218,7 +216,7 @@ Task<void> Server::Impl::handle_connection(Executor executor, TcpSocket socket)
    // there is one line per connection, whatever the protocol. One that fails before that gets
    // the line telling why instead.
    //
-   auto buffer = boost::beast::flat_buffer();
+   auto buffer = Buffer();
    auto [ec, detected] = co_await detail::detect(socket, buffer);
    if (ec)
    {

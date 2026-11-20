@@ -8,8 +8,8 @@
 #include "anyhttp/asio/formatter.hpp"
 #endif
 
-#include <boost/beast/http/field.hpp>
 #include <boost/core/detail/string_view.hpp>
+#include <boost/http/field.hpp>
 #include <boost/system/system_error.hpp>
 #include <boost/url/authority_view.hpp>
 #include <boost/url/pct_string_view.hpp>
@@ -58,12 +58,12 @@ struct std::formatter<boost::core::string_view> : public std::formatter<std::str
 // -------------------------------------------------------------------------------------------------
 
 template <>
-struct std::formatter<boost::beast::http::field>
+struct std::formatter<boost::http::field>
 {
    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
 
    template <typename FormatContext>
-   auto format(const boost::beast::http::field& field, FormatContext& ctx) const
+   auto format(const boost::http::field& field, FormatContext& ctx) const
    {
       return std::format_to(ctx.out(), "{}", to_string(field));
    }

@@ -153,7 +153,7 @@ TEST_P(AsioTokens, WHEN_connect_and_get_take_cancel_after_THEN_results_pass_thro
       auto [get_ec, message] =
          co_await session.async_get(url.set_path("missing"), {}, cancel_after(never, as_tuple));
       EXPECT_FALSE(get_ec) << get_ec.message();
-      EXPECT_EQ(message.result_int(), 404);
+      EXPECT_EQ(message.status_int(), 404);
    };
 }
 
@@ -234,7 +234,7 @@ TEST_P(AsioTokens, WHEN_server_gives_a_callback_THEN_it_is_not_called_before_the
    clientSession = [this](Session session) -> Task<void> {
       auto [ec, message] = co_await session.async_get(url, {}, as_tuple);
       EXPECT_FALSE(ec) << ec.message();
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
    };
 }
 

@@ -3,9 +3,9 @@
 #include "anyhttp/h1/io.hpp"
 #include "anyhttp/net.hpp"
 
-#include <boost/beast/core/detail/base64.hpp>
-#include <boost/beast/core/flat_buffer.hpp>
-#include <boost/beast/http.hpp>
+#include <boost/http/request.hpp>
+#include <boost/http/response_parser.hpp>
+#include <boost/http/serializer.hpp>
 #include <boost/scope/scope_exit.hpp>
 
 #include <nghttp2/nghttp2.h>
@@ -39,19 +39,39 @@ protected:
    };
 
    using Responses = std::map<int32_t, Response>;
-   using Request = boost::beast::http::request<boost::beast::http::string_body>;
-   using Http11Response = boost::beast::http::response<boost::beast::http::string_body>;
+   using Http11Response = client::Message;
 
+   /// A request with a body, which a header alone has no place for.
+   struct Request : boost::http::request
+   {
+      using boost::http::request::request;
+      std::string body;
+   };
+
+   /// base64url without padding (RFC 4648, section 5), as 'HTTP2-Settings' has it.
    static std::string base64url(std::span<const uint8_t> data)
    {
-      namespace base64 = boost::beast::detail::base64;
-      std::string result(base64::encoded_size(data.size()), '\0');
-      result.resize(base64::encode(result.data(), data.data(), data.size()));
-      std::ranges::replace(result, '+', '-');
-      std::ranges::replace(result, '/', '_');
-      while (result.ends_with('='))
-         result.pop_back();
+      static constexpr std::string_view alphabet =
+         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+      std::string result;
+      for (size_t i = 0; i < data.size(); i += 3)
+      {
+         const size_t n = std::min<size_t>(3, data.size() - i);
+         uint32_t bits = 0;
+         for (size_t j = 0; j < 3; ++j)
+            bits = (bits << 8) | (j < n ? data[i + j] : 0);
+         for (size_t j = 0; j <= n; ++j)
+            result.push_back(alphabet[(bits >> (18 - 6 * j)) & 0x3f]);
+      }
       return result;
+   }
+
+   static boost::http::response_parser make_parser()
+   {
+      boost::http::response_parser parser(h1::make_parser_config(false, default_max_header_size));
+      parser.reset();
+      parser.start();
+      return parser;
    }
 
    static nghttp2_nv nv(std::string_view name, std::string_view value)
@@ -63,10 +83,10 @@ protected:
 
    /// Upgrades a request for the first target, with \p method, and sends GETs for the others as
    /// HTTP/2 streams. \p fields go along with the upgrade request.
-   Task<Responses> upgrade(std::vector<std::string> targets, boost::beast::http::fields fields = {},
-                           boost::beast::http::verb method = boost::beast::http::verb::get)
+   Task<Responses> upgrade(std::vector<std::string> targets, Fields fields = {},
+                           boost::http::method method = boost::http::method::get)
    {
-      namespace http = boost::beast::http;
+      namespace http = boost::http;
 
       auto socket = io::make_socket(context.get_executor());
       check(co_await io::connect(socket, {server->local_endpoint()}));
@@ -117,20 +137,21 @@ protected:
          nghttp2_pack_settings_payload2(settings.data(), settings.size(), iv.data(), iv.size());
       EXPECT_GT(len, 0);
 
-      http::request<http::empty_body> request{method, targets.front(), 11};
+      http::request request(method, targets.front());
       for (const auto& field : fields)
-         request.insert(field.name_string(), field.value());
+         request.append(field.name, field.value);
       request.set(http::field::host, authority);
       request.set(http::field::connection, "Upgrade, HTTP2-Settings");
       request.set(http::field::upgrade, "h2c");
-      request.set("HTTP2-Settings", base64url({settings.data(), size_t(len)}));
-      check(co_await h1::write_message(socket, request));
+      request.set(http::field::http2_settings, base64url({settings.data(), size_t(len)}));
+      http::serializer serializer(h1::make_serializer_config());
+      check(co_await h1::write_message(socket, serializer, request));
 
-      boost::beast::flat_buffer buffer;
-      http::response_parser<http::empty_body> parser;
+      Buffer buffer;
+      auto parser = make_parser();
       check(co_await h1::read_header(socket, buffer, parser));
-      EXPECT_EQ(parser.get().result(), http::status::switching_protocols);
-      if (parser.get().result() != http::status::switching_protocols)
+      EXPECT_EQ(parser.get().status(), http::status::switching_protocols);
+      if (parser.get().status() != http::status::switching_protocols)
          co_return responses;
 
       //
@@ -177,7 +198,9 @@ protected:
          out.clear();
       };
 
-      recv(buffer.data()); // what came along with the 101 response
+      // what came along with the 101 response
+      const auto leftover = parser.release_buffered_data();
+      recv(boost::asio::buffer(leftover.data(), leftover.size()));
       std::array<uint8_t, 16384> data;
       for (co_await send(); !done(); co_await send())
       {
@@ -197,18 +220,22 @@ protected:
    /// Sends a single HTTP/1.1 request and reads the response.
    Task<Http11Response> http11(Request request)
    {
-      namespace http = boost::beast::http;
+      namespace http = boost::http;
 
       auto socket = io::make_socket(context.get_executor());
       check(co_await io::connect(socket, {server->local_endpoint()}));
 
       request.set(http::field::host, std::format("127.0.0.2:{}", server->local_endpoint().port()));
-      request.prepare_payload();
-      check(co_await h1::write_message(socket, request));
+      if (!request.body.empty() || request.method() != http::method::get)
+         request.set_content_length(request.body.size());
+      http::serializer serializer(h1::make_serializer_config());
+      check(co_await h1::write_message(socket, serializer, request, request.body));
 
-      boost::beast::flat_buffer buffer;
-      Http11Response response;
-      check(co_await h1::read_message(socket, buffer, response));
+      Buffer buffer;
+      auto parser = make_parser();
+      auto body = check(co_await h1::read_message(socket, buffer, parser));
+      Http11Response response(parser.get());
+      response.body() = std::move(body);
       io::shutdown(socket, io::Shutdown::send); // the server may have closed the connection already
       co_return response;
    }
@@ -229,13 +256,13 @@ protected:
       return result;
    }
 
-   static Request upgrade_request(boost::beast::http::verb method, std::string target)
+   static Request upgrade_request(boost::http::method method, std::string target)
    {
-      namespace http = boost::beast::http;
-      Request request{method, target, 11};
+      namespace http = boost::http;
+      Request request(method, target);
       request.set(http::field::connection, "Upgrade, HTTP2-Settings");
       request.set(http::field::upgrade, "h2c");
-      request.set("HTTP2-Settings", "AAMAAABkAAQAAQAAAAIAAAAA"); // as sent by curl
+      request.set(http::field::http2_settings, "AAMAAABkAAQAAQAAAAIAAAAA"); // as sent by curl
       return request;
    }
 };
@@ -257,9 +284,9 @@ TEST_F(H2CUpgrade, WHEN_upgrade_is_requested_THEN_request_continues_as_stream_1)
 
 TEST_F(H2CUpgrade, WHEN_upgraded_THEN_request_headers_are_passed_on_to_stream_1)
 {
-   boost::beast::http::fields fields;
+   Fields fields;
    fields.set("x-custom", "value");
-   fields.set(boost::beast::http::field::keep_alive, "timeout=5");
+   fields.set(boost::http::field::keep_alive, "timeout=5");
    auto responses = run(upgrade({"/dump?first"}, std::move(fields)));
 
    ASSERT_TRUE(responses.contains(1));
@@ -294,7 +321,7 @@ TEST_F(H2CUpgrade, WHEN_upgraded_THEN_connection_takes_more_streams)
 //
 TEST_F(H2CUpgrade, WHEN_options_is_upgraded_THEN_method_is_carried_over_to_stream_1)
 {
-   auto responses = run(upgrade({"/dump?options"}, {}, boost::beast::http::verb::options));
+   auto responses = run(upgrade({"/dump?options"}, {}, boost::http::method::options));
 
    ASSERT_EQ(responses.size(), 1);
    ASSERT_TRUE(responses.contains(1));
@@ -307,7 +334,7 @@ TEST_F(H2CUpgrade, WHEN_options_is_upgraded_THEN_method_is_carried_over_to_strea
 
 TEST_F(H2CUpgrade, WHEN_options_asterisk_is_upgraded_THEN_connection_takes_more_streams)
 {
-   auto responses = run(upgrade({"*", "/dump?second"}, {}, boost::beast::http::verb::options));
+   auto responses = run(upgrade({"*", "/dump?second"}, {}, boost::http::method::options));
 
    ASSERT_EQ(responses.size(), 2);
    EXPECT_EQ(responses[1].status, 404); // the test server has no handler for an asterisk target
@@ -318,31 +345,31 @@ TEST_F(H2CUpgrade, WHEN_options_asterisk_is_upgraded_THEN_connection_takes_more_
 
 TEST_F(H2CUpgrade, WHEN_request_has_body_THEN_is_served_as_http11)
 {
-   auto request = upgrade_request(boost::beast::http::verb::post, "/echo");
-   request.body() = "Hello, World!";
+   auto request = upgrade_request(boost::http::method::post, "/echo");
+   request.body = "Hello, World!";
    auto response = run(http11(std::move(request)));
 
-   EXPECT_EQ(response.result_int(), 200);
+   EXPECT_EQ(response.status_int(), 200);
    EXPECT_EQ(response.body(), "Hello, World!");
 }
 
 TEST_F(H2CUpgrade, WHEN_http2_settings_are_missing_THEN_is_served_as_http11)
 {
-   auto request = upgrade_request(boost::beast::http::verb::get, "/dump?no-settings");
-   request.erase("HTTP2-Settings");
+   auto request = upgrade_request(boost::http::method::get, "/dump?no-settings");
+   request.erase(boost::http::field::http2_settings);
    auto response = run(http11(std::move(request)));
 
-   EXPECT_EQ(response.result_int(), 200);
+   EXPECT_EQ(response.status_int(), 200);
    EXPECT_THAT(response.body(), HasSubstr("query: no-settings"));
 }
 
 TEST_F(H2CUpgrade, WHEN_http2_settings_are_invalid_THEN_is_served_as_http11)
 {
-   auto request = upgrade_request(boost::beast::http::verb::get, "/dump?invalid");
-   request.set("HTTP2-Settings", "AAMAAABkAA"); // 7 bytes, not a multiple of 6
+   auto request = upgrade_request(boost::http::method::get, "/dump?invalid");
+   request.set(boost::http::field::http2_settings, "AAMAAABkAA"); // 7 bytes, not a multiple of 6
    auto response = run(http11(std::move(request)));
 
-   EXPECT_EQ(response.result_int(), 200);
+   EXPECT_EQ(response.status_int(), 200);
    EXPECT_THAT(response.body(), HasSubstr("query: invalid"));
 }
 

@@ -152,7 +152,7 @@ Task<std::string> get_body(Session& session, boost::urls::url url)
    if (ec)
       throw_error(ec);
 
-   std::println("{}: {} bytes", message.result_int(), message.body().size());
+   std::println("{}: {} bytes", message.status_int(), message.body().size());
    co_return std::move(message.body());
 }
 // [get-end]
@@ -169,7 +169,7 @@ Task<size_t> read_at_most(Session session, boost::urls::url url, size_t limit)
    if (response_ec)
       co_return 0;
    std::println("{} {}", response.status_code(),
-                std::string_view(response.fields()["content-type"]));
+                std::string_view(response.fields().value_or("content-type", "")));
 
    size_t total = 0;
    std::array<char, 16_k> buffer;

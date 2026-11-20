@@ -331,10 +331,12 @@ TEST_P(H2Push, WHEN_a_push_beats_the_settings_ack_THEN_it_is_logged_and_cancelle
       },
       [](Session session, boost::urls::url target) -> Task<void> {
          auto first = check(co_await session.get(target));
-         EXPECT_EQ(first.result_int(), 200);
+         EXPECT_EQ(first.status_int(), 200);
          EXPECT_EQ(first.body(), "first");
-         EXPECT_EQ(first["x-promised"], "") << "the promise is not part of this response";
-         EXPECT_EQ(first["x-pushed"], "") << "the pushed response is not part of this one";
+         EXPECT_EQ(first.value_or("x-promised", ""), "")
+            << "the promise is not part of this response";
+         EXPECT_EQ(first.value_or("x-pushed", ""), "")
+            << "the pushed response is not part of this one";
 
          auto second = check(co_await session.get(target));
          EXPECT_EQ(second.body(), "second") << "the session has to stay usable";

@@ -17,9 +17,8 @@ using namespace testing;
 
 INSTANTIATE_TEST_SUITE_P(ClientAsync, ClientAsync, ValuesIn(protocols()), NameGenerator);
 
-/// Beast's end_of_stream, as the runtime's error code.
-static const error_code end_of_stream =
-   boost::system::error_code(boost::beast::http::error::end_of_stream);
+/// A connection that ended before a response began.
+static const error_code end_of_stream = errors::end_of_stream;
 
 /**
  * Cancels \p task after \p timeout, the way each runtime does it: ASIO with cancel_after() on the
@@ -265,7 +264,7 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_request_head_is_still_there
          EXPECT_EQ(request.method(), method);
          EXPECT_EQ(request.url().buffer(), url);
          EXPECT_EQ(request.url().path(), "/custom/head");
-         EXPECT_EQ(request.fields()["X-Test"], "42");
+         EXPECT_EQ(request.fields().value_or("X-Test", ""), "42");
 
          inspected->notify();
       };
@@ -619,7 +618,7 @@ TEST_P(ClientAsync, HelloWorld)
    };
    clientSession = [this](Session session) -> Task<void> {
       auto message = check(co_await session.get(url));
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
       EXPECT_EQ(message.body(), hello);
    };
 }
@@ -776,7 +775,7 @@ TEST_P(ClientAsync, ServerYieldFirst)
       check(co_await response.write_eof());
    };
    clientSession = [this](Session session) -> Task<void> {
-      EXPECT_EQ((check(co_await session.get(url))).result_int(), 200);
+      EXPECT_EQ((check(co_await session.get(url))).status_int(), 200);
    };
 }
 

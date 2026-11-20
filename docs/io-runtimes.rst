@@ -67,7 +67,7 @@ What the names stand for
      - ``server``, ``client``
      - ``server``
 
-Buffers are Asio's on both, headers are Beast's :cpp:type:`Fields`, URLs Boost.URL's.
+Buffers are Asio's on both, headers are Boost.HTTP's :cpp:type:`Fields`, URLs Boost.URL's.
 
 The reference shows what the headers have for ASIO, as Doxygen is told to read them that way. So the
 reference has the operations with completion tokens that a COROSIO build does not have, and the types
@@ -143,7 +143,7 @@ Where the two runtimes spell an error differently, the namespace ``anyhttp::erro
      - ``boost::asio::error::eof``
      - ``boost::capy::error::eof``
    * - :cpp:var:`errors::partial_message`
-     - ``beast::http::error::partial_message``
+     - ``boost::http::error::incomplete``
      - ``boost::capy::error::stream_truncated``
    * - :cpp:var:`errors::canceled`
      - ``errc::operation_canceled``
@@ -155,7 +155,10 @@ Where the two runtimes spell an error differently, the namespace ``anyhttp::erro
      - ``boost::asio::error::connection_aborted``
      - ``errc::connection_aborted``
    * - :cpp:var:`errors::header_limit`
-     - ``beast::http::error::header_limit``
+     - ``boost::http::error::headers_limit``
+     - the same
+   * - :cpp:var:`errors::end_of_stream`
+     - ``boost::http::error::end_of_stream``
      - the same
 
 Anything else compares against ``errc::`` (``boost::system::errc`` or ``std::errc``), with one

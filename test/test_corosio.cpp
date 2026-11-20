@@ -7,17 +7,19 @@
 
 #if ANYHTTP_COROSIO
 
-#include <boost/beast/core/buffers_range.hpp>
-#include <boost/beast/http/error.hpp>
-#include <boost/beast/http/message.hpp>
-#include <boost/beast/http/parser.hpp>
-#include <boost/beast/http/serializer.hpp>
-#include <boost/beast/http/string_body.hpp>
+#include <boost/http/error.hpp>
+#include <boost/http/request.hpp>
+#include <boost/http/request_parser.hpp>
+#include <boost/http/response.hpp>
+#include <boost/http/response_parser.hpp>
+#include <boost/http/serializer.hpp>
 
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/error.hpp>
 
 #include <boost/capy/buffers.hpp>
+#include <boost/capy/buffers/buffer_copy.hpp>
+#include <boost/capy/buffers/make_buffer.hpp>
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/run_async.hpp>
@@ -28,6 +30,7 @@
 #include <boost/corosio/tcp_socket.hpp>
 #include <boost/corosio/test/socket_pair.hpp>
 
+#include "anyhttp/h1/io.hpp"
 #include "anyhttp/runtime.hpp"
 
 #include <gmock/gmock.h>
@@ -40,150 +43,113 @@
 using namespace testing;
 
 namespace capy = boost::capy;
-namespace http = boost::beast::http;
-
-// =================================================================================================
-
-namespace
-{
-
-//
-// Reads from `socket` into `parser` until it has a complete message. put() consumes only part of
-// what it is given -- the header first, and the body in a call of its own -- so everything it
-// leaves has to be offered again.
-//
-template <class Parser>
-capy::task<std::error_code> read_message(boost::corosio::tcp_socket& socket, Parser& parser)
-{
-   std::array<char, 4096> buffer;
-   while (!parser.is_done())
-   {
-      auto [ec, n] = co_await socket.read_some(capy::mutable_buffer(buffer.data(), buffer.size()));
-      if (ec)
-         co_return ec;
-
-      for (const char* data = buffer.data(); n > 0 && !parser.is_done();)
-      {
-         boost::system::error_code bec;
-         const auto used = parser.put(boost::asio::buffer(data, n), bec);
-         if (bec == http::error::need_more)
-            break;
-         if (bec)
-            co_return bec;
-         data += used, n -= used;
-      }
-   }
-   co_return std::error_code{};
-}
-
-//
-// Writes what `serializer` produces to `socket`. The buffers next() hands out are valid until
-// consume(), so their descriptors are copied out of the visitor and consumed after the write.
-//
-template <class Serializer>
-capy::task<std::error_code> write_message(boost::corosio::tcp_socket& socket,
-                                          Serializer& serializer)
-{
-   while (!serializer.is_done())
-   {
-      boost::system::error_code bec;
-      std::vector<capy::const_buffer> buffers;
-      serializer.next(bec, [&](boost::system::error_code&, const auto& sequence) {
-         for (auto buffer : boost::beast::buffers_range_ref(sequence))
-            buffers.emplace_back(buffer.data(), buffer.size());
-      });
-      if (bec)
-         co_return bec;
-
-      auto [ec, n] = co_await capy::write(socket, buffers);
-      if (ec)
-         co_return ec;
-      serializer.consume(n);
-   }
-   co_return std::error_code{};
-}
-
-} // namespace
+namespace http = boost::http;
 
 // =================================================================================================
 
 //
-// HTTP/1.1 without Beast's asynchronous operations, which need an ASIO stream: its parser and
-// serializer, driven by read and write loops on corosio sockets. A chunked request and a response
-// with a Content-Length, so that both framings go through both halves.
+// Boost.HTTP's own loops around its parser and serializer -- parser::read() and serializer::sink
+// -- are written for capy's streams, so they run on corosio sockets as they are. anyhttp has loops
+// of its own (h1/io.hpp), to run on either runtime, but these say what Boost.HTTP takes for
+// granted of a stream. A chunked request and a response with a Content-Length, so that both
+// framings go through both halves.
 //
-TEST(Corosio, BeastParserAndSerializer)
+TEST(Corosio, HttpParserAndSerializer)
 {
    boost::corosio::io_context context;
    auto [ec, server, client] = boost::corosio::test::make_socket_pair(context);
    ASSERT_FALSE(ec);
 
    std::error_code server_ec, client_ec;
-   http::request_parser<http::string_body> request_parser;
-   http::response_parser<http::string_body> response_parser;
+   http::request_parser request_parser(anyhttp::h1::make_parser_config(true, 64 * 1024));
+   http::response_parser response_parser(anyhttp::h1::make_parser_config(false, 64 * 1024));
+   http::serializer server_serializer(anyhttp::h1::make_serializer_config());
+   http::serializer client_serializer(anyhttp::h1::make_serializer_config());
+   std::string request_body, response_body;
+   bool chunked = false;
 
-   auto serve = [](boost::corosio::tcp_socket& socket, auto& parser,
-                   std::error_code& result) -> capy::task<> {
-      if ((result = co_await read_message(socket, parser)))
+   auto serve = [&](boost::corosio::tcp_socket& socket) -> capy::task<> {
+      request_parser.reset();
+      request_parser.start();
+      if (auto [read_ec] = co_await request_parser.read(socket); read_ec)
+      {
+         server_ec = read_ec;
          co_return;
+      }
+      chunked = request_parser.get().metadata().transfer_encoding.is_chunked;
+      request_body = request_parser.body();
 
-      http::response<http::string_body> response{http::status::ok, 11, parser.get().body()};
-      response.prepare_payload();
-      http::response_serializer<http::string_body> serializer{response};
-      result = co_await write_message(socket, serializer);
+      http::response response(http::status::ok);
+      response.set_payload_size(request_body.size());
+      server_serializer.set_message(response);
+      auto sink = server_serializer.sink_for(socket);
+      auto [write_ec, n] = co_await sink.write_eof(capy::make_buffer(request_body));
+      server_ec = write_ec;
    };
 
-   auto request = [](boost::corosio::tcp_socket& socket, auto& parser,
-                     std::error_code& result) -> capy::task<> {
-      http::request<http::string_body> request{http::verb::post, "/echo", 11, "hello, corosio"};
-      request.chunked(true);
-      http::request_serializer<http::string_body> serializer{request};
-      if ((result = co_await write_message(socket, serializer)))
+   auto request = [&](boost::corosio::tcp_socket& socket) -> capy::task<> {
+      http::request request(http::method::post, "/echo");
+      request.set_chunked(true);
+      client_serializer.set_message(request);
+      auto sink = client_serializer.sink_for(socket);
+      if (auto [write_ec, n] =
+             co_await sink.write_eof(capy::make_buffer(std::string_view("hello, corosio")));
+          write_ec)
+      {
+         client_ec = write_ec;
          co_return;
+      }
 
-      result = co_await read_message(socket, parser);
+      response_parser.reset();
+      response_parser.start();
+      auto [read_ec] = co_await response_parser.read(socket);
+      client_ec = read_ec;
+      if (!read_ec)
+         response_body = response_parser.body();
    };
 
-   capy::run_async(context.get_executor())(serve(server, request_parser, server_ec));
-   capy::run_async(context.get_executor())(request(client, response_parser, client_ec));
+   capy::run_async(context.get_executor())(serve(server));
+   capy::run_async(context.get_executor())(request(client));
    context.run();
 
    EXPECT_FALSE(server_ec) << server_ec.message();
    EXPECT_FALSE(client_ec) << client_ec.message();
-   EXPECT_TRUE(request_parser.chunked());
+   EXPECT_TRUE(chunked);
    EXPECT_EQ(request_parser.get().target(), "/echo");
-   EXPECT_EQ(response_parser.get().result_int(), 200);
-   EXPECT_EQ(response_parser.get().body(), "hello, corosio");
+   EXPECT_EQ(request_body, "hello, corosio");
+   EXPECT_EQ(response_parser.get().status_int(), 200);
+   EXPECT_EQ(response_body, "hello, corosio");
 }
 
 // -------------------------------------------------------------------------------------------------
 
 //
-// Why each I/O runtime needs error constants of its own: a Boost.System code survives the
-// conversion to std::error_code -- Beast's errors stay comparable across it -- but asio's eof does
-// not become capy's. What docs/end-of-body.rst calls errors::eof at the end of a body is
-// capy::error::eof in COROSIO.
+// Why each I/O runtime needs error constants of its own: Boost.HTTP's errors are std::error_code,
+// the same in both runtimes, but asio's eof does not become capy's. What docs/end-of-body.rst
+// calls errors::eof at the end of a body is capy::error::eof in COROSIO.
 //
 TEST(Corosio, ErrorCodeInterop)
 {
-   const std::error_code partial = boost::system::error_code{http::error::partial_message};
-   EXPECT_EQ(partial, std::error_code(boost::system::error_code{http::error::partial_message}));
-   EXPECT_EQ(partial.message(), "partial message");
+   const std::error_code incomplete = http::error::incomplete;
+   EXPECT_EQ(incomplete, std::error_code(boost::system::error_code(incomplete)));
 
    const std::error_code eof = boost::system::error_code{boost::asio::error::eof};
    EXPECT_NE(eof, capy::cond::eof);
    EXPECT_EQ(std::error_code{capy::error::eof}, capy::cond::eof);
 
    //
-   // What the parser itself reports: Beast attaches the source location of the error.
+   // What the parser itself reports, and what anyhttp makes of it.
    //
-   http::request_parser<http::string_body> parser;
-   parser.header_limit(16);
-   boost::system::error_code limit;
+   http::request_parser parser(anyhttp::h1::make_parser_config(true, 32));
+   parser.reset();
+   parser.start();
    std::string_view request = "GET / HTTP/1.1\r\nX-Field: a value well over sixteen bytes\r\n";
-   parser.put(boost::asio::buffer(request), limit);
-   ASSERT_EQ(limit, http::error::header_limit) << limit.message();
-   EXPECT_EQ(std::error_code(limit), anyhttp::errors::header_limit) << limit.what();
+   auto buffers = parser.prepare();
+   const auto n = capy::buffer_copy(buffers, capy::make_buffer(request));
+   parser.commit(n);
+   std::error_code limit;
+   parser.parse(limit);
+   EXPECT_EQ(anyhttp::h1::to_error_code(limit), anyhttp::errors::header_limit) << limit.message();
 }
 
 // =================================================================================================

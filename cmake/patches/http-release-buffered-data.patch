@@ -1,0 +1,93 @@
+diff --git a/include/boost/http/parser.hpp b/include/boost/http/parser.hpp
+index 2edf97b..dfe0c9c 100644
+--- a/include/boost/http/parser.hpp
++++ b/include/boost/http/parser.hpp
+@@ -336,6 +336,19 @@ public:
+         to retrieve protocol-dependent data that
+         follows the HTTP message.
+ 
++        The octets are released: they are no longer
++        part of what the parser holds, and a later
++        @ref has_buffered_data returns false. The body
++        of the message, if any, is left as it is.
++
++        @par Preconditions
++        `this->is_complete() == true`, otherwise the
++        returned view is empty.
++
++        @par Postconditions
++        The returned view is invalidated by any
++        modifying member function.
++
+         @return A string view of leftover data.
+ 
+         @see @ref metadata::upgrade, @ref metadata::connection.
+diff --git a/src/parser.cpp b/src/parser.cpp
+index e73cb3b..29aac77 100644
+--- a/src/parser.cpp
++++ b/src/parser.cpp
+@@ -33,6 +33,7 @@
+ #include "src/detail/buffer_utils.hpp"
+ #include "src/detail/zlib_filter_base.hpp"
+ 
++#include <algorithm>
+ #include <array>
+ #include <memory>
+ 
+@@ -1303,6 +1304,45 @@ public:
+             body_avail_);
+     }
+ 
++    core::string_view
++    release_buffered_data() noexcept
++    {
++        if(state_ != state::complete)
++            return {};
++
++        // the octets past the message are at the end of cb0_,
++        // behind what is left of a plain body
++        auto const skip = is_plain() ? body_avail_ : 0;
++        if(cb0_.size() <= skip)
++            return {};
++
++        // make them contiguous: rotating the storage puts the
++        // second piece of the circular buffer behind the first
++        auto cbp = cb0_.data();
++        if(cbp[1].size() != 0)
++        {
++            auto* base = static_cast<char*>(
++                const_cast<void*>(cbp[1].data()));
++            auto* first = static_cast<char*>(
++                const_cast<void*>(cbp[0].data()));
++            auto const cap = cb0_.max_size();
++            auto const size = cb0_.size();
++            std::rotate(base, first, first + cbp[0].size());
++            cb0_ = { base, cap, size };
++            cbp = cb0_.data();
++        }
++
++        auto const* p = static_cast<char const*>(cbp[0].data());
++        core::string_view leftover(p + skip, cb0_.size() - skip);
++
++        // released: no longer part of what the parser holds, but
++        // the storage stays as it is until the next modifying call.
++        // What is left is the body, and that is all the buffer
++        // may claim: p is not the base of the storage.
++        cb0_ = { const_cast<char*>(p), skip, skip };
++        return leftover;
++    }
++
+     bool
+     has_buffered_data() const noexcept
+     {
+@@ -1564,8 +1604,8 @@ core::string_view
+ parser::
+ release_buffered_data() noexcept
+ {
+-    // TODO
+-    return {};
++    BOOST_ASSERT(impl_);
++    return impl_->release_buffered_data();
+ }
+ 
+ bool

@@ -2,7 +2,7 @@
 
 using namespace testing;
 
-namespace http = boost::beast::http;
+namespace http = boost::http;
 
 // =================================================================================================
 
@@ -39,7 +39,7 @@ TEST_P(IPv6, WHEN_server_listens_on_ipv6_loopback_THEN_get_succeeds)
    respond_with("Hello, IPv6!");
    clientSession = [this](Session session) -> Task<void> {
       auto message = check(co_await session.get(url));
-      EXPECT_EQ(message.result(), http::status::ok);
+      EXPECT_EQ(message.status(), http::status::ok);
       EXPECT_EQ(message.body(), "Hello, IPv6!");
    };
 }
@@ -66,7 +66,7 @@ TEST_P(DualStack, WHEN_ipv6_server_is_reached_over_ipv4_THEN_get_succeeds)
    respond_with("Hello, IPv4!");
    clientSession = [this](Session session) -> Task<void> {
       auto message = check(co_await session.get(url));
-      EXPECT_EQ(message.result(), http::status::ok);
+      EXPECT_EQ(message.status(), http::status::ok);
       EXPECT_EQ(message.body(), "Hello, IPv4!");
    };
 }
@@ -94,7 +94,7 @@ TEST_P(DualStackSecondaryAddress, WHEN_server_is_reached_on_a_secondary_address_
    respond_with("Hello, 127.0.0.2!");
    clientSession = [this](Session session) -> Task<void> {
       auto message = check(co_await session.get(url));
-      EXPECT_EQ(message.result(), http::status::ok);
+      EXPECT_EQ(message.status(), http::status::ok);
       EXPECT_EQ(message.body(), "Hello, 127.0.0.2!");
    };
 }

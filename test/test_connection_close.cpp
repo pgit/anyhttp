@@ -3,8 +3,9 @@
 #include "anyhttp/h1/io.hpp"
 #include "anyhttp/net.hpp"
 
-#include <boost/beast/core/flat_buffer.hpp>
-#include <boost/beast/http.hpp>
+#include <boost/http/request.hpp>
+#include <boost/http/response_parser.hpp>
+#include <boost/http/serializer.hpp>
 
 #if ANYHTTP_ASIO
 #include <boost/asio/ssl/host_name_verification.hpp>
@@ -19,7 +20,7 @@
 
 using namespace testing;
 
-namespace http = boost::beast::http;
+namespace http = boost::http;
 namespace h1 = anyhttp::h1;
 
 // =================================================================================================
@@ -35,8 +36,15 @@ namespace h1 = anyhttp::h1;
 class ConnectionClose : public Server
 {
 protected:
-   using Request = http::request<http::string_body>;
-   using Response = http::response<http::string_body>;
+   /// A request with a body, which a header alone has no place for.
+   struct Request : http::request
+   {
+      using http::request::request;
+      std::string body;
+   };
+
+   /// The response, header and body, as a client's get() has it.
+   using Response = client::Message;
 
    Task<TcpSocket> connect()
    {
@@ -50,12 +58,33 @@ protected:
    Task<Response> exchange(Stream& socket, Request request)
    {
       request.set(http::field::host, std::format("127.0.0.2:{}", port()));
-      request.prepare_payload();
-      check(co_await h1::write_message(socket, request));
+      if (!request.body.empty() || request.method() != http::method::get)
+         request.set_content_length(request.body.size());
+      check(co_await h1::write_message(socket, serializer_, request, request.body));
+      co_return co_await read_response(socket);
+   }
 
-      Response response;
-      check(co_await h1::read_message(socket, buffer_, response));
+   /// Reads a response, which must arrive whole.
+   template <typename Stream>
+   Task<Response> read_response(Stream& socket)
+   {
+      auto [ec, response] = co_await try_read_response(socket);
+      if (ec)
+         throw_error(ec);
       co_return response;
+   }
+
+   /// Reads a response, as much of it as there is.
+   template <typename Stream>
+   Task<std::tuple<error_code, Response>> try_read_response(Stream& socket)
+   {
+      parser_.start();
+      auto [ec, body] = co_await h1::read_message(socket, buffer_, parser_);
+      Response response;
+      if (parser_.got_header())
+         response = Response(parser_.get());
+      response.body() = std::move(body);
+      co_return std::tuple{ec, std::move(response)};
    }
 
    /**
@@ -66,7 +95,7 @@ protected:
    template <typename Stream>
    Task<error_code> read_eof(Stream& socket)
    {
-      EXPECT_EQ(buffer_.size(), 0) << "unread data left over from the response";
+      EXPECT_FALSE(parser_.has_buffered_data()) << "unread data left over from the response";
 
       std::array<char, 64> buffer;
       Timer timer(context.get_executor());
@@ -97,7 +126,13 @@ protected:
       Server::run();
    }
 
-   boost::beast::flat_buffer buffer_;
+   Buffer buffer_; // input to go to the parser before the socket: none, everything is read by it
+   http::serializer serializer_{h1::make_serializer_config()};
+   http::response_parser parser_ = [] {
+      http::response_parser parser(h1::make_parser_config(false, default_max_header_size));
+      parser.reset();
+      return parser;
+   }();
 };
 
 // -------------------------------------------------------------------------------------------------
@@ -107,11 +142,11 @@ TEST_F(ConnectionClose, WHEN_request_asks_to_close_THEN_response_says_so_and_str
    run([&]() -> Task<void> {
       auto socket = co_await connect();
 
-      Request request{http::verb::get, "/dump", 11};
+      Request request(http::method::get, "/dump");
       request.set(http::field::connection, "close");
       auto response = co_await exchange(socket, std::move(request));
 
-      EXPECT_EQ(response.result_int(), 200);
+      EXPECT_EQ(response.status_int(), 200);
       EXPECT_FALSE(response.keep_alive()) << "the last response has to announce itself as one";
       EXPECT_EQ(co_await read_eof(socket), errors::eof);
    }());
@@ -122,12 +157,12 @@ TEST_F(ConnectionClose, WHEN_request_with_body_asks_to_close_THEN_body_is_served
    run([&]() -> Task<void> {
       auto socket = co_await connect();
 
-      Request request{http::verb::post, "/echo", 11};
-      request.body() = "hello";
+      Request request(http::method::post, "/echo");
+      request.body = "hello";
       request.set(http::field::connection, "close");
       auto response = co_await exchange(socket, std::move(request));
 
-      EXPECT_EQ(response.result_int(), 200);
+      EXPECT_EQ(response.status_int(), 200);
       EXPECT_EQ(response.body(), "hello");
       EXPECT_FALSE(response.keep_alive());
       EXPECT_EQ(co_await read_eof(socket), errors::eof);
@@ -139,13 +174,13 @@ TEST_F(ConnectionClose, WHEN_request_does_not_ask_to_close_THEN_connection_takes
    run([&]() -> Task<void> {
       auto socket = co_await connect();
 
-      auto first = co_await exchange(socket, Request{http::verb::get, "/dump?first", 11});
-      EXPECT_EQ(first.result_int(), 200);
+      auto first = co_await exchange(socket, Request(http::method::get, "/dump?first"));
+      EXPECT_EQ(first.status_int(), 200);
       EXPECT_TRUE(first.keep_alive());
       EXPECT_THAT(first.body(), HasSubstr("query: first"));
 
-      auto second = co_await exchange(socket, Request{http::verb::get, "/dump?second", 11});
-      EXPECT_EQ(second.result_int(), 200);
+      auto second = co_await exchange(socket, Request(http::method::get, "/dump?second"));
+      EXPECT_EQ(second.status_int(), 200);
       EXPECT_TRUE(second.keep_alive());
       EXPECT_THAT(second.body(), HasSubstr("query: second"));
    }());
@@ -160,9 +195,10 @@ TEST_F(ConnectionClose, WHEN_request_is_http_1_0_THEN_stream_ends_after_the_resp
       // HTTP/1.0 has no persistent connections unless the client asks for one, so this response
       // is the last one even though nothing said "close".
       //
-      auto response = co_await exchange(socket, Request{http::verb::get, "/dump", 10});
+      auto response =
+         co_await exchange(socket, Request(http::method::get, "/dump", http::version::http_1_0));
 
-      EXPECT_EQ(response.result_int(), 200);
+      EXPECT_EQ(response.status_int(), 200);
       EXPECT_FALSE(response.keep_alive());
       EXPECT_EQ(co_await read_eof(socket), errors::eof);
    }());
@@ -186,9 +222,8 @@ TEST_F(ConnectionClose, WHEN_requests_follow_one_that_asks_to_close_THEN_they_ar
       check(co_await io::write(socket,
                                boost::asio::buffer(raw_get("Connection: close\r\n") + raw_get())));
 
-      Response response;
-      check(co_await h1::read_message(socket, buffer_, response));
-      EXPECT_EQ(response.result_int(), 200);
+      auto response = co_await read_response(socket);
+      EXPECT_EQ(response.status_int(), 200);
       EXPECT_FALSE(response.keep_alive());
       EXPECT_EQ(co_await read_eof(socket), errors::eof);
       EXPECT_EQ(served, 1);
@@ -213,9 +248,8 @@ TEST_F(ConnectionClose, WHEN_handler_says_close_THEN_stream_ends_and_the_rest_is
       auto socket = co_await connect();
       check(co_await io::write(socket, boost::asio::buffer(raw_get() + raw_get())));
 
-      Response response;
-      check(co_await h1::read_message(socket, buffer_, response));
-      EXPECT_EQ(response.result_int(), 200);
+      auto response = co_await read_response(socket);
+      EXPECT_EQ(response.status_int(), 200);
       EXPECT_FALSE(response.keep_alive());
       EXPECT_EQ(co_await read_eof(socket), errors::eof);
       EXPECT_EQ(served, 1);
@@ -315,13 +349,14 @@ TEST_F(RejectedRequest, WHEN_request_is_rejected_THEN_the_response_arrives_anywa
          co_return ec;
       };
       auto receive = [&]() -> Task<error_code> {
-         auto [ec, n] = co_await h1::read_message(socket, buffer_, response);
+         auto [ec, received] = co_await try_read_response(socket);
+         response = std::move(received);
          co_return ec;
       };
 
       auto [send_ec, receive_ec] = co_await when_both(send(), receive());
       EXPECT_FALSE(receive_ec) << "the 431 was lost: " << receive_ec.message();
-      EXPECT_EQ(response.result_int(), 431);
+      EXPECT_EQ(response.status_int(), 431);
       EXPECT_FALSE(response.keep_alive());
    }());
 }
@@ -381,11 +416,11 @@ TEST_F(TlsConnectionClose, WHEN_request_asks_to_close_THEN_close_notify_comes_be
    run([&]() -> Task<void> {
       auto stream = co_await connect_tls();
 
-      Request request{http::verb::get, "/dump", 11};
+      Request request(http::method::get, "/dump");
       request.set(http::field::connection, "close");
       auto response = co_await exchange(stream, std::move(request));
 
-      EXPECT_EQ(response.result_int(), 200);
+      EXPECT_EQ(response.status_int(), 200);
       EXPECT_FALSE(response.keep_alive());
 
       // a clean end of stream, not ssl::error::stream_truncated
