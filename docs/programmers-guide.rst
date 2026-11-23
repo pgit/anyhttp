@@ -496,6 +496,12 @@ The ends map onto the contract of :doc:`end-of-body`:
 The two directions are independent. Opening a stream never waits: at the peer's limit,
 :cpp:func:`open_stream() <quic::Connection::open_stream>` fails with :cpp:var:`errors::would_block`.
 A connection is closed when its handle goes away, on the server when the handler returns.
+
+A client that has the address of its server from somewhere else -- a DNS resolver, whose list of
+servers is addresses -- connects to those endpoints with the other overload of
+:cpp:func:`quic::connect`, and gives the name the certificate has to be valid for apart from them.
+An empty name checks the chain only and sends no SNI, and :cpp:member:`quic::Config::tls_verify`
+turns the check off altogether, for testing.
 :cpp:struct:`quic::Config` has the flow control limits and how writes reach the stack, and
 :src:`docs/quic-streams-plan.md` has how all this came about.
 

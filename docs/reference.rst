@@ -104,7 +104,9 @@ Plain QUIC streams
 
    #include <anyhttp/quic.hpp>
 
-.. doxygenfunction:: anyhttp::quic::connect
+.. doxygenfunction:: anyhttp::quic::connect(Executor executor, std::string host, std::string port, Config config)
+
+.. doxygenfunction:: anyhttp::quic::connect(Executor executor, std::vector<TcpEndpoint> endpoints, std::string host, Config config)
 
 .. doxygenfunction:: anyhttp::quic::async_connect
 

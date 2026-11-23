@@ -10,7 +10,9 @@
 #include <boost/system/detail/errc.hpp>
 
 #include <memory>
+#include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace anyhttp::quic
 {
@@ -162,7 +164,14 @@ void Connection::reset() noexcept { impl_.reset(); }
 // connect()
 // =================================================================================================
 
-IoTask<Connection> connect(Executor executor, std::string host, std::string port, Config config)
+namespace
+{
+
+//
+// What connect() makes of either the endpoints it is given or the ones it looks up.
+//
+template <typename Target>
+IoTask<Connection> connect_to(Executor executor, Target target, std::string host, Config config)
 {
    if (config.alpn.empty() || config.alpn.size() > 255)
       co_return std::tuple{make_error_code(errc::invalid_argument), Connection{}};
@@ -170,14 +179,25 @@ IoTask<Connection> connect(Executor executor, std::string host, std::string port
    try
    {
       ClientConfig client_config{.alpn = config.alpn,
-                                 .host = host,
+                                 .host = std::move(host),
                                  .tls_ca_file = config.tls_ca_file,
+                                 .verify = config.tls_verify,
                                  .idle_timeout = config.idle_timeout};
-      auto session = co_await async_connect(
-         std::move(executor), std::move(host), std::move(port), std::move(client_config),
-         [config](QuicSession& s) -> std::unique_ptr<QuicApplication> {
-            return std::make_unique<StreamApplication>(s, config, nullptr);
-         });
+      auto factory = [config](QuicSession& s) -> std::unique_ptr<QuicApplication> {
+         return std::make_unique<StreamApplication>(s, config, nullptr);
+      };
+
+      std::shared_ptr<QuicSession> session;
+      if constexpr (std::is_same_v<Target, std::vector<TcpEndpoint>>)
+         session = co_await async_connect(std::move(executor), std::move(target),
+                                          std::move(client_config), std::move(factory));
+      else
+      {
+         auto host_to_resolve = client_config.host;
+         session =
+            co_await async_connect(std::move(executor), std::move(host_to_resolve),
+                                   std::move(target), std::move(client_config), std::move(factory));
+      }
 
       auto& application = static_cast<StreamApplication&>(*session->application());
       co_return std::tuple{error_code{},
@@ -187,6 +207,21 @@ IoTask<Connection> connect(Executor executor, std::string host, std::string port
    {
       co_return std::tuple{ex.code(), Connection{}};
    }
+}
+
+} // namespace
+
+IoTask<Connection> connect(Executor executor, std::string host, std::string port, Config config)
+{
+   co_return co_await connect_to(std::move(executor), std::move(port), std::move(host),
+                                 std::move(config));
+}
+
+IoTask<Connection> connect(Executor executor, std::vector<TcpEndpoint> endpoints, std::string host,
+                           Config config)
+{
+   co_return co_await connect_to(std::move(executor), std::move(endpoints), std::move(host),
+                                 std::move(config));
 }
 
 #if ANYHTTP_ASIO

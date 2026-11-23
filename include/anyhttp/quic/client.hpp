@@ -25,10 +25,14 @@ struct ClientConfig
    std::string alpn;
 
    /// The host the server's certificate has to be valid for: a name, sent as SNI, or an address.
+   /// Empty checks the chain only, and sends no SNI.
    std::string host;
 
    /// The CA certificates to verify the server with, see client::Config::tls_ca_file.
    std::string tls_ca_file;
+
+   /// Whether the server's certificate is verified at all, see Config::tls_verify.
+   bool verify = true;
 
    /// How long the connection may be silent before it is considered dead.
    std::chrono::nanoseconds idle_timeout = std::chrono::seconds{30};
