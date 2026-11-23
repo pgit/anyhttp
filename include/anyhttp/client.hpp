@@ -102,6 +102,13 @@ struct Config
     * next connection.
     */
    std::string tls_ca_file;
+
+   /**
+    * Where to log the secrets of every TLS handshake, over TCP and QUIC, as
+    * \c server::Config::tls_keylog_file describes. Empty, the default, logs nothing. Opened on
+    * every connect, which fails if it can't be.
+    */
+   std::string tls_keylog_file{};
 };
 
 // =================================================================================================

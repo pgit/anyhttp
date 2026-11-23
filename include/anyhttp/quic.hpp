@@ -54,6 +54,12 @@ struct Config
    std::string tls_ca_file;
 
    /**
+    * Client: where to log the TLS secrets, see client::Config::tls_keylog_file. The server's is
+    * server::Config::tls_keylog_file.
+    */
+   std::string tls_keylog_file{};
+
+   /**
     * Client: how long the connection may be silent. The server's is server::Config::idle_timeout.
     */
    std::chrono::nanoseconds idle_timeout = std::chrono::seconds{30};

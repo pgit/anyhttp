@@ -378,6 +378,7 @@ Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor,
    quic::ClientConfig quic_config{.alpn = "h3",
                                   .host = config.url.host_address(),
                                   .tls_ca_file = config.tls_ca_file,
+                                  .tls_keylog_file = config.tls_keylog_file,
                                   .idle_timeout = 30s};
    const size_t max_header_size = config.max_header_size;
    co_return co_await quic::async_connect(

@@ -68,7 +68,7 @@ static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned ch
 }
 
 TlsContext make_server_tls_context(const std::string& certificate_chain,
-                                   const std::string& private_key)
+                                   const std::string& private_key, const std::string& keylog_file)
 {
    boost::asio::ssl::context ctx{boost::asio::ssl::context::tlsv13};
    SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, nullptr);
@@ -76,13 +76,15 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 
    ctx.use_certificate_chain_file(certificate_chain);
    ctx.use_private_key_file(private_key, boost::asio::ssl::context::pem);
+   tls_set_keylog_file(ctx.native_handle(), keylog_file);
 
    return ctx;
 }
 
 // -------------------------------------------------------------------------------------------------
 
-TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol)
+TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol,
+                                   const std::string& keylog_file)
 {
    boost::asio::ssl::context ctx{boost::asio::ssl::context::tls_client};
    SSL_CTX_set_min_proto_version(ctx.native_handle(), TLS1_2_VERSION);
@@ -97,6 +99,7 @@ TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol
    SSL_CTX_set_alpn_protos(ctx.native_handle(), alpn.data(),
                            static_cast<unsigned int>(alpn.size()));
 
+   tls_set_keylog_file(ctx.native_handle(), keylog_file);
    return ctx;
 }
 
