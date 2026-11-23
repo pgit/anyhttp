@@ -33,6 +33,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace anyhttp::quic
 {
@@ -58,6 +59,12 @@ struct Config
     * server::Config::tls_keylog_file.
     */
    std::string tls_keylog_file{};
+
+   /**
+    * Client: whether the server's certificate is verified at all. Without it, any certificate is
+    * taken, from anybody who answers in the server's place -- that is for testing.
+    */
+   bool tls_verify = true;
 
    /**
     * Client: how long the connection may be silent. The server's is server::Config::idle_timeout.
@@ -273,6 +280,18 @@ using ConnectHandler = Completion<Connect>;
 /// \param config The protocol, and how to speak it.
 /// \return The error and the connection.
 IoTask<Connection> connect(Executor executor, std::string host, std::string port, Config config);
+
+/// Connects to the first of \p endpoints that gets there, negotiating \c config.alpn, and returns
+/// the connection -- for a client that knows the server's address already, and its name apart
+/// from that. The server's certificate has to be valid for \p host, which is also sent as SNI if
+/// it is a name; an empty \p host checks the chain only, and sends no SNI.
+/// \param executor What the connection runs on.
+/// \param endpoints Where the server is, tried one after the other.
+/// \param host The name or address the server's certificate has to be valid for, or empty.
+/// \param config The protocol, and how to speak it.
+/// \return The error and the connection.
+IoTask<Connection> connect(Executor executor, std::vector<TcpEndpoint> endpoints, std::string host,
+                           Config config);
 
 #if ANYHTTP_ASIO
 /// \cond internal

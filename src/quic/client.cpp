@@ -89,8 +89,13 @@ struct TlsClientContext
       SSL_CTX_set_alpn_protos(ctx, reinterpret_cast<const unsigned char*>(alpn.data()),
                               static_cast<unsigned int>(alpn.size()));
 
-      tls_load_trusted_cas(ctx, config.tls_ca_file);
-      SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
+      if (config.verify)
+      {
+         tls_load_trusted_cas(ctx, config.tls_ca_file);
+         SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
+      }
+      else
+         SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
       tls_set_keylog_file(ctx, config.tls_keylog_file);
    }
 
@@ -245,7 +250,9 @@ int QuicClientSession::init(UdpEndpoint remote, const ClientConfig& config,
    // The certificate has to be valid for the origin, the host of the URL -- also when `remote` is
    // an alternative service it advertised (RFC 7838, section 2.1).
    //
-   if (!tls_set_peer_name(ssl_, config.host))
+   // An empty host leaves the chain to be checked, and nothing to send as SNI.
+   //
+   if (!config.host.empty() && !tls_set_peer_name(ssl_, config.host))
    {
       mloge("init: can't verify certificates for '{}'", config.host);
       return -1;
@@ -353,8 +360,9 @@ void QuicClientSession::signal_ready() { ready_.set(); }
 
 int QuicClientSession::handle_error(int /*rv*/)
 {
-   // X509_V_ERR_INVALID_CALL: the handshake never got as far as verifying anything
-   if (ssl_)
+   // X509_V_ERR_INVALID_CALL: the handshake never got as far as verifying anything. Without
+   // verification there is a result all the same, but nothing was decided by it.
+   if (ssl_ && SSL_get_verify_mode(ssl_) != SSL_VERIFY_NONE)
       if (auto result = SSL_get_verify_result(ssl_);
           result != X509_V_OK && result != X509_V_ERR_INVALID_CALL)
          mlogw("server certificate: {}", X509_verify_cert_error_string(result));

@@ -490,6 +490,71 @@ TEST_P(QuicStreams, WHEN_alpn_is_unknown_THEN_connect_fails)
    }());
 }
 
+// -------------------------------------------------------------------------------------------------
+
+//
+// connect() to endpoints the client has already, with the name that the certificate has to be
+// valid for given apart from them: the server is at 127.0.0.2, and "localhost" is one of the
+// names of its certificate, "anyhttp.example" is not.
+//
+TEST_P(QuicStreams, WHEN_connecting_to_endpoints_THEN_the_certificate_is_checked_for_the_name_given)
+{
+   serverConnection = echo_streams;
+   run([&]() -> Task<void> {
+      auto [ec, connection] = co_await quic::connect(
+         context.get_executor(), {server->local_endpoint()}, "localhost", client_config());
+      EXPECT_FALSE(ec) << ec.message();
+      if (!connection)
+         co_return;
+
+      auto [open_ec, stream] = connection.open_stream();
+      std::ignore = co_await stream.write_eof(boost::asio::buffer("named", 5));
+      auto [read_ec, body] = co_await read_all(stream);
+      EXPECT_EQ(body, "named");
+   }());
+}
+
+TEST_P(QuicStreams, WHEN_the_name_given_is_not_the_certificates_THEN_connect_fails)
+{
+   run([&]() -> Task<void> {
+      auto [ec, connection] = co_await quic::connect(
+         context.get_executor(), {server->local_endpoint()}, "anyhttp.example", client_config());
+      EXPECT_TRUE(ec);
+      EXPECT_FALSE(connection);
+   }());
+}
+
+TEST_P(QuicStreams, WHEN_no_name_is_given_THEN_the_chain_is_still_checked)
+{
+   run([&]() -> Task<void> {
+      auto [ec, connection] = co_await quic::connect(
+         context.get_executor(), {server->local_endpoint()}, "", client_config());
+      EXPECT_FALSE(ec) << ec.message();
+
+      // the default trust store, which does not have the test PKI's root
+      auto config = client_config();
+      config.tls_ca_file.clear();
+      auto [untrusted_ec, untrusted] =
+         co_await quic::connect(context.get_executor(), {server->local_endpoint()}, "", config);
+      EXPECT_TRUE(untrusted_ec);
+      EXPECT_FALSE(untrusted);
+   }());
+}
+
+TEST_P(QuicStreams, WHEN_verification_is_off_THEN_any_certificate_is_taken)
+{
+   run([&]() -> Task<void> {
+      // neither trusted nor for this name
+      auto config = client_config();
+      config.tls_ca_file.clear();
+      config.tls_verify = false;
+      auto [ec, connection] = co_await quic::connect(
+         context.get_executor(), {server->local_endpoint()}, "anyhttp.example", config);
+      EXPECT_FALSE(ec) << ec.message();
+      EXPECT_TRUE(connection);
+   }());
+}
+
 TEST_P(QuicStreams, WHEN_http3_is_on_the_same_port_THEN_both_work)
 {
    serverConnection = echo_streams;
