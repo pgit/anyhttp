@@ -34,9 +34,9 @@ It builds and starts the server of `build-openssl-release/` (ASIO) and `build-co
 over HTTP/1.1, HTTP/2 and HTTP/3 against each, and prints a table of req/s, MB/s, failures and
 median/p99 latency, plus every row's req/s relative to the ASIO row of its protocol.
 A row names what it measures in three columns: the server program (`anyhttp` or `nghttpd`), its
-I/O runtime (`asio`, `corosio`; `libev` for nghttpd) and the protocol implementation (`beast` for
-HTTP/1.1, `nghttp2` or `nghttp2v2` for HTTP/2, `ngtcp2+nghttp3` for HTTP/3), so that runtime and
-implementation are never folded into one name.
+I/O runtime (`asio`, `corosio`; `libev` for nghttpd) and the protocol implementation
+(`boost.http` for HTTP/1.1, `nghttp2` or `nghttp2v2` for HTTP/2, `ngtcp2+nghttp3` for HTTP/3), so
+that runtime and implementation are never folded into one name.
 Both trees use OpenSSL, because COROSIO has to; `build-release/` is ASIO on AWS-LC, which is
 faster on its own (see [TLS library](#tls-library-aws-lc-vs-openssl)) and would skew the
 comparison.

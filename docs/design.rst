@@ -27,7 +27,7 @@ ngtcp2 and nghttp3 from being compile-time dependencies of anyone who uses anyht
      - On top of
    * - ``h1/``
      - HTTP/1.1
-     - Beast's parser and serializer
+     - Boost.HTTP's parser and serializer
    * - ``h2/``
      - HTTP/2
      - nghttp2

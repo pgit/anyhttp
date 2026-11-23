@@ -222,7 +222,7 @@ TEST_F(ClientTlsPeer, WHEN_framed_body_has_arrived_THEN_missing_close_notify_doe
 TEST_F(ClientTlsPeer, WHEN_connection_is_cut_before_the_response_THEN_that_is_the_end_of_stream)
 {
    get({.response = "", .close_notify = false});
-   EXPECT_EQ(result, error_code{make_error_code(boost::beast::http::error::end_of_stream)});
+   EXPECT_EQ(result, errors::end_of_stream);
 }
 
 // =================================================================================================

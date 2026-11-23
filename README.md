@@ -18,7 +18,7 @@ It supports HTTP/1.x, HTTP/2 and HTTP/3 behind a common, type-erasing interface,
 
 None of those protocols are implemented from scratch. Instead, it is a wrapper around the following well-established libraries:
 
-* [beast](https://github.com/boostorg/beast) (its parser and serializer)
+* [Boost.HTTP](https://github.com/cppalliance/http) (its parser, serializer and header fields), pre-release, built from its `develop` branch
 * [nghttp2](https://github.com/nghttp2/nghttp2), or [nghttp2 version 2](https://github.com/nghttp2/nghttp2-v2), its rewrite
 * [ngtcp2](https://github.com/ngtcp2/ngtcp2) / [nghttp3](https://github.com/ngtcp2/nghttp3)
 
@@ -106,7 +106,6 @@ An installed package works as well, on ASIO, see
 
 For now, this section contains just a set of random links collected during development.
 
-* [Beast Example using Type Erasure](https://www.boost.org/doc/libs/develop/boost/beast/http/message_generator.hpp)
 * [Development container](docs/devcontainer.rst) -- how the build environment is put together
 * [Capturing traffic](docs/capture.rst) -- tcpdump and tshark, decrypting TLS and QUIC with a key log
 * [cpp-devcontainer](https://github.com/pgit/cpp-devcontainer) -- the generic C++ base image it builds on

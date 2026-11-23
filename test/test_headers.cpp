@@ -12,7 +12,7 @@ using namespace testing;
 //
 // HTTP/2 splits a header block that does not fit into a single frame (16 KiB by default) into
 // HEADERS + CONTINUATION frames, HTTP/3 compresses the whole field section with QPACK, and
-// HTTP/1.1 parses it with a Beast parser. All of them are subject to Config::max_header_size.
+// HTTP/1.1 parses it with Boost.HTTP's parser. All of them are subject to Config::max_header_size.
 //
 class Headers : public ClientAsync
 {
@@ -32,36 +32,42 @@ static Fields make_fields(size_t count, size_t size)
    {
       auto value = std::format("value-{}-", i);
       value.resize(std::max(size, value.size()), char('a' + i % 26));
-      result.insert(std::format("x-header-{}", i), value);
+      result.append(std::format("x-header-{}", i), value);
    }
    return result;
 }
 
+//
+// The helpers take the fields of a message as well, a client::Message: both are Boost.HTTP's
+// fields_base.
+//
+using AnyFields = boost::http::fields_base;
+
 /// All values of the fields named \p name, in the order they appear in.
-static std::vector<std::string_view> values_of(const Fields& fields, std::string_view name)
+static std::vector<std::string_view> values_of(const AnyFields& fields, std::string_view name)
 {
-   auto [begin, end] = fields.equal_range(name);
-   return std::ranges::subrange(begin, end) |
-          rv::transform([](auto& field) { return std::string_view(field.value()); }) |
-          std::ranges::to<std::vector>();
+   std::vector<std::string_view> result;
+   for (auto value : fields.find_all(name))
+      result.emplace_back(value);
+   return result;
 }
 
 /// All fields as (name, value) pairs, in the order they appear in.
-static std::vector<std::pair<std::string_view, std::string_view>> pairs_of(const Fields& fields)
+static std::vector<std::pair<std::string_view, std::string_view>> pairs_of(const AnyFields& fields)
 {
-   return fields | rv::transform([](auto& field) {
-             return std::pair(std::string_view(field.name_string()),
-                              std::string_view(field.value()));
-          }) |
-          std::ranges::to<std::vector>();
+   std::vector<std::pair<std::string_view, std::string_view>> result;
+   for (auto&& field : fields)
+      result.emplace_back(field.name, field.value);
+   return result;
 }
 
 /// Expects every field of \p expected to be found in \p actual.
-static void expect_contains(const Fields& actual, const Fields& expected)
+static void expect_contains(const AnyFields& actual, const Fields& expected)
 {
    auto fields = pairs_of(actual);
    for (auto&& field : expected)
-      EXPECT_THAT(fields, Contains(Pair(StrCaseEq(field.name_string()), field.value())));
+      EXPECT_THAT(fields, Contains(Pair(StrCaseEq(std::string_view(field.name)),
+                                        std::string_view(field.value))));
 }
 
 /// Number of bytes the fields take up on an HTTP/1.1 wire, roughly.
@@ -69,7 +75,7 @@ static size_t wire_size(const Fields& fields)
 {
    size_t result = 0;
    for (auto&& field : fields)
-      result += field.name_string().size() + field.value().size() + 4; // ": " and CRLF
+      result += field.name.size() + field.value.size() + 4; // ": " and CRLF
    return result;
 }
 
@@ -91,7 +97,7 @@ void Headers::round_trip(Fields sent)
 
    clientSession = [this, sent](Session session) -> Task<void> {
       auto message = check(co_await session.get(url, sent));
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
       expect_contains(message, sent);
       EXPECT_THAT(message.body(), IsEmpty());
    };
@@ -112,7 +118,7 @@ TEST_P(Headers, WHEN_header_name_repeats_THEN_all_values_arrive_in_order)
    Fields sent;
    std::vector<std::string> values;
    for (size_t i = 0; i < 50; ++i)
-      sent.insert("x-repeated", values.emplace_back(std::format("value-{}", i)));
+      sent.append("x-repeated", values.emplace_back(std::format("value-{}", i)));
 
    requestHandler = [sent, values](server::Request request,
                                    server::Response response) -> Task<void> {
@@ -159,7 +165,7 @@ TEST_P(Headers, WHEN_request_headers_exceed_default_limit_THEN_server_responds_4
 
    clientSession = [this, sent](Session session) -> Task<void> {
       auto message = check(co_await session.get(url, sent));
-      EXPECT_EQ(message.result_int(), 431);
+      EXPECT_EQ(message.status_int(), 431);
    };
 }
 
@@ -185,7 +191,7 @@ TEST_P(Headers, WHEN_complex_url_is_submitted_THEN_is_provided_to_request_handle
    clientSession = [this](Session session) -> Task<void> {
       std::println("URL: {}", url.buffer());
       auto message = check(co_await session.get(url, {}));
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
    };
 }
 
@@ -256,7 +262,7 @@ protected:
       auto [ec, message] = co_await session.get(target, sent);
       if (ec)
          co_return std::unexpected(ec);
-      co_return message.result_int();
+      co_return message.status_int();
    }
 
    size_t handled = 0;

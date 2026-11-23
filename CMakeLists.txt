@@ -151,29 +151,40 @@ elseif (ANYHTTP_API STREQUAL "COROSIO")
         message(FATAL_ERROR "ANYHTTP_API=COROSIO needs TLS_LIBRARY=OpenSSL: "
                             "corosio's openssl_stream does not build against AWS-LC")
     endif()
+else()
+    message(FATAL_ERROR "ANYHTTP_API must be ASIO or COROSIO, not '${ANYHTTP_API}'")
+endif()
 
-    #
-    # Pinned: both are pre-release and change their API on 'develop' without notice. Moving a pin
-    # is a commit of its own.
-    #
-    include(FetchContent)
-    foreach (option TESTS EXAMPLES BENCH)
-        set(BOOST_CAPY_BUILD_${option} OFF CACHE BOOL "" FORCE)
-        set(BOOST_COROSIO_BUILD_${option} OFF CACHE BOOL "" FORCE)
-    endforeach()
-    FetchContent_Declare(capy
-        GIT_REPOSITORY https://github.com/cppalliance/capy.git
-        GIT_TAG d62f5de1684389682ff4201a6171eec646165036
-        EXCLUDE_FROM_ALL)
+#
+# capy, Boost.HTTP (cppalliance/http) and, for COROSIO, corosio. Every tree needs the first two:
+# HTTP/1.1 is Boost.HTTP's parser and serializer, and those are written in terms of capy's buffers
+# and errors, whatever the runtime. See cmake/http.cmake.
+#
+# Pinned: all three are pre-release and change their API on 'develop' without notice. Moving a pin
+# is a commit of its own, and Boost.HTTP's has to build against capy's.
+#
+include(FetchContent)
+foreach (option TESTS EXAMPLES BENCH)
+    set(BOOST_CAPY_BUILD_${option} OFF CACHE BOOL "" FORCE)
+    set(BOOST_COROSIO_BUILD_${option} OFF CACHE BOOL "" FORCE)
+endforeach()
+FetchContent_Declare(capy
+    GIT_REPOSITORY https://github.com/cppalliance/capy.git
+    GIT_TAG d62f5de1684389682ff4201a6171eec646165036
+    EXCLUDE_FROM_ALL)
+include(cmake/http.cmake)
+if (ANYHTTP_COROSIO)
     FetchContent_Declare(corosio
         GIT_REPOSITORY https://github.com/cppalliance/corosio.git
         GIT_TAG 13bcf933adf8c5ce8576bd3349ae58d2e46e5c53
         EXCLUDE_FROM_ALL)
-    FetchContent_MakeAvailable(capy corosio)
+    FetchContent_MakeAvailable(capy http corosio)
     message(STATUS "Using I/O runtime: COROSIO (capy/corosio)")
 else()
-    message(FATAL_ERROR "ANYHTTP_API must be ASIO or COROSIO, not '${ANYHTTP_API}'")
+    FetchContent_MakeAvailable(capy http)
+    message(STATUS "Using I/O runtime: ASIO")
 endif()
+anyhttp_add_http()
 
 # --------------------------------------------------------------------------------------------------
 

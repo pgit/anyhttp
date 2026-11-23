@@ -19,7 +19,6 @@
 #include "anyhttp/request_handlers.hpp" // IWYU pragma: keep
 #include "anyhttp/server_impl.hpp"
 
-#include <boost/beast/http/status.hpp>
 #include <boost/url/parse.hpp>
 
 #include <nghttp3/nghttp3.h>
@@ -211,16 +210,15 @@ void Http3ServerStream::submit_response(unsigned int status, const Fields& user_
 
    for (auto&& item : response_fields)
    {
-      if (item.name_string().starts_with(':'))
+      if (item.name.starts_with(':'))
       {
-         mlogw("submit_response: dropping pseudo-header '{}'", item.name_string());
+         mlogw("submit_response: dropping pseudo-header '{}'", item.name);
          continue;
       }
-      nva.push_back(make_nv(item.name_string(), item.value()));
+      nva.push_back(make_nv(item.name, item.value));
    }
 
-   using namespace boost::beast::http;
-   mlogd("{} {}", response_status, obsolete_reason(int_to_status(response_status)));
+   mlogd("{} {}", response_status, reason_phrase(response_status));
 
    if (submit_headers(nva, false /* response */))
       session.wake_write();

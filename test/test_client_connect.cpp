@@ -367,7 +367,7 @@ protected:
    {
       EXPECT_EQ(session.protocol(), GetParam());
       auto message = check(co_await session.get(url));
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
       EXPECT_EQ(message.body(), url.encoded_host_and_port());
    }
 };

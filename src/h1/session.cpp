@@ -11,36 +11,29 @@
 
 #include <boost/asio/buffer.hpp>
 
-#include <boost/beast/core/buffer_traits.hpp>
-#include <boost/beast/core/detail/base64.hpp>
-#include <boost/beast/core/error.hpp>
-#include <boost/beast/core/string.hpp>
-#include <boost/beast/http/basic_parser.hpp>
-#include <boost/beast/http/buffer_body.hpp>
-#include <boost/beast/http/empty_body.hpp>
-#include <boost/beast/http/error.hpp>
-#include <boost/beast/http/parser.hpp>
-#include <boost/beast/http/rfc7230.hpp>
-#include <boost/beast/http/serializer.hpp>
-#include <boost/beast/version.hpp>
+#include <boost/http/field.hpp>
+#include <boost/http/method.hpp>
+#include <boost/http/request.hpp>
+#include <boost/http/response.hpp>
+#include <boost/http/rfc/list_rule.hpp>
+#include <boost/http/rfc/token_rule.hpp>
+#include <boost/http/status.hpp>
 
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <boost/system/errc.hpp>
 
+#include <boost/url/grammar/ci_string.hpp>
+#include <boost/url/grammar/parse.hpp>
 #include <boost/url/parse.hpp>
 
 #include <algorithm>
-#include <charconv>
+#include <array>
 #include <chrono>
 #include <optional>
 #include <string_view>
 
 using namespace std::chrono_literals;
-
-using namespace boost::asio;
-namespace beast = boost::beast;
-namespace http = beast::http;
 
 namespace anyhttp::h1
 {
@@ -48,26 +41,43 @@ namespace anyhttp::h1
 // =================================================================================================
 
 using namespace boost::asio;
-using namespace boost::beast;
+using http::field;
 
 /**
  * Adds the user's header fields to an outgoing message. A field replaces whatever the message
  * already has under that name, like a default set before, but repeated fields are all kept.
  */
-template <bool isRequest, typename Body>
-static void add_fields(http::message<isRequest, Body>& message, const Fields& headers)
+static void add_fields(http::message_base& message, const Fields& headers)
 {
    for (auto&& header : headers)
-      message.erase(header.name_string());
+      message.erase(header.name);
    for (auto&& header : headers)
-      message.insert(header.name_string(), header.value());
+      message.append(header.name, header.value);
 }
 
-/// Converts Config::max_header_size into what a Beast parser takes as its header limit.
-static std::uint32_t header_limit(size_t max_header_size)
+/// A copy of the header fields of \p message, which stay with the parser only until the next one.
+static Fields copy_fields(const http::fields_base& message)
 {
-   return static_cast<std::uint32_t>(
-      std::min<size_t>(max_header_size, std::numeric_limits<std::uint32_t>::max()));
+   Fields fields;
+   fields.reserve_bytes(message.buffer().size());
+   for (auto&& header : message)
+      fields.append(header.name, header.value);
+   return fields;
+}
+
+/// Whether \p message has a 'Content-Length', valid or not.
+static bool has_content_length(const http::message_base& message)
+{
+   return message.metadata().content_length.count > 0;
+}
+
+/// Sets the 'Content-Length' of \p message, or removes it.
+static void set_content_length(http::message_base& message, std::optional<size_t> content_length)
+{
+   if (content_length)
+      message.set_content_length(*content_length);
+   else
+      message.erase(field::content_length);
 }
 
 // =================================================================================================
@@ -75,43 +85,67 @@ static std::uint32_t header_limit(size_t max_header_size)
 namespace
 {
 
-template <typename Interface, typename Stream, typename Buffer, typename Parser>
-class BeastReader : public Interface
+/**
+ * The incoming half of a message, as a Reader. The parser is the session's, see H1Session: its
+ * header is good until the next message, so the reader keeps a copy of what it hands out. It reads
+ * through the parser while it is attached, and not at all any more once it is detached.
+ */
+template <typename Interface, typename Stream, typename Parser>
+class H1Reader : public Interface
 {
 public:
-   BeastReader(BeastSession<Stream>& session_, Stream& stream_, Buffer& buffer_)
-      : session(&session_), stream(stream_), buffer(buffer_),
+   H1Reader(H1Session<Stream>& session_, Parser& parser_)
+      : session(&session_), parser(&parser_),
         executor_(session_.get_executor()), // survives detach(), see get_executor()
         log_prefix_(session_.log_prefix())
    {
-      // parser.header_limit(std::numeric_limits<uint32_t>::max());
-      parser.body_limit(std::numeric_limits<uint64_t>::max());
       session_.attach(*this);
    }
 
    void destroy() noexcept override
    {
-      mlogd("destroy: reader destroyed, is_done={}", parser.is_done());
-      if (!parser.is_done() && session)
+      mlogd("destroy: reader destroyed, complete={}", complete);
+      if (!complete && session)
       {
          mlogw("destroy: reader destroyed, but parser not done yet... closing socket");
          //
          // We could still try to send an error response here.
          // This breaks WHEN_server_discards_request_THEN_is_still_able_to_deliver_response.
          //
-         auto ec = io::shutdown(stream, io::Shutdown::receive);
+         auto ec = io::shutdown(session->stream_, io::Shutdown::receive);
          session->closed_ = true;
          logwd(ec != errc::not_connected, "[{}] destroy: shutdown: {}", log_prefix(), what(ec));
       }
       finish();
    }
 
-   ~BeastReader() override
+   ~H1Reader() override
    {
       assert(!reading);
       finish();
       if (session)
          session->release(*this);
+   }
+
+   /// Takes what is needed of the header, once the parser has it.
+   void on_header()
+   {
+      const auto& message = parser->get();
+      fields_ = copy_fields(message);
+
+      //
+      // What the message announced as its body length. A response to HEAD has no payload whatever
+      // its 'Content-Length' says, but that is still what it announced, and what HTTP/2 and HTTP/3
+      // report for it.
+      //
+      const auto& content_length = message.metadata().content_length;
+      if (message.payload() == http::payload::size)
+         content_length_ = message.payload_size();
+      else if (content_length.count && !content_length.ec)
+         content_length_ = content_length.value;
+      else if (message.payload() == http::payload::none)
+         content_length_ = 0;
+      complete = parser->is_complete();
    }
 
    /// Tells the session, once, that this reader is done with the stream, see reader_finished().
@@ -120,23 +154,18 @@ public:
       if (session && !finished)
       {
          finished = true;
-         session->reader_finished(parser.is_done());
+         session->reader_finished(complete);
       }
    }
    void detach() override
    {
       mlogd("detach");
       session = nullptr;
+      parser = nullptr;
    }
 
-   const Fields& fields() const override { return parser.get(); }
-   std::optional<size_t> content_length() const noexcept override
-   {
-      if (parser.content_length())
-         return parser.content_length().value();
-      else
-         return std::nullopt;
-   }
+   const Fields& fields() const override { return fields_; }
+   std::optional<size_t> content_length() const noexcept override { return content_length_; }
 
    //
    // The I/O is done in a coroutine, see Reader::Impl::read_some(). As a task of its own, it is
@@ -155,78 +184,58 @@ public:
       //
       // Everything that can be answered without touching the connection, each case with the error
       // code the Reader contract prescribes for it (see common.hpp): a zero-length read is not a
-      // read and reports nothing, wherever the body stands; a parser that is done keeps reporting
-      // the end of the body, ASIO-style, session or no session; and a read past a detached,
-      // unfinished parser is a truncation the caller must hear about.
+      // read and reports nothing, wherever the body stands; a message that has been read keeps
+      // reporting the end of the body, ASIO-style, session or no session; and a read past a
+      // detached, unfinished one is a truncation the caller must hear about.
       //
       if (body_buffer.size() == 0)
          co_return std::tuple{error_code{}, size_t{0}};
-      else if (parser.is_done())
+      else if (eof)
          co_return std::tuple{errors::eof, size_t{0}};
       else if (!session)
-         co_return std::tuple{errors::partial_message, size_t{0}};
-
-      buffer.reserve(64_k); // the buffer is the session's, so not before checking for it
-      mlogd("async_read_some: is_done={} size={} capacity={}", parser.is_done(), buffer.size(),
-            buffer.capacity());
+         co_return std::tuple{complete ? errors::eof : errors::partial_message, size_t{0}};
 
       auto self = Interface::shared_from_this();
       reading = true;
-      for (;;)
+
+      error_code ec;
+      size_t n = 0;
+      try
       {
-         parser.get().body().data = body_buffer.data();
-         parser.get().body().size = body_buffer.size();
-
-         error_code ec;
-         size_t n = 0;
-         try
-         {
-            const auto op = session->read_op();
-            std::tie(ec, n) = co_await h1::read_some(stream, buffer, parser);
-         }
-         catch (const system_error& e) // a cancelled coroutine throws from its next co_await
-         {
-            ec = e.code();
-         }
-
-         auto& body = parser.get().body();
-         size_t payload = body_buffer.size() - body.size;
-         mlogd("async_read_some: n={} (body={}) ({}) is_done={} size={} capacity={}", n, payload,
-               ec.message(), parser.is_done(), buffer.size(), buffer.capacity());
-
-         if (parser.is_done())
-            finish();
-
-         //
-         // Nothing of the body came out of this round -- either the parser is done now, which
-         // is the end of the body, or it just needs more input. Either way there is nothing to
-         // hand to the caller yet.
-         //
-         if (!ec && payload == 0)
-         {
-            if (parser.is_done())
-               ec = errors::eof;
-            else if (!session)
-               ec = errors::partial_message;
-            else
-               continue;
-         }
-
-         reading = false;
-         co_return std::tuple{ec, payload};
+         const auto op = session->read_op();
+         std::tie(ec, n) =
+            co_await h1::read_body(session->stream_, session->pending_, *parser, body_buffer);
       }
+      catch (const system_error& e) // a cancelled coroutine throws from its next co_await
+      {
+         ec = e.code();
+      }
+
+      if (parser) // still attached
+         complete = parser->is_complete();
+      if (ec == errors::eof)
+         eof = true;
+      mlogd("async_read_some: n={} ({}) complete={}", n, ec.message(), complete);
+
+      if (complete)
+         finish();
+
+      reading = false;
+      co_return std::tuple{ec, n};
    }
 
    Executor get_executor() const noexcept override { return executor_; }
    std::string log_prefix() const override { return log_prefix_; }
 
-   BeastSession<Stream>* session;
-   Stream& stream;
-   Buffer& buffer;
-   Parser parser;
+   H1Session<Stream>* session;
+   Parser* parser; ///< the session's, see on_header()
+   Fields fields_;
+   std::optional<size_t> content_length_;
    Executor executor_; // kept as a copy so a detached reader can still complete
    std::string log_prefix_; // likewise, for logging
    bool reading = false;
+   bool complete = false; ///< whether the parser has all of the message
+   bool eof = false; ///< whether all of the body has been read, too
    bool finished = false; // see finish()
 };
 
@@ -235,54 +244,53 @@ public:
 //
 // The two roles a reader can be in. Everything above is the same for both; what they add is the
 // half of the incoming message that only their role has -- a request line, or a status code.
-// Which of the two Beast parsers a role reads with follows from the role itself.
+// Which of the two parsers a role reads with follows from the role itself.
 //
 
-template <typename Stream, typename Buffer>
-class BeastRequestReader final
-   : public BeastReader<server::Request::Impl, Stream, Buffer,
-                        beast::http::request_parser<beast::http::buffer_body>>
+template <typename Stream>
+class RequestReader final : public H1Reader<server::Request::Impl, Stream, http::request_parser>
 {
-   using Base = BeastReader<server::Request::Impl, Stream, Buffer,
-                            beast::http::request_parser<beast::http::buffer_body>>;
+   using Base = H1Reader<server::Request::Impl, Stream, http::request_parser>;
 
 public:
    using Base::Base;
 
-   std::string_view method() const noexcept override { return this->parser.get().method_string(); }
+   std::string_view method() const noexcept override { return method_; }
    boost::url_view url() const override { return url_; }
+
+   /// Copied from the request line, see H1Reader::on_header().
+   std::string method_;
 
    /// Assembled from the request target, the host header and the kind of socket this arrived on,
    /// by the session, right after the header was parsed.
    boost::url url_;
 };
 
-template <typename Stream, typename Buffer>
-class BeastResponseReader final
-   : public BeastReader<client::Response::Impl, Stream, Buffer,
-                        beast::http::response_parser<beast::http::buffer_body>>
+template <typename Stream>
+class ResponseReader final : public H1Reader<client::Response::Impl, Stream, http::response_parser>
 {
-   using Base = BeastReader<client::Response::Impl, Stream, Buffer,
-                            beast::http::response_parser<beast::http::buffer_body>>;
+   using Base = H1Reader<client::Response::Impl, Stream, http::response_parser>;
 
 public:
    using Base::Base;
 
-   unsigned int status_code() const noexcept override { return this->parser.get().result_int(); }
+   unsigned int status_code() const noexcept override { return status_code_; }
+
+   unsigned int status_code_ = 0;
 };
 
 // -------------------------------------------------------------------------------------------------
 
 /**
- * Common implementation of server::Response and client::Request writer.
+ * Common implementation of server::Response and client::Request writer. The message is the
+ * writer's own, the serializer the session's: there is only one message at a time to write.
  */
-template <typename Parent, typename Stream, typename Serializer,
-          typename Message = std::remove_const_t<typename Serializer::value_type>>
+template <typename Parent, typename Stream, typename Message>
 class WriterBase : public Parent
 {
 public:
-   WriterBase(BeastSession<Stream>& session_, Stream& stream_)
-      : session(&session_), stream(stream_),
+   explicit WriterBase(H1Session<Stream>& session_)
+      : session(&session_),
         executor_(session_.get_executor()), // survives detach(), see get_executor()
         log_prefix_(session_.log_prefix())
    {
@@ -308,7 +316,7 @@ public:
       session = nullptr;
    }
 
-   /// The I/O is done in a coroutine, see Reader::Impl::read_some() and BeastReader.
+   /// The I/O is done in a coroutine, see Reader::Impl::read_some() and H1Reader.
    void async_write(WriteHandler&& handler, boost::asio::const_buffer buffer, bool eof) override
    {
       launch(get_executor(), write(buffer, eof), std::move(handler));
@@ -351,57 +359,42 @@ public:
       writing = true;
 
       mlogd("async_write: {} bytes (eof={} chunked={} content_length={})", buffer.size(), eof,
-            message.chunked(), message.has_content_length());
+            message.metadata().transfer_encoding.is_chunked, has_content_length(message));
 
       //
-      // The last body buffer and the end of the body go into the same serializer pass: with
-      // 'more' cleared, beast emits the data and the terminating chunk (or just the data, for a
-      // content-length delimited body) in one go, so ending a body costs no extra write.
+      // The last body buffer and the end of the body go into the same serializer pass, so ending
+      // a body costs no extra write: the data and the terminating chunk (or just the data, for a
+      // content-length delimited body) go out together.
       //
-#if BOOST_BEAST_VERSION < 359
-      // https://github.com/boostorg/beast/issues/3032
-      // make sure to set 'nullptr' on empty size, otherwise beast may serialize an empty chunk
-      message.body().data = buffer.size() ? const_cast<void*>(buffer.data()) : nullptr;
-#else
-      message.body().data = const_cast<void*>(buffer.data());
-#endif
-      message.body().size = buffer.size();
-      message.body().more = !eof;
-
-      //
-      // With 'chunked' transfer encoding, the serializer will automatically emit a chunk as
-      // large as possible. This means that if the user writes a single large buffer, cancellation
-      // can not be done gracefully at chunk boundary any more. See 'Cancellation' testcase for an
-      // example of this.
+      // With 'chunked' transfer encoding, the serializer makes a chunk of as much as its buffer
+      // holds. So cancellation can not be done gracefully at a chunk boundary of the caller's.
+      // See 'Cancellation' testcase for an example of this.
       //
       auto self = Parent::shared_from_this();
       const auto expected = buffer.size();
 
-      // 'n' is the number of bytes written to the stream, 'body' counts those taken from the buffer
+      // 'taken' is how much of the buffer the serializer has copied, see h1::write_body()
       error_code ec;
-      size_t n = 0;
-      h1::BodyWatch body{buffer};
+      size_t taken = 0;
       try
       {
          const auto op = session->write_op();
-         std::tie(ec, n) = co_await h1::write(stream, serializer, &body);
+         std::tie(ec, taken) =
+            co_await h1::write_body(session->stream_, session->serializer_, buffer, eof);
       }
       catch (const system_error& e) // a cancelled coroutine throws from its next co_await
       {
          ec = e.code();
       }
-      mlogd("async_write: n={} (\x1b[1;{}m{}\x1b[0m) done={} (body {})", n, ec ? 31 : 32,
-            ec.message(), serializer.is_done(), serializer.get().body().size);
+      mlogd("async_write: taken={} (\x1b[1;{}m{}\x1b[0m)", taken, ec ? 31 : 32, ec.message());
 
       writing = false;
 
       if (ec == errc::operation_canceled)
       {
          //
-         // Cancellation is tricky, see e.g.: https://github.com/boostorg/beast/issues/2325.
-         //
-         // Main reason is that, depending on when the cancellation actually takes place,
-         // the stream is in an undefined state. For example, when writing a large chunk is
+         // Cancellation is tricky: depending on when the cancellation actually takes place, the
+         // stream is in an undefined state. For example, when writing a large chunk is
          // interrupted, there is no meaningful way to recover: The length of the chunk has
          // been written, but only part of the data.
          //
@@ -410,25 +403,18 @@ public:
          // TODO: We could try to support partial cancellation, but that would only work
          //       at chunk boundaries.
          //
-         mlogi("async_write: canceled after writing {} of {} bytes", n, expected);
+         mlogi("async_write: canceled after taking {} of {} bytes", taken, expected);
          cancelled = true;
          if (session) // otherwise, the stream is gone already
          {
             mlogi("async_write: canceled, closing stream");
-            io::shutdown(stream, io::Shutdown::send);
+            io::shutdown(session->stream_, io::Shutdown::send);
          }
       }
       else if (ec)
       {
          cancelled = true;
       }
-      /*
-      else if (!ec && n < expected)
-      {
-         mlogw("async_write: wrote {} bytes which is less than expected ({})", n, expected);
-         ec = make_error_code(errc::message_size);
-      }
-      */
 
       //
       // Only now is the body really ended: a cancelled or failed EOF write never got its
@@ -448,7 +434,7 @@ public:
       // effect immediately, not only when this task is gone.
       //
       self.reset();
-      co_return std::tuple{ec, ec ? body.written : expected};
+      co_return std::tuple{ec, ec ? taken : expected};
    }
 
    /// Called when a write has ended the body, before its handler is invoked.
@@ -459,14 +445,15 @@ public:
 
    // ----------------------------------------------------------------------------------------------
 
-   /// Writes the header of the message, see submit_headers().
-   IoTask<> write_head()
+   /// Writes the header of the message, see submit_headers(). With \p body cleared, that is all.
+   IoTask<> write_head(bool body = true)
    {
       error_code ec;
       try
       {
          const auto op = session->write_op();
-         std::tie(ec, std::ignore) = co_await h1::write_header(stream, serializer);
+         std::tie(ec) =
+            co_await h1::write_header(session->stream_, session->serializer_, message, body);
       }
       catch (const system_error& e) // a cancelled coroutine throws from its next co_await
       {
@@ -480,23 +467,27 @@ public:
     */
    void submit_headers(const Fields& headers)
    {
-      message.body().data = nullptr;
-
       add_fields(message, headers);
 
-      if (!message.has_content_length())
-         message.chunked(true);
+      if (!has_content_length(message))
+         message.set_chunked(true);
 
-      mlogd("async_submit: chunked={} has_content_length={} length={}", message.chunked(),
-            message.has_content_length(), message.payload_size().value_or(0));
+      mlogd("async_submit: chunked={} has_content_length={} length={}",
+            message.metadata().transfer_encoding.is_chunked, has_content_length(message),
+            message.metadata().content_length.value);
+   }
+
+   /// Logs the header section of the message, start line excluded.
+   void log_fields() const
+   {
+      for (const auto& header : message)
+         mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name), truncated(header.value));
    }
 
    // ----------------------------------------------------------------------------------------------
 
-   BeastSession<Stream>* session;
-   Stream& stream;
+   H1Session<Stream>* session;
    Message message;
-   Serializer serializer{message};
    Executor executor_; // kept as a copy so a detached writer can still complete
    std::string log_prefix_; // likewise, for logging
    bool writing = false;
@@ -508,23 +499,19 @@ public:
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-class ResponseWriter
-   : public WriterBase<server::Response::Impl, Stream, http::response_serializer<http::buffer_body>>
+class ResponseWriter : public WriterBase<server::Response::Impl, Stream, http::response>
 {
-   using super =
-      WriterBase<server::Response::Impl, Stream, http::response_serializer<http::buffer_body>>;
+   using super = WriterBase<server::Response::Impl, Stream, http::response>;
 
 public:
    using super::cancelled;
    using super::log_prefix;
    using super::message;
-   using super::serializer;
    using super::session;
-   using super::stream;
    using super::submit_headers;
 
 public:
-   ResponseWriter(BeastSession<Stream>& session_, Stream& stream_) : super(session_, stream_) {}
+   explicit ResponseWriter(H1Session<Stream>& session_) : super(session_) {}
 
    //
    // A response that could not be written leaves the connection unusable, so the session must not
@@ -536,13 +523,10 @@ public:
 
    void content_length(std::optional<size_t> content_length) override
    {
-      if (content_length)
-         message.content_length(*content_length);
-      else
-         message.content_length(boost::none);
+      set_content_length(message, content_length);
    }
 
-   /// The I/O is done in a coroutine, see BeastReader.
+   /// The I/O is done in a coroutine, see H1Reader.
    void async_submit(StatusHandler&& handler, unsigned int status_code,
                      const Fields& headers) override
    {
@@ -557,10 +541,11 @@ public:
          co_return std::tuple{errors::connection_aborted};
       }
 
-      message.result(status_code);
+      const auto status = static_cast<unsigned short>(status_code);
+      message.set_start_line(status, reason_phrase(status));
 
-      if (message.find(http::field::date) == message.end())
-         message.set(http::field::date, std::string_view(http_date_now()));
+      if (!message.exists(field::date))
+         message.set(field::date, std::string_view(http_date_now()));
 
       submit_headers(headers);
 
@@ -573,13 +558,11 @@ public:
       if (!message.keep_alive())
          session->closed_ = true;
 
-      if (message.find(http::field::server) == message.end())
-         message.set(http::field::server, "anyhttp");
+      if (!message.exists(field::server))
+         message.set(field::server, "anyhttp");
 
-      mlogd("{} {}", message.result_int(), message.reason());
-      for (const auto& header : message)
-         mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
-               truncated(header.value()));
+      mlogd("{} {}", message.status_int(), message.reason());
+      super::log_fields();
 
       //
       // TODO: For bundling writing the header and body, we should just post the writing here,
@@ -600,11 +583,9 @@ public:
 } // namespace
 
 template <typename Stream>
-class RequestWriter
-   : public WriterBase<client::Request::Impl, Stream, http::request_serializer<http::buffer_body>>
+class RequestWriter : public WriterBase<client::Request::Impl, Stream, http::request>
 {
-   using super =
-      WriterBase<client::Request::Impl, Stream, http::request_serializer<http::buffer_body>>;
+   using super = WriterBase<client::Request::Impl, Stream, http::request>;
 
 public:
    using super::cancelled;
@@ -612,13 +593,11 @@ public:
    using super::log_prefix;
    using super::message;
    using super::response_requested;
-   using super::serializer;
    using super::session;
-   using super::stream;
    using super::submit_headers;
 
 public:
-   RequestWriter(ClientSession<Stream>& session_, Stream& stream_) : super(session_, stream_) {}
+   explicit RequestWriter(ClientSession<Stream>& session_) : super(session_) {}
 
    ~RequestWriter() override
    {
@@ -642,13 +621,12 @@ public:
     */
    bool has_body() const
    {
-      if (message.chunked())
+      const auto& metadata = message.metadata();
+      if (metadata.transfer_encoding.count)
          return true;
-
-      auto value = message[http::field::content_length];
-      size_t length = 0;
-      auto [end, ec] = std::from_chars(value.data(), value.data() + value.size(), length);
-      return ec != std::errc{} || end != value.data() + value.size() || length != 0;
+      if (!metadata.content_length.count)
+         return false;
+      return metadata.content_length.ec || metadata.content_length.value != 0;
    }
 
    /// Called when writing the header is done. A request without a body is complete by then.
@@ -674,10 +652,7 @@ public:
 
    void content_length(std::optional<size_t> content_length) override
    {
-      if (content_length)
-         message.content_length(*content_length);
-      else
-         message.content_length(boost::none);
+      set_content_length(message, content_length);
    }
 
    using super::get_executor;
@@ -697,11 +672,11 @@ public:
       }
 
       submit_headers(headers);
-      message.method(http::verb::post);
-      co_return co_await super::write_head();
+      message.set_method(http::method::post);
+      co_return co_await super::write_head(has_body());
    }
 
-   /// The I/O is done in a coroutine, see BeastReader.
+   /// The I/O is done in a coroutine, see H1Reader.
    void async_get_response(client::Request::GetResponseHandler&& handler) override
    {
       launch(get_executor(), get_response(), std::move(handler));
@@ -743,21 +718,28 @@ public:
       }
       response_requested = true;
 
-      auto& buffer = session->buffer_;
-      auto reader =
-         std::make_unique<BeastResponseReader<std::decay_t<decltype(stream)>, decltype(buffer)>>(
-            *session, stream, buffer);
-      auto& parser = reader->parser;
-      parser.header_limit(header_limit(cs.client().config().max_header_size));
-      // whatever its header field says, a response to HEAD is over after that (RFC 9112, 6.3)
-      parser.skip(message.method() == http::verb::head);
+      //
+      // The parser is the session's. It is done with the previous response, or has not seen one
+      // yet, unless an earlier attempt to read this one was cancelled, see below: then it goes on
+      // where that one left off.
+      //
+      auto& parser = cs.parser_;
+      if (!std::exchange(cs.parser_started_, true))
+      {
+         // whatever its header field says, a response to HEAD is over after that (RFC 9112, 6.3)
+         if (message.method() == http::method::head)
+            parser.start_head_response();
+         else
+            parser.start();
+      }
 
-      mlogd("waiting for response (size={} capacity={})", buffer.size(), buffer.capacity());
-      size_t len = 0;
+      auto reader = std::make_unique<ResponseReader<Stream>>(*session, parser);
+
+      mlogd("waiting for response ({} bytes pending)", session->pending_.size());
       try
       {
          const auto op = session->read_op();
-         std::tie(ec, len) = co_await h1::read_header(stream, buffer, parser);
+         std::tie(ec) = co_await h1::read_header(session->stream_, session->pending_, parser);
       }
       catch (const system_error& e) // a cancelled coroutine throws from its next co_await
       {
@@ -766,36 +748,39 @@ public:
 
       if (!ec)
       {
-         auto& msg = parser.get();
-         mlogd("{} {}", msg.result_int(), msg.reason());
+         const auto& msg = parser.get();
+         reader->status_code_ = msg.status_int();
+         reader->on_header();
+         mlogd("{} {}", msg.status_int(), msg.reason());
          for (const auto& header : msg)
-            mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
-                  truncated(header.value()));
+            mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name), truncated(header.value));
 
          //
          // An "Alt-Svc" on any response may point at an HTTP/3 endpoint to use for the next
          // connection (RFC 7838), see Client::Impl::on_alt_svc().
          //
-         if (auto alt_svc = msg[http::field::alt_svc]; session && !alt_svc.empty())
+         if (auto alt_svc = msg.value_or(field::alt_svc, ""); session && !alt_svc.empty())
             client_session().client().on_alt_svc(std::string_view(alt_svc));
       }
       else
-         mlogw("async_read_header: {} len={}", ec.message(), len);
+         mlogw("async_read_header: {}", ec.message());
 
       //
-      // If reading the headers was cancelled before receiving anything, we can allow another
-      // attempt. TODO: If we move the parser into the session, we can even relax this further.
+      // If reading the header was cancelled before it was complete, another attempt can pick up
+      // where this one left off: the parser is the session's, and keeps what it has got so far.
       //
-      // As this reader has not taken anything from the connection, it does not count as having
-      // failed to read the response, either.
+      // As this reader has not taken anything from the connection that the next one would not
+      // take, it does not count as having failed to read the response, either.
       //
-      if (ec == errc::operation_canceled && !parser.got_some())
+      if (ec == errc::operation_canceled && !parser.got_header())
       {
          response_requested = false;
          reader->finished = true;
       }
+      else
+         cs.parser_started_ = false;
 
-      if (!ec && parser.is_done()) // a response without body is complete already
+      if (!ec && reader->complete) // a response without body is complete already
          reader->finish();
 
       co_return std::tuple{ec, client::Response(std::move(reader))};
@@ -810,14 +795,15 @@ public:
 // =================================================================================================
 
 template <typename Stream>
-BeastSession<Stream>::BeastSession(std::string_view prefix, Executor executor, Stream&& stream)
-   : executor_(std::move(executor)), log_prefix_(prefix), stream_(std::move(stream))
+H1Session<Stream>::H1Session(std::string_view prefix, Executor executor, Stream&& stream)
+   : log_prefix_(prefix), executor_(std::move(executor)), stream_(std::move(stream)),
+     serializer_(h1::make_serializer_config())
 {
    mlogd("session created");
 }
 
 template <typename Stream>
-BeastSession<Stream>::~BeastSession()
+H1Session<Stream>::~H1Session()
 {
    mlogd("session deleted");
    if (!writers_.empty())
@@ -833,8 +819,10 @@ ServerSession<Stream>::ServerSession(server::Server::Impl& parent, Executor exec
                                      Stream&& stream)
    : ServerSessionBase(parent),
      super(anyhttp::log_prefix(Role::server, "h1", io::remote_endpoint(stream)),
-           std::move(executor), std::move(stream))
+           std::move(executor), std::move(stream)),
+     parser_(h1::make_parser_config(true, parent.config().max_header_size))
 {
+   parser_.reset();
 }
 
 template <typename Stream>
@@ -842,12 +830,14 @@ ClientSession<Stream>::ClientSession(client::Client::Impl& parent, Executor exec
                                      Stream&& stream)
    : ClientSessionBase(parent),
      super(anyhttp::log_prefix(Role::client, "h1", io::remote_endpoint(stream)),
-           std::move(executor), std::move(stream))
+           std::move(executor), std::move(stream)),
+     parser_(h1::make_parser_config(false, parent.config().max_header_size))
 {
+   parser_.reset();
 }
 
 template <typename Stream>
-Task<void> BeastSession<Stream>::end_connection(bool notify)
+Task<void> H1Session<Stream>::end_connection(bool notify)
 {
    //
    // End the stream itself first: over TLS, that is the "close_notify" the peer needs to tell the
@@ -878,7 +868,7 @@ Task<void> BeastSession<Stream>::end_connection(bool notify)
 // -------------------------------------------------------------------------------------------------
 
 template <typename Stream>
-void BeastSession<Stream>::destroy() noexcept
+void H1Session<Stream>::destroy() noexcept
 {
    if (stream_closed_)
       return;
@@ -920,6 +910,67 @@ void ServerSession<Stream>::destroy() noexcept
 
 // =================================================================================================
 
+/// Whether the comma-separated \p list has \p token in it, in any case.
+static bool has_token(std::string_view list, std::string_view token)
+{
+   auto tokens = boost::urls::grammar::parse(list, http::list_rule(http::token_rule, 1));
+   return tokens && std::ranges::any_of(*tokens, [&](auto item) {
+             return boost::urls::grammar::ci_is_equal(item, token);
+          });
+}
+
+/**
+ * Decodes \p text from base64url without padding (RFC 4648, section 5), what 'HTTP2-Settings'
+ * holds (RFC 7540, section 3.2.1). Fails on anything else.
+ */
+static std::optional<std::string> base64url_decode(std::string_view text)
+{
+   const auto value = [](char c) -> int {
+      if (c >= 'A' && c <= 'Z')
+         return c - 'A';
+      if (c >= 'a' && c <= 'z')
+         return c - 'a' + 26;
+      if (c >= '0' && c <= '9')
+         return c - '0' + 52;
+      if (c == '-')
+         return 62;
+      if (c == '_')
+         return 63;
+      return -1;
+   };
+
+   if (text.size() % 4 == 1)
+      return std::nullopt;
+
+   std::string result;
+   result.reserve(text.size() * 3 / 4);
+   unsigned bits = 0;
+   int count = 0;
+   for (char c : text)
+   {
+      const int v = value(c);
+      if (v < 0)
+         return std::nullopt;
+      bits = (bits << 6) | static_cast<unsigned>(v);
+      if (++count == 4)
+      {
+         result.push_back(static_cast<char>(bits >> 16));
+         result.push_back(static_cast<char>(bits >> 8));
+         result.push_back(static_cast<char>(bits));
+         bits = 0;
+         count = 0;
+      }
+   }
+   if (count == 2)
+      result.push_back(static_cast<char>(bits >> 4));
+   else if (count == 3)
+   {
+      result.push_back(static_cast<char>(bits >> 10));
+      result.push_back(static_cast<char>(bits >> 2));
+   }
+   return result;
+}
+
 /**
  * Returns what the HTTP/2 session needs to continue \p request as stream 1, if the request asks
  * for an upgrade to h2c (RFC 7540, section 3.2) and it can be granted. Otherwise, the upgrade is
@@ -930,7 +981,7 @@ void ServerSession<Stream>::destroy() noexcept
  * negotiated by ALPN instead.
  */
 static std::optional<h2::Upgrade> h2c_upgrade(std::string_view log_prefix,
-                                              const http::request<http::buffer_body>& request,
+                                              const http::static_request& request,
                                               const boost::urls::url& url, bool complete)
 {
    //
@@ -942,18 +993,11 @@ static std::optional<h2::Upgrade> h2c_upgrade(std::string_view log_prefix,
    if constexpr (ANYHTTP_H2_V2)
       return std::nullopt;
 
-   const auto has_token = [](std::string_view list, std::string_view token) {
-      for (auto item : http::token_list(list))
-         if (beast::iequals(item, token))
-            return true;
-      return false;
-   };
-
-   if (!has_token(request[http::field::upgrade], "h2c") || url.scheme() != "http")
+   if (!has_token(request.value_or(field::upgrade, ""), "h2c") || url.scheme() != "http")
       return std::nullopt;
 
-   if (!has_token(request[http::field::connection], "upgrade") ||
-       !has_token(request[http::field::connection], "http2-settings"))
+   const auto connection = request.value_or(field::connection, "");
+   if (!has_token(connection, "upgrade") || !has_token(connection, "http2-settings"))
    {
       logw("[{}] upgrade: ignoring h2c upgrade, 'Connection' misses 'Upgrade' or 'HTTP2-Settings'",
            log_prefix);
@@ -961,7 +1005,7 @@ static std::optional<h2::Upgrade> h2c_upgrade(std::string_view log_prefix,
    }
 
    // exactly one HTTP2-Settings header, containing base64url without padding
-   if (request.count("HTTP2-Settings") != 1)
+   if (request.count(field::http2_settings) != 1)
    {
       logw("[{}] upgrade: ignoring h2c upgrade, need exactly one 'HTTP2-Settings' header",
            log_prefix);
@@ -974,45 +1018,29 @@ static std::optional<h2::Upgrade> h2c_upgrade(std::string_view log_prefix,
       return std::nullopt;
    }
 
-   std::string encoded(request["HTTP2-Settings"]);
-   std::ranges::replace(encoded, '-', '+');
-   std::ranges::replace(encoded, '_', '/');
-
-   h2::Upgrade upgrade;
-   upgrade.settings.resize(beast::detail::base64::decoded_size(encoded.size()));
-   auto [written, read] =
-      beast::detail::base64::decode(upgrade.settings.data(), encoded.data(), encoded.size());
-   upgrade.settings.resize(written);
-
    // a SETTINGS payload is a sequence of 6-byte entries
-   if (read != encoded.size() || upgrade.settings.size() % 6 != 0)
+   auto settings = base64url_decode(request.at(field::http2_settings));
+   if (!settings || settings->size() % 6 != 0)
    {
       logw("[{}] upgrade: ignoring h2c upgrade, invalid 'HTTP2-Settings' header", log_prefix);
       return std::nullopt;
    }
 
-   upgrade.method = request.method_string();
+   h2::Upgrade upgrade;
+   upgrade.settings = std::move(*settings);
+   upgrade.method = request.method_text();
    upgrade.url = url;
 
    //
    // HTTP/2 has no connection-specific header fields (RFC 9113, section 8.2.2), and the upgrade
    // ones are used up by now.
    //
-   for (const auto& field : request)
-   {
-      switch (field.name())
-      {
-      case http::field::connection:
-      case http::field::proxy_connection:
-      case http::field::keep_alive:
-      case http::field::transfer_encoding:
-      case http::field::upgrade:
-      case http::field::http2_settings:
-         break;
-      default:
-         upgrade.fields.insert(field.name_string(), field.value());
-      }
-   }
+   static constexpr std::array connection_specific{field::connection, field::proxy_connection,
+                                                   field::keep_alive, field::transfer_encoding,
+                                                   field::upgrade,    field::http2_settings};
+   for (const auto& item : request)
+      if (!item.id || !std::ranges::contains(connection_specific, *item.id))
+         upgrade.fields.append(item.name, item.value);
    return upgrade;
 }
 
@@ -1022,39 +1050,52 @@ static std::optional<h2::Upgrade> h2c_upgrade(std::string_view log_prefix,
  * waiting again.
  *
  * Requests are served one at a time, also when the client pipelines them: those that follow wait in
- * the buffer, and the next one is read only after the handler of the previous one has returned, so
+ * the parser, and the next one is read only after the handler of the previous one has returned, so
  * the responses go out in order. A response the handler has not completed by then is detached, and
  * writing to it fails with \c connection_aborted.
  *
- * Requests and responses that outlive the session are detached as well, see ~BeastSession().
+ * Requests and responses that outlive the session are detached as well, see ~H1Session().
  */
 template <typename Stream>
 Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 {
-   buffer_ = std::move(buffer);
+   pending_ = std::move(buffer);
 
-   mlogd("do_server_session, {} bytes in buffer", buffer_.size());
+   mlogd("do_server_session, {} bytes in buffer", pending_.size());
 
    size_t requestCounter = 0;
    while (!closed_)
    {
       detach_readers(); // the previous request, if still around, is done with the stream
-      auto reader = std::make_unique<BeastRequestReader<decltype(stream_), decltype(buffer_)>>(
-         *this, stream_, buffer_);
+
+      //
+      // What is left of the previous message can not be told apart from whatever follows it on
+      // the connection, and a response that was begun and not ended leaves the client waiting for
+      // the rest of it: either way, nothing more can go over this connection.
+      //
+      if (requestCounter && !parser_.is_complete())
+      {
+         mlogw("previous request not read completely, closing connection");
+         break;
+      }
+      if (!serializer_.is_done())
+      {
+         mlogw("previous response not complete, closing connection");
+         break;
+      }
+
+      parser_.start();
+      auto reader = std::make_unique<RequestReader<Stream>>(*this, parser_);
 
       logd("");
-      mlogd("waiting for request (size={} capacity={})", buffer_.size(), buffer_.capacity());
-      auto& parser = reader->parser;
-      parser.header_limit(header_limit(server().config().max_header_size));
-      auto [ec, len] = co_await h1::read_header(stream_, buffer_, parser);
+      mlogd("waiting for request ({} bytes pending)", pending_.size());
+      auto [ec] = co_await h1::read_header(stream_, pending_, parser_);
       if (!ec)
-         mlogd("async_read_header: len={} size={} capacity={} ec={}", len, buffer_.size(),
-               buffer_.capacity(), ec.message());
-      else if (ec == h1::to_error_code(http::error::end_of_stream))
+         mlogd("async_read_header: ok");
+      else if (ec == errors::end_of_stream)
          mlogd("async_read_header: end of stream");
       else
-         mlogw("async_read_header: len={} size={} capacity={} ec=\x1b[1;31m{}\x1b[0m", len,
-               buffer_.size(), buffer_.capacity(), ec.message());
+         mlogw("async_read_header: \x1b[1;31m{}\x1b[0m", ec.message());
 
       //
       // The rest of the request can not be told apart from whatever follows it on the connection,
@@ -1062,25 +1103,26 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       //
       if (ec == errors::header_limit)
       {
-         http::response<http::empty_body> res{http::status::request_header_fields_too_large, 11};
-         res.set(http::field::server, "anyhttp");
-         res.set(http::field::connection, "close");
-         res.content_length(0);
-         if (auto [ec, n] = co_await h1::write_message(stream_, res); ec)
+         http::response res(http::status::request_header_fields_too_large);
+         res.set(field::server, "anyhttp");
+         res.set(field::connection, "close");
+         res.set_content_length(0);
+         if (auto [ec] = co_await h1::write_header(stream_, serializer_, res, false); ec)
             mlogw("writing 431 response: {}", ec.message());
       }
       if (ec)
          break;
       requestCounter++;
 
-      auto& request = parser.get();
-      const bool need_eof = request.need_eof();
+      auto& request = parser_.get();
+      const bool need_eof = !request.keep_alive();
+      reader->method_ = request.method_text();
+      reader->on_header();
 
-      // if (auto url = boost::urls::parse_relative_ref(request.target()); url.has_value())
       if (auto url = boost::urls::parse_uri_reference(request.target()); url.has_value())
          reader->url_ = url.value();
       else
-         mlogw("{} {}: invalid target: {}", request.method_string(), request.target(),
+         mlogw("{} {}: invalid target: {}", request.method_text(), request.target(),
                url.error().message());
 
       //
@@ -1097,44 +1139,52 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       else
          reader->url_.set_scheme("http");
 
+      const auto host = request.value_or(field::host, "");
       try
       {
-         reader->url_.set_encoded_authority(request[http::field::host]);
+         reader->url_.set_encoded_authority(host);
       }
       catch (std::exception& ex)
       {
-         mlogw("ignoring invalid host header: {}", request[http::field::host]);
+         mlogw("ignoring invalid host header: {}", host);
       }
 
-      mlogd("{} {} (need_eof={})", request.method_string(), reader->url_.buffer(), need_eof);
-      for (auto& header : request)
-         mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
-               truncated(header.value()));
+      mlogd("{} {} (need_eof={})", request.method_text(), reader->url_.buffer(), need_eof);
+      for (const auto& header : request)
+         mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name), truncated(header.value));
 
       //
       // Upgrade to h2c, if requested: Answer with "101 Switching Protocols" and hand over the
       // stream to an HTTP/2 session, which continues this request as stream 1. Anything that
-      // follows in the buffer (the client preface) is already HTTP/2.
+      // follows the request (the client preface) is already HTTP/2: what the parser holds of it,
+      // and what it has not taken yet.
       //
-      if (auto upgrade = h2c_upgrade(log_prefix(), request, reader->url_, parser.is_done()))
+      if (auto upgrade = h2c_upgrade(log_prefix(), request, reader->url_, parser_.is_complete()))
       {
-         http::response<http::empty_body> res{http::status::switching_protocols, request.version()};
-         res.set(http::field::connection, "Upgrade");
-         res.set(http::field::upgrade, "h2c");
-         reader.reset(); // owns the parser and thereby 'request'
+         Buffer data;
+         const auto leftover = parser_.release_buffered_data();
+         buffer_copy(data.prepare(leftover.size()), const_buffer(leftover.data(), leftover.size()));
+         data.commit(leftover.size());
+         buffer_copy(data.prepare(pending_.size()), pending_.data());
+         data.commit(pending_.size());
+         pending_.clear();
+         reader.reset();
 
-         if (auto [ec, n] = co_await h1::write_message(stream_, res); ec)
+         http::response res(http::status::switching_protocols);
+         res.set(field::connection, "Upgrade");
+         res.set(field::upgrade, "h2c");
+         if (auto [ec] = co_await h1::write_header(stream_, serializer_, res, false); ec)
          {
             mlogw("upgrade: writing 101 response: {}", ec.message());
             break;
          }
 
-         mlogi("upgrading to h2c, {} bytes in buffer", buffer_.size());
+         mlogi("upgrading to h2c, {} bytes in buffer", data.size());
          // Stream is whatever this session runs on, but never a TLS one: h2c_upgrade() takes
          // cleartext requests only, as h2 over TLS is negotiated by ALPN instead.
          upgraded_ = h2::make_server_session(server(), super::get_executor(), std::move(stream_),
                                              std::move(*upgrade));
-         co_await upgraded_->do_session(std::move(buffer_));
+         co_await upgraded_->do_session(std::move(data));
          mlogi("h2c session done, served {} requests before upgrade", requestCounter - 1);
          co_return;
       }
@@ -1143,11 +1193,10 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       // Prepare response.
       //
       detach_writers(); // likewise for the previous response
-      auto writer = std::make_shared<ResponseWriter<Stream>>(*this, stream_);
+      auto writer = std::make_shared<ResponseWriter<Stream>>(*this);
 
-      http::response<http::buffer_body>& response = writer->message;
-      http::response_serializer<http::buffer_body>& serializer = writer->serializer;
-      response.set(http::field::server, "anyhttp");
+      http::response& response = writer->message;
+      response.set(field::server, "anyhttp");
 
       //
       // Point the client at our HTTP/3 endpoint, see server::Config::alt_svc_max_age. Set before
@@ -1155,7 +1204,7 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       // simply pass its own field: submitting a response replaces the fields it names.
       //
       if (const auto& alt_svc = server().alt_svc(); !alt_svc.empty())
-         response.set(http::field::alt_svc, alt_svc);
+         response.set(field::alt_svc, alt_svc);
 
       //
       // A client that asked for the connection to end -- or one speaking HTTP/1.0, which has no
@@ -1163,7 +1212,7 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
       // is not allowed to sidestep this by keeping the connection alive.
       //
       if (need_eof)
-         response.keep_alive(false);
+         response.set_keep_alive(false);
 
       //
       // Call user-provided request handler.
@@ -1192,14 +1241,7 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
          }
       }
 
-      //
-      // FIXME: Maybe we shouldn't hand out put the parser object to the request handler. If the
-      //        request gets dropped, we don't know anything about the stream's state any more and
-      //        whether or not we can try to read a new request.
-      //
-      //        We should have a parser here, and call is_done() on it.
-      //
-      mlogd("request handler finished (size={} capacity={})", buffer_.size(), buffer_.capacity());
+      mlogd("request handler finished ({} bytes pending)", pending_.size());
 
       //
       // Honor 'Connection: close', even if the handler has not responded at all. A response that
@@ -1224,9 +1266,9 @@ Task<void> ServerSession<Stream>::do_session(Buffer&& buffer)
 template <typename Stream>
 Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
 {
-   buffer_ = std::move(buffer);
+   pending_ = std::move(buffer);
 
-   mlogd("do_client_session, {} bytes in buffer", buffer_.size());
+   mlogd("do_client_session, {} bytes in buffer", pending_.size());
 
    // Set the low-level TCP stream timeout. This is relevant for some testcases...
    // stream_.expires_after(5s);
@@ -1236,7 +1278,7 @@ Task<void> ClientSession<Stream>::do_session(Buffer&& buffer)
    // and the session only keeps them in order (see ClientSession). Pipelining needs no queue
    // either, as a request is written as a whole before the next one may be submitted, and
    // responses are read in the order of their requests. Requests and responses that outlive the
-   // session are detached, see ~BeastSession().
+   // session are detached, see ~H1Session().
    //
 
    //
@@ -1292,7 +1334,7 @@ void ServerSession<Stream>::async_submit(SubmitHandler&& handler, std::string_vi
    assert(false);
 }
 
-/// The I/O is done in a coroutine, see BeastReader.
+/// The I/O is done in a coroutine, see H1Reader.
 template <typename Stream>
 void ClientSession<Stream>::async_submit(SubmitHandler&& handler, std::string_view method,
                                          boost::urls::url target, const Fields& headers)
@@ -1322,32 +1364,39 @@ IoTask<client::Request> ClientSession<Stream>::submit(std::string method, boost:
       co_return std::tuple{ec, client::Request{}};
    }
 
-   auto writer = std::make_unique<RequestWriter<Stream>>(*this, stream_);
+   auto writer = std::make_unique<RequestWriter<Stream>>(*this);
    auto& request = writer->message;
 
    //
    // FIXME: https://datatracker.ietf.org/doc/html/rfc7230#section-5.3
    //        Usually, target should be in "origin form", but we need to support other forms, too.
    //
-   request.base().target(target.encoded_target());
-   // request.base().target(url.buffer());
-   request.method_string(method);
-   request.set(http::field::user_agent, "anyhttp");
-   add_fields(request, headers);
-   if (request.find(http::field::host) == request.end())
-      request.set(http::field::host, target.encoded_host_and_port());
-   if (!request.has_content_length())
-      request.chunked(true);
+   // The request checks what it is given: a method or target with whitespace in it, or a header
+   // field that is not one, is not something to put on the wire.
+   //
+   try
+   {
+      request.set_start_line(method, target.encoded_target());
+      request.set(field::user_agent, "anyhttp");
+      add_fields(request, headers);
+      if (!request.exists(field::host))
+         request.set(field::host, target.encoded_host_and_port());
+      if (!has_content_length(request))
+         request.set_chunked(true);
+   }
+   catch (const std::exception& ex)
+   {
+      mlogw("async_submit: invalid request: {}", ex.what());
+      co_return std::tuple{make_error_code(errc::invalid_argument), client::Request{}};
+   }
 
-   mlogd("{} {}", request.method_string(), target.buffer());
-   for (const auto& header : request)
-      mlogd("  \x1b[1;34m{}\x1b[0m: {}", truncated(header.name_string()),
-            truncated(header.value()));
+   mlogd("{} {}", request.method_text(), target.buffer());
+   writer->log_fields();
 
    writer->sequence = requests_sent_++;
    sending_ = writer.get();
 
-   std::tie(ec) = co_await writer->write_head();
+   std::tie(ec) = co_await writer->write_head(writer->has_body());
    writer->header_written(ec);
    co_return std::tuple{ec, client::Request(std::move(writer))};
 }
@@ -1374,10 +1423,17 @@ template <typename Stream>
 void ClientSession<Stream>::request_released(RequestWriter<Stream>& request)
 {
    //
-   // The connection is in the middle of this request, and nothing else can be sent any more.
+   // The connection is in the middle of this request, and nothing else can be sent any more. Nor
+   // is the rest of this one coming: the end of the stream is what tells the server, which would
+   // otherwise wait for it, and the client for the response, forever.
    //
    if (sending_ == &request)
+   {
       request_failed(request);
+      auto ec = io::shutdown(stream_, io::Shutdown::send);
+      logwd(ec && ec != errc::not_connected, "[{}] request #{} released: shutdown: {}",
+            log_prefix(), request.sequence, ec.message());
+   }
 
    //
    // Its response will be coming, but nobody is going to read it.
@@ -1409,7 +1465,8 @@ ANYHTTP_SERVER_STREAMS(ANYHTTP_H1_SESSION)
 
 // =================================================================================================
 // Factories, see anyhttp/h1/backend.hpp. Instantiating the session templates is kept to this
-// translation unit, so that the generic server and client stay free of beast's HTTP machinery.
+// translation unit, so that the generic server and client stay free of Boost.HTTP's parser and
+// serializer.
 // =================================================================================================
 
 template <SocketStream Stream>

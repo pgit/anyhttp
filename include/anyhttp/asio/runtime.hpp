@@ -35,7 +35,7 @@
 #include <boost/system/error_code.hpp>
 #include <boost/system/system_error.hpp>
 
-#include <boost/beast/http/error.hpp>
+#include <boost/http/error.hpp>
 
 #include <cassert>
 #include <cerrno>
@@ -133,9 +133,10 @@ namespace errors
 inline const error_code eof = boost::asio::error::eof;
 
 /// An incoming body that ended before it was complete: a reset stream, a lost connection.
-/// \runtimes{beast::http::error::partial_message,capy::error::stream_truncated}
+/// \runtimes{boost::http::error::incomplete,capy::error::stream_truncated}
 /// \hideinitializer
-inline const error_code partial_message = boost::beast::http::error::partial_message;
+inline const error_code partial_message =
+   boost::http::make_error_code(boost::http::error::incomplete);
 
 /// An operation that was cancelled before it completed.
 /// \runtimes{errc::operation_canceled,capy::error::canceled}
@@ -163,9 +164,16 @@ inline const error_code bad_descriptor = boost::asio::error::bad_descriptor;
 inline const error_code already_started = boost::asio::error::already_started;
 
 /// A header section larger than Config::max_header_size.
-/// \runtimes{beast::http::error::header_limit,beast::http::error::header_limit}
+/// \runtimes{boost::http::error::headers_limit,boost::http::error::headers_limit}
 /// \hideinitializer
-inline const error_code header_limit = boost::beast::http::error::header_limit;
+inline const error_code header_limit =
+   boost::http::make_error_code(boost::http::error::headers_limit);
+
+/// A connection that ended where a message could have begun: before a response, or between two.
+/// \runtimes{boost::http::error::end_of_stream,boost::http::error::end_of_stream}
+/// \hideinitializer
+inline const error_code end_of_stream =
+   boost::http::make_error_code(boost::http::error::end_of_stream);
 } // namespace errors
 
 /// \cond internal

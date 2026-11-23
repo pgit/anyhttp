@@ -35,10 +35,11 @@
 #include <boost/corosio/ip_address.hpp>
 #include <boost/corosio/wait_type.hpp>
 
-// the buffer vocabulary stays Boost.Asio's, which Beast needs anyway
+// the buffer vocabulary stays Boost.Asio's, which the generic and protocol code is written in
 #include <boost/asio/buffer.hpp>
-#include <boost/beast/http/error.hpp>
+#include <boost/http/error.hpp>
 #include <boost/system/error_code.hpp>
+#include <boost/system/system_error.hpp>
 
 #include <cerrno>
 #include <chrono>
@@ -119,7 +120,9 @@ inline const error_code bad_descriptor = std::make_error_code(std::errc::bad_fil
 inline const error_code already_started =
    std::make_error_code(std::errc::connection_already_in_progress);
 inline const error_code header_limit =
-   boost::system::error_code(boost::beast::http::error::header_limit);
+   boost::http::make_error_code(boost::http::error::headers_limit);
+inline const error_code end_of_stream =
+   boost::http::make_error_code(boost::http::error::end_of_stream);
 } // namespace errors
 
 /// Whether the runtime supports running a server or client on several threads (with strands).

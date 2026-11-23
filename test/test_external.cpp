@@ -463,7 +463,7 @@ TEST_F(ExternalCustom, nghttp2_trailers)
    requestHandler = [](server::Request request, server::Response response) -> Task<void> {
       const auto received = co_await drain(request);
       auto body = std::format("{} bytes, x-trailer: {}", received,
-                              std::string_view(request.fields()["x-trailer"]));
+                              std::string_view(request.fields().value_or("x-trailer", "")));
       check(co_await response.submit(200, fields({{"Content-Length", body.size()}})));
       check(co_await response.write_eof(boost::asio::buffer(body)));
    };

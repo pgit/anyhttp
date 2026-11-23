@@ -6,7 +6,6 @@
 #include "anyhttp/writer_impl.hpp"
 
 #include <boost/asio/buffer.hpp>
-#include <boost/beast/http/error.hpp>
 #include <boost/url/url.hpp>
 #include <boost/url/urls.hpp>
 

@@ -2,14 +2,15 @@
 
 #include "session.hpp"
 
-#include <boost/beast/core/flat_buffer.hpp>
+#include "anyhttp/detail/flat_buffer.hpp"
 
 #include <memory>
 
 namespace anyhttp
 {
 
-using Buffer = boost::beast::flat_buffer;
+/// What a session starts with: the bytes read from the connection before it took over.
+using Buffer = detail::FlatBuffer;
 
 // =================================================================================================
 

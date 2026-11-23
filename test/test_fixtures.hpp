@@ -11,7 +11,6 @@
 #include "anyhttp/session.hpp"
 #include "anyhttp/utils.hpp"
 
-#include <boost/beast/http/error.hpp>
 #include <boost/url/url.hpp>
 
 #include <gmock/gmock.h>
