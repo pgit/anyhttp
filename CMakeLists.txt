@@ -170,13 +170,13 @@ foreach (option TESTS EXAMPLES BENCH)
 endforeach()
 FetchContent_Declare(capy
     GIT_REPOSITORY https://github.com/cppalliance/capy.git
-    GIT_TAG d62f5de1684389682ff4201a6171eec646165036
+    GIT_TAG 07ecb34749d2f9cbf8456b370d6aca69ab6b39b7
     EXCLUDE_FROM_ALL)
 include(cmake/http.cmake)
 if (ANYHTTP_COROSIO)
     FetchContent_Declare(corosio
         GIT_REPOSITORY https://github.com/cppalliance/corosio.git
-        GIT_TAG 13bcf933adf8c5ce8576bd3349ae58d2e46e5c53
+        GIT_TAG 2d246de82c62a62d0da9c1e4c81a1865be7f9321
         EXCLUDE_FROM_ALL)
     FetchContent_MakeAvailable(capy http corosio)
     message(STATUS "Using I/O runtime: COROSIO (capy/corosio)")
