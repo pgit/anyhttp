@@ -578,7 +578,7 @@ TEST_P(QuicStreams, WHEN_http3_is_on_the_same_port_THEN_both_work)
       EXPECT_FALSE(connect_ec) << connect_ec.message();
       auto [get_ec, message] = co_await session.get(url, {});
       EXPECT_FALSE(get_ec) << get_ec.message();
-      EXPECT_EQ(message.result_int(), 404);
+      EXPECT_EQ(message.status_int(), 404);
    }());
 }
 

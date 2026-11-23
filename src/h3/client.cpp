@@ -20,9 +20,6 @@
 #include "anyhttp/quic/session.hpp"
 #include "anyhttp/session_impl.hpp"
 
-#include <boost/beast/http/error.hpp>
-#include <boost/beast/http/status.hpp>
-
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 
@@ -210,8 +207,7 @@ void Http3ClientStream::on_headers_complete()
       return;
    }
 
-   using namespace boost::beast::http;
-   mlogd("{} {}", status_code, obsolete_reason(int_to_status(status_code)));
+   mlogd("{} {}", status_code, reason_phrase(status_code));
    log_headers(log_prefix_, std::exchange(received_headers, {}));
    deliver_response();
 }
@@ -223,8 +219,7 @@ void Http3ClientStream::on_failed(error_code ec)
    // ever arrived if headers were never received -- never report success with a null Response.
    //
    if (!failure_ec) // the first reason is the one to report, see on_headers_complete()
-      failure_ec =
-         ec ? ec : error_code(boost::system::error_code(boost::beast::http::error::end_of_stream));
+      failure_ec = ec ? ec : errors::end_of_stream;
    deliver_failure();
 }
 
@@ -259,11 +254,11 @@ bool Http3ClientStream::submit_request(std::string_view method, const boost::url
 
    for (auto&& item : headers)
    {
-      if (item.name_string().starts_with(':'))
+      if (item.name.starts_with(':'))
          mlogw("async_submit: invalid header '{}': setting pseudo headers is not allowed",
-               item.name_string());
+               item.name);
 
-      nva.push_back(make_nv(item.name_string(), item.value()));
+      nva.push_back(make_nv(item.name, item.value));
    }
 
    mlogd("{} {}", method_str, request_url.buffer());
@@ -383,6 +378,7 @@ Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor,
    quic::ClientConfig quic_config{.alpn = "h3",
                                   .host = config.url.host_address(),
                                   .tls_ca_file = config.tls_ca_file,
+                                  .tls_keylog_file = config.tls_keylog_file,
                                   .idle_timeout = 30s};
    const size_t max_header_size = config.max_header_size;
    co_return co_await quic::async_connect(

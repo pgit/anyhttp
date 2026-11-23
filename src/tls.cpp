@@ -9,8 +9,13 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
+#include <cerrno>
 #include <cstdlib>
 #include <format>
+#include <string_view>
+
+#include <fcntl.h>
+#include <unistd.h>
 
 // =================================================================================================
 
@@ -61,6 +66,60 @@ std::string_view alpn(SSL* ssl)
    return {reinterpret_cast<const char*>(data), len};
 }
 
+// -------------------------------------------------------------------------------------------------
+
+/// The key log file of an SSL_CTX, kept in its ex_data and closed when the context goes.
+struct KeyLog
+{
+   explicit KeyLog(int fd) noexcept : fd(fd) {}
+   ~KeyLog() { ::close(fd); }
+   KeyLog(const KeyLog&) = delete;
+   KeyLog& operator=(const KeyLog&) = delete;
+
+   const int fd;
+};
+
+void free_keylog(void*, void* ptr, CRYPTO_EX_DATA*, int, long, void*)
+{
+   delete static_cast<KeyLog*>(ptr);
+}
+
+/// The ex_data slot every SSL_CTX keeps its KeyLog in, allocated on first use.
+int keylog_index()
+{
+   static const int index = SSL_CTX_get_ex_new_index(0, nullptr, nullptr, nullptr, free_keylog);
+   return index;
+}
+
+//
+// The keylog callback has no argument of its own, so the file comes from the context. A line is
+// written in one piece, newline and all: with O_APPEND, that keeps lines from different threads
+// and processes apart. A write that fails loses that line, and only that line -- there is nobody
+// to tell but the log.
+//
+void write_keylog_line(const SSL* ssl, const char* line)
+{
+   const auto* log =
+      static_cast<KeyLog*>(SSL_CTX_get_ex_data(SSL_get_SSL_CTX(ssl), keylog_index()));
+   if (!log)
+      return;
+
+   std::string buffer{line};
+   buffer += '\n';
+   for (std::string_view rest = buffer; !rest.empty();)
+   {
+      const auto n = ::write(log->fd, rest.data(), rest.size());
+      if (n < 0 && errno == EINTR)
+         continue;
+      if (n <= 0)
+      {
+         logw("TLS key log: {}", last_error().message());
+         return;
+      }
+      rest.remove_prefix(static_cast<size_t>(n));
+   }
+}
+
 } // namespace
 
 // -------------------------------------------------------------------------------------------------
@@ -107,6 +166,31 @@ bool tls_set_peer_name(ssl_st* ssl, const std::string& host)
    return !not_an_ip ? X509_VERIFY_PARAM_set1_ip_asc(param, host.c_str()) == 1
                      : X509_VERIFY_PARAM_set1_host(param, host.data(), host.size()) == 1 &&
                           SSL_set_tlsext_host_name(ssl, host.c_str()) == 1;
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// AWS-LC and OpenSSL have the same keylog callback and the same ex_data, so this needs no #if
+// either. Setting it again replaces the file, closing the one before.
+//
+void tls_set_keylog_file(ssl_ctx_st* ctx, const std::string& file)
+{
+   if (file.empty())
+      return;
+
+   const int fd = ::open(file.c_str(), O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
+   if (fd < 0)
+   {
+      const auto ec = last_error();
+      loge("can't open TLS key log '{}': {}", file, ec.message());
+      throw_error(ec);
+   }
+
+   auto* log = new KeyLog(fd);
+   delete static_cast<KeyLog*>(SSL_CTX_get_ex_data(ctx, keylog_index()));
+   SSL_CTX_set_ex_data(ctx, keylog_index(), log);
+   SSL_CTX_set_keylog_callback(ctx, write_keylog_line);
 }
 
 // -------------------------------------------------------------------------------------------------

@@ -88,7 +88,7 @@ TEST_P(FileHandler, WHEN_file_exists_THEN_serves_content)
 {
    clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/custom/hello.txt");
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
       EXPECT_EQ(message.body(), "Hello, File!");
    };
 }
@@ -97,7 +97,7 @@ TEST_P(FileHandler, WHEN_file_is_in_subdirectory_THEN_serves_content)
 {
    clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/custom/sub/nested.txt");
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
       EXPECT_EQ(message.body(), "Nested!");
    };
 }
@@ -110,7 +110,7 @@ TEST_P(FileHandler, WHEN_file_is_empty_THEN_serves_empty_body)
 {
    clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/custom/empty.txt");
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
       EXPECT_THAT(message.body(), IsEmpty());
    };
 }
@@ -123,7 +123,7 @@ TEST_P(FileHandler, WHEN_file_is_large_THEN_serves_all_of_it)
 {
    clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/custom/large.bin");
-      EXPECT_EQ(message.result_int(), 200);
+      EXPECT_EQ(message.status_int(), 200);
       EXPECT_EQ(message.body(), std::string(256_k, 'x'));
    };
 }
@@ -132,7 +132,7 @@ TEST_P(FileHandler, WHEN_file_does_not_exist_THEN_error_404)
 {
    clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/custom/missing.txt");
-      EXPECT_EQ(message.result_int(), 404);
+      EXPECT_EQ(message.status_int(), 404);
       EXPECT_THAT(message.body(), IsEmpty());
    };
 }
@@ -143,17 +143,17 @@ TEST_P(FileHandler, WHEN_file_does_not_exist_THEN_error_404)
 TEST_P(FileHandler, WHEN_path_is_a_directory_THEN_error_404)
 {
    clientSession = [this](Session session) -> Task<void> {
-      EXPECT_EQ((co_await get(session, "/custom/sub")).result_int(), 404);
-      EXPECT_EQ((co_await get(session, "/custom/")).result_int(), 404);
+      EXPECT_EQ((co_await get(session, "/custom/sub")).status_int(), 404);
+      EXPECT_EQ((co_await get(session, "/custom/")).status_int(), 404);
    };
 }
 
 TEST_P(FileHandler, WHEN_path_escapes_the_root_THEN_error_404)
 {
    clientSession = [this](Session session) -> Task<void> {
-      EXPECT_EQ((co_await get(session, "/custom/../outside.txt")).result_int(), 404);
-      EXPECT_EQ((co_await get(session, "/custom/sub/../../outside.txt")).result_int(), 404);
-      EXPECT_EQ((co_await get(session, encoded("/custom/%2e%2e/outside.txt"))).result_int(), 404);
+      EXPECT_EQ((co_await get(session, "/custom/../outside.txt")).status_int(), 404);
+      EXPECT_EQ((co_await get(session, "/custom/sub/../../outside.txt")).status_int(), 404);
+      EXPECT_EQ((co_await get(session, encoded("/custom/%2e%2e/outside.txt"))).status_int(), 404);
    };
 }
 
@@ -163,7 +163,7 @@ TEST_P(FileHandler, WHEN_path_escapes_the_root_THEN_error_404)
 TEST_P(FileHandler, WHEN_symlink_points_outside_the_root_THEN_error_404)
 {
    clientSession = [this](Session session) -> Task<void> {
-      EXPECT_EQ((co_await get(session, "/custom/escape.txt")).result_int(), 404);
+      EXPECT_EQ((co_await get(session, "/custom/escape.txt")).status_int(), 404);
    };
 }
 
@@ -175,9 +175,9 @@ TEST_P(FileHandler, WHEN_prefix_matches_mid_segment_THEN_error_404)
 {
    clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/customer.txt");
-      EXPECT_EQ(message.result_int(), 404);
+      EXPECT_EQ(message.status_int(), 404);
       EXPECT_THAT(message.body(), IsEmpty());
-      EXPECT_EQ((co_await get(session, "/customer/hello.txt")).result_int(), 404);
+      EXPECT_EQ((co_await get(session, "/customer/hello.txt")).status_int(), 404);
    };
 }
 
@@ -188,7 +188,7 @@ TEST_P(FileHandler, WHEN_file_is_not_readable_THEN_error_403)
 
    clientSession = [this](Session session) -> Task<void> {
       auto message = co_await get(session, "/custom/secret.txt");
-      EXPECT_EQ(message.result_int(), 403);
+      EXPECT_EQ(message.status_int(), 403);
       EXPECT_THAT(message.body(), IsEmpty());
    };
 }

@@ -7,8 +7,6 @@
 #include "anyhttp/h3/backend.hpp"
 #include "anyhttp/quic/backend.hpp"
 
-#include <boost/beast/core/flat_buffer.hpp>
-
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
 
@@ -52,7 +50,8 @@ static void destroy_on_its_executor(const std::shared_ptr<Session::Impl>& sessio
 
 Server::Impl::Impl(Executor executor, Config config)
    : config_(std::move(config)), executor_(std::move(executor)),
-     tls_context_(make_server_tls_context(config_.tls_certificate_chain, config_.tls_private_key)),
+     tls_context_(make_server_tls_context(config_.tls_certificate_chain, config_.tls_private_key,
+                                          config_.tls_keylog_file)),
      acceptor_(io::make_acceptor(executor_))
 {
    mlogi("ctor");
@@ -218,7 +217,7 @@ Task<void> Server::Impl::handle_connection(Executor executor, TcpSocket socket)
    // there is one line per connection, whatever the protocol. One that fails before that gets
    // the line telling why instead.
    //
-   auto buffer = boost::beast::flat_buffer();
+   auto buffer = Buffer();
    auto [ec, detected] = co_await detail::detect(socket, buffer);
    if (ec)
    {

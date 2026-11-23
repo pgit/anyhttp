@@ -178,8 +178,9 @@ Making requests
 One request, one operation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-:cpp:func:`Session::get` does a whole GET as one operation, and hands back the response as a plain
-Beast message, with status, fields and the body as a ``std::string``:
+:cpp:func:`Session::get` does a whole GET as one operation, and hands back the response as a
+:cpp:class:`client::Message`: a plain ``boost::http::response``, with status and fields, and the
+body as a ``std::string``:
 
 .. literalinclude:: snippets.cpp
    :language: cpp

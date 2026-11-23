@@ -76,6 +76,22 @@ struct Config
    std::string tls_private_key = "pki/out/server-key.pem";
 
    /**
+    * Where to log the secrets of every TLS handshake, for TLS over TCP and for QUIC, so that a
+    * capture of the traffic can be decrypted -- by Wireshark, which reads this file as the
+    * "(Pre)-Master-Secret log", or anything else that reads the NSS key log format browsers and
+    * curl write to \c SSLKEYLOGFILE. Empty, the default, logs nothing. A debugging aid: whoever can
+    * read the file can read the traffic, so it is created with mode 0600.
+    *
+    * The file is opened when the Server is constructed, which fails if it can't be, and appended
+    * to from then on; it can be shared with other servers and clients, of this process or another.
+    * The library does not look at \c SSLKEYLOGFILE itself, the \c server program does.
+    *
+    * Not over TCP with the COROSIO I/O runtime, whose TLS stream does not expose its TLS library:
+    * the server logs a warning and serves without, HTTP/3 does log.
+    */
+   std::string tls_keylog_file{};
+
+   /**
     * The largest header section of a request the server accepts, in bytes. A request with more is
     * answered with 431 (Request Header Fields Too Large) and never reaches the request handler.
     * HTTP/1.1 counts the request line and header lines as received, and closes the connection

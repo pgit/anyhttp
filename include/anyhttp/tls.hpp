@@ -34,6 +34,18 @@ void tls_load_trusted_cas(ssl_ctx_st* ctx, const std::string& ca_file);
 bool tls_set_peer_name(ssl_st* ssl, const std::string& host);
 
 /**
+ * Makes every handshake on \p ctx append its secrets to \p file, in the NSS key log format that
+ * Wireshark reads (the format of SSLKEYLOGFILE), or does nothing if \p file is empty. See
+ * \c server::Config::tls_keylog_file.
+ *
+ * The file is opened here, created with mode 0600 if it does not exist, appended to, and closed
+ * with the last reference to \p ctx. Each line goes out in a single write(), so several contexts,
+ * and the threads of several connections, can share one file. Throws a \c system_error if it
+ * cannot be opened.
+ */
+void tls_set_keylog_file(ssl_ctx_st* ctx, const std::string& file);
+
+/**
  * Unpredictable bytes from the TLS library's own generator, for the `rand` callback that each of
  * nghttp2 version 2, nghttp3 and ngtcp2 asks for. Lives here because this is where the TLS library
  * is addressed; the signature is deliberately the one `nghttp2_rand` and `nghttp3_rand` declare,

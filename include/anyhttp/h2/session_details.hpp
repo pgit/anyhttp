@@ -11,7 +11,6 @@
 #include "anyhttp/net.hpp"
 
 #include <boost/asio/buffer.hpp>
-#include <boost/beast/core/static_buffer.hpp>
 #include <boost/scope/scope_exit.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>

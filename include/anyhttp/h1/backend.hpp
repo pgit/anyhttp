@@ -3,7 +3,7 @@
 //
 // The HTTP/1.1 backend as seen from the generic server and client: factories that turn a stream
 // that is ready to carry HTTP/1.1 into a Session::Impl. Everything else about the backend --
-// beast's parser, serializer and the session templates driving them -- stays in h1/session.hpp
+// Boost.HTTP's parser, serializer and the session templates driving them -- stays in h1/session.hpp
 // and h1/session.cpp, which are the only places instantiating them.
 //
 
@@ -24,7 +24,7 @@ namespace anyhttp::h1
 // connection's strand if it has one: a corosio socket knows its context, not its strand.
 //
 // These are defined in src/h1/session.cpp and explicitly instantiated there for each of the
-// stream types below, so that beast's HTTP machinery is instantiated in that one place only.
+// stream types below, so that the sessions are instantiated in that one place only.
 //
 
 template <SocketStream Stream>

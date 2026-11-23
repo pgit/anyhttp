@@ -76,7 +76,7 @@ Task<void> dump(server::Request request, server::Response response)
 
    std::println(str, "headers:");
    for (const auto& field : request.fields())
-      std::println(str, "  {}: {}", field.name_string(), EscapedString(field.value()));
+      std::println(str, "  {}: {}", field.name, EscapedString(field.value));
 
    auto body = str.str();
    if (auto [ec] = co_await response.submit(

@@ -181,6 +181,7 @@ IoTask<Connection> connect_to(Executor executor, Target target, std::string host
       ClientConfig client_config{.alpn = config.alpn,
                                  .host = std::move(host),
                                  .tls_ca_file = config.tls_ca_file,
+                                 .tls_keylog_file = config.tls_keylog_file,
                                  .verify = config.tls_verify,
                                  .idle_timeout = config.idle_timeout};
       auto factory = [config](QuicSession& s) -> std::unique_ptr<QuicApplication> {

@@ -96,6 +96,7 @@ struct TlsClientContext
       }
       else
          SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+      tls_set_keylog_file(ctx, config.tls_keylog_file);
    }
 
    ~TlsClientContext()

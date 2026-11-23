@@ -42,7 +42,7 @@ if (USE_LIBCXX)
     target_compile_options(anyhttp PUBLIC $<$<COMPILE_LANGUAGE:CXX>:-stdlib=libc++>)
     target_link_options(anyhttp PUBLIC -stdlib=libc++)
 endif()
-target_link_libraries(anyhttp PUBLIC Threads::Threads Boost::headers Boost::url)
+target_link_libraries(anyhttp PUBLIC Threads::Threads Boost::headers Boost::url anyhttp::http)
 target_link_libraries(anyhttp PUBLIC spdlog::spdlog_header_only)
 
 target_link_libraries(anyhttp PRIVATE Boost::thread Boost::atomic Boost::filesystem)
@@ -88,9 +88,3 @@ if (ANYHTTP_COROSIO)
 
     return()
 endif()
-
-#
-# beast_issue_3032
-#
-add_executable(beast_issue_3032)
-target_sources(beast_issue_3032 PRIVATE "issues/beast_issue_3032.cpp")

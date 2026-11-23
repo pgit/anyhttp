@@ -12,11 +12,6 @@
 
 #include <boost/asio/buffer.hpp>
 
-#include <boost/beast/core/static_buffer.hpp>
-#include <boost/beast/http/error.hpp>
-#include <boost/beast/http/impl/error.hpp>
-#include <boost/beast/http/status.hpp>
-
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/errc.hpp>
 
@@ -29,8 +24,6 @@
 
 #include <charconv>
 #include <string>
-
-namespace http = boost::beast::http;
 
 // =================================================================================================
 
@@ -186,7 +179,7 @@ static int on_header_callback(nghttp2_session* session, const nghttp2_frame* fra
       }
 
       if (!name.starts_with(':'))
-         stream->fields.insert(name, value);
+         stream->fields.append(name, value);
    }
    catch (std::exception& ex)
    {
@@ -311,12 +304,11 @@ static int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame*
    case NGHTTP2_HEADERS:
    {
       assert(stream);
-      using namespace boost::beast::http;
       if (frame->headers.cat == NGHTTP2_HCAT_REQUEST)
          logd("[{}] {} {}", stream->log_prefix(), stream->method, stream->url.buffer());
       else if (frame->headers.cat == NGHTTP2_HCAT_RESPONSE && stream->status_code)
          logd("[{}] {} {}", stream->log_prefix(), *stream->status_code,
-              obsolete_reason(int_to_status(*stream->status_code)));
+              reason_phrase(*stream->status_code));
       stream->log_received_headers();
 
       if (frame->headers.cat == NGHTTP2_HCAT_REQUEST)
@@ -327,7 +319,7 @@ static int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame*
          // A response may carry an alternative service as a header field instead of, or as well
          // as, in an ALTSVC frame -- the two say the same thing in the same syntax.
          //
-         if (auto alt_svc = stream->fields["alt-svc"]; !alt_svc.empty())
+         if (auto alt_svc = stream->fields.value_or("alt-svc", ""); !alt_svc.empty())
             handler->on_alt_svc(std::string_view(alt_svc));
 
          stream->on_response();
@@ -555,11 +547,11 @@ void NGHttp2Session::async_submit(SubmitHandler&& handler, std::string_view meth
 
    for (auto&& item : headers)
    {
-      if (item.name_string().starts_with(':'))
+      if (item.name.starts_with(':'))
          logw("[{}] async_submit: invalid header '{}': setting pseudo headers is not allowed",
-              stream->log_prefix(), item.name_string());
+              stream->log_prefix(), item.name);
 
-      nva.push_back(make_nv_ls(item.name_string(), item.value()));
+      nva.push_back(make_nv_ls(item.name, item.value));
    }
 
    logd("[{}] {} {}", stream->log_prefix(), method_str, url.buffer());
@@ -726,7 +718,7 @@ void NGHttp2Session::close_stream(int32_t stream_id)
 
    if (stream->response_handler)
    {
-      auto ec = http::make_error_code(http::error::end_of_stream); // be compatible with beast
+      auto ec = errors::end_of_stream; // as HTTP/1.1 has it
       //   ec = errc::make_error_code(errc::connection_reset);
       swap_and_invoke(stream->response_handler, ec, client::Response{nullptr});
    }

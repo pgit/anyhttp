@@ -80,7 +80,7 @@ A ``ClientAsync`` test body does not do any I/O itself. It only assigns up to tw
       clientSession = [this](Session session) -> Task<void> {
          auto [ec, request] = co_await session.submit(url);
          auto [response_ec, response] = co_await request.get_response();
-         EXPECT_EQ(response_ec, boost::beast::http::error::end_of_stream);
+         EXPECT_EQ(response_ec, errors::end_of_stream);
       };
    }
 

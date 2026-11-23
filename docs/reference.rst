@@ -28,7 +28,8 @@ Client
 .. doxygenclass:: anyhttp::client::Response
    :members:
 
-.. doxygentypedef:: anyhttp::client::Message
+.. doxygenclass:: anyhttp::client::Message
+   :members:
 
 Session
 -------
@@ -89,6 +90,8 @@ Headers and protocols
 .. doxygentypedef:: anyhttp::Fields
 
 .. doxygenfunction:: anyhttp::fields
+
+.. doxygenfunction:: anyhttp::reason_phrase
 
 .. doxygenclass:: anyhttp::FieldValue
    :members:
@@ -240,6 +243,8 @@ against ``errc::``, which is ``boost::system::errc`` on ASIO and ``std::errc`` o
 .. doxygenvariable:: anyhttp::errors::already_started
 
 .. doxygenvariable:: anyhttp::errors::header_limit
+
+.. doxygenvariable:: anyhttp::errors::end_of_stream
 
 Coroutines
 ^^^^^^^^^^

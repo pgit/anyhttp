@@ -16,9 +16,6 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/stream.hpp>
 
-#include <boost/beast/core/buffer_traits.hpp>
-#include <boost/beast/core/stream_traits.hpp>
-
 #include <memory>
 #include <type_traits>
 
@@ -162,8 +159,6 @@ private:
 
    std::unique_ptr<Impl> impl;
 };
-
-static_assert(boost::beast::is_async_stream<any_async_stream>::value);
 
 // -------------------------------------------------------------------------------------------------
 

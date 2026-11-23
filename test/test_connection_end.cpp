@@ -3,8 +3,9 @@
 #include "anyhttp/h1/io.hpp"
 #include "anyhttp/net.hpp"
 
-#include <boost/beast/core/flat_buffer.hpp>
-#include <boost/beast/http.hpp>
+#include <boost/http/request.hpp>
+#include <boost/http/response_parser.hpp>
+#include <boost/http/serializer.hpp>
 
 #if ANYHTTP_ASIO
 #include <boost/asio/ssl/host_name_verification.hpp>
@@ -25,7 +26,7 @@
 
 using namespace testing;
 
-namespace http = boost::beast::http;
+namespace http = boost::http;
 namespace h1 = anyhttp::h1;
 
 // =================================================================================================
@@ -228,15 +229,15 @@ protected:
       }
       else
       {
-         http::request<http::empty_body> request{http::verb::get, "/dump", 11};
+         http::request request(http::method::get, "/dump");
          request.set(http::field::host, authority());
          request.set(http::field::connection, connection);
-         check(co_await h1::write_message(stream, request));
+         check(co_await h1::write_message(stream, serializer_, request));
 
-         http::response<http::string_body> response;
-         check(co_await h1::read_message(stream, buffer_, response));
-         EXPECT_EQ(response.result_int(), 200);
-         EXPECT_EQ(response.keep_alive(), connection == "keep-alive");
+         parser_.start();
+         check(co_await h1::read_message(stream, buffer_, parser_));
+         EXPECT_EQ(parser_.get().status_int(), 200);
+         EXPECT_EQ(parser_.get().keep_alive(), connection == "keep-alive");
       }
    }
 
@@ -269,7 +270,7 @@ protected:
     */
    Task<error_code> read_end(Stream& stream)
    {
-      EXPECT_EQ(buffer_.size(), 0) << "unread data left over from the response";
+      EXPECT_FALSE(parser_.has_buffered_data()) << "unread data left over from the response";
 
       std::array<uint8_t, 16 * 1024> data;
       for (;;)
@@ -436,7 +437,13 @@ protected:
    }
 
    H2Client h2_;
-   boost::beast::flat_buffer buffer_;
+   Buffer buffer_; // input to go to the parser before the stream: none, everything is read by it
+   http::serializer serializer_{h1::make_serializer_config()};
+   http::response_parser parser_ = [] {
+      http::response_parser parser(h1::make_parser_config(false, default_max_header_size));
+      parser.reset();
+      return parser;
+   }();
 };
 
 // =================================================================================================

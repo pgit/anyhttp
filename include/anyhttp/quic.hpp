@@ -55,6 +55,12 @@ struct Config
    std::string tls_ca_file;
 
    /**
+    * Client: where to log the TLS secrets, see client::Config::tls_keylog_file. The server's is
+    * server::Config::tls_keylog_file.
+    */
+   std::string tls_keylog_file{};
+
+   /**
     * Client: whether the server's certificate is verified at all. Without it, any certificate is
     * taken, from anybody who answers in the server's place -- that is for testing.
     */

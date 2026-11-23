@@ -9,7 +9,6 @@
 #include "anyhttp/h3/common.hpp"
 #include "anyhttp/quic/session.hpp"
 
-#include <boost/beast/http/error.hpp>
 #include <boost/system/detail/errc.hpp>
 
 #include <charconv>
@@ -145,7 +144,7 @@ void Http3Stream::on_header(std::string_view name, std::string_view value)
             content_length = len;
       }
 
-      fields.insert(name, value); // insert, not set: repeated fields must all be kept
+      fields.append(name, value); // append, not set: repeated fields must all be kept
    }
    catch (const std::exception& ex)
    {

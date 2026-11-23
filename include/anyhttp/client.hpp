@@ -6,8 +6,7 @@
 
 #include <boost/asio/buffer.hpp>
 
-#include <boost/beast/http/message.hpp>
-#include <boost/beast/http/string_body.hpp>
+#include <boost/http/response.hpp>
 
 #include <boost/url.hpp>
 
@@ -103,6 +102,13 @@ struct Config
     * next connection.
     */
    std::string tls_ca_file;
+
+   /**
+    * Where to log the secrets of every TLS handshake, over TCP and QUIC, as
+    * \c server::Config::tls_keylog_file describes. Empty, the default, logs nothing. Opened on
+    * every connect, which fails if it can't be.
+    */
+   std::string tls_keylog_file{};
 };
 
 // =================================================================================================
@@ -110,11 +116,26 @@ struct Config
 /**
  * A response received in one piece: status, header fields and the whole body as a string.
  *
- * This is a plain Beast message, with nothing of anyhttp left in it -- what \c Session::async_get()
- * hands back. Its version is 11 whatever the protocol was: HTTP/2 and HTTP/3 have no version on
- * the wire, and a Beast message has nowhere else to put one.
+ * The status line and header fields are a plain \c boost::http::response, with nothing of anyhttp
+ * left in them -- \c status_int(), \c reason(), \c value_or(), iteration -- and the body comes
+ * with it. That is what \c Session::async_get() hands back. Its version is HTTP/1.1 whatever the
+ * protocol was: HTTP/2 and HTTP/3 have no version on the wire, and a response has nowhere else to
+ * put one.
  */
-using Message = boost::beast::http::response<boost::beast::http::string_body>;
+class Message : public boost::http::response
+{
+public:
+   using boost::http::response::response;
+
+   /// \return The body of the response.
+   std::string& body() noexcept { return body_; }
+
+   /// \return The body of the response.
+   const std::string& body() const noexcept { return body_; }
+
+private:
+   std::string body_;
+};
 
 // -------------------------------------------------------------------------------------------------
 
@@ -226,8 +247,6 @@ private:
    /// Hides Writer::pimpl(), narrowing it to the implementation this handle was built from.
    Impl& pimpl() const noexcept;
 };
-
-// static_assert(boost::beast::is_async_write_stream<Request>::value);
 
 // =================================================================================================
 

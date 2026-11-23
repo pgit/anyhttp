@@ -13,7 +13,6 @@
 #include <nghttp2v2/nghttp2.h>
 
 #include <boost/asio/buffer.hpp>
-#include <boost/beast/http/error.hpp>
 #include <boost/system/detail/errc.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <boost/system/detail/system_category.hpp>
