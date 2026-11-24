@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -70,6 +71,24 @@ struct Config
     * Client: how long the connection may be silent. The server's is server::Config::idle_timeout.
     */
    std::chrono::nanoseconds idle_timeout = std::chrono::seconds{30};
+
+   /**
+    * Client: the address and port to send from, bound before connecting, with port 0 for any
+    * port. Only those of the server's endpoints that are of its family are tried, and if none
+    * is, connect() fails with \c errc::address_family_not_supported; an address that is not one
+    * of this host's fails with \c errc::address_not_available. Without it, the system picks the
+    * address by its routes, and any port.
+    */
+   std::optional<UdpEndpoint> local_endpoint{};
+
+   /**
+    * Client: the name of the network interface to send through, such as \c "eth0", whatever the
+    * routes say: SO_BINDTODEVICE, on Linux only, and with \c CAP_NET_RAW before Linux 5.7.
+    * connect() fails with \c errc::no_such_device if there is no interface of that name, and with
+    * \c errc::operation_not_supported on other systems. Empty sends through whichever interface
+    * the routes pick.
+    */
+   std::string device{};
 
    /**
     * Flow control, as announced to the peer: how much it may send on one stream, and on all of
@@ -218,6 +237,11 @@ public:
    /// \return The <tt>[quic:address:port]</tt> tag the library's log lines carry for this
    /// connection.
    std::string log_prefix() const;
+
+   /// \return Where the peer sends from and receives at: on the server, the client's address and
+   /// port, on the client, the server's. A default-constructed endpoint for a handle without a
+   /// connection.
+   UdpEndpoint remote_endpoint() const;
 
 #if ANYHTTP_ASIO
    /**

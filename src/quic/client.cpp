@@ -133,9 +133,12 @@ public:
    IoTask<> shutdown() override;
 
    //
-   // Connect-time setup, with the application `factory` makes. Returns 0 on success.
+   // Connect-time setup, in two steps: the socket, which reports what the system made of it, and
+   // the connection on it, with the application `factory` makes, which returns 0 on success.
    //
-   int init(UdpEndpoint remote, const ClientConfig& config, const ApplicationFactory& factory);
+   error_code open(const UdpEndpoint& remote, const ClientConfig& config);
+   int init(const UdpEndpoint& remote, const ClientConfig& config,
+            const ApplicationFactory& factory);
 
    //
    // Awaited by async_connect() before handing the session back to the caller. Fires once the
@@ -183,21 +186,42 @@ QuicClientSession::~QuicClientSession()
 
 // -------------------------------------------------------------------------------------------------
 
-int QuicClientSession::init(UdpEndpoint remote, const ClientConfig& config,
+//
+// The device and the local endpoint, if the config has them, go before connect(), which would
+// pick both by the routes otherwise.
+//
+error_code QuicClientSession::open(const UdpEndpoint& remote, const ClientConfig& config)
+{
+   if (auto ec = io::open(socket_, remote))
+   {
+      logw("QuicClientSession::open: {}: {}", remote, ec.message());
+      return ec;
+   }
+   if (!config.device.empty())
+      if (auto ec = io::bind_to_device(socket_, config.device))
+      {
+         logw("QuicClientSession::open: device '{}': {}", config.device, ec.message());
+         return ec;
+      }
+   if (config.local_endpoint)
+      if (auto ec = io::bind(socket_, *config.local_endpoint))
+      {
+         logw("QuicClientSession::open: bind to {}: {}", *config.local_endpoint, ec.message());
+         return ec;
+      }
+   if (auto ec = io::connect(socket_, remote))
+   {
+      logw("QuicClientSession::open: connect to {}: {}", remote, ec.message());
+      return ec;
+   }
+   return {};
+}
+
+int QuicClientSession::init(const UdpEndpoint& remote, const ClientConfig& config,
                             const ApplicationFactory& factory)
 {
    TlsClientContext tls{config}; // may throw
 
-   if (auto ec = io::open(socket_, remote))
-   {
-      loge("QuicClientSession::init: open: {}", ec.message());
-      return -1;
-   }
-   if (auto ec = io::connect(socket_, remote))
-   {
-      loge("QuicClientSession::init: connect: {}", ec.message());
-      return -1;
-   }
    auto local = io::to_sockaddr(io::local_endpoint(socket_)); // may throw
    auto peer = io::to_sockaddr(remote);
 
@@ -446,10 +470,30 @@ Task<std::shared_ptr<QuicSession>> async_connect(Executor executor,
    if (endpoints.empty())
       throw_error(make_error_code(errc::host_unreachable));
 
+   //
+   // What the last attempt failed with, see the declaration. Every endpoint that is tried sets it,
+   // so it keeps this value only if none was.
+   //
+   auto failed = make_error_code(errc::address_family_not_supported);
+
    for (const auto& endpoint : endpoints)
    {
+      const UdpEndpoint remote{endpoint.address(), endpoint.port()};
+      if (config.local_endpoint &&
+          config.local_endpoint->address().is_v4() != remote.address().is_v4())
+      {
+         logd("not connecting to {}: not of the family of {}", remote, *config.local_endpoint);
+         continue;
+      }
+
       auto session = std::make_shared<QuicClientSession>(executor);
-      if (session->init(UdpEndpoint{endpoint.address(), endpoint.port()}, config, factory) != 0)
+      if (auto ec = session->open(remote, config))
+      {
+         failed = ec;
+         continue;
+      }
+      failed = make_error_code(errc::connection_refused);
+      if (session->init(remote, config, factory) != 0)
          continue;
 
       std::shared_ptr<Session::Impl> impl = session;
@@ -482,7 +526,7 @@ Task<std::shared_ptr<QuicSession>> async_connect(Executor executor,
       logi("[{}] connecting to {} failed", session->log_prefix(), endpoint);
    }
 
-   throw_error(make_error_code(errc::connection_refused));
+   throw_error(failed);
 }
 
 Task<std::shared_ptr<QuicSession>> async_connect(Executor executor, std::string host,

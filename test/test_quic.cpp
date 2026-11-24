@@ -1,5 +1,6 @@
 #include "test_fixtures.hpp"
 
+#include "anyhttp/net.hpp"
 #include "anyhttp/quic.hpp"
 
 #include <array>
@@ -68,6 +69,19 @@ Task<void> echo_streams(quic::Connection connection)
          co_return;
       launch(connection.get_executor(), echo(std::move(stream)));
    }
+}
+
+/// Sends \p text over a stream of its own, to a server that echoes it, and returns what came back.
+Task<std::string> echoed(quic::Connection& connection, std::string text)
+{
+   auto [ec, stream] = co_await connection.open_stream();
+   if (ec)
+      throw_error(ec);
+   std::ignore = co_await stream.write_eof(make_buffer(text));
+   auto [read_ec, body] = co_await read_all(stream);
+   if (read_ec)
+      throw_error(read_ec);
+   co_return body;
 }
 
 } // namespace
@@ -700,6 +714,116 @@ TEST_P(QuicStreams, WHEN_verification_is_off_THEN_any_certificate_is_taken)
          context.get_executor(), {server->local_endpoint()}, "anyhttp.example", config);
       EXPECT_FALSE(ec) << ec.message();
       EXPECT_TRUE(connection);
+   }());
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// Where the client sends from. The server is at 127.0.0.2, which the system sends to from
+// 127.0.0.1 unless told otherwise; 127.0.0.3 is on loopback, too, on Linux.
+//
+TEST_P(QuicStreams, WHEN_a_local_address_is_given_THEN_the_server_sees_the_connection_come_from_it)
+{
+   UdpEndpoint seen;
+   serverConnection = [&](quic::Connection connection) -> Task<void> {
+      seen = connection.remote_endpoint();
+      co_await echo_streams(std::move(connection));
+   };
+   run([&]() -> Task<void> {
+      auto config = client_config();
+      config.local_endpoint = UdpEndpoint{io::make_address("127.0.0.3"), 0};
+      auto connection = co_await connect(config);
+      EXPECT_EQ(connection.remote_endpoint(),
+                UdpEndpoint(io::make_address("127.0.0.2"), server->local_endpoint().port()));
+
+      // once it is back, the server has had the connection
+      auto body = co_await echoed(connection, "from 127.0.0.3");
+      EXPECT_EQ(body, "from 127.0.0.3");
+   }());
+   EXPECT_EQ(seen.address(), io::make_address("127.0.0.3"));
+   EXPECT_NE(seen.port(), 0);
+}
+
+TEST_P(QuicStreams, WHEN_a_local_port_is_given_THEN_the_server_sees_the_connection_come_from_it)
+{
+   // a port that is free: what the system picked for a socket that is gone again
+   auto probe = io::make_udp_socket(context.get_executor());
+   const UdpEndpoint any_port{io::make_address("127.0.0.3"), 0};
+   ASSERT_FALSE(io::open(probe, any_port));
+   ASSERT_FALSE(io::bind(probe, any_port));
+   const auto local = io::local_endpoint(probe);
+   io::close(probe);
+
+   UdpEndpoint seen;
+   serverConnection = [&](quic::Connection connection) -> Task<void> {
+      seen = connection.remote_endpoint();
+      co_await echo_streams(std::move(connection));
+   };
+   run([&]() -> Task<void> {
+      auto config = client_config();
+      config.local_endpoint = local;
+      auto connection = co_await connect(config);
+      auto body = co_await echoed(connection, "from a port of its own");
+      EXPECT_EQ(body, "from a port of its own");
+   }());
+   EXPECT_EQ(seen, local);
+}
+
+TEST_P(QuicStreams, WHEN_the_local_address_is_not_this_hosts_THEN_connect_fails)
+{
+   run([&]() -> Task<void> {
+      auto config = client_config();
+      config.local_endpoint = UdpEndpoint{io::make_address("192.0.2.1"), 0}; // TEST-NET-1
+      auto [ec, connection] =
+         co_await quic::connect(context.get_executor(), "127.0.0.2", port(), config);
+      EXPECT_EQ(ec, errc::address_not_available) << ec.message();
+      EXPECT_FALSE(connection);
+   }());
+}
+
+TEST_P(QuicStreams, WHEN_the_local_address_is_of_the_other_family_THEN_connect_fails)
+{
+   run([&]() -> Task<void> {
+      auto config = client_config();
+      config.local_endpoint = UdpEndpoint{io::make_address("::1"), 0};
+      auto [ec, connection] =
+         co_await quic::connect(context.get_executor(), "127.0.0.2", port(), config);
+      EXPECT_EQ(ec, errc::address_family_not_supported) << ec.message();
+      EXPECT_FALSE(connection);
+   }());
+}
+
+TEST_P(QuicStreams, WHEN_a_device_is_given_THEN_the_connection_goes_through_it)
+{
+   serverConnection = echo_streams;
+   run([&]() -> Task<void> {
+      auto config = client_config();
+      config.device = "lo";
+      auto connection = co_await connect(config);
+      auto body = co_await echoed(connection, "through lo");
+      EXPECT_EQ(body, "through lo");
+   }());
+}
+
+TEST_P(QuicStreams, WHEN_there_is_no_such_device_THEN_connect_fails)
+{
+   run([&]() -> Task<void> {
+      //
+      // No interface has any of these names. But the kernel takes a name up to its first NUL,
+      // which would make the second "lo", and cuts it short to what a name can be (15 characters)
+      // without telling, which the third would be.
+      //
+      for (const auto& device :
+           {std::string("nonexistent0"), std::string("lo\0x", 4), std::string(16, 'x')})
+      {
+         auto config = client_config();
+         config.device = device;
+         auto [ec, connection] =
+            co_await quic::connect(context.get_executor(), "127.0.0.2", port(), config);
+         EXPECT_EQ(ec, errc::no_such_device) << device << ": " << ec.message();
+         EXPECT_FALSE(connection);
+      }
    }());
 }
 

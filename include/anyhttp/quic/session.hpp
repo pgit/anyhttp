@@ -68,6 +68,10 @@ public:
    const std::string& log_prefix() const noexcept { return log_prefix_; }
    const ngtcp2_cid& scid() const noexcept { return scid_; }
 
+   /// The peer's end of the path the connection is on now, or a default-constructed endpoint
+   /// before there is a connection.
+   UdpEndpoint remote_endpoint() const noexcept;
+
    /// The protocol running on top, once the ALPN is known (null before).
    QuicApplication* application() const noexcept { return application_.get(); }
 

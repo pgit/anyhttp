@@ -6,6 +6,7 @@
 #include "anyhttp/quic/session.hpp"
 #include "anyhttp/client_impl.hpp" // IWYU pragma: keep
 #include "anyhttp/literals.hpp"
+#include "anyhttp/net.hpp"
 #include "anyhttp/quic/common.hpp"
 #include "anyhttp/quic/stream.hpp"
 #include "anyhttp/tls.hpp"
@@ -51,6 +52,14 @@ QuicSession::~QuicSession()
    if (ossl_ctx_)
       ngtcp2_crypto_ossl_ctx_del(ossl_ctx_);
 #endif
+}
+
+UdpEndpoint QuicSession::remote_endpoint() const noexcept
+{
+   if (!conn_)
+      return {};
+   const auto* path = ngtcp2_conn_get_path(conn_);
+   return io::from_sockaddr(path->remote.addr, path->remote.addrlen).value_or(UdpEndpoint{});
 }
 
 void QuicSession::clear_streams()
