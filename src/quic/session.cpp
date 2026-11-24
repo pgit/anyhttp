@@ -481,8 +481,7 @@ void QuicSession::fill_callbacks(ngtcp2_callbacks& callbacks)
    callbacks.recv_stop_sending = &QuicSession::cb_recv_stop_sending;
    callbacks.stream_reset = &QuicSession::cb_stream_reset;
    callbacks.extend_max_stream_data = &QuicSession::cb_extend_max_stream_data;
-   callbacks.extend_max_local_streams_bidi = &QuicSession::cb_extend_max_streams_bidi;
-   callbacks.extend_max_remote_streams_bidi = &QuicSession::cb_extend_max_streams_bidi;
+   callbacks.extend_max_local_streams_bidi = &QuicSession::cb_extend_max_local_streams_bidi;
    callbacks.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
    callbacks.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
    callbacks.get_path_challenge_data = ngtcp2_crypto_get_path_challenge_data_cb;
@@ -731,9 +730,12 @@ int QuicSession::cb_remove_connection_id(ngtcp2_conn*, const ngtcp2_cid* cid, vo
    return 0;
 }
 
-int QuicSession::cb_extend_max_streams_bidi(ngtcp2_conn*, uint64_t /*max_streams*/, void* /*user*/)
+int QuicSession::cb_extend_max_local_streams_bidi(ngtcp2_conn*, uint64_t max_streams, void* user)
 {
-   return 0;
+   auto self = static_cast<QuicSession*>(user);
+   if (!self->application_ready_)
+      return 0; // the limit the handshake brings: nobody can be waiting for a stream yet
+   return self->application_->extend_max_local_streams_bidi(max_streams);
 }
 
 int QuicSession::cb_stream_stop_sending(ngtcp2_conn*, int64_t stream_id, uint64_t app_error_code,

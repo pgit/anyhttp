@@ -494,9 +494,18 @@ The ends map onto the contract of :doc:`end-of-body`:
      - writes fail with ``errc::connection_reset``
      - :cpp:func:`stop_sending() <quic::Stream::stop_sending>`, or dropping the Reader before the end
 
-The two directions are independent. Opening a stream never waits: at the peer's limit,
-:cpp:func:`open_stream() <quic::Connection::open_stream>` fails with :cpp:var:`errors::would_block`.
-A connection is closed when its handle goes away, on the server when the handler returns.
+The two directions are independent. A connection is closed when its handle goes away, on the server
+when the handler returns.
+
+Each end says how many streams the other may have open at once, with
+:cpp:member:`quic::Config::max_streams`, and allows another one as one of them closes. Opening a
+stream at the peer's limit waits for that, the way a write waits for the peer's flow control window:
+:cpp:func:`open_stream() <quic::Connection::open_stream>` completes once the peer's ``MAX_STREAMS``
+arrives, which is a round trip after both ends are done with an earlier stream, and opens that wait
+are served in the order they started. Waiting for a stream while holding the one that has to close
+first waits until it is cancelled. :cpp:func:`try_open_stream() <quic::Connection::try_open_stream>`
+does not wait, and fails with :cpp:var:`errors::would_block` instead -- for a client that would
+rather open another connection.
 
 A client that has the address of its server from somewhere else -- a DNS resolver, whose list of
 servers is addresses -- connects to those endpoints with the other overload of

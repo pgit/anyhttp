@@ -329,8 +329,9 @@ void Http3ClientApplication::async_submit(SubmitHandler&& handler, std::string_v
       // The peer's stream limit is reached: there is no stream to put this request on until one of
       // the requests in progress is finished, and the caller may well be the one who has to finish
       // it, so waiting here could deadlock. That makes it would_block, the same answer HTTP/1.1
-      // gives for its limit of one and plain QUIC streams give for this very error, see
-      // Session::async_submit() and quic::Connection::open_stream().
+      // gives for its limit of one, see Session::async_submit(). (Plain QUIC streams wait for
+      // this, see quic::Connection::async_open_stream(), and give would_block only when asked
+      // not to.)
       //
       if (rv == NGTCP2_ERR_STREAM_ID_BLOCKED)
       {

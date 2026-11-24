@@ -389,7 +389,7 @@ IoTask<std::string> quic_hello(Executor executor, std::string host, std::string 
    if (connect_ec)
       co_return std::tuple{connect_ec, std::string{}};
 
-   auto [open_ec, stream] = connection.open_stream();
+   auto [open_ec, stream] = co_await connection.open_stream();
    if (open_ec)
       co_return std::tuple{open_ec, std::string{}};
 

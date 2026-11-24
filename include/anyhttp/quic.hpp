@@ -198,6 +198,10 @@ private:
 using AcceptStream = void(error_code, Stream);
 using AcceptStreamHandler = Completion<AcceptStream>;
 
+/// The completion signature of \c Connection::async_open_stream: the error and the stream.
+using OpenStream = void(error_code, Stream);
+using OpenStreamHandler = Completion<OpenStream>;
+
 /**
  * One QUIC connection carrying plain streams, as a handle. Dropping it (or \c reset()) closes the
  * connection, failing whatever streams are still open, as \c close() does.
@@ -239,16 +243,50 @@ public:
    /// connection.
    UdpEndpoint remote_endpoint() const;
 
+#if ANYHTTP_ASIO
    /**
-    * Opens a bidirectional stream. The peer learns of it with the first thing written.
+    * Opens a bidirectional stream, waiting until the peer allows another one. The peer learns of
+    * the stream with the first thing written.
     *
-    * Opening a stream never waits: at the limit of concurrent streams the peer allows, this fails
-    * with \c errors::would_block -- the caller may be the one who has to finish a stream first.
-    * On a connection that is over, it fails with \c errors::connection_aborted.
+    * The peer limits how many streams may be open at once, and allows another one as one of
+    * them closes: once it is over in both directions, at both ends, which is a round trip after
+    * this side is done with it. Until then, this waits, the way a write waits for the peer's flow
+    * control window. Opens that wait are served in the order they started.
+    *
+    * Fails with \c errors::canceled when cancelled, and with \c errors::connection_aborted once
+    * the connection is over, also while waiting. A caller that waits here holding the stream that
+    * would have to close first waits until then: use \c try_open_stream() to open only if the
+    * peer allows it right away.
+    *
+    * \param token The completion token, for a handler of the signature \c OpenStream.
+    * \return What \p token makes of the operation.
+    */
+   template <BOOST_ASIO_COMPLETION_TOKEN_FOR(OpenStream) CompletionToken = DefaultCompletionToken>
+   auto async_open_stream(CompletionToken&& token = CompletionToken())
+   {
+      return boost::asio::async_initiate<CompletionToken, OpenStream>(
+         boost::asio::bind_executor(boost::asio::get_associated_executor(token, get_executor()),
+                                    [this](OpenStreamHandler handler) { //
+                                       async_open_stream_any(std::move(handler));
+                                    }),
+         token);
+   }
+#endif
+
+   /// \c async_open_stream() as a coroutine: <tt>auto [ec, stream] = co_await
+   /// connection.open_stream();</tt>
+   /// \return The error and the stream.
+   IoTask<Stream> open_stream();
+
+   /**
+    * Opens a bidirectional stream if the peer allows another one right now, without waiting. Fails
+    * with \c errors::would_block at the peer's limit, and also while an \c open_stream() is
+    * waiting, which comes first. On a connection that is over, it fails with
+    * \c errors::connection_aborted.
     *
     * \return The error and the stream.
     */
-   results<Stream> open_stream();
+   results<Stream> try_open_stream();
 
 #if ANYHTTP_ASIO
    /// Waits for the next stream the peer opens. Fails with \c errors::connection_aborted once the
@@ -281,6 +319,7 @@ public:
    void reset() noexcept;
 
 private:
+   void async_open_stream_any(OpenStreamHandler&& handler);
    void async_accept_stream_any(AcceptStreamHandler&& handler);
 
    std::shared_ptr<Impl> impl_;

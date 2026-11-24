@@ -181,7 +181,7 @@ public:
    static int cb_get_new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, uint8_t* token, size_t cidlen,
                                        void* user);
    static int cb_remove_connection_id(ngtcp2_conn*, const ngtcp2_cid* cid, void* user);
-   static int cb_extend_max_streams_bidi(ngtcp2_conn*, uint64_t max_streams, void* user);
+   static int cb_extend_max_local_streams_bidi(ngtcp2_conn*, uint64_t max_streams, void* user);
    static int cb_stream_stop_sending(ngtcp2_conn*, int64_t stream_id, uint64_t app_error_code,
                                      void* user, void*);
    static int cb_recv_stop_sending(ngtcp2_conn*, int64_t stream_id, uint64_t app_error_code,
