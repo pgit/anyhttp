@@ -10,6 +10,7 @@
 
 #include <ngtcp2/ngtcp2.h>
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -123,13 +124,17 @@ void StreamApplication::on_closed(error_code ec)
 
    //
    // An accept_stream() waiting learns that no stream will ever come, the streams nobody has
-   // accepted yet are dropped -- the session fails them, if it is still around to do so.
+   // accepted yet are dropped -- the session fails them, if it is still around to do so. The
+   // open_stream()s waiting learn that the peer will allow none any more.
    //
    closed_ec_ = errors::connection_aborted;
    accept_queue_.clear();
    write_queue_.clear();
    if (accept_handler_)
       complete(std::move(accept_handler_), session_.get_executor(), closed_ec_, Stream{});
+   for (auto& waiter : std::exchange(open_waiters_, {}))
+      if (waiter.handler)
+         complete(std::move(waiter.handler), session_.get_executor(), closed_ec_, Stream{});
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -201,7 +206,84 @@ void StreamApplication::async_accept_stream(AcceptStreamHandler&& handler)
    accept_handler_ = std::move(handler);
 }
 
-results<Stream> StreamApplication::open_stream()
+results<Stream> StreamApplication::try_open_stream()
+{
+   if (!open_waiters_.empty())
+      return {errors::would_block, Stream{}}; // they come first
+   return open_local_stream();
+}
+
+void StreamApplication::async_open_stream(OpenStreamHandler&& handler)
+{
+   //
+   // Right away if nobody waits before us and the peer allows another stream, and failing right
+   // away on a connection that is over -- which has nobody waiting any more, see on_closed().
+   //
+   if (open_waiters_.empty())
+   {
+      auto [ec, stream] = open_local_stream();
+      if (ec != errors::would_block)
+      {
+         complete_immediately(std::move(handler), session_.get_executor(), ec, std::move(stream));
+         return;
+      }
+   }
+
+   //
+   // Until the peer's MAX_STREAMS allows another one, see extend_max_local_streams_bidi(). The
+   // connection may be gone by the time a cancellation comes, and the token tells whether this
+   // open is still waiting then.
+   //
+   mlogd("open_stream: at the peer's limit, {} waiting before", open_waiters_.size());
+   const auto token = ++open_tokens_;
+   on_cancel(handler, [weak = session_.weak_from_this(), token] {
+      if (auto self = std::static_pointer_cast<QuicSession>(weak.lock()))
+         static_cast<StreamApplication*>(self->application())->cancel_open(token);
+   });
+   open_waiters_.push_back({.token = token, .handler = std::move(handler)});
+}
+
+void StreamApplication::cancel_open(uint64_t token)
+{
+   auto it = std::ranges::find(open_waiters_, token, &OpenWaiter::token);
+   if (it == open_waiters_.end())
+      return; // it has its stream already, or failed with the connection
+
+   mlogd("open_stream: cancelled");
+   auto handler = std::move(it->handler);
+   open_waiters_.erase(it);
+   complete(std::move(handler), session_.get_executor(), errors::canceled, Stream{});
+}
+
+int StreamApplication::extend_max_local_streams_bidi(uint64_t max_streams)
+{
+   mlogd("peer allows {} streams of ours in all, {} waiting", max_streams, open_waiters_.size());
+   serve_open_waiters();
+   return 0;
+}
+
+void StreamApplication::serve_open_waiters()
+{
+   while (!open_waiters_.empty())
+   {
+      if (!open_waiters_.front().handler)
+      {
+         open_waiters_.pop_front(); // nobody left to give a stream to
+         continue;
+      }
+
+      auto [ec, stream] = open_local_stream();
+      if (ec == errors::would_block)
+         return; // until the peer allows another one
+
+      auto handler = std::move(open_waiters_.front().handler);
+      open_waiters_.pop_front();
+      // posted: this is reached from inside ngtcp2
+      complete(std::move(handler), session_.get_executor(), ec, std::move(stream));
+   }
+}
+
+results<Stream> StreamApplication::open_local_stream()
 {
    if (closed_ec_ || session_.closed() || !session_.application_ready())
       return {errors::connection_aborted, Stream{}};

@@ -128,11 +128,28 @@ std::string Connection::log_prefix() const
    return impl_ ? impl_->session->log_prefix() : std::string{};
 }
 
-results<Stream> Connection::open_stream()
+void Connection::async_open_stream_any(OpenStreamHandler&& handler)
+{
+   if (!impl_)
+   {
+      std::move(handler)(errors::bad_descriptor, Stream{});
+      return;
+   }
+   impl_->application.async_open_stream(std::move(handler));
+}
+
+IoTask<Stream> Connection::open_stream()
+{
+   co_return co_await initiate<OpenStream>([this](OpenStreamHandler handler) { //
+      async_open_stream_any(std::move(handler));
+   });
+}
+
+results<Stream> Connection::try_open_stream()
 {
    if (!impl_)
       return {errors::bad_descriptor, Stream{}};
-   return impl_->application.open_stream();
+   return impl_->application.try_open_stream();
 }
 
 void Connection::async_accept_stream_any(AcceptStreamHandler&& handler)

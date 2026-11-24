@@ -47,9 +47,13 @@ protected:
 
 //
 // Plain streams on a QUIC connection, the same on both sides. A stream the peer opens waits in a
-// queue until accept_stream() takes it, one we open is there right away. Each stream reports what
-// it wants to send to the round-robin write queue, from which write_pkt() takes one stream per
-// packet; a stream out of flow control credit leaves the queue until the peer extends it.
+// queue until accept_stream() takes it. One we open is there right away if the peer allows another
+// one, otherwise the open_stream() waits in a queue of its own until the peer's MAX_STREAMS raises
+// the limit, and the stream is opened for it right there.
+//
+// Each stream reports what it wants to send to the round-robin write queue, from which
+// write_pkt() takes one stream per packet; a stream out of flow control credit leaves the queue
+// until the peer extends it.
 //
 // Flow control: stream credit is granted as a stream's Reader reads (QuicStream), connection
 // credit as soon as the data arrives -- a stream nobody reads holds up only itself.
@@ -82,6 +86,7 @@ public:
    int stream_stop_sending(int64_t id, uint64_t app_error_code) override;
    int recv_stop_sending(int64_t id, uint64_t app_error_code) override;
    int extend_max_stream_data(int64_t id) override;
+   int extend_max_local_streams_bidi(uint64_t max_streams) override;
    ngtcp2_ssize next_stream_data(int64_t& id, bool& fin, std::span<ngtcp2_vec> vec) override;
    int on_stream_data_written(int64_t id, size_t n, bool fin) override;
    void on_stream_blocked(int64_t id) override;
@@ -90,7 +95,8 @@ public:
    //
    // What Connection offers.
    //
-   results<Stream> open_stream();
+   results<Stream> try_open_stream();
+   void async_open_stream(OpenStreamHandler&& handler);
    void async_accept_stream(AcceptStreamHandler&& handler);
 
    /// Puts `stream` at the end of the write queue, unless it is in there already.
@@ -108,6 +114,15 @@ private:
    /// Hands the oldest stream waiting to the accept_stream() waiting, if there are both.
    void deliver_accepted();
 
+   /// Opens a stream of ours, if the peer allows another one: would_block if it does not.
+   results<Stream> open_local_stream();
+
+   /// Opens a stream for each open_stream() waiting, oldest first, as long as the peer allows.
+   void serve_open_waiters();
+
+   /// Takes the open_stream() `token` stands for out of the queue, completing it as cancelled.
+   void cancel_open(uint64_t token);
+
    /// Removes `id` from the front of the write queue, where write_pkt() took it from.
    void unschedule_front(PlainStream& stream);
 
@@ -117,6 +132,19 @@ private:
 
    std::deque<std::shared_ptr<PlainStream>> accept_queue_;
    AcceptStreamHandler accept_handler_;
+
+   //
+   // The open_stream()s waiting for the peer to allow another stream, oldest first. The token
+   // tells a cancellation which one it is for, and that it is too late once it has gone.
+   //
+   struct OpenWaiter
+   {
+      uint64_t token;
+      OpenStreamHandler handler;
+   };
+   std::deque<OpenWaiter> open_waiters_;
+   uint64_t open_tokens_ = 0;
+
    error_code closed_ec_; // why the connection is over, once it is
 
    std::deque<int64_t> write_queue_;

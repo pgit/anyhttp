@@ -3,6 +3,8 @@
 #include "anyhttp/quic.hpp"
 
 #include <array>
+#include <chrono>
+#include <format>
 #include <string>
 #include <vector>
 
@@ -26,6 +28,18 @@ IoTask<std::string> read_all(Reader& reader)
       if (ec)
          co_return std::tuple{ec == errors::eof ? error_code{} : ec, std::move(body)};
    }
+}
+
+/// \p connection.open_stream(), cancelled after \p timeout the way each runtime cancels: ASIO with
+/// cancel_after() on the operation, COROSIO with a stop request.
+IoTask<quic::Stream> open_stream_within(quic::Connection& connection,
+                                        std::chrono::milliseconds timeout)
+{
+#if ANYHTTP_COROSIO
+   co_return co_await stop_after(timeout, connection.open_stream());
+#else
+   co_return co_await connection.async_open_stream(cancel_after(timeout, as_tuple));
+#endif
 }
 
 /// A body of \p size bytes that is not the same all over, so that misplaced bytes show.
@@ -135,7 +149,7 @@ TEST_P(QuicStreams, WHEN_stream_is_echoed_THEN_both_ends_see_the_whole_body)
    serverConnection = echo_streams;
    run([&]() -> Task<void> {
       auto connection = co_await connect();
-      auto [ec, stream] = connection.open_stream();
+      auto [ec, stream] = co_await connection.open_stream();
       EXPECT_FALSE(ec) << ec.message();
       EXPECT_EQ(stream.id(), 0);
 
@@ -174,8 +188,10 @@ TEST_P(QuicStreams, WHEN_bodies_are_larger_than_the_windows_THEN_they_arrive_int
       // The writes complete before the echoes are read, so all of a stream's echo is buffered
       // -- up to its window -- until then: read concurrently, by awaiting the exchanges together.
       //
-      co_await when_both(exchange(std::get<1>(connection.open_stream()), pattern(1024 * 1024)),
-                         exchange(std::get<1>(connection.open_stream()), pattern(700 * 1024 + 17)));
+      auto [ec1, first] = co_await connection.open_stream();
+      auto [ec2, second] = co_await connection.open_stream();
+      co_await when_both(exchange(std::move(first), pattern(1024 * 1024)),
+                         exchange(std::move(second), pattern(700 * 1024 + 17)));
    }());
 }
 
@@ -200,7 +216,7 @@ TEST_P(QuicStreams, WHEN_one_side_ends_its_body_THEN_the_other_can_still_write)
 
    run([&]() -> Task<void> {
       auto connection = co_await connect();
-      auto [ec, stream] = connection.open_stream();
+      auto [ec, stream] = co_await connection.open_stream();
       auto [eof_ec, eof_written] = co_await stream.write_eof(make_buffer("question", 8));
       EXPECT_FALSE(eof_ec) << eof_ec.message();
 
@@ -234,7 +250,7 @@ TEST_P(QuicStreams, WHEN_peer_resets_its_side_THEN_reads_report_partial_message)
 
    run([&]() -> Task<void> {
       auto connection = co_await connect();
-      auto [ec, stream] = connection.open_stream();
+      auto [ec, stream] = co_await connection.open_stream();
       auto [write_ec, written] = co_await stream.write(make_buffer("partial", 7));
       EXPECT_FALSE(write_ec) << write_ec.message();
       co_await delay(50ms); // let it arrive, so that the server sees a stream to accept
@@ -263,7 +279,7 @@ TEST_P(QuicStreams, WHEN_peer_stops_reading_THEN_writes_fail_with_connection_res
 
    run([&]() -> Task<void> {
       auto connection = co_await connect();
-      auto [ec, stream] = connection.open_stream();
+      auto [ec, stream] = co_await connection.open_stream();
 
       //
       // Writes keep succeeding until the STOP_SENDING has arrived, a round trip after the first
@@ -295,7 +311,7 @@ TEST_P(QuicStreams, WHEN_writer_is_dropped_before_the_end_THEN_peer_sees_partial
 
    run([&]() -> Task<void> {
       auto connection = co_await connect();
-      auto [ec, stream] = connection.open_stream();
+      auto [ec, stream] = co_await connection.open_stream();
       auto [write_ec, written] = co_await stream.write(make_buffer("unfinished", 10));
       EXPECT_FALSE(write_ec) << write_ec.message();
       co_await delay(50ms);
@@ -338,7 +354,7 @@ TEST_P(QuicStreamsSmallWindow, WHEN_reader_is_slow_THEN_flow_control_holds_the_w
 
    run([&]() -> Task<void> {
       auto connection = co_await connect();
-      auto [ec, stream] = connection.open_stream();
+      auto [ec, stream] = co_await connection.open_stream();
       auto body = pattern(8 * window);
       auto [write_ec, written] = co_await stream.write_eof(make_buffer(body));
       EXPECT_FALSE(write_ec) << write_ec.message();
@@ -347,36 +363,169 @@ TEST_P(QuicStreamsSmallWindow, WHEN_reader_is_slow_THEN_flow_control_holds_the_w
    }());
 }
 
-TEST_P(QuicStreamsSmallWindow, WHEN_peer_allows_no_more_streams_THEN_open_stream_would_block)
+//
+// At the peer's limit, try_open_stream() refuses, and open_stream() waits for a stream to be over
+// -- at both ends, which the server's MAX_STREAMS tells: the client has done its part when it has
+// read the echo, and does nothing more.
+//
+TEST_P(QuicStreamsSmallWindow, WHEN_peer_allows_no_more_streams_THEN_try_refuses_and_open_waits)
 {
    serverConnection = echo_streams;
    run([&]() -> Task<void> {
       auto connection = co_await connect();
-      auto [ec1, first] = connection.open_stream();
+      auto [ec1, first] = connection.try_open_stream();
       EXPECT_FALSE(ec1) << ec1.message();
-      auto [ec2, second] = connection.open_stream();
+      auto [ec2, second] = connection.try_open_stream();
       EXPECT_FALSE(ec2) << ec2.message();
-      auto [ec3, third] = connection.open_stream();
+      auto [ec3, third] = connection.try_open_stream();
       EXPECT_EQ(ec3, errors::would_block);
       EXPECT_FALSE(third);
 
-      //
-      // Once a stream is over, the server lets us open another one.
-      //
       std::ignore = co_await first.write_eof(make_buffer("1", 1));
       auto [read_ec, body] = co_await read_all(first);
       EXPECT_EQ(body, "1");
-      first.reset();
 
-      error_code ec4 = errors::would_block;
-      quic::Stream fourth;
-      for (int i = 0; i < 50 && ec4 == errors::would_block; ++i)
-      {
-         co_await delay(10ms);
-         std::tie(ec4, fourth) = connection.open_stream();
-      }
+      auto [ec4, fourth] = co_await open_stream_within(connection, 2s);
       EXPECT_FALSE(ec4) << ec4.message();
       EXPECT_EQ(fourth.id(), 8);
+   }());
+}
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// A server that allows one stream at a time, as a DNS over QUIC server may: each open has to wait
+// for the stream before it to be over.
+//
+class QuicStreamsOneStream : public QuicStreams
+{
+protected:
+   void configure_server(quic::Config& config) override { config.max_streams = 1; }
+};
+
+INSTANTIATE_TEST_SUITE_P(QuicStreamsOneStream, QuicStreamsOneStream, Values(false, true),
+                         [](const auto& info) { return info.param ? "ZeroCopy" : "Staged"; });
+
+TEST_P(QuicStreamsOneStream, WHEN_the_one_stream_is_open_THEN_the_next_open_waits_for_its_end)
+{
+   serverConnection = echo_streams;
+   run([&]() -> Task<void> {
+      auto connection = co_await connect();
+      auto [ec, first] = co_await connection.open_stream();
+      EXPECT_FALSE(ec) << ec.message();
+
+      bool opened = false;
+      auto open_second = [&]() -> Task<void> {
+         auto [open_ec, second] = co_await open_stream_within(connection, 2s);
+         opened = true;
+         EXPECT_FALSE(open_ec) << open_ec.message();
+         EXPECT_EQ(second.id(), 4);
+         std::ignore = co_await second.write_eof(make_buffer("2", 1));
+         auto [read_ec, body] = co_await read_all(second);
+         EXPECT_EQ(body, "2");
+      };
+      auto finish_first = [&]() -> Task<void> {
+         co_await delay(50ms);
+         EXPECT_FALSE(opened) << "the second stream opened while the first was open";
+         std::ignore = co_await first.write_eof(make_buffer("1", 1));
+         auto [read_ec, body] = co_await read_all(first);
+         EXPECT_EQ(body, "1");
+      };
+      co_await when_both(open_second(), finish_first());
+      EXPECT_TRUE(opened);
+   }());
+}
+
+TEST_P(QuicStreamsOneStream, WHEN_several_opens_wait_THEN_they_get_their_streams_in_order)
+{
+   serverConnection = echo_streams;
+   run([&]() -> Task<void> {
+      auto connection = co_await connect();
+      auto [ec, first] = co_await connection.open_stream();
+      EXPECT_FALSE(ec) << ec.message();
+
+      std::vector<std::string> order;
+      auto echo_on_next = [&](std::string name, std::chrono::milliseconds after) -> Task<void> {
+         co_await delay(after); // so that the waits start in this order
+         auto [open_ec, stream] = co_await open_stream_within(connection, 2s);
+         EXPECT_FALSE(open_ec) << name << ": " << open_ec.message();
+         order.push_back(std::format("{} on {}", name, stream.id()));
+         std::ignore = co_await stream.write_eof(make_buffer(name));
+         auto [read_ec, body] = co_await read_all(stream);
+         EXPECT_EQ(body, name);
+      };
+      auto finish_first = [&]() -> Task<void> {
+         co_await delay(50ms);
+         std::ignore = co_await first.write_eof(make_buffer("1", 1));
+         std::ignore = co_await read_all(first);
+      };
+      co_await when_both(when_both(echo_on_next("a", 0ms), echo_on_next("b", 10ms)),
+                         finish_first());
+      EXPECT_THAT(order, ElementsAre("a on 4", "b on 8"));
+   }());
+}
+
+TEST_P(QuicStreamsOneStream, WHEN_waiting_open_is_cancelled_THEN_it_fails_and_takes_no_stream)
+{
+   serverConnection = echo_streams;
+   run([&]() -> Task<void> {
+      auto connection = co_await connect();
+      auto [ec, first] = co_await connection.open_stream();
+      EXPECT_FALSE(ec) << ec.message();
+
+      auto [cancelled_ec, none] = co_await open_stream_within(connection, 50ms);
+      EXPECT_EQ(cancelled_ec, errors::canceled);
+      EXPECT_FALSE(none);
+
+      std::ignore = co_await first.write_eof(make_buffer("1", 1));
+      std::ignore = co_await read_all(first);
+      auto [open_ec, second] = co_await open_stream_within(connection, 2s);
+      EXPECT_FALSE(open_ec) << open_ec.message();
+      EXPECT_EQ(second.id(), 4);
+   }());
+}
+
+TEST_P(QuicStreamsOneStream, WHEN_connection_closes_THEN_waiting_open_fails)
+{
+   serverConnection = [](quic::Connection connection) -> Task<void> {
+      auto [ec, stream] = co_await connection.accept_stream();
+      EXPECT_FALSE(ec) << ec.message();
+      co_await delay(50ms);
+      connection.close(7);
+   };
+
+   run([&]() -> Task<void> {
+      auto connection = co_await connect();
+      auto [ec, first] = co_await connection.open_stream();
+      std::ignore = co_await first.write(make_buffer("hi", 2)); // for the server to accept it
+
+      auto [open_ec, none] = co_await open_stream_within(connection, 2s);
+      EXPECT_EQ(open_ec, errors::connection_aborted);
+      EXPECT_FALSE(none);
+   }());
+}
+
+TEST_P(QuicStreamsOneStream, WHEN_connection_is_closed_here_THEN_waiting_open_fails)
+{
+   serverConnection = echo_streams;
+   run([&]() -> Task<void> {
+      auto connection = co_await connect();
+      auto [ec, first] = co_await connection.open_stream();
+      EXPECT_FALSE(ec) << ec.message();
+
+      auto open_second = [&]() -> Task<void> {
+         auto [open_ec, none] = co_await open_stream_within(connection, 2s);
+         EXPECT_EQ(open_ec, errors::connection_aborted);
+         EXPECT_FALSE(none);
+      };
+      auto close_later = [&]() -> Task<void> {
+         co_await delay(50ms);
+         connection.close();
+      };
+      co_await when_both(open_second(), close_later());
+
+      auto [late_ec, late] = co_await connection.open_stream();
+      EXPECT_EQ(late_ec, errors::connection_aborted);
    }());
 }
 
@@ -385,7 +534,7 @@ TEST_P(QuicStreamsSmallWindow, WHEN_peer_allows_no_more_streams_THEN_open_stream
 TEST_P(QuicStreams, WHEN_server_opens_a_stream_THEN_client_accepts_it)
 {
    serverConnection = [](quic::Connection connection) -> Task<void> {
-      auto [ec, stream] = connection.open_stream();
+      auto [ec, stream] = co_await connection.open_stream();
       EXPECT_FALSE(ec) << ec.message();
       EXPECT_EQ(stream.id(), 1); // the first server-initiated bidirectional stream
       std::ignore = co_await stream.write_eof(make_buffer("push", 4));
@@ -419,7 +568,7 @@ TEST_P(QuicStreams, WHEN_connection_is_closed_THEN_what_waits_on_it_fails)
 
    run([&]() -> Task<void> {
       auto connection = co_await connect();
-      auto [ec, stream] = connection.open_stream();
+      auto [ec, stream] = co_await connection.open_stream();
       std::ignore = co_await stream.write(make_buffer("hi", 2));
 
       auto [accept_ec, accepted] = co_await connection.accept_stream();
@@ -427,7 +576,7 @@ TEST_P(QuicStreams, WHEN_connection_is_closed_THEN_what_waits_on_it_fails)
       auto [read_ec, body] = co_await read_all(stream);
       EXPECT_EQ(read_ec, errors::partial_message);
 
-      auto [open_ec, opened] = connection.open_stream();
+      auto [open_ec, opened] = co_await connection.open_stream();
       EXPECT_EQ(open_ec, errors::connection_aborted);
    }());
 }
@@ -456,7 +605,7 @@ TEST_P(QuicStreams, WHEN_write_is_cancelled_THEN_the_stream_goes_on_with_a_short
 
    run([&]() -> Task<void> {
       auto connection = co_await connect();
-      auto [ec, stream] = connection.open_stream();
+      auto [ec, stream] = co_await connection.open_stream();
       auto copy = body;
       auto result = co_await when_either(stream.write(make_buffer(copy)), delay(100ms));
       EXPECT_EQ(result.index(), 1) << "the write completed, although nothing was read";
@@ -506,7 +655,7 @@ TEST_P(QuicStreams, WHEN_connecting_to_endpoints_THEN_the_certificate_is_checked
       if (!connection)
          co_return;
 
-      auto [open_ec, stream] = connection.open_stream();
+      auto [open_ec, stream] = co_await connection.open_stream();
       std::ignore = co_await stream.write_eof(make_buffer("named", 5));
       auto [read_ec, body] = co_await read_all(stream);
       EXPECT_EQ(body, "named");
@@ -563,7 +712,7 @@ TEST_P(QuicStreams, WHEN_http3_is_on_the_same_port_THEN_both_work)
 
    run([&]() -> Task<void> {
       auto connection = co_await connect();
-      auto [ec, stream] = connection.open_stream();
+      auto [ec, stream] = co_await connection.open_stream();
       std::ignore = co_await stream.write_eof(make_buffer("plain", 5));
       auto [read_ec, body] = co_await read_all(stream);
       EXPECT_EQ(body, "plain");
@@ -601,7 +750,7 @@ TEST_P(QuicStreams, WHEN_using_completion_tokens_THEN_the_same_works)
    run([&]() -> Task<void> {
       auto connection = co_await quic::async_connect(context.get_executor(), "127.0.0.2", port(),
                                                      client_config(), use_awaitable);
-      auto [ec, stream] = connection.open_stream();
+      auto stream = co_await connection.async_open_stream(use_awaitable);
       co_await stream.async_write_eof(boost::asio::buffer("token", 5), use_awaitable);
       auto [read_ec, body] = co_await read_all(stream);
       EXPECT_EQ(body, "token");
@@ -630,7 +779,7 @@ TEST_P(QuicStreams, WHEN_accept_stream_takes_cancel_after_THEN_it_can_be_cancell
       auto connection = co_await quic::async_connect(context.get_executor(), "127.0.0.2", port(),
                                                      client_config(), use_awaitable);
       co_await delay(200ms); // the server's first accept has given up by now
-      auto [ec, stream] = connection.open_stream();
+      auto [ec, stream] = co_await connection.open_stream();
       co_await stream.async_write_eof(boost::asio::buffer("late", 4), use_awaitable);
       auto [read_ec, body] = co_await read_all(stream);
       EXPECT_EQ(body, "late");
