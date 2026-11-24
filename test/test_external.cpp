@@ -465,7 +465,7 @@ TEST_F(ExternalCustom, nghttp2_trailers)
       auto body = std::format("{} bytes, x-trailer: {}", received,
                               std::string_view(request.fields().value_or("x-trailer", "")));
       check(co_await response.submit(200, fields({{"Content-Length", body.size()}})));
-      check(co_await response.write_eof(boost::asio::buffer(body)));
+      check(co_await response.write_eof(make_buffer(body)));
    };
 
    auto url = std::format("http://127.0.0.2:{}/custom", port());

@@ -9,8 +9,6 @@
 #include <expected>
 #include <ranges>
 
-#include <boost/asio/buffer.hpp>
-
 namespace anyhttp
 {
 template <typename T>
@@ -91,7 +89,7 @@ template <ByteRange Range>
 Task<void> send(Writer& request, Range range)
 {
    logd("send: (contiguous range)...");
-   if (auto [ec, n] = co_await request.write(boost::asio::buffer(range.data(), range.size())); ec)
+   if (auto [ec, n] = co_await request.write(make_buffer(range.data(), range.size())); ec)
    {
       logd("[{}] send: (contiguous range) {} after {} of {} bytes", request.log_prefix(),
            ec.message(), n, range.size());
@@ -117,7 +115,7 @@ Task<void> send(Writer& request, Range range)
       for (; it != last && out != buffer.end(); ++it, ++out)
          *out = *it;
       const auto n = static_cast<size_t>(out - buffer.begin());
-      auto [ec, taken] = co_await request.write(boost::asio::buffer(buffer.data(), n));
+      auto [ec, taken] = co_await request.write(make_buffer(buffer.data(), n));
       bytes += taken;
       if (ec)
       {

@@ -45,6 +45,30 @@ add_executable(test_all ${SRC_FILES})
 target_sources(test_all PRIVATE tsan_libcxx.cpp)
 # not a test either: what a test needs of <linux/tcp.h>, which clashes with Asio's includes
 target_sources(test_all PRIVATE tcp_info.cpp)
+
+#
+# A test at compile time: on COROSIO, no public header brings Boost.Asio along, so that a program
+# that names none of it compiles none of it either. Each header goes into a file of its own, as a
+# program would include it. The public headers are what cmake/install.cmake installs, minus those of
+# the runtimes, which come through anyhttp/runtime.hpp anyway.
+#
+if (ANYHTTP_COROSIO)
+    file(GLOB_RECURSE public_headers CONFIGURE_DEPENDS RELATIVE ${PROJECT_SOURCE_DIR}/include
+         ${PROJECT_SOURCE_DIR}/include/anyhttp/*.hpp)
+    list(FILTER public_headers EXCLUDE
+         REGEX "/(asio|corosio|detail|h1|h2|h2v2|h3|quic)/|_impl\\.hpp$|/net\\.hpp$")
+    foreach (header IN LISTS public_headers)
+        string(MAKE_C_IDENTIFIER ${header} name)
+        file(CONFIGURE OUTPUT public_headers/${name}.cpp @ONLY CONTENT [[
+#include <@header@>
+
+#if defined(BOOST_ASIO_VERSION)
+#error "<@header@> brings Boost.Asio along on COROSIO"
+#endif
+]])
+        target_sources(test_all PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/public_headers/${name}.cpp)
+    endforeach()
+endif()
 target_link_libraries(test_all PRIVATE GTest::gtest_main GTest::gmock)
 target_link_libraries(test_all PRIVATE spdlog::spdlog_header_only)
 

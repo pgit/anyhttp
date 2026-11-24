@@ -30,7 +30,8 @@ A standalone spike (capy `a372a6b`, corosio `6a3eed4`, both `develop`) establish
 - **COROSIO means corosio all the way down**: its reactor, sockets, timers and TLS; `capy::task`;
   results as `results` tuples. Boost.Asio *headers* stay, because Beast needs asio's buffer
   and error types (capy's `buffers/asio.hpp` bridges the buffers). No `io_context`, socket,
-  handler or `awaitable` of ASIO's is used.
+  handler or `awaitable` of ASIO's is used. (Since step 9, only inside the library: the public
+  headers include none of Asio's.)
 - **COROSIO requires `TLS_LIBRARY=OpenSSL`** (see §0). The "one TLS library per process" rule holds:
   corosio's `openssl_stream` and `ngtcp2_crypto_ossl` both use OpenSSL 3.5. This constraint goes
   away only if corosio's engine stops using the BIO pair's zero-copy API (a candidate upstream PR).
@@ -296,8 +297,14 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
    are the runtime's own: `IpAddress`, `TcpEndpoint` and `UdpEndpoint` are Boost.Asio's or
    corosio's, also in `Server::local_endpoint()`. Where the two differ, `io::make_address()`,
    `io::to_sockaddr()`, `io::from_sockaddr()` and `normalize()` are defined by each runtime.
-   Until Beast gives way to a sans-I/O HTTP library without Asio (Boost.Http), a COROSIO build
-   still needs Boost.Asio's headers, but none of its I/O.
+   Until Beast gave way to Boost.HTTP (#46), a COROSIO build needed Boost.Asio's headers, but
+   none of its I/O. After that, only anyhttp's own buffers brought them into a program, and they
+   are the runtime's now (#39): `ConstBuffer` and `MutableBuffer` are capy's on COROSIO, and
+   `make_buffer()` makes either. The library's sources still speak Asio's buffers,
+   `<boost/asio/buffer.hpp>` alone, and `Reader`/`Writer` convert at the API; the stream helpers
+   that take Asio's buffers, `io::read_some()` and the like, moved from `runtime.hpp` to `net.hpp`,
+   which is not public. In a COROSIO tree, `test/CMakeLists.txt` compiles every public header on
+   its own and fails if one of them brings Asio along.
 
 Out of scope for the port, and kept as separate commits if wanted: what lessons §9.1 lists as
 "what this project does better" in h3 (parking on `EAGAIN`, `write_aggregate_pkt`, and so on). A

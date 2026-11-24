@@ -9,7 +9,10 @@
 #include "anyhttp/common.hpp"
 #include "anyhttp/runtime.hpp"
 
+#include <boost/capy/buffers.hpp>
+#include <boost/capy/buffers/asio.hpp>
 #include <boost/capy/ex/async_waker.hpp>
+#include <boost/capy/write.hpp>
 
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/io_context.hpp>
@@ -22,6 +25,10 @@
 #include <boost/corosio/timeout.hpp>
 #include <boost/corosio/tls_context.hpp>
 #include <boost/corosio/udp_socket.hpp>
+#include <boost/corosio/wait_type.hpp>
+
+// the buffer vocabulary of the generic and protocol code stays Boost.Asio's
+#include <boost/asio/buffer.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -36,6 +43,8 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+
+#include <sys/socket.h>
 
 namespace anyhttp::inline corosio
 {
@@ -121,6 +130,64 @@ inline PlainServerStream make_plain_server_stream(TcpSocket&& socket) { return s
 
 #define ANYHTTP_SERVER_STREAMS(X) X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream)
 #define ANYHTTP_CLIENT_STREAMS(X) X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream)
+
+// -------------------------------------------------------------------------------------------------
+
+// I/O on the streams the sessions run on, see asio/net.hpp.
+namespace io
+{
+
+template <typename Stream>
+auto read_some(Stream& stream, boost::asio::mutable_buffer buffer)
+{
+   return stream.read_some(capy::mutable_buffer(buffer.data(), buffer.size()));
+}
+
+template <typename Stream, typename ConstBufferSequence>
+auto write(Stream& stream, const ConstBufferSequence& buffers)
+{
+   return capy::write(stream, capy::from_asio(buffers));
+}
+
+/// Peeks at what has arrived on \p socket, without taking it. corosio has no flags for its
+/// receive operations, so this waits for readiness and peeks at the native socket.
+template <typename Socket>
+IoTask<size_t> peek(Socket& socket, boost::asio::mutable_buffer buffer)
+{
+   for (;;)
+   {
+      if (auto [ec] = co_await socket.wait(boost::corosio::wait_type::read); ec)
+         co_return std::tuple{ec, size_t{0}};
+
+      auto n = ::recv(socket.native_handle(), buffer.data(), buffer.size(), MSG_PEEK);
+      if (n > 0)
+         co_return std::tuple{error_code{}, static_cast<size_t>(n)};
+      if (n == 0)
+         co_return std::tuple{errors::eof, size_t{0}};
+      if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+         co_return std::tuple{last_error(), size_t{0}};
+   }
+}
+
+/// Receives a datagram into \p buffer, on a connected datagram socket. A coroutine, unlike
+/// read_some(): corosio's datagram operations do not copy their buffer sequence, as its stream
+/// operations do, but point to it, so it has to outlive the operation.
+template <typename Socket>
+IoTask<size_t> receive(Socket& socket, boost::asio::mutable_buffer buffer)
+{
+   const capy::mutable_buffer buffers(buffer.data(), buffer.size());
+   auto [ec, n] = co_await socket.recv(buffers);
+   co_return std::tuple{ec, n};
+}
+
+/// Waits until \p socket has something to read, for a caller that reads it by hand.
+template <typename Socket>
+auto wait_readable(Socket& socket)
+{
+   return socket.wait(boost::corosio::wait_type::read);
+}
+
+} // namespace io
 
 // -------------------------------------------------------------------------------------------------
 

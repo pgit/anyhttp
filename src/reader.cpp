@@ -39,13 +39,17 @@ std::optional<size_t> Reader::content_length() const noexcept
 
 static IoTask<size_t> no_reader() { co_return std::tuple{errors::bad_descriptor, size_t{0}}; }
 
-IoTask<size_t> Reader::read_some(boost::asio::mutable_buffer buffer)
+//
+// The API speaks the runtime's buffers, the backends Asio's, which are the same type on ASIO.
+//
+IoTask<size_t> Reader::read_some(MutableBuffer buffer)
 {
-   return impl_ ? impl_->read_some(buffer) : no_reader();
+   return impl_ ? impl_->read_some(boost::asio::mutable_buffer(buffer.data(), buffer.size()))
+                : no_reader();
 }
 
 #if ANYHTTP_ASIO
-void Reader::async_read_some_any(boost::asio::mutable_buffer buffer, ReadSomeHandler&& handler)
+void Reader::async_read_some_any(MutableBuffer buffer, ReadSomeHandler&& handler)
 {
    if (impl_)
       impl_->async_read_some(buffer, std::move(handler));

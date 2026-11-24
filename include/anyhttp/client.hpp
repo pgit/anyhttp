@@ -4,8 +4,6 @@
 #include "reader.hpp"
 #include "writer.hpp"
 
-#include <boost/asio/buffer.hpp>
-
 #include <boost/http/response.hpp>
 
 #include <boost/url.hpp>

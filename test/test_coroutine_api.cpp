@@ -29,7 +29,7 @@ TEST_P(CoroutineApi, WHEN_exchanging_a_body_THEN_both_sides_see_all_of_it)
       std::array<char, 1024> buffer;
       for (;;)
       {
-         auto [ec, n] = co_await request.read_some(boost::asio::buffer(buffer));
+         auto [ec, n] = co_await request.read_some(make_buffer(buffer));
          body.append(buffer.data(), n);
          if (ec == errors::eof)
             break;
@@ -40,23 +40,23 @@ TEST_P(CoroutineApi, WHEN_exchanging_a_body_THEN_both_sides_see_all_of_it)
 
       auto [submit_ec] = co_await response.submit(200, {});
       EXPECT_FALSE(submit_ec) << submit_ec.message();
-      auto [write_ec, written] = co_await response.write(boost::asio::buffer(body));
+      auto [write_ec, written] = co_await response.write(make_buffer(body));
       EXPECT_FALSE(write_ec) << write_ec.message();
       //
       // Not checked: over HTTP/3, the server's writes complete when the peer acknowledges them,
       // and a client that has read all of the response may close the connection before it
       // acknowledges the last of it.
       //
-      std::ignore = co_await response.write_eof(boost::asio::buffer("!", 1));
+      std::ignore = co_await response.write_eof(make_buffer("!", 1));
    };
 
    clientSession = [this](Session session) -> Task<void> {
       auto [ec, request] = co_await session.submit(url);
       EXPECT_FALSE(ec) << ec.message();
 
-      auto [write_ec, written] = co_await request.write(boost::asio::buffer("Hello, ", 7));
+      auto [write_ec, written] = co_await request.write(make_buffer("Hello, ", 7));
       EXPECT_FALSE(write_ec) << write_ec.message();
-      auto [eof_ec, eof_written] = co_await request.write_eof(boost::asio::buffer("World", 5));
+      auto [eof_ec, eof_written] = co_await request.write_eof(make_buffer("World", 5));
       EXPECT_FALSE(eof_ec) << eof_ec.message();
 
       auto [response_ec, response] = co_await request.get_response();
@@ -67,7 +67,7 @@ TEST_P(CoroutineApi, WHEN_exchanging_a_body_THEN_both_sides_see_all_of_it)
       std::array<char, 1024> buffer;
       for (;;)
       {
-         auto [ec, n] = co_await response.read_some(boost::asio::buffer(buffer));
+         auto [ec, n] = co_await response.read_some(make_buffer(buffer));
          body.append(buffer.data(), n);
          if (ec)
          {
@@ -78,6 +78,48 @@ TEST_P(CoroutineApi, WHEN_exchanging_a_body_THEN_both_sides_see_all_of_it)
       EXPECT_EQ(body, "Hello, World!");
    };
 }
+
+#if ANYHTTP_COROSIO
+//
+// On COROSIO, the API's buffers are capy's: a handler that names nothing of Boost.Asio ends a body
+// with one, and reads into one or into a sequence of them. Spelled the way capy does, not through
+// make_buffer().
+//
+TEST_P(CoroutineApi, WHEN_ending_a_body_with_a_capy_buffer_THEN_the_peer_gets_all_of_it)
+{
+   requestHandler = [](server::Request request, server::Response response) -> Task<void> {
+      std::string body = co_await read(request);
+      check(co_await response.submit(200, {}));
+      check(co_await response.write(boost::capy::const_buffer(body.data(), body.size())));
+      // not checked, for HTTP/3, see above
+      std::ignore = co_await response.write_eof(boost::capy::make_buffer(std::string_view("!")));
+   };
+
+   clientSession = [this](Session session) -> Task<void> {
+      auto request = check(co_await session.submit(url));
+      std::string hello = "Hello, World";
+      // a capy::mutable_buffer, which converts to the const_buffer that write_eof() takes
+      check(co_await request.write_eof(boost::capy::make_buffer(hello)));
+      auto response = check(co_await request.get_response());
+
+      std::string body;
+      std::array<char, 4> buffer;
+      for (;;)
+      {
+         // read_some() fills the first non-empty buffer of a sequence
+         std::array buffers{boost::capy::mutable_buffer(), boost::capy::make_buffer(buffer)};
+         auto [ec, n] = co_await response.read_some(buffers);
+         body.append(buffer.data(), n);
+         if (ec)
+         {
+            EXPECT_EQ(ec, errors::eof);
+            break;
+         }
+      }
+      EXPECT_EQ(body, "Hello, World!");
+   };
+}
+#endif
 
 TEST_P(CoroutineApi, WHEN_writing_after_the_end_THEN_error_is_reported_not_thrown)
 {
@@ -92,7 +134,7 @@ TEST_P(CoroutineApi, WHEN_writing_after_the_end_THEN_error_is_reported_not_throw
       EXPECT_FALSE(ec) << ec.message();
       EXPECT_FALSE(std::get<0>(co_await request.write_eof()));
 
-      auto [write_ec, written] = co_await request.write(boost::asio::buffer("late", 4));
+      auto [write_ec, written] = co_await request.write(make_buffer("late", 4));
       EXPECT_EQ(write_ec, errc::broken_pipe);
 
       auto [response_ec, response] = co_await request.get_response();
@@ -114,7 +156,7 @@ TEST_P(CoroutineApi, WHEN_reader_comes_back_after_the_body_has_ended_THEN_all_of
       co_await drain(request);
       std::string body(small_body, 'x');
       std::ignore = co_await response.submit(200, fields({{"Content-Length", small_body}}));
-      std::ignore = co_await response.write_eof(boost::asio::buffer(body));
+      std::ignore = co_await response.write_eof(make_buffer(body));
    };
 
    clientSession = [this](Session session) -> Task<void> {
@@ -123,7 +165,7 @@ TEST_P(CoroutineApi, WHEN_reader_comes_back_after_the_body_has_ended_THEN_all_of
       auto response = check(co_await request.get_response());
 
       std::array<char, 1024> buffer;
-      auto n = check(co_await response.read_some(boost::asio::buffer(buffer)));
+      auto n = check(co_await response.read_some(make_buffer(buffer)));
 
       co_await sleep(100ms); // meanwhile, the rest of the body arrives, and the stream closes
       EXPECT_EQ(n + co_await drain(response), small_body);
@@ -135,7 +177,7 @@ TEST_P(CoroutineApi, WHEN_connecting_and_getting_THEN_message_arrives)
    requestHandler = [](server::Request request, server::Response response) -> Task<void> {
       co_await drain(request);
       std::ignore = co_await response.submit(200, fields({{"Content-Length", 2}}));
-      std::ignore = co_await response.write_eof(boost::asio::buffer("ok", 2));
+      std::ignore = co_await response.write_eof(make_buffer("ok", 2));
    };
 
    clientSession = [this](Session) -> Task<void> {

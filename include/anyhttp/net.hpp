@@ -9,6 +9,8 @@
 //
 //    Types        TcpSocket, TcpAcceptor, TlsContext, TlsStream, UdpSocket, PlainServerStream,
 //                 ANYHTTP_SERVER_STREAMS(X), ANYHTTP_CLIENT_STREAMS(X)
+//    I/O          io::read_some(), io::write(), io::peek(), io::receive(), io::wait_readable(),
+//                 in Asio's buffers on both runtimes
 //    Streams      SocketStream, stream_traits<>, get_socket(), is_tls(), io::shutdown(),
 //                 io::cancel(), io::close(), io::remote_endpoint(), async_teardown()
 //    TCP          io::make_socket(), io::make_acceptor(), io::listen(), io::local_endpoint(),

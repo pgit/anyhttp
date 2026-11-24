@@ -11,7 +11,7 @@
 // sections and documents each, corosio/runtime.hpp follows it:
 //
 //    types        Task<T>, Executor, IpAddress, TcpEndpoint, UdpEndpoint, error_code,
-//                 results<Ts...>, IoTask<Ts...>; asio:: for the buffers, which stay Asio's
+//                 results<Ts...>, IoTask<Ts...>, ConstBuffer, MutableBuffer, make_buffer()
 //    errors       errc, errors::, system_error, throw_error(), last_error(), and ::code() of an
 //                 exception_ptr; multithreaded_runtime
 //    completions  Completion<Signature>, complete_immediately(), complete(), on_cancel(),
@@ -19,7 +19,10 @@
 //    scheduling   yield_now(), run_later(), dispatch_to(), new_strand(), delay(), when_both(),
 //                 when_either(), reset_cancellation(), shielded()
 //    engines      Event, Timer
-//    I/O          io::read_some(), io::write(), io::peek(), io::receive(), io::wait_readable()
+//
+// The buffers are the runtime's own, Asio's or capy's, so that a public header includes nothing of
+// Boost.Asio on COROSIO (test_public_headers.cpp). The generic and protocol code is written in
+// Asio's buffers on both, which net.hpp brings, and the API converts at its boundary.
 //
 
 #include "anyhttp/config.hpp"

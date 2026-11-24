@@ -218,6 +218,29 @@ Types
    :ASIO: ``boost::asio::ip::udp::endpoint``
    :COROSIO: ``boost::corosio::endpoint``, the same type as :cpp:type:`TcpEndpoint`
 
+.. cpp:type:: anyhttp::ConstBuffer
+
+   A read-only buffer, as the API takes what it writes.
+
+   :ASIO: ``boost::asio::const_buffer``
+   :COROSIO: ``boost::capy::const_buffer``
+
+.. cpp:type:: anyhttp::MutableBuffer
+
+   A writable buffer, as the API takes where it reads to. It converts to a :cpp:type:`ConstBuffer`.
+
+   :ASIO: ``boost::asio::mutable_buffer``
+   :COROSIO: ``boost::capy::mutable_buffer``
+
+.. cpp:function:: template <typename... Args> auto anyhttp::make_buffer(Args&&... args) noexcept
+
+   A :cpp:type:`ConstBuffer` or :cpp:type:`MutableBuffer` of what ``args`` name: a string, a vector,
+   an array, a pointer and a size, optionally clamped to a maximum size. Code that has to compile on
+   both runtimes makes its buffers with this.
+
+   :ASIO: ``boost::asio::buffer()``
+   :COROSIO: ``boost::capy::make_buffer()``
+
 .. doxygentypedef:: anyhttp::DefaultCompletionToken
 
 .. doxygenfunction:: anyhttp::throw_error

@@ -504,7 +504,7 @@ protected:
          co_await drain(request);
          const std::string authority(request.url().encoded_host_and_port());
          check(co_await response.submit(200, fields({{"Content-Length", authority.size()}})));
-         check(co_await response.write_eof(boost::asio::buffer(authority)));
+         check(co_await response.write_eof(make_buffer(authority)));
       };
    }
 

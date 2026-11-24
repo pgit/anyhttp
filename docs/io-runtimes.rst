@@ -22,7 +22,7 @@ That layer is the inline namespace ``anyhttp::asio`` or ``anyhttp::corosio``. It
 anyhttp's, :cpp:type:`Task` or :cpp:var:`errors::eof`, and a library of one runtime does not link
 with code compiled for the other. Because ``asio`` and ``corosio`` are names in ``anyhttp``, code
 that says ``using namespace anyhttp`` writes Boost's namespaces in full, as in
-``boost::asio::buffer()``: a namespace alias ``asio`` of its own would be ambiguous.
+``boost::asio::io_context``: a namespace alias ``asio`` of its own would be ambiguous.
 
 .. _io-runtimes-vocabulary:
 
@@ -57,6 +57,12 @@ What the names stand for
    * - :cpp:type:`TcpEndpoint`, :cpp:type:`UdpEndpoint`
      - ``boost::asio::ip::tcp::endpoint``, ``boost::asio::ip::udp::endpoint``
      - ``boost::corosio::endpoint``
+   * - :cpp:type:`ConstBuffer`, :cpp:type:`MutableBuffer`
+     - ``boost::asio::const_buffer``, ``boost::asio::mutable_buffer``
+     - ``boost::capy::const_buffer``, ``boost::capy::mutable_buffer``
+   * - :cpp:func:`make_buffer`
+     - ``boost::asio::buffer()``
+     - ``boost::capy::make_buffer()``
    * - Operations
      - ``async_x(..., token)`` and ``x()``
      - ``x()``
@@ -67,7 +73,13 @@ What the names stand for
      - ``server``, ``client``
      - ``server``
 
-Buffers are Asio's on both, headers are Boost.HTTP's :cpp:type:`Fields`, URLs Boost.URL's.
+Headers are Boost.HTTP's :cpp:type:`Fields` on both, URLs Boost.URL's.
+
+The buffers are the runtime's own, so that a program on COROSIO compiles nothing of Asio: none of
+the public headers includes any of it there. Code that has to build with either makes its buffers
+with :cpp:func:`make_buffer`, as the guide does. Capy's buffers have no ``operator+``, so where the
+guide speaks of ``buffer + n``, the part of a buffer after its first ``n`` bytes, code for both
+writes ``buffer += n``, which Asio's buffers have as well.
 
 The reference shows what the headers have for ASIO, as Doxygen is told to read them that way. So the
 reference has the operations with completion tokens that a COROSIO build does not have, and the types
@@ -88,13 +100,13 @@ example, with the types of the library:
 
    // ASIO: the operation, which completes a handler of the signature void(error_code, size_t) ...
    template <typename CompletionToken = DefaultCompletionToken>
-   auto async_read_some(boost::asio::mutable_buffer buffer, CompletionToken&& token = CompletionToken());
+   auto async_read_some(MutableBuffer buffer, CompletionToken&& token = CompletionToken());
 
    // ... and the coroutine around it.
-   IoTask<size_t> read_some(boost::asio::mutable_buffer buffer);
+   IoTask<size_t> read_some(MutableBuffer buffer);
 
    // COROSIO: the coroutine.
-   IoTask<size_t> read_some(boost::asio::mutable_buffer buffer);
+   IoTask<size_t> read_some(MutableBuffer buffer);
 
 The coroutine has the same declaration on both, so code that uses only coroutines builds with
 either, which is what the guide does. It yields :cpp:type:`results`, a tuple with the error first,
