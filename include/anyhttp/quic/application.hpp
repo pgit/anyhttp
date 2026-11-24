@@ -83,6 +83,14 @@ public:
    }
    virtual int extend_max_stream_data(int64_t id) = 0;
 
+   /// The peer allows us more bidirectional streams: \p max_streams in all, counted from the
+   /// start of the connection -- as its MAX_STREAMS raises the limit.
+   virtual int extend_max_local_streams_bidi(uint64_t max_streams)
+   {
+      (void)max_streams;
+      return 0;
+   }
+
    //
    // Write scheduling, from QuicSession::write_pkt(), which is only called when the connection
    // has credit left.

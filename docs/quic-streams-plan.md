@@ -191,8 +191,10 @@ The shape is §2's. Where the details came out differently:
   `Connection` handle, which closes the connection. `clear_streams()` therefore moves the map out
   before destroying it, and `close_connection()` always posts (ASIO showed it as a double free).
 - **API spelling.** `Stream::reset_stream(code)` rather than `reset(code)`: `reset()` already
-  releases a handle, on both of its bases. `open_stream()` is synchronous and returns the tuple
-  directly; `accept_stream()` and `quic::connect()` are operations, with completion tokens in ASIO.
+  releases a handle, on both of its bases. `open_stream()` was synchronous and returned the tuple
+  directly; since #53 it waits for the peer's MAX_STREAMS, and the synchronous one, failing with
+  `would_block`, is `try_open_stream()`. `open_stream()`, `accept_stream()` and `quic::connect()`
+  are operations, with completion tokens in ASIO.
   The server's side is `Server::on_quic(config, handler)`, with the ALPN in the config.
 - **Log prefixes.** A server session is `quic:` until the ALPN is chosen, then the ALPN; the
   handshake line says "<alpn> over QUIC"; "session destroyed" counts streams, not requests.
