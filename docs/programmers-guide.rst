@@ -503,6 +503,14 @@ servers is addresses -- connects to those endpoints with the other overload of
 :cpp:func:`quic::connect`, and gives the name the certificate has to be valid for apart from them.
 An empty name checks the chain only and sends no SNI, and :cpp:member:`quic::Config::tls_verify`
 turns the check off altogether, for testing.
+
+Where the client sends from is up to the system's routes, unless
+:cpp:member:`quic::Config::local_endpoint` has an address to bind to, and maybe a port. Then only
+the server's endpoints of that address's family are tried. :cpp:member:`quic::Config::device`
+names an interface to send through instead of the one the routes pick, on Linux.
+:cpp:func:`remote_endpoint() <quic::Connection::remote_endpoint>` tells the server where a
+connection comes from, and the client where it goes.
+
 :cpp:struct:`quic::Config` has the flow control limits and how writes reach the stack, and
 :src:`docs/quic-streams-plan.md` has how all this came about.
 

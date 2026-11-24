@@ -5,7 +5,11 @@
 
 #include "anyhttp/net.hpp"
 
+#include <net/if.h>
 #include <sys/socket.h>
+
+#include <string_view>
+#include <tuple>
 
 // =================================================================================================
 // UDP, the same in both runtimes, see anyhttp/net.hpp.
@@ -26,6 +30,26 @@ error_code bind(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept
    if (::bind(socket.native_handle(), address.data(), address.size))
       return last_error();
    return {};
+}
+
+error_code bind_to_device(UdpSocket& socket, std::string_view device) noexcept
+{
+#ifdef SO_BINDTODEVICE
+   //
+   // The kernel takes the name up to its first NUL, and at most IFNAMSIZ - 1 characters of it,
+   // without telling: a longer one would bind to whatever interface has the name cut short.
+   //
+   if (device.empty() || device.size() >= IFNAMSIZ || device.find('\0') != device.npos)
+      return make_error_code(errc::no_such_device);
+   if (::setsockopt(socket.native_handle(), SOL_SOCKET, SO_BINDTODEVICE, device.data(),
+                    static_cast<socklen_t>(device.size())))
+      return last_error();
+   return {};
+#else
+   std::ignore = socket;
+   std::ignore = device;
+   return make_error_code(errc::operation_not_supported);
+#endif
 }
 
 error_code connect(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept

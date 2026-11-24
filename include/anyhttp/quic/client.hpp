@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,14 +40,24 @@ struct ClientConfig
 
    /// How long the connection may be silent before it is considered dead.
    std::chrono::nanoseconds idle_timeout = std::chrono::seconds{30};
+
+   /// Where to send from, see quic::Config::local_endpoint.
+   std::optional<UdpEndpoint> local_endpoint{};
+
+   /// The network interface to send through, see quic::Config::device.
+   std::string device{};
 };
 
 //
 // Connects over QUIC to the first of `endpoints` that gets there, one after the other, with the
 // application `factory` makes on top, and returns the session once that application is up
-// (QuicApplication::on_ready()). Throws if it doesn't get there: with what ended the wait if the
-// caller cancelled it, which also closes the connection, and with errc::connection_refused if the
-// connections failed.
+// (QuicApplication::on_ready()). With a local endpoint, only those of its family are tried.
+//
+// Throws if it doesn't get there: with what ended the wait if the caller cancelled it, which also
+// closes the connection, and otherwise with what the last attempt failed with. That is what the
+// system reported if the socket could not be set up (errc::address_not_available, say, for a
+// local address that is not this host's), and errc::connection_refused if it could. Without an
+// endpoint of the local endpoint's family, it is errc::address_family_not_supported.
 //
 Task<std::shared_ptr<QuicSession>> async_connect(Executor executor,
                                                  std::vector<TcpEndpoint> endpoints,

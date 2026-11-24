@@ -128,6 +128,11 @@ std::string Connection::log_prefix() const
    return impl_ ? impl_->session->log_prefix() : std::string{};
 }
 
+UdpEndpoint Connection::remote_endpoint() const
+{
+   return impl_ ? impl_->session->remote_endpoint() : UdpEndpoint{};
+}
+
 results<Stream> Connection::open_stream()
 {
    if (!impl_)
@@ -183,7 +188,9 @@ IoTask<Connection> connect_to(Executor executor, Target target, std::string host
                                  .tls_ca_file = config.tls_ca_file,
                                  .tls_keylog_file = config.tls_keylog_file,
                                  .verify = config.tls_verify,
-                                 .idle_timeout = config.idle_timeout};
+                                 .idle_timeout = config.idle_timeout,
+                                 .local_endpoint = config.local_endpoint,
+                                 .device = config.device};
       auto factory = [config](QuicSession& s) -> std::unique_ptr<QuicApplication> {
          return std::make_unique<StreamApplication>(s, config, nullptr);
       };

@@ -27,8 +27,8 @@
 //    Streams      io::drain()
 //    Addresses    io::make_address(), SocketAddress, io::to_sockaddr(), io::from_sockaddr()
 //                 (defined by each runtime, in src/asio/net.cpp and src/corosio/net.cpp)
-//    UDP          io::bind(), io::connect(), io::local_endpoint(), io::set_option(), io::send()
-//                 (defined once, in src/net.cpp, on the native handle)
+//    UDP          io::bind(), io::bind_to_device(), io::connect(), io::local_endpoint(),
+//                 io::set_option(), io::send() (defined once, in src/net.cpp, on the native handle)
 //
 
 #include "anyhttp/common.hpp"
@@ -148,6 +148,12 @@ std::optional<UdpEndpoint> from_sockaddr(const sockaddr* address, socklen_t size
 
 /// Binds \p socket to \p endpoint.
 error_code bind(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept;
+
+/// Binds \p socket to the network interface \p device: it sends through that one only
+/// (SO_BINDTODEVICE). errc::no_such_device also for a name that no interface can have, which the
+/// kernel would cut short and take for another, and errc::operation_not_supported where there is
+/// no such option.
+error_code bind_to_device(UdpSocket& socket, std::string_view device) noexcept;
 
 /// Connects \p socket to \p endpoint: it sends there and receives from there only.
 error_code connect(UdpSocket& socket, const UdpEndpoint& endpoint) noexcept;
