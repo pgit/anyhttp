@@ -25,9 +25,11 @@
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/error.hpp>
 #include <boost/asio/ssl/stream.hpp>
+#include <boost/asio/write.hpp>
 
 #include <chrono>
 #include <concepts>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -62,6 +64,68 @@ inline PlainServerStream make_plain_server_stream(TcpSocket&& socket)
 #define ANYHTTP_SERVER_STREAMS(X)                                                                  \
    X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream) X(::anyhttp::any_async_stream)
 #define ANYHTTP_CLIENT_STREAMS(X) X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream)
+
+// -------------------------------------------------------------------------------------------------
+
+//
+// I/O on the streams the sessions run on, yielding a tuple in both runtimes:
+//
+//    auto [ec, n] = co_await io::read_some(stream, buffer);
+//
+// Always call these qualified: unqualified, ADL would find boost::asio's synchronous read_some()
+// and write() for an ASIO stream as well.
+//
+namespace io
+{
+
+/// Reads some bytes into \p buffer: <tt>(error_code, size_t)</tt>.
+template <typename Stream>
+auto read_some(Stream& stream, boost::asio::mutable_buffer buffer)
+{
+   return stream.async_read_some(buffer, boost::asio::as_tuple);
+}
+
+/// Writes all of \p buffers, unless an error comes first: <tt>(error_code, size_t)</tt>.
+template <typename Stream, typename ConstBufferSequence>
+auto write(Stream& stream, const ConstBufferSequence& buffers)
+{
+   //
+   // As few writes as the stream takes: async_write()'s default completion condition, transfer_all,
+   // would split them into 64 KiB each. A large HTTP/1.1 header then takes several round trips
+   // through the reactor, and a server that rejects it early catches the client in the middle.
+   //
+   return boost::asio::async_write(
+      stream, buffers,
+      [](const error_code& ec, size_t) -> size_t {
+         return ec ? 0 : std::numeric_limits<size_t>::max();
+      },
+      boost::asio::as_tuple);
+}
+
+/// Peeks at what has arrived on \p socket, without taking it: <tt>(error_code, size_t)</tt>.
+template <typename Socket>
+auto peek(Socket& socket, boost::asio::mutable_buffer buffer)
+{
+   return socket.async_receive(buffer, Socket::message_peek, boost::asio::as_tuple);
+}
+
+/// Receives a datagram into \p buffer, on a connected datagram socket: <tt>(error_code,
+/// size_t)</tt>.
+template <typename Socket>
+auto receive(Socket& socket, boost::asio::mutable_buffer buffer)
+{
+   return socket.async_receive(buffer, boost::asio::as_tuple);
+}
+
+/// Waits until \p socket has something to read, for a caller that reads it by hand
+/// (<tt>recvmsg()</tt> on its native handle): <tt>(error_code)</tt>.
+template <typename Socket>
+auto wait_readable(Socket& socket)
+{
+   return socket.async_wait(Socket::wait_read, boost::asio::as_tuple);
+}
+
+} // namespace io
 
 // -------------------------------------------------------------------------------------------------
 

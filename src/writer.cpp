@@ -39,18 +39,23 @@ void Writer::content_length(std::optional<size_t> content_length)
 
 static IoTask<size_t> no_writer() { co_return std::tuple{errors::bad_descriptor, size_t{0}}; }
 
-IoTask<size_t> Writer::write(boost::asio::const_buffer buffer)
+//
+// The API speaks the runtime's buffers, the backends Asio's, which are the same type on ASIO.
+//
+IoTask<size_t> Writer::write(ConstBuffer buffer)
 {
-   return impl_ ? impl_->write(buffer, false) : no_writer();
+   return impl_ ? impl_->write(boost::asio::const_buffer(buffer.data(), buffer.size()), false)
+                : no_writer();
 }
 
-IoTask<size_t> Writer::write_eof(boost::asio::const_buffer buffer)
+IoTask<size_t> Writer::write_eof(ConstBuffer buffer)
 {
-   return impl_ ? impl_->write(buffer, true) : no_writer();
+   return impl_ ? impl_->write(boost::asio::const_buffer(buffer.data(), buffer.size()), true)
+                : no_writer();
 }
 
 #if ANYHTTP_ASIO
-void Writer::async_write_any(WriteHandler&& handler, boost::asio::const_buffer buffer, bool eof)
+void Writer::async_write_any(WriteHandler&& handler, ConstBuffer buffer, bool eof)
 {
    if (impl_)
       impl_->async_write(std::move(handler), buffer, eof);

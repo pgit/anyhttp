@@ -2,8 +2,6 @@
 
 #include "common.hpp"
 
-#include <boost/asio/buffer.hpp>
-
 #if ANYHTTP_COROSIO
 #include <boost/capy/concept/const_buffer_sequence.hpp>
 #include <boost/capy/concept/write_stream.hpp>
@@ -11,6 +9,7 @@
 #include <boost/asio/associated_executor.hpp>
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/bind_executor.hpp>
+#include <boost/asio/buffer.hpp>
 #endif
 
 #include <memory>
@@ -79,14 +78,13 @@ public:
     * \return What \p token makes of the operation.
     */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
-   auto async_write(boost::asio::const_buffer buffer, CompletionToken&& token = CompletionToken())
+   auto async_write(ConstBuffer buffer, CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
-         boost::asio::bind_executor(
-            write_executor(token),
-            [this](WriteHandler handler, boost::asio::const_buffer buffer) { //
-               async_write_any(std::move(handler), buffer, false);
-            }),
+         boost::asio::bind_executor(write_executor(token),
+                                    [this](WriteHandler handler, ConstBuffer buffer) { //
+                                       async_write_any(std::move(handler), buffer, false);
+                                    }),
          token, buffer);
    }
 
@@ -104,15 +102,13 @@ public:
     * \return What \p token makes of the operation.
     */
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
-   auto async_write_eof(boost::asio::const_buffer buffer,
-                        CompletionToken&& token = CompletionToken())
+   auto async_write_eof(ConstBuffer buffer, CompletionToken&& token = CompletionToken())
    {
       return boost::asio::async_initiate<CompletionToken, Write>(
-         boost::asio::bind_executor(
-            write_executor(token),
-            [this](WriteHandler handler, boost::asio::const_buffer buffer) { //
-               async_write_any(std::move(handler), buffer, true);
-            }),
+         boost::asio::bind_executor(write_executor(token),
+                                    [this](WriteHandler handler, ConstBuffer buffer) { //
+                                       async_write_any(std::move(handler), buffer, true);
+                                    }),
          token, buffer);
    }
 
@@ -122,7 +118,7 @@ public:
    template <BOOST_ASIO_COMPLETION_TOKEN_FOR(Write) CompletionToken = DefaultCompletionToken>
    auto async_write_eof(CompletionToken&& token = CompletionToken())
    {
-      return async_write_eof(boost::asio::const_buffer{}, std::forward<CompletionToken>(token));
+      return async_write_eof(ConstBuffer{}, std::forward<CompletionToken>(token));
    }
 #endif
 
@@ -135,13 +131,13 @@ public:
    /// Writes \p buffer as part of the body: <tt>auto [ec, n] = co_await writer.write(buffer);</tt>
    /// \param buffer What to write.
    /// \return The error, and how many bytes of \p buffer the writer has taken, see \c Write.
-   IoTask<size_t> write(boost::asio::const_buffer buffer);
+   IoTask<size_t> write(ConstBuffer buffer);
 
    /// Writes \p buffer, if any, and ends the body: <tt>auto [ec, n] = co_await
    /// writer.write_eof();</tt>
    /// \param buffer What to write.
    /// \return The error, and how many bytes of \p buffer the writer has taken, see \c Write.
-   IoTask<size_t> write_eof(boost::asio::const_buffer buffer = {});
+   IoTask<size_t> write_eof(ConstBuffer buffer = {});
 
 #if ANYHTTP_COROSIO
    /**
@@ -154,8 +150,8 @@ public:
    {
       for (auto it = capy::buffer_sequence_begin(buffers); it != capy::buffer_sequence_end(buffers);
            ++it)
-         if (capy::const_buffer buffer = *it; buffer.size() > 0)
-            co_return co_await write(boost::asio::const_buffer(buffer.data(), buffer.size()));
+         if (ConstBuffer buffer = *it; buffer.size() > 0)
+            co_return co_await write(buffer);
       co_return std::tuple{error_code{}, size_t{0}};
    }
 #endif
@@ -183,7 +179,7 @@ private:
       return boost::asio::get_associated_executor(token, get_executor());
    }
 
-   void async_write_any(WriteHandler&& handler, boost::asio::const_buffer buffer, bool eof);
+   void async_write_any(WriteHandler&& handler, ConstBuffer buffer, bool eof);
 #endif
 
    std::shared_ptr<Impl> impl_;

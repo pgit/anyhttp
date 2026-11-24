@@ -220,7 +220,14 @@ may: the h2c upgrade and formatter tests drive nghttp2 by hand.)
 
 **Generic and protocol code include nothing from Boost.Asio but `<boost/asio/buffer.hpp>`**, and
 nothing from capy or corosio but what Boost.HTTP brings along: its parser and serializer are
-written in terms of capy's buffers, which `h1/io.hpp` converts at the boundary. They reach
+written in terms of capy's buffers, which `h1/io.hpp` converts at the boundary. **On COROSIO, the
+public headers include nothing of Asio at all**: the API takes the runtime's `ConstBuffer` and
+`MutableBuffer`, capy's there, which `Reader` and `Writer` convert to Asio's for the backends.
+Code that builds on both runtimes -- the shared tests, the docs, `request_handlers` -- makes its
+buffers with `make_buffer()`, and writes `buffer += n` (capy's buffers have no `+`). A COROSIO
+tree's `test_all` compiles every public header on its own and fails if Asio comes along
+(`test/CMakeLists.txt`); the stream helpers in Asio's buffers, `io::read_some()` and the like, are
+in `net.hpp` for that reason. They reach
 the runtime through `anyhttp/runtime.hpp`, `anyhttp/net.hpp` and `anyhttp/formatter.hpp`, which
 include the `asio/` or `corosio/` header of the build's runtime. Addresses and endpoints are the
 runtime's own (`IpAddress`, `TcpEndpoint`, `UdpEndpoint`); where the two differ, `net.hpp` declares

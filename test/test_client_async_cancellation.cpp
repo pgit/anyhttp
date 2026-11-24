@@ -188,8 +188,8 @@ TEST_P(ClientAsyncCancellation, PerOperationCancellation)
       std::stop_source stop;
       Timer timer(context.get_executor());
       timer.arm(110ms, [&stop] { stop.request_stop(); });
-      auto [ec, n] = co_await boost::capy::run(stop.get_token())(
-         response.read_some(boost::asio::buffer(buffer)));
+      auto [ec, n] =
+         co_await boost::capy::run(stop.get_token())(response.read_some(make_buffer(buffer)));
 #else
       boost::asio::cancellation_signal cancel;
       boost::asio::steady_timer timer(co_await boost::asio::this_coro::executor, 110ms);
@@ -228,7 +228,7 @@ TEST_P(ClientAsyncCancellation, CancelAfter)
       EXPECT_FALSE(ec);
 
       constexpr auto msg = "Hello, Client!"sv;
-      check(co_await request.write_eof(boost::asio::buffer(msg)));
+      check(co_await request.write_eof(make_buffer(msg)));
       EXPECT_EQ(co_await read(response), msg);
    };
 }
@@ -246,7 +246,7 @@ TEST_P(ClientAsyncCancellation, WHEN_client_read_some_with_cancel_after_THEN_can
 
       std::array<uint8_t, 1024> buffer;
 #if ANYHTTP_COROSIO
-      auto [ec, n] = co_await stop_after(100ms, response.read_some(boost::asio::buffer(buffer)));
+      auto [ec, n] = co_await stop_after(100ms, response.read_some(make_buffer(buffer)));
 #else
       auto [ec, n] = co_await response.async_read_some(boost::asio::buffer(buffer),
                                                        cancel_after(100ms, as_tuple));
@@ -265,7 +265,7 @@ TEST_P(ClientAsyncCancellation, WHEN_server_read_some_with_cancel_after_THEN_can
    requestHandler = [](server::Request request, server::Response response) -> Task<void> {
       std::array<uint8_t, 1024> buffer;
 #if ANYHTTP_COROSIO
-      auto [ec, n] = co_await stop_after(100ms, request.read_some(boost::asio::buffer(buffer)));
+      auto [ec, n] = co_await stop_after(100ms, request.read_some(make_buffer(buffer)));
 #else
       auto [ec, n] = co_await request.async_read_some(boost::asio::buffer(buffer),
                                                       cancel_after(100ms, as_tuple));
@@ -293,11 +293,11 @@ TEST_P(ClientAsyncCancellation, WHEN_read_some_completes_before_cancel_after_THE
       auto response = check(co_await request.get_response());
 
       constexpr auto msg = "Hello, Server!"sv;
-      check(co_await request.write_eof(boost::asio::buffer(msg)));
+      check(co_await request.write_eof(make_buffer(msg)));
 
       std::array<char, 1024> buffer;
 #if ANYHTTP_COROSIO
-      auto [ec, n] = co_await stop_after(10s, response.read_some(boost::asio::buffer(buffer)));
+      auto [ec, n] = co_await stop_after(10s, response.read_some(make_buffer(buffer)));
 #else
       auto [ec, n] = co_await response.async_read_some(boost::asio::buffer(buffer),
                                                        cancel_after(10s, as_tuple));
@@ -353,7 +353,7 @@ TEST_P(SmallSocketBuffers, WHEN_client_write_with_cancel_after_THEN_cancelled)
 
       const std::vector<uint8_t> body(8_m, 'x');
 #if ANYHTTP_COROSIO
-      auto [ec, written] = co_await stop_after(100ms, request.write(boost::asio::buffer(body)));
+      auto [ec, written] = co_await stop_after(100ms, request.write(make_buffer(body)));
 #else
       auto [ec, written] =
          co_await request.async_write(boost::asio::buffer(body), cancel_after(100ms, as_tuple));
@@ -512,7 +512,7 @@ TEST_P(ClientAsyncCancellation, WHEN_read_some_is_cancelled_THEN_the_body_can_st
 
       std::array<uint8_t, 1024> buffer;
 #if ANYHTTP_COROSIO
-      auto [ec, n] = co_await stop_after(50ms, response.read_some(boost::asio::buffer(buffer)));
+      auto [ec, n] = co_await stop_after(50ms, response.read_some(make_buffer(buffer)));
 #else
       auto [ec, n] = co_await response.async_read_some(boost::asio::buffer(buffer),
                                                        cancel_after(50ms, as_tuple));
@@ -521,7 +521,7 @@ TEST_P(ClientAsyncCancellation, WHEN_read_some_is_cancelled_THEN_the_body_can_st
       EXPECT_EQ(n, 0u);
 
       constexpr auto msg = "Hello, Client!"sv;
-      check(co_await request.write_eof(boost::asio::buffer(msg)));
+      check(co_await request.write_eof(make_buffer(msg)));
       EXPECT_EQ(co_await read(response), msg);
    };
 }
@@ -565,12 +565,12 @@ protected:
          });
          const auto answer = std::format("{} {}", received.size(), intact ? "intact" : "broken");
          check(co_await response.submit(200, {}));
-         check(co_await response.write_eof(boost::asio::buffer(answer)));
+         check(co_await response.write_eof(make_buffer(answer)));
       };
 
       clientSession = [this, eof](Session session) -> Task<void> {
          auto request = check(co_await session.submit(url, {}));
-         const auto buffer = boost::asio::buffer(body());
+         const auto buffer = make_buffer(body());
 
          error_code ec;
          size_t n = 0;
@@ -591,7 +591,9 @@ protected:
          EXPECT_LT(n, buffer.size());
          std::println("cancelled after taking {} of {} bytes", n, buffer.size());
 
-         check(co_await request.write_eof(buffer + n));
+         auto rest = buffer;
+         rest += n; // what the write has not taken: capy's buffers have no operator+
+         check(co_await request.write_eof(rest));
          auto response = check(co_await request.get_response());
          EXPECT_EQ(co_await read(response), std::format("{} intact", buffer.size()));
       };

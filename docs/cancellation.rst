@@ -35,7 +35,8 @@ What a cancelled operation promises
 2. It completes with an error that compares equal to ``errc::operation_canceled``, unless it had
    finished already, in which case it reports how it finished.
 3. A read reports the bytes it has delivered, a write **how many bytes of its buffer it has taken**.
-   Those are no longer the caller's: what is left to write starts after them, at ``buffer + n``.
+   Those are no longer the caller's: what is left to write starts after them, at ``buffer + n``
+   (``buffer += n`` with capy's buffers, see :doc:`io-runtimes`).
    Bytes taken need not have reached the peer, as some protocols copy them first.
 4. The buffer of the operation has to stay valid until it completes, cancelled or not. Once it has
    completed, nothing refers to it any more.

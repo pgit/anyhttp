@@ -164,7 +164,7 @@ TEST_P(ClientAsync, WHEN_session_is_gone_THEN_request_reports_error)
       auto request = check(co_await session.submit(url.set_path("echo"), {}));
       session.reset();
 
-      auto [ec, written] = co_await request.write(boost::asio::buffer("Hello"sv));
+      auto [ec, written] = co_await request.write(make_buffer("Hello"sv));
       EXPECT_TRUE(is_connection_error(ec)) << what(ec);
 
       std::tie(ec, written) = co_await request.write_eof();
@@ -205,7 +205,7 @@ TEST_P(ClientAsync, WHEN_server_session_is_gone_THEN_response_reports_error)
          auto [ec] = co_await response.submit(200, {});
          EXPECT_TRUE(is_connection_error(ec)) << what(ec);
 
-         std::tie(ec, std::ignore) = co_await response.write(boost::asio::buffer("Hello"sv));
+         std::tie(ec, std::ignore) = co_await response.write(make_buffer("Hello"sv));
          EXPECT_TRUE(is_connection_error(ec)) << what(ec);
 
          responded->notify();
@@ -304,13 +304,13 @@ TEST_P(ClientAsync,
 
    clientSession = [this](Session session) -> Task<void> {
       auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request1.write_eof(boost::asio::buffer("Hello, Server #1!"sv)));
+      check(co_await request1.write_eof(make_buffer("Hello, Server #1!"sv)));
       auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
 
       request1.reset();
       session.reset();
 
-      auto [ec, written] = co_await request2.write(boost::asio::buffer("Hello"sv));
+      auto [ec, written] = co_await request2.write(make_buffer("Hello"sv));
       EXPECT_TRUE(is_connection_error(ec)) << what(ec);
    };
 }
@@ -322,7 +322,7 @@ TEST_P(ClientAsync, WHEN_session_is_gone_THEN_earlier_request_reports_error)
 
    clientSession = [this](Session session) -> Task<void> {
       auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request1.write_eof(boost::asio::buffer("Hello, Server #1!"sv)));
+      check(co_await request1.write_eof(make_buffer("Hello, Server #1!"sv)));
       auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
 
       session.reset();
@@ -340,9 +340,9 @@ TEST_P(ClientAsync,
 
    clientSession = [this](Session session) -> Task<void> {
       auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request1.write_eof(boost::asio::buffer("Hello, Server #1!"sv)));
+      check(co_await request1.write_eof(make_buffer("Hello, Server #1!"sv)));
       auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request2.write(boost::asio::buffer("Hello, Server #2!"sv)));
+      check(co_await request2.write(make_buffer("Hello, Server #2!"sv)));
 
       auto response1 = check(co_await request1.get_response());
       EXPECT_EQ(co_await drain(response1), 17);
@@ -355,7 +355,7 @@ TEST_P(ClientAsync,
       // The body of the second response is still open, as its request has not been ended.
       //
       std::array<char, 64> buffer;
-      auto [ec, n] = co_await response2.read_some(boost::asio::buffer(buffer));
+      auto [ec, n] = co_await response2.read_some(make_buffer(buffer));
       EXPECT_EQ(ec, errors::partial_message) << what(ec);
    };
 }
@@ -455,12 +455,12 @@ TEST_P(ClientAsync, YieldFuzz)
       fields.set("Content-Length", std::to_string(msg.size()));
       check(co_await response.submit(200, fields));
       co_await yield(dist(server_gen));
-      check(co_await response.write(boost::asio::buffer(msg)));
+      check(co_await response.write(make_buffer(msg)));
       co_await yield(dist(server_gen));
       check(co_await response.write_eof());
       co_await yield(dist(server_gen));
       std::array<uint8_t, 16> data;
-      co_await request.read_some(boost::asio::buffer(data));
+      co_await request.read_some(make_buffer(data));
    };
    clientSession = [this](Session session) -> Task<void> {
       std::uniform_int_distribution<> dist(0, 10);
@@ -493,7 +493,7 @@ TEST_P(ClientAsync, WHEN_body_ends_THEN_read_reports_eof)
    requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       co_await drain(request);
       check(co_await response.submit(200, fields({{"Content-Length", hello.size()}})));
-      check(co_await response.write_eof(boost::asio::buffer(hello)));
+      check(co_await response.write_eof(make_buffer(hello)));
    };
    clientSession = [this](Session session) -> Task<void> {
       auto request = check(co_await session.submit(url));
@@ -504,7 +504,7 @@ TEST_P(ClientAsync, WHEN_body_ends_THEN_read_reports_eof)
       std::array<char, 4> buffer; // small on purpose: several reads before the end
       for (;;)
       {
-         auto [ec, n] = co_await response.read_some(boost::asio::buffer(buffer));
+         auto [ec, n] = co_await response.read_some(make_buffer(buffer));
          if (ec)
          {
             EXPECT_EQ(ec, errors::eof);
@@ -521,12 +521,12 @@ TEST_P(ClientAsync, WHEN_body_ends_THEN_read_reports_eof)
       // opportunity to do (both sides of the exchange are finished by now).
       //
       co_await yield(20);
-      auto [ec, n] = co_await response.read_some(boost::asio::buffer(buffer));
+      auto [ec, n] = co_await response.read_some(make_buffer(buffer));
       EXPECT_EQ(ec, errors::eof);
 
       // ... but a zero-length read is not a read, and reports nothing
       std::array<char, 0> empty;
-      std::tie(ec, n) = co_await response.read_some(boost::asio::buffer(empty));
+      std::tie(ec, n) = co_await response.read_some(make_buffer(empty));
       EXPECT_FALSE(ec);
       EXPECT_EQ(n, 0u);
    };
@@ -541,7 +541,7 @@ TEST_P(ClientAsync, WHEN_reading_into_buffer_sequence_THEN_empty_buffers_are_ski
    requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       co_await drain(request);
       check(co_await response.submit(200, fields({{"Content-Length", hello.size()}})));
-      check(co_await response.write_eof(boost::asio::buffer(hello)));
+      check(co_await response.write_eof(make_buffer(hello)));
    };
    clientSession = [this](Session session) -> Task<void> {
       auto request = check(co_await session.submit(url));
@@ -550,8 +550,8 @@ TEST_P(ClientAsync, WHEN_reading_into_buffer_sequence_THEN_empty_buffers_are_ski
 
       std::array<char, 0> empty;
       std::array<char, 64> buffer;
-      auto n = check(co_await response.read_some(
-         std::array{boost::asio::buffer(empty), boost::asio::buffer(buffer)}));
+      auto n =
+         check(co_await response.read_some(std::array{make_buffer(empty), make_buffer(buffer)}));
       EXPECT_GT(n, 0u);
       EXPECT_THAT(hello, StartsWith(std::string_view(buffer.data(), n)));
    };
@@ -568,7 +568,7 @@ TEST_P(ClientAsync, WHEN_empty_buffer_is_written_THEN_body_stays_open)
       EXPECT_EQ(co_await drain(request), 0u);
       check(co_await response.submit(200, {}));
       check(co_await response.write({})); // writes nothing, leaves the body open
-      check(co_await response.write_eof(boost::asio::buffer(tail)));
+      check(co_await response.write_eof(make_buffer(tail)));
    };
    clientSession = [this](Session session) -> Task<void> {
       auto request = check(co_await session.submit(url));
@@ -590,7 +590,7 @@ TEST_P(ClientAsync, WHEN_written_after_eof_THEN_reports_broken_pipe)
    requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       co_await drain(request);
       check(co_await response.submit(200, fields({{"Content-Length", hello.size()}})));
-      check(co_await response.write_eof(boost::asio::buffer(hello)));
+      check(co_await response.write_eof(make_buffer(hello)));
 
       auto [ec, written] = co_await response.write_eof();
       EXPECT_FALSE(ec);
@@ -598,10 +598,10 @@ TEST_P(ClientAsync, WHEN_written_after_eof_THEN_reports_broken_pipe)
       std::tie(ec, written) = co_await response.write({});
       EXPECT_FALSE(ec);
 
-      std::tie(ec, written) = co_await response.write(boost::asio::buffer(hello));
+      std::tie(ec, written) = co_await response.write(make_buffer(hello));
       EXPECT_EQ(ec, errc::broken_pipe);
 
-      std::tie(ec, written) = co_await response.write_eof(boost::asio::buffer(hello));
+      std::tie(ec, written) = co_await response.write_eof(make_buffer(hello));
       EXPECT_EQ(ec, errc::broken_pipe);
    };
    clientSession = [this](Session session) -> Task<void> {
@@ -614,7 +614,7 @@ TEST_P(ClientAsync, HelloWorld)
    static const auto hello = "Hello, World!"sv;
    requestHandler = [this](server::Request request, server::Response response) -> Task<void> {
       check(co_await response.submit(200, {}));
-      check(co_await response.write_eof(boost::asio::buffer(hello)));
+      check(co_await response.write_eof(make_buffer(hello)));
    };
    clientSession = [this](Session session) -> Task<void> {
       auto message = check(co_await session.get(url));
@@ -644,7 +644,7 @@ TEST_P(ClientAsync, WHEN_server_writes_large_buffer_at_once_THEN_receives_all)
       co_await drain(request);
 
       check(co_await response.submit(200, fields({{"Content-Length", body.size()}})));
-      check(co_await response.write_eof(boost::asio::buffer(body)));
+      check(co_await response.write_eof(make_buffer(body)));
    };
    clientSession = [this](Session session) -> Task<void> {
       EXPECT_EQ((check(co_await session.get(url))).body().size(), body.size());
@@ -670,7 +670,7 @@ TEST_P(ClientAsync, WHEN_server_cancels_write_eof_THEN_client_sees_truncated_bod
       // this is over, so the write is guaranteed to still be in progress when it is cancelled.
       //
 #if ANYHTTP_COROSIO
-      auto [ec, written] = co_await stop_after(50ms, response.write_eof(boost::asio::buffer(body)));
+      auto [ec, written] = co_await stop_after(50ms, response.write_eof(make_buffer(body)));
 #else
       auto [ec, written] =
          co_await response.async_write_eof(boost::asio::buffer(body), cancel_after(50ms, as_tuple));
@@ -710,7 +710,7 @@ TEST_P(ClientAsync, WHEN_client_cancels_write_eof_THEN_can_still_end)
 
       // far more than the send window, with nobody reading the echo yet: this cannot complete
       auto write_eof = [&]() -> Task<void> {
-         check(co_await request.write_eof(boost::asio::buffer(body)));
+         check(co_await request.write_eof(make_buffer(body)));
       };
       auto ep = co_await cancel_task_after(100ms, write_eof());
       EXPECT_EQ(code(ep), errc::operation_canceled);
@@ -821,9 +821,9 @@ TEST_P(ClientAsync, Recursion)
 
       // verify that immediate completion (here, due to an empty buffer) does not cause recursion
       std::array<uint8_t, 0> empty;
-      check(co_await response.read_some(boost::asio::buffer(empty)));
+      check(co_await response.read_some(make_buffer(empty)));
       auto s0 = stack_remaining_bytes().value();
-      check(co_await response.read_some(boost::asio::buffer(empty)));
+      check(co_await response.read_some(make_buffer(empty)));
       auto s1 = stack_remaining_bytes().value();
       EXPECT_EQ(s0, s1);
 
@@ -859,13 +859,13 @@ TEST_P(ClientAsync, Custom)
       std::array<uint8_t, 1024> buffer;
       for (;;)
       {
-         auto [ec, n] = co_await request.read_some(boost::asio::buffer(buffer));
+         auto [ec, n] = co_await request.read_some(make_buffer(buffer));
          if (ec)
          {
             check(co_await response.write_eof());
             co_return;
          }
-         check(co_await response.write(boost::asio::buffer(buffer, n)));
+         check(co_await response.write(make_buffer(buffer, n)));
       }
    };
    clientSession = [this](Session session) -> Task<void> {
@@ -960,10 +960,10 @@ TEST_P(ClientAsync, WHEN_multiple_request_are_made_THEN_responses_are_received_i
 {
    clientSession = [this](Session session) -> Task<void> {
       auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request1.write_eof(boost::asio::buffer("Hello, Server #1!"sv)));
+      check(co_await request1.write_eof(make_buffer("Hello, Server #1!"sv)));
 
       auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request2.write_eof(boost::asio::buffer("Hello, Server #2! XYZ"sv)));
+      check(co_await request2.write_eof(make_buffer("Hello, Server #2! XYZ"sv)));
 
       auto response1 = check(co_await request1.get_response());
       EXPECT_EQ(co_await drain(response1), 17);
@@ -998,10 +998,10 @@ TEST_P(ClientAsync, WHEN_request_is_submitted_before_previous_is_complete_THEN_r
       else
          EXPECT_FALSE(ec) << what(ec);
 
-      check(co_await request1.write_eof(boost::asio::buffer(body1)));
+      check(co_await request1.write_eof(make_buffer(body1)));
       if (limited)
          request2 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request2.write_eof(boost::asio::buffer(body2)));
+      check(co_await request2.write_eof(make_buffer(body2)));
 
       auto response1 = check(co_await request1.get_response());
       EXPECT_EQ(co_await read(response1), body1);
@@ -1049,7 +1049,7 @@ TEST_P(OneStream, WHEN_limit_is_one_THEN_second_request_reports_would_block)
       // against the limit until it is closed in *both* directions, so reading the response to its
       // end is part of letting the next request through; HTTP/1.1 is free again after the write.
       //
-      check(co_await request1.write_eof(boost::asio::buffer(body1)));
+      check(co_await request1.write_eof(make_buffer(body1)));
       EXPECT_EQ(co_await read(response1), body1);
 
       //
@@ -1074,7 +1074,7 @@ TEST_P(OneStream, WHEN_limit_is_one_THEN_second_request_reports_would_block)
       if (!request2)
          co_return;
 
-      check(co_await request2.write_eof(boost::asio::buffer(body2)));
+      check(co_await request2.write_eof(make_buffer(body2)));
       auto response2 = check(co_await request2.get_response());
       EXPECT_EQ(co_await read(response2), body2);
    };
@@ -1089,8 +1089,7 @@ TEST_P(ClientAsync, WHEN_many_requests_are_made_THEN_all_are_answered_in_order)
       for (size_t i = 0; i < 10; ++i)
       {
          requests.push_back(check(co_await session.submit(url.set_path("echo"), {})));
-         check(
-            co_await requests.back().write_eof(boost::asio::buffer(std::format("request #{}", i))));
+         check(co_await requests.back().write_eof(make_buffer(std::format("request #{}", i))));
       }
 
       for (size_t i = 0; i < requests.size(); ++i)
@@ -1112,9 +1111,9 @@ TEST_P(ClientAsync, WHEN_getting_response_before_previous_is_read_THEN_reports_w
 
    clientSession = [this](Session session) -> Task<void> {
       auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request1.write_eof(boost::asio::buffer(body1)));
+      check(co_await request1.write_eof(make_buffer(body1)));
       auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request2.write_eof(boost::asio::buffer(body2)));
+      check(co_await request2.write_eof(make_buffer(body2)));
 
       auto [ec, response2] = co_await request2.get_response();
       EXPECT_EQ(ec, errors::would_block) << "response #1 not requested yet";
@@ -1143,11 +1142,11 @@ TEST_P(ClientAsync, WHEN_request_has_no_body_THEN_it_is_complete_after_submit)
       auto request1 =
          check(co_await session.submit(url.set_path("echo"), fields({{"Content-Length", 0}})));
       auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request2.write_eof(boost::asio::buffer(body2)));
+      check(co_await request2.write_eof(make_buffer(body2)));
 
       auto [ec, written] = co_await request1.write_eof();
       EXPECT_FALSE(ec) << what(ec);
-      std::tie(ec, written) = co_await request1.write(boost::asio::buffer(body1));
+      std::tie(ec, written) = co_await request1.write(make_buffer(body1));
       EXPECT_EQ(ec, errc::broken_pipe) << what(ec);
 
       auto response1 = check(co_await request1.get_response());
@@ -1169,14 +1168,14 @@ TEST_P(ClientAsync, WHEN_content_length_is_written_without_eof_THEN_request_is_n
    clientSession = [this](Session session) -> Task<void> {
       auto request1 = check(
          co_await session.submit(url.set_path("echo"), fields({{"Content-Length", body1.size()}})));
-      check(co_await request1.write(boost::asio::buffer(body1)));
+      check(co_await request1.write(make_buffer(body1)));
 
       auto [ec, request2] = co_await session.submit(url.set_path("echo"), {});
       EXPECT_EQ(ec, errors::would_block);
 
       check(co_await request1.write_eof());
       request2 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request2.write_eof(boost::asio::buffer(body2)));
+      check(co_await request2.write_eof(make_buffer(body2)));
 
       auto response1 = check(co_await request1.get_response());
       EXPECT_EQ(co_await read(response1), body1);
@@ -1196,7 +1195,7 @@ TEST_P(ClientAsync, WHEN_incomplete_request_is_released_THEN_later_requests_repo
 
    clientSession = [this](Session session) -> Task<void> {
       auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request1.write(boost::asio::buffer(body1)));
+      check(co_await request1.write(make_buffer(body1)));
       request1.reset();
 
       auto [ec, request2] = co_await session.submit(url.set_path("echo"), {});
@@ -1216,9 +1215,9 @@ TEST_P(ClientAsync,
 
    clientSession = [this](Session session) -> Task<void> {
       auto request1 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request1.write_eof(boost::asio::buffer(body1)));
+      check(co_await request1.write_eof(make_buffer(body1)));
       auto request2 = check(co_await session.submit(url.set_path("echo"), {}));
-      check(co_await request2.write_eof(boost::asio::buffer(body2)));
+      check(co_await request2.write_eof(make_buffer(body2)));
       request1.reset();
 
       auto [ec, response] = co_await request2.get_response();
