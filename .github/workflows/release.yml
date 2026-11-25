@@ -165,20 +165,10 @@ jobs:
           path: build/docs/html/
           retention-days: 30
 
-  #
-  # A site has one deployment, so this is what publishes the documentation as well: it goes to the
-  # root of the site, and the coverage report next to it. There is no point in publishing a report
-  # without the documentation, so a failure over there holds this back.
-  #
   coverage:
     name: Coverage
-    needs: docs
     runs-on: *runs_on
     container: *container
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
 
     steps:
       - *checkout
@@ -194,19 +184,6 @@ jobs:
         run: |
           cmake --build --preset build-coverage --target coverage
 
-      - name: Prepare Pages directory
-        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-        run: |
-          mkdir -p pages/coverage
-          cp -r build-coverage/coverage_report/* pages/coverage/
-
-      - name: Get the documentation
-        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-        uses: actions/download-artifact@v8
-        with:
-          name: documentation
-          path: pages/
-
       - name: Upload Coverage Report
         uses: actions/upload-artifact@v7
         with:
@@ -214,13 +191,48 @@ jobs:
           path: build-coverage/coverage_report/
           retention-days: 30
 
-      - name: Upload coverage and documentation to GitHub Pages
-        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+  #
+  # A site has one deployment, so the documentation and the coverage report go out together: the
+  # documentation at the root of the site, the report under coverage/. There is no point in
+  # publishing one without the other, so a failure in either job holds this back. It builds
+  # nothing, so it needs neither the container nor a checkout, and when GitHub's side of the
+  # deployment fails, re-running this job alone takes seconds. A re-run keeps the artifacts of the
+  # attempts before it, and deploy-pages refuses a name that two of them share, so the site's
+  # artifact is named after the attempt.
+  #
+  pages:
+    name: Pages
+    needs: [ docs, coverage ]
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: *runs_on
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Get the documentation
+        uses: actions/download-artifact@v8
+        with:
+          name: documentation
+          path: pages/
+
+      - name: Get the coverage report
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-report
+          path: pages/coverage/
+
+      - name: Upload the site
         uses: actions/upload-pages-artifact@v5
         with:
+          name: github-pages-${{ github.run_attempt }}
           path: pages/
 
       - name: Deploy to GitHub Pages
-        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
         id: deployment
         uses: actions/deploy-pages@v5
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
