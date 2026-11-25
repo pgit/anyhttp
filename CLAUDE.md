@@ -111,7 +111,9 @@ pass: check for `[ OK ]` lines.
 ### Documentation
 
 `cmake --build build --target docs` makes the site in `build/docs/html`; the pages are `docs/*.rst`,
-the reference comes from the comments in the public headers. [docs/README.md](docs/README.md) has
+the reference comes from the comments in the public headers. Doxygen is Debian's; Sphinx, Breathe
+and the theme the target pip-installs into `build/docs/venv` on its first run, at the versions
+`docs/requirements.txt` pins -- bump them there. [docs/README.md](docs/README.md) has
 how to write it. Warnings are errors in Doxygen and Sphinx, so changing a public header can fail this
 target: run it, a new public symbol also needs an entry in `docs/reference.rst`. The code the guide
 shows is `docs/snippets.cpp` and `docs/examples/`, compiled in every tree with

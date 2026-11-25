@@ -135,7 +135,9 @@ jobs:
   #
   # The guide and the reference, with Doxygen and Sphinx, where warnings are errors: this is where a
   # public symbol without a comment shows, and a reference that goes nowhere. The tools are the
-  # ones .devcontainer/Dockerfile installs, as the image does not have them. Nothing is compiled.
+  # ones .devcontainer/Dockerfile installs, as the image does not have them: Doxygen, and pip, with
+  # which the target installs the versions of Sphinx and Breathe that docs/requirements.txt pins.
+  # Nothing is compiled.
   #
   docs:
     name: Documentation
@@ -149,7 +151,7 @@ jobs:
         run: |
           apt-get update
           apt-get -y install --no-install-recommends \
-            doxygen python3-sphinx python3-breathe python3-sphinx-rtd-theme
+            doxygen python3-pip python3-venv
 
       - name: Make the documentation
         run: |

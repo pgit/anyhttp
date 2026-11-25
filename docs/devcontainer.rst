@@ -79,8 +79,9 @@ What anyhttp adds
 
 The top layer, :src:`.devcontainer/Dockerfile`, adds things for interactive use: ``tmux``, ``btop``,
 ``valgrind``, ``ping``, persistent bash history (a volume mounted at ``/commandhistory``), and the
-aliases in ``.devcontainer/.bash_aliases``. It also has Doxygen, Sphinx and Breathe, for this
-documentation. :src:`.devcontainer/devcontainer.json` adds the VS Code extensions (clangd, CMake Tools,
+aliases in ``.devcontainer/.bash_aliases``. It also has Doxygen and pip, for this documentation: the
+``docs`` target installs Sphinx and Breathe itself, at the versions :src:`docs/requirements.txt`
+pins. :src:`.devcontainer/devcontainer.json` adds the VS Code extensions (clangd, CMake Tools,
 TestMate, CodeLLDB, ...), ``SYS_PTRACE`` for debuggers and sanitizers, and bind-mounts ``~/.claude``
 from the host.
 
