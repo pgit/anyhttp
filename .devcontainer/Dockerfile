@@ -18,13 +18,13 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
 
 #
 # What makes the documentation (cmake --build build --target docs): Doxygen for the comments in the
-# headers, Sphinx for the pages. These are the versions of the release of Debian that the base image
-# is on, which are known to work together. The Documentation job in .github/workflows/release.yml
-# installs the same.
+# headers, Debian's, and pip for Sphinx, Breathe and the theme, which the target installs on demand
+# at the versions docs/requirements.txt pins, into a virtual environment of the build tree -- Debian's
+# pip does not install into the system's Python (PEP 668). The Documentation job in
+# .github/workflows/release.yml installs the same.
 #
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
-    apt-get -y install --no-install-recommends \
-        doxygen python3-sphinx python3-breathe python3-sphinx-rtd-theme && \
+    apt-get -y install --no-install-recommends doxygen python3-pip python3-venv && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

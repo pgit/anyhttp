@@ -23,15 +23,17 @@ cmake --build build --target docs
 The pages end up in `build/docs/html`, with `index.html` to start from. It takes
 [Doxygen](https://www.doxygen.nl), [Sphinx](https://www.sphinx-doc.org),
 [Breathe](https://breathe.readthedocs.io) and the
-[Read the Docs theme](https://sphinx-rtd-theme.readthedocs.io), which the devcontainer has. On
-Debian that is:
+[Read the Docs theme](https://sphinx-rtd-theme.readthedocs.io). Doxygen comes from the system, the
+rest the target installs itself, the first time it runs, at the versions
+[requirements.txt](requirements.txt) pins, into a virtual environment in `build/docs/venv`. That
+takes the network, and Python's `venv` module. The devcontainer has both; on Debian that is:
 
 ```sh
-apt-get install doxygen python3-sphinx python3-breathe python3-sphinx-rtd-theme
+apt-get install doxygen python3-pip python3-venv
 ```
 
 The target is not part of a regular build, and not there at all where CMake finds no `doxygen` or no
-`sphinx-build`, or was told `ANYHTTP_BUILD_DOCS=OFF`. It can be made from a tree of either I/O runtime
+`python3`, or was told `ANYHTTP_BUILD_DOCS=OFF`. It can be made from a tree of either I/O runtime
 and gives the same result: Doxygen reads `asio/runtime.hpp` for the runtime layer, whichever runtime
 the tree is on.
 
