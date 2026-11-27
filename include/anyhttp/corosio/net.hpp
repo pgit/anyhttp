@@ -307,7 +307,7 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 
 /// A client's TLS context, see asio/net.hpp, and without a keylog, as the server's.
 TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol,
-                                   const std::string& keylog_file = {});
+                                   const std::string& keylog_file = {}, bool verify = true);
 
 namespace io
 {
@@ -338,7 +338,9 @@ void set_buffer_sizes(TcpSocket& socket, int send, int receive);
 
 IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, std::string port);
 
-IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints);
+/// Connects \p socket to the first of \p endpoints that takes it, see asio/net.hpp.
+IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints,
+                            std::optional<TcpEndpoint> local = {});
 
 inline TlsStream make_tls_stream(TcpSocket&& socket, TlsContext& context)
 {

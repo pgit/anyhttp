@@ -274,8 +274,9 @@ shared files.
 - Test `.cpp` files put `using namespace testing;` after the includes and use `HasSubstr`,
   `Values`, `Not` unqualified. Never in `test_fixtures.hpp` (it would leak), and not in
   `test_external.cpp`, whose own `Args` alias collides with gmock's.
-- Commit subjects are prefixed: `fix:`, `refactor:`, `docs:`, `chore:`, `style:`, `test:`, or
-  the protocol (`h1:`, `h2:`, `h3:`).
+- Commit subjects are prefixed with what they are about: the part of the library a change is to,
+  where there is one (`client:`, `server:`, `quic:`, `tls:`, or the protocol, `h1:`, `h2:`,
+  `h3:`), and otherwise its kind: `fix:`, `refactor:`, `docs:`, `chore:`, `style:`, `test:`.
 
 ## Traps
 

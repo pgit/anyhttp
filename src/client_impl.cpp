@@ -184,7 +184,8 @@ Task<Session> Client::Impl::async_connect()
    // Initiate connection.
    //
    auto socket = io::make_socket(executor_);
-   auto [connect_ec, endpoint] = co_await io::connect(socket, std::move(endpoints));
+   auto [connect_ec, endpoint] =
+      co_await io::connect(socket, std::move(endpoints), config().local_endpoint);
    if (connect_ec)
       throw_error(connect_ec);
 
@@ -214,8 +215,8 @@ Task<Session> Client::Impl::async_connect()
    //
    if (is_https(config().url))
    {
-      auto tls_context =
-         make_client_tls_context(config().tls_ca_file, config().protocol, config().tls_keylog_file);
+      auto tls_context = make_client_tls_context(config().tls_ca_file, config().protocol,
+                                                 config().tls_keylog_file, config().tls_verify);
       auto tls = io::make_tls_stream(std::move(socket), tls_context);
       io::set_peer_name(tls, host);
       if (auto [ec] = co_await io::handshake(tls, Role::client); ec)
