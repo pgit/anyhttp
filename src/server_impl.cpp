@@ -51,7 +51,7 @@ static void destroy_on_its_executor(const std::shared_ptr<Session::Impl>& sessio
 Server::Impl::Impl(Executor executor, Config config)
    : config_(std::move(config)), executor_(std::move(executor)),
      tls_context_(make_server_tls_context(config_.tls_certificate_chain, config_.tls_private_key,
-                                          config_.tls_keylog_file)),
+                                          config_.tls_protocols, config_.tls_keylog_file)),
      acceptor_(io::make_acceptor(executor_))
 {
    mlogi("ctor");
@@ -250,6 +250,7 @@ Task<void> Server::Impl::handle_connection(Executor executor, TcpSocket socket)
       // Everything that is not "h2" is served as HTTP/1.1, including the empty ALPN of a client
       // that offered none at all (curl --no-alpn) and one nobody agreed on. Refusing those would
       // buy nothing: HTTP/1.1 is what a connection without a negotiated protocol speaks anyway.
+      // (corosio's TLS refuses the latter itself, see server::Config::tls_protocols.)
       //
       if (alpn == "h2")
          session = h2::make_server_session(*this, executor, std::move(tls));

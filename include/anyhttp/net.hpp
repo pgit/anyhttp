@@ -25,6 +25,7 @@
 // Declared and documented here, the same for both runtimes:
 //
 //    Streams      io::drain()
+//    TLS          server_alpn() (defined once, in src/net.cpp)
 //    Addresses    io::make_address(), SocketAddress, io::to_sockaddr(), io::from_sockaddr()
 //                 (defined by each runtime, in src/asio/net.cpp and src/corosio/net.cpp)
 //    UDP          io::bind(), io::bind_to_device(), io::connect(), io::local_endpoint(),
@@ -47,7 +48,9 @@
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string_view>
+#include <vector>
 
 #include <sys/socket.h>
 
@@ -189,3 +192,20 @@ error_code set_option(UdpSocket& socket, int level, int name, int value) noexcep
 error_code send(UdpSocket& socket, boost::asio::const_buffer buffer) noexcept;
 
 } // namespace anyhttp::io (in the runtime's namespace)
+
+#if ANYHTTP_COROSIO
+namespace anyhttp::inline corosio
+#else
+namespace anyhttp::inline asio
+#endif
+{
+
+/**
+ * What a server offers by ALPN over TLS on TCP, as server::Config::tls_protocols has it: the names
+ * of \p protocols, "h2" and "http/1.1", in that order, which make_server_tls_context() takes. So
+ * there are two at most. Throws \c std::invalid_argument for no protocols at all, for HTTP/3, which
+ * is not negotiated this way, and for one of them twice. Defined in src/net.cpp.
+ */
+std::vector<std::string_view> server_alpn(std::span<const Protocol> protocols);
+
+} // namespace anyhttp (in the runtime's namespace)

@@ -14,10 +14,13 @@
 
 #include <openssl/ssl.h>
 
+#include <algorithm>
+#include <cassert>
 #include <cstring>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include <sys/socket.h>
 
@@ -27,35 +30,65 @@ namespace anyhttp::inline asio
 // =================================================================================================
 
 //
-// The protocols we speak over TLS on TCP, in descending order of preference. HTTP/3 is not in
-// here: it is offered on the UDP endpoint instead, see anyhttp/h3/backend.hpp.
+// The protocols we speak over TLS on TCP, in descending order of preference, in ALPN's wire format:
+// a sequence of length-prefixed, non-empty names. HTTP/3 is not in here: it is offered on the UDP
+// endpoint instead, see anyhttp/h3/backend.hpp. A client offers h2_h1, or the "http/1.1" at its
+// end, see make_client_tls_context().
 //
 // https://nghttp2.org/documentation/tutorial-server.html
 //
-static unsigned char next_proto_list[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+static constexpr unsigned char h2_h1[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+static constexpr unsigned char h1_h2[] = {8, 'h', 't', 't', 'p', '/', '1', '.', '1', 2, 'h', '2'};
 
-static unsigned int next_proto_list_len = sizeof(next_proto_list);
+//
+// Every list a server can offer, see server_alpn(), which is the argument the callbacks below get
+// -- and so has to outlive every context: hence these, and not one made for each context.
+//
+using AlpnList = std::span<const unsigned char>;
+static const AlpnList server_alpn_lists[] = {AlpnList{h2_h1}, AlpnList{h1_h2},
+                                             AlpnList{h2_h1}.first(3), AlpnList{h1_h2}.first(9)};
+
+//
+// The one of server_alpn_lists that is \p names.
+//
+static const AlpnList& server_alpn_list(const std::vector<std::string_view>& names)
+{
+   std::vector<unsigned char> wire;
+   for (const auto name : names)
+   {
+      wire.push_back(static_cast<unsigned char>(name.size()));
+      wire.insert(wire.end(), name.begin(), name.end());
+   }
+
+   const auto it = std::ranges::find_if(
+      server_alpn_lists, [&wire](const AlpnList& list) { return std::ranges::equal(list, wire); });
+   assert(it != std::end(server_alpn_lists)); // which is what server_alpn() lets through
+   return *it;
+}
+
 static int next_proto_cb(SSL* s, const unsigned char** data, unsigned int* len, void* arg)
 {
-   *data = next_proto_list;
-   *len = next_proto_list_len;
+   const auto& ours = *static_cast<const AlpnList*>(arg);
+   *data = ours.data();
+   *len = static_cast<unsigned int>(ours.size());
    return SSL_TLSEXT_ERR_OK;
 }
 
 //
-// ALPN, picking the first protocol of ours the client offers -- our preference wins, not the
-// client's order.
+// ALPN, picking the first protocol of ours, the list in \p arg, that the client offers -- our
+// preference wins, not the client's order.
 //
 static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned char* outlen,
                                 const unsigned char* in, unsigned int inlen, void* arg)
 {
-   for (std::string_view wanted : {"h2", "http/1.1"})
+   for (auto ours = *static_cast<const AlpnList*>(arg); !ours.empty();
+        ours = ours.subspan(1 + ours[0]))
    {
-      // The wire format is a sequence of length-prefixed, non-empty protocol names.
+      const auto wanted = ours.subspan(1, ours[0]);
       for (auto list = std::span{in, inlen}; !list.empty() && list.size() > list[0];
            list = list.subspan(1 + list[0]))
       {
-         if (std::string_view{reinterpret_cast<const char*>(&list[1]), list[0]} != wanted)
+         if (!std::ranges::equal(list.subspan(1, list[0]), wanted))
             continue;
 
          *out = &list[1];
@@ -68,11 +101,16 @@ static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned ch
 }
 
 TlsContext make_server_tls_context(const std::string& certificate_chain,
-                                   const std::string& private_key, const std::string& keylog_file)
+                                   const std::string& private_key,
+                                   std::span<const Protocol> protocols,
+                                   const std::string& keylog_file)
 {
+   // Our lists are static, and so is the argument: the callbacks change nothing.
+   auto* const alpn = const_cast<AlpnList*>(&server_alpn_list(server_alpn(protocols)));
+
    boost::asio::ssl::context ctx{boost::asio::ssl::context::tlsv13};
-   SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, nullptr);
-   SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, nullptr);
+   SSL_CTX_set_next_protos_advertised_cb(ctx.native_handle(), next_proto_cb, alpn);
+   SSL_CTX_set_alpn_select_cb(ctx.native_handle(), alpn_select_proto_cb, alpn);
 
    ctx.use_certificate_chain_file(certificate_chain);
    ctx.use_private_key_file(private_key, boost::asio::ssl::context::pem);
@@ -98,7 +136,7 @@ TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol
       ctx.set_verify_mode(boost::asio::ssl::verify_none);
 
    // "http/1.1" is the tail of the list, what follows the three bytes of "h2".
-   auto alpn = std::span<const unsigned char>{next_proto_list};
+   auto alpn = AlpnList{h2_h1};
    if (protocol != Protocol::h2)
       alpn = alpn.subspan(3);
    SSL_CTX_set_alpn_protos(ctx.native_handle(), alpn.data(),

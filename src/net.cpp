@@ -1,6 +1,7 @@
 //
 // The network half of the runtime layer, see anyhttp/net.hpp: what both runtimes do the same way,
-// on the native handle. The rest is in asio/net.cpp and corosio/net.cpp.
+// on the native handle, and what a server offers by ALPN. The rest is in asio/net.cpp and
+// corosio/net.cpp.
 //
 
 #include "anyhttp/net.hpp"
@@ -8,8 +9,12 @@
 #include <net/if.h>
 #include <sys/socket.h>
 
+#include <algorithm>
+#include <format>
+#include <stdexcept>
 #include <string_view>
 #include <tuple>
+#include <vector>
 
 // =================================================================================================
 // UDP, the same in both runtimes, see anyhttp/net.hpp.
@@ -118,3 +123,47 @@ std::optional<IpAddress> bind_address(const std::optional<IpAddress>& local,
 }
 
 } // namespace anyhttp::io (in the runtime's namespace)
+
+// =================================================================================================
+// TLS, the same in both runtimes, see anyhttp/net.hpp.
+// =================================================================================================
+
+#if ANYHTTP_COROSIO
+namespace anyhttp::inline corosio
+#else
+namespace anyhttp::inline asio
+#endif
+{
+
+std::vector<std::string_view> server_alpn(std::span<const Protocol> protocols)
+{
+   if (protocols.empty())
+      throw std::invalid_argument("Config::tls_protocols: none at all");
+
+   std::vector<std::string_view> names;
+   for (const auto protocol : protocols)
+   {
+      std::string_view name;
+      switch (protocol)
+      {
+      case Protocol::h1:
+         name = "http/1.1";
+         break;
+      case Protocol::h2:
+         name = "h2";
+         break;
+      default:
+         throw std::invalid_argument(std::format(
+            "Config::tls_protocols: {} is not negotiated over TLS on TCP", to_string(protocol)));
+      }
+
+      if (std::ranges::find(names, name) != names.end())
+         throw std::invalid_argument(
+            std::format("Config::tls_protocols: {} more than once", to_string(protocol)));
+      names.push_back(name);
+   }
+
+   return names;
+}
+
+} // namespace anyhttp (in the runtime's namespace)
