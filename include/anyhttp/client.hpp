@@ -47,7 +47,10 @@ struct Config
     * The address and port to connect from, bound before connecting, with port 0 for any port.
     * Only those of the server's endpoints that are of its family are tried, and if none is,
     * \c async_connect() fails with \c errc::address_family_not_supported; an address that is not
-    * one of this host's fails it with \c errc::address_not_available. With HTTP/3, it is the
+    * one of this host's fails it with \c errc::address_not_available. A port is bound with
+    * SO_REUSEADDR, so that it can be connected from again while an earlier connection from it is
+    * in TIME_WAIT -- though not to the same server endpoint, which the kernel refuses with
+    * \c errc::address_not_available until the TIME_WAIT is over. With HTTP/3, it is the
     * address and port the UDP socket is bound to, see \c quic::Config::local_endpoint. Without
     * it, the system picks the address by its routes, and any port.
     */

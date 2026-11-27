@@ -173,6 +173,8 @@ IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, st
 //
 // boost::asio::async_connect() closes and reopens the socket for every endpoint it tries, which
 // throws away a bind, so with a local endpoint it is this loop instead -- the one of corosio's.
+// A fixed port takes SO_REUSEADDR, or the bind fails for as long as an earlier connection from it
+// is in TIME_WAIT.
 //
 IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints,
                             std::optional<TcpEndpoint> local)
@@ -194,11 +196,16 @@ IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoint
       socket.close(ignored);
       if (socket.open(endpoint.protocol(), ec); ec)
          continue;
+      if (local->port() != 0)
+         if (socket.set_option(boost::asio::socket_base::reuse_address(true), ec); ec)
+            continue;
       if (socket.bind(*local, ec); ec)
          continue;
       std::tie(ec) = co_await socket.async_connect(endpoint, boost::asio::as_tuple);
       if (!ec)
          co_return std::tuple{error_code{}, endpoint};
+      if (ec == errc::operation_canceled) // and the next co_await would throw
+         break;
    }
    co_return std::tuple{ec, TcpEndpoint{}};
 }

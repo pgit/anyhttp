@@ -671,12 +671,70 @@ TEST_F(ClientConnect, WHEN_local_endpoint_is_given_THEN_connection_comes_from_th
                           .local_endpoint = TcpEndpoint{io::make_address("127.0.0.3"), 0},
                           .protocol = Protocol::h1});
    error_code result;
-   launch(context.get_executor(), connect(client, result));
+   auto connect_or_close = [](client::Client& client, error_code& result,
+                              TcpAcceptor& acceptor) -> Task<void> {
+      co_await connect(client, result);
+      if (result)
+         io::close(acceptor); // or its accept() would wait for ever
+   };
+   launch(context.get_executor(), connect_or_close(client, result, acceptor));
    context.run();
 
    EXPECT_EQ(result, error_code{}) << result.message();
    ASSERT_TRUE(seen);
    EXPECT_EQ(seen->address(), io::make_address("127.0.0.3"));
+}
+
+//
+// With a port, too: the first connection from it is still around, in FIN_WAIT or TIME_WAIT, when
+// the second binds it again, which takes SO_REUSEADDR. The client closes first, so that what is
+// left behind is on its side, and connects to another server the second time, as two connections
+// that are the same in all four of address and port cannot be.
+//
+TEST_F(ClientConnect, WHEN_local_port_is_given_THEN_it_can_be_connected_from_again)
+{
+   auto first = io::make_acceptor(context.get_executor());
+   auto second = io::make_acceptor(context.get_executor());
+   io::listen(first, {io::make_address("127.0.0.2"), 0});
+   io::listen(second, {io::make_address("127.0.0.2"), 0});
+
+   // A free port, the kernel's pick for a listener: closing that leaves nothing behind.
+   auto probe = io::make_acceptor(context.get_executor());
+   io::listen(probe, {io::make_address("127.0.0.3"), 0});
+   const TcpEndpoint local{io::make_address("127.0.0.3"), io::local_endpoint(probe).port()};
+   io::close(probe);
+
+   std::vector<TcpEndpoint> seen;
+   auto serve = [this](TcpAcceptor& acceptor, std::vector<TcpEndpoint>& seen) -> Task<void> {
+      auto socket = io::make_socket(context.get_executor());
+      check(co_await io::accept(acceptor, socket)); // or closed, after a connect has failed
+      seen.push_back(*io::remote_endpoint(socket));
+      std::array<char, 64> buffer{};
+      for (;;)
+         if (auto [ec, n] = co_await io::read_some(socket, boost::asio::buffer(buffer)); ec)
+            break;
+   };
+   for (auto* acceptor : {&first, &second})
+      launch(context.get_executor(), serve(*acceptor, seen), [](const std::exception_ptr&) {});
+
+   std::vector<error_code> results;
+   auto client = [this](std::array<TcpAcceptor*, 2> acceptors, TcpEndpoint local,
+                        std::vector<error_code>& results) -> Task<void> {
+      for (auto* acceptor : acceptors)
+      {
+         auto socket = io::make_socket(context.get_executor());
+         auto [ec, endpoint] = co_await io::connect(socket, {io::local_endpoint(*acceptor)}, local);
+         results.push_back(ec);
+         if (ec)
+            io::close(*acceptor); // or its accept() would wait for ever
+      } // closing the socket first
+   };
+   launch(context.get_executor(), client({&first, &second}, local, results),
+          [](const std::exception_ptr& ep) { EXPECT_FALSE(ep) << what(ep); });
+   context.run();
+
+   EXPECT_THAT(results, ElementsAre(error_code{}, error_code{}));
+   EXPECT_THAT(seen, ElementsAre(local, local));
 }
 
 //

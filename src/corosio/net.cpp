@@ -155,11 +155,16 @@ IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoint
       if ((ec = socket.open(endpoint.address().is_v4() ? boost::corosio::family::v4
                                                        : boost::corosio::family::v6)))
          continue;
+      if (local && local->port() != 0 &&
+          (ec = socket.set_option(boost::corosio::socket_option::reuse_address(true))))
+         continue;
       if (local && (ec = socket.bind(*local)))
          continue;
       std::tie(ec) = co_await socket.connect(endpoint);
       if (!ec)
          co_return std::tuple{error_code{}, endpoint};
+      if (ec == errc::operation_canceled) // and every further endpoint would be, too
+         break;
    }
    co_return std::tuple{ec, TcpEndpoint{}};
 }
