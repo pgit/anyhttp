@@ -1,7 +1,8 @@
 //
 // What the client does over TLS with servers that are not like our own, which speaks TLS 1.3 only,
-// always picks HTTP/2 if offered and always ends a connection with a "close_notify". The server
-// here is written out by hand, so that it can do all of that differently.
+// picks HTTP/2 if offered (unless told otherwise, see server::Config::tls_protocols) and always
+// ends a connection with a "close_notify". The server here is written out by hand, so that it can
+// do all of that differently.
 //
 #include "test_fixtures.hpp"
 

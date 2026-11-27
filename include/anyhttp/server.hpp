@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 namespace anyhttp::server
 {
@@ -96,6 +97,22 @@ struct Config
     * the server logs a warning and serves without, HTTP/3 does log.
     */
    std::string tls_keylog_file{};
+
+   /**
+    * What the server offers over TLS on TCP, by ALPN, in its order of preference: \c Protocol::h2
+    * and \c Protocol::h1, either or both. A connection speaks the first of them that the client
+    * offers as well. One that offers no ALPN at all gets HTTP/1.1, which is what TLS without a
+    * protocol agreed on speaks; one that offers none of them is refused, with the
+    * "no_application_protocol" alert of RFC 7301 (section 3.2). So <tt>{Protocol::h1}</tt> serves
+    * HTTP/1.1 only, and <tt>{Protocol::h1, Protocol::h2}</tt> HTTP/2 only to a client that offers
+    * nothing else.
+    *
+    * Cleartext is not affected: HTTP/2 there is by prior knowledge or by an upgrade, and both are
+    * served whatever this says. Nor is HTTP/3, which is QUIC's to negotiate, see
+    * \ref alt_svc_max_age. The constructor throws \c std::invalid_argument for a list that is
+    * empty, names \c Protocol::h3 or names a protocol twice.
+    */
+   std::vector<Protocol> tls_protocols = {Protocol::h2, Protocol::h1};
 
    /**
     * The largest header section of a request the server accepts, in bytes. A request with more is

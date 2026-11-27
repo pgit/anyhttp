@@ -31,6 +31,7 @@
 #include <concepts>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -306,11 +307,13 @@ static_assert(!SocketStream<boost::asio::ip::tcp::socket&>); // rvalues only, se
 
 /**
  * The server's TLS context, from the certificate chain and private key in the PEM files given.
- * ALPN offers "h2" and "http/1.1", and our order of preference wins over the client's. The secrets
- * of its handshakes go to \p keylog_file, if not empty, see \c server::Config::tls_keylog_file.
+ * ALPN offers \p protocols, and our order of preference wins over the client's, see
+ * \c server::Config::tls_protocols; throws what server_alpn() does. The secrets of its handshakes
+ * go to \p keylog_file, if not empty, see \c server::Config::tls_keylog_file.
  */
 TlsContext make_server_tls_context(const std::string& certificate_chain,
                                    const std::string& private_key,
+                                   std::span<const Protocol> protocols,
                                    const std::string& keylog_file = {});
 
 /**

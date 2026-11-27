@@ -18,8 +18,12 @@
 #include <csignal>
 #include <cstdlib>
 #include <expected>
+#include <format>
 #include <iostream>
 #include <print>
+#include <ranges>
+#include <string>
+#include <string_view>
 
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -97,6 +101,10 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
         po::value(&config.server.tls_keylog_file)->default_value(config.server.tls_keylog_file),
         "file to append the TLS secrets of every handshake to, for Wireshark (default: "
         "$SSLKEYLOGFILE)");
+   std::string alpn = "h2,http/1.1";
+   opts("alpn", po::value(&alpn)->default_value(alpn),
+        "what to offer over TLS on TCP, in order of preference: 'h2' and 'http/1.1', either or "
+        "both, separated by a comma");
    long alt_svc_max_age = config.server.alt_svc_max_age.count();
    opts("alt-svc-max-age", po::value(&alt_svc_max_age)->default_value(alt_svc_max_age),
         "how long clients may remember the HTTP/3 endpoint advertised as 'Alt-Svc' over HTTP/1.1 "
@@ -123,6 +131,19 @@ static std::expected<Config, int> parse_config(int argc, char* argv[])
       po::notify(vm);
 
       config.server.alt_svc_max_age = std::chrono::seconds{std::max(0L, alt_svc_max_age)};
+
+      // what is not a list of protocols to offer, the server's constructor says
+      config.server.tls_protocols.clear();
+      for (const auto name : std::views::split(alpn, ','))
+      {
+         const std::string_view protocol{name.begin(), name.end()};
+         if (protocol == "h2")
+            config.server.tls_protocols.push_back(Protocol::h2);
+         else if (protocol == "http/1.1")
+            config.server.tls_protocols.push_back(Protocol::h1);
+         else
+            throw po::error(std::format("--alpn: '{}' is neither 'h2' nor 'http/1.1'", protocol));
+      }
 
       // 'verbose' takes no argument, so its parsed value is always empty -- count occurrences
       config.verbose = std::ranges::count_if(

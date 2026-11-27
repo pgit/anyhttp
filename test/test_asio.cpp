@@ -293,8 +293,9 @@ protected:
 
    IoContext context;
    tcp::acceptor acceptor{context, {boost::asio::ip::make_address("127.0.0.2"), 0}};
-   boost::asio::ssl::context tls_context = make_server_tls_context(
-      server::Config{}.tls_certificate_chain, server::Config{}.tls_private_key);
+   boost::asio::ssl::context tls_context =
+      make_server_tls_context(server::Config{}.tls_certificate_chain,
+                              server::Config{}.tls_private_key, server::Config{}.tls_protocols);
    std::optional<tcp::socket> peer;
    std::optional<boost::asio::ssl::stream<tcp::socket>> tls_peer;
 };

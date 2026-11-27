@@ -6,7 +6,9 @@
 #include <future>
 #include <optional>
 #include <print>
+#include <stdexcept>
 #include <thread>
+#include <vector>
 
 using namespace testing;
 
@@ -189,6 +191,25 @@ TEST(ServerTls, WHEN_private_key_is_missing_THEN_constructor_throws)
                                    server::Config{.listen_address = "127.0.0.2",
                                                   .port = 0,
                                                   .tls_private_key = "pki/out/missing.pem"}));
+}
+
+//
+// So does a list of protocols to offer over TLS that is none, see server::Config::tls_protocols.
+//
+TEST(ServerTls, WHEN_tls_protocols_are_none_to_offer_THEN_constructor_throws)
+{
+   IoContext context;
+   for (const auto& protocols : {std::vector<Protocol>{}, std::vector{Protocol::h3},
+                                 std::vector{Protocol::h2, Protocol::h1, Protocol::h3},
+                                 std::vector{Protocol::h1, Protocol::h1}})
+   {
+      EXPECT_THROW(
+         server::Server(
+            context.get_executor(),
+            server::Config{.listen_address = "127.0.0.2", .port = 0, .tls_protocols = protocols}),
+         std::invalid_argument)
+         << PrintToString(protocols);
+   }
 }
 
 // =================================================================================================

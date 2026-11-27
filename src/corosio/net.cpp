@@ -36,8 +36,12 @@ static void warn_no_keylog(const std::string& keylog_file, Role role)
 }
 
 TlsContext make_server_tls_context(const std::string& certificate_chain,
-                                   const std::string& private_key, const std::string& keylog_file)
+                                   const std::string& private_key,
+                                   std::span<const Protocol> protocols,
+                                   const std::string& keylog_file)
 {
+   const auto alpn = server_alpn(protocols); // two names at most
+
    warn_no_keylog(keylog_file, Role::server);
    TlsContext ctx;
    if (auto ec = ctx.set_min_protocol_version(boost::corosio::tls_version::tls_1_3))
@@ -46,7 +50,7 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
       throw std::system_error(ec, "use_certificate_chain_file");
    if (auto ec = ctx.use_private_key_file(private_key, boost::corosio::tls_file_format::pem))
       throw std::system_error(ec, "use_private_key_file");
-   std::ignore = ctx.set_alpn({"h2", "http/1.1"});
+   std::ignore = alpn.size() == 1 ? ctx.set_alpn({alpn[0]}) : ctx.set_alpn({alpn[0], alpn[1]});
    return ctx;
 }
 

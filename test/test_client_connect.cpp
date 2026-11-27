@@ -263,6 +263,72 @@ TEST_P(ClientTls, WHEN_server_certificate_verifies_THEN_connect_succeeds)
 
 // -------------------------------------------------------------------------------------------------
 
+//
+// What the server offers over TLS on TCP, see server::Config::tls_protocols. HTTP/3 is QUIC's to
+// negotiate, so a client that asks for it gets it whatever the list says.
+//
+class ClientTlsServerHttp11Only : public ClientTls
+{
+protected:
+   void configure_server(server::Config& config) override { config.tls_protocols = {Protocol::h1}; }
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientTlsServerHttp11Only, ClientTlsServerHttp11Only, all_protocols,
+                         NameGenerator);
+
+TEST_P(ClientTlsServerHttp11Only, WHEN_server_offers_http11_only_THEN_client_speaks_http11)
+{
+   EXPECT_EQ(connect(), error_code{});
+   EXPECT_EQ(protocol, GetParam() == Protocol::h3 ? Protocol::h3 : Protocol::h1);
+}
+
+class ClientTlsServerPrefersHttp11 : public ClientTls
+{
+protected:
+   void configure_server(server::Config& config) override
+   {
+      config.tls_protocols = {Protocol::h1, Protocol::h2};
+   }
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientTlsServerPrefersHttp11, ClientTlsServerPrefersHttp11, all_protocols,
+                         NameGenerator);
+
+TEST_P(ClientTlsServerPrefersHttp11, WHEN_server_prefers_http11_THEN_client_speaks_http11)
+{
+   EXPECT_EQ(connect(), error_code{});
+   EXPECT_EQ(protocol, GetParam() == Protocol::h3 ? Protocol::h3 : Protocol::h1);
+}
+
+//
+// A client that offers only HTTP/1.1 agrees on nothing with this server, and is refused, see
+// server::Config::tls_protocols.
+//
+class ClientTlsServerHttp2Only : public ClientTls
+{
+protected:
+   void configure_server(server::Config& config) override { config.tls_protocols = {Protocol::h2}; }
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientTlsServerHttp2Only, ClientTlsServerHttp2Only, all_protocols,
+                         NameGenerator);
+
+TEST_P(ClientTlsServerHttp2Only, WHEN_server_offers_http2_only_THEN_http11_client_is_refused)
+{
+   if (GetParam() == Protocol::h1)
+   {
+      expect_failure(connect());
+      EXPECT_FALSE(protocol);
+   }
+   else
+   {
+      EXPECT_EQ(connect(), error_code{});
+      EXPECT_EQ(protocol, GetParam());
+   }
+}
+
+// -------------------------------------------------------------------------------------------------
+
 class ClientTlsDefaultTrust : public ClientTls
 {
 protected:

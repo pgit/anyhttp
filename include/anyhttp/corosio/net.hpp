@@ -37,6 +37,7 @@
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -303,6 +304,7 @@ static_assert(SocketStream<TlsStream>);
  */
 TlsContext make_server_tls_context(const std::string& certificate_chain,
                                    const std::string& private_key,
+                                   std::span<const Protocol> protocols,
                                    const std::string& keylog_file = {});
 
 /// A client's TLS context, see asio/net.hpp, and without a keylog, as the server's.
