@@ -84,13 +84,18 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 // -------------------------------------------------------------------------------------------------
 
 TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol,
-                                   const std::string& keylog_file)
+                                   const std::string& keylog_file, bool verify)
 {
    boost::asio::ssl::context ctx{boost::asio::ssl::context::tls_client};
    SSL_CTX_set_min_proto_version(ctx.native_handle(), TLS1_2_VERSION);
 
-   tls_load_trusted_cas(ctx.native_handle(), ca_file);
-   ctx.set_verify_mode(boost::asio::ssl::verify_peer);
+   if (verify)
+   {
+      tls_load_trusted_cas(ctx.native_handle(), ca_file);
+      ctx.set_verify_mode(boost::asio::ssl::verify_peer);
+   }
+   else
+      ctx.set_verify_mode(boost::asio::ssl::verify_none);
 
    // "http/1.1" is the tail of the list, what follows the three bytes of "h2".
    auto alpn = std::span<const unsigned char>{next_proto_list};
@@ -165,9 +170,37 @@ IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, st
    co_return std::tuple{ec, std::move(endpoints)};
 }
 
-IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints)
+//
+// boost::asio::async_connect() closes and reopens the socket for every endpoint it tries, which
+// throws away a bind, so with a local endpoint it is this loop instead -- the one of corosio's.
+//
+IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints,
+                            std::optional<TcpEndpoint> local)
 {
-   co_return co_await boost::asio::async_connect(socket, endpoints, boost::asio::as_tuple);
+   if (!local)
+      co_return co_await boost::asio::async_connect(socket, endpoints, boost::asio::as_tuple);
+
+   error_code ec = make_error_code(endpoints.empty() ? errc::host_unreachable
+                                                     : errc::address_family_not_supported);
+   for (const auto& endpoint : endpoints)
+   {
+      if (endpoint.address().is_v4() != local->address().is_v4())
+      {
+         logd("not connecting to {}: not of the family of {}", endpoint, *local);
+         continue;
+      }
+
+      error_code ignored;
+      socket.close(ignored);
+      if (socket.open(endpoint.protocol(), ec); ec)
+         continue;
+      if (socket.bind(*local, ec); ec)
+         continue;
+      std::tie(ec) = co_await socket.async_connect(endpoint, boost::asio::as_tuple);
+      if (!ec)
+         co_return std::tuple{error_code{}, endpoint};
+   }
+   co_return std::tuple{ec, TcpEndpoint{}};
 }
 
 void set_peer_name(TlsStream& stream, const std::string& host)

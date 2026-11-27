@@ -8,6 +8,7 @@
 
 #include <boost/url.hpp>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,16 @@ struct Config
     * before the next one is tried -- limit that by cancelling \c async_connect().
     */
    std::vector<TcpEndpoint> endpoints{};
+
+   /**
+    * The address and port to connect from, bound before connecting, with port 0 for any port.
+    * Only those of the server's endpoints that are of its family are tried, and if none is,
+    * \c async_connect() fails with \c errc::address_family_not_supported; an address that is not
+    * one of this host's fails it with \c errc::address_not_available. With HTTP/3, it is the
+    * address and port the UDP socket is bound to, see \c quic::Config::local_endpoint. Without
+    * it, the system picks the address by its routes, and any port.
+    */
+   std::optional<TcpEndpoint> local_endpoint{};
 
    /**
     * What to speak. An "https" \c url means TLS, and the server has a say in it: \c h1 offers
@@ -100,6 +111,13 @@ struct Config
     * next connection.
     */
    std::string tls_ca_file;
+
+   /**
+    * Whether the server's certificate is verified at all, over TCP and QUIC. Without it, any
+    * certificate is taken, from anybody who answers in the server's place -- that is for
+    * testing. The host of \c url still goes out as SNI.
+    */
+   bool tls_verify = true;
 
    /**
     * Where to log the secrets of every TLS handshake, over TCP and QUIC, as

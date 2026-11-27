@@ -53,15 +53,20 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 // -------------------------------------------------------------------------------------------------
 
 TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol,
-                                   const std::string& keylog_file)
+                                   const std::string& keylog_file, bool verify)
 {
    warn_no_keylog(keylog_file, Role::client);
    TlsContext ctx;
    if (auto ec = ctx.set_min_protocol_version(boost::corosio::tls_version::tls_1_2))
       throw_error(ec);
-   if (auto ec = ca_file.empty() ? ctx.set_default_verify_paths() : ctx.load_verify_file(ca_file))
-      throw std::system_error(ec, "load_verify_file");
-   if (auto ec = ctx.set_verify_mode(boost::corosio::tls_verify_mode::peer))
+   if (verify)
+   {
+      if (auto ec =
+             ca_file.empty() ? ctx.set_default_verify_paths() : ctx.load_verify_file(ca_file))
+         throw std::system_error(ec, "load_verify_file");
+   }
+   if (auto ec = ctx.set_verify_mode(verify ? boost::corosio::tls_verify_mode::peer
+                                            : boost::corosio::tls_verify_mode::none))
       throw_error(ec);
    if (protocol == Protocol::h2)
       std::ignore = ctx.set_alpn({"h2", "http/1.1"});
@@ -133,14 +138,24 @@ IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, st
    co_return std::tuple{ec, std::move(endpoints)};
 }
 
-IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints)
+IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints,
+                            std::optional<TcpEndpoint> local)
 {
-   error_code ec = make_error_code(errc::host_unreachable);
+   error_code ec = make_error_code(
+      !local || endpoints.empty() ? errc::host_unreachable : errc::address_family_not_supported);
    for (const auto& endpoint : endpoints)
    {
+      if (local && endpoint.address().is_v4() != local->address().is_v4())
+      {
+         logd("not connecting to {}: not of the family of {}", endpoint, *local);
+         continue;
+      }
+
       socket.close();
       if ((ec = socket.open(endpoint.address().is_v4() ? boost::corosio::family::v4
                                                        : boost::corosio::family::v6)))
+         continue;
+      if (local && (ec = socket.bind(*local)))
          continue;
       std::tie(ec) = co_await socket.connect(endpoint);
       if (!ec)

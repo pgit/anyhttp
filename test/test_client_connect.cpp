@@ -1,5 +1,7 @@
 #include "test_fixtures.hpp"
 
+#include "anyhttp/net.hpp"
+
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -599,6 +601,133 @@ INSTANTIATE_TEST_SUITE_P(ClientEndpointsWrongHost, ClientEndpointsWrongHost, all
 TEST_P(ClientEndpointsWrongHost, WHEN_certificate_is_not_for_the_host_of_the_url_THEN_connect_fails)
 {
    expect_failure(connect());
+   EXPECT_FALSE(protocol);
+}
+
+// =================================================================================================
+
+//
+// client::Config::tls_verify: without it, a certificate is taken that the trust store does not
+// vouch for, and one that is for another host.
+//
+class ClientTlsNoVerify : public ClientTlsDefaultTrust
+{
+protected:
+   void configure_client(client::Config& config) override
+   {
+      ClientTlsDefaultTrust::configure_client(config);
+      config.tls_verify = false;
+   }
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientTlsNoVerify, ClientTlsNoVerify, all_protocols, NameGenerator);
+
+TEST_P(ClientTlsNoVerify, WHEN_issuer_is_not_trusted_but_verify_is_off_THEN_connect_succeeds)
+{
+   EXPECT_EQ(connect(), error_code{});
+   EXPECT_EQ(protocol, GetParam());
+}
+
+class ClientTlsNoVerifyWrongHost : public ClientTlsWrongHost
+{
+protected:
+   void configure_client(client::Config& config) override { config.tls_verify = false; }
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientTlsNoVerifyWrongHost, ClientTlsNoVerifyWrongHost, all_protocols,
+                         NameGenerator);
+
+TEST_P(ClientTlsNoVerifyWrongHost, WHEN_certificate_is_for_another_host_but_verify_is_off_THEN_ok)
+{
+   EXPECT_EQ(connect(), error_code{});
+   EXPECT_EQ(protocol, GetParam());
+}
+
+// =================================================================================================
+
+//
+// client::Config::local_endpoint, which the server's listener sees a TCP connection come from.
+// 127.0.0.3 is on loopback, too, on Linux.
+//
+TEST_F(ClientConnect, WHEN_local_endpoint_is_given_THEN_connection_comes_from_there)
+{
+   auto acceptor = io::make_acceptor(context.get_executor());
+   io::listen(acceptor, {io::make_address("127.0.0.2"), 0});
+   const auto server = io::local_endpoint(acceptor);
+
+   std::optional<TcpEndpoint> seen;
+   auto accept = [this](TcpAcceptor& acceptor, std::optional<TcpEndpoint>& seen) -> Task<void> {
+      auto socket = io::make_socket(context.get_executor());
+      check(co_await io::accept(acceptor, socket));
+      seen = io::remote_endpoint(socket);
+   };
+   launch(context.get_executor(), accept(acceptor, seen),
+          [](const std::exception_ptr& ep) { EXPECT_FALSE(ep) << what(ep); });
+
+   auto url = boost::urls::url("http://127.0.0.2/");
+   url.set_port_number(server.port());
+   client::Client client(context.get_executor(),
+                         {.url = url,
+                          .local_endpoint = TcpEndpoint{io::make_address("127.0.0.3"), 0},
+                          .protocol = Protocol::h1});
+   error_code result;
+   launch(context.get_executor(), connect(client, result));
+   context.run();
+
+   EXPECT_EQ(result, error_code{}) << result.message();
+   ASSERT_TRUE(seen);
+   EXPECT_EQ(seen->address(), io::make_address("127.0.0.3"));
+}
+
+//
+// What a local endpoint can go wrong with is the same over TCP and QUIC: an address that is not
+// this host's, and one of a family that none of the server's endpoints is of.
+//
+class ClientLocalEndpoint : public ClientTls
+{
+protected:
+   void configure_client(client::Config& config) override { config.local_endpoint = local; }
+
+   TcpEndpoint local{io::make_address("127.0.0.3"), 0};
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientLocalEndpoint, ClientLocalEndpoint, all_protocols, NameGenerator);
+
+TEST_P(ClientLocalEndpoint, WHEN_local_endpoint_is_on_this_host_THEN_connect_succeeds)
+{
+   EXPECT_EQ(connect(), error_code{});
+   EXPECT_EQ(protocol, GetParam());
+}
+
+class ClientLocalEndpointNotOurs : public ClientLocalEndpoint
+{
+protected:
+   ClientLocalEndpointNotOurs() { local = {io::make_address("192.0.2.1"), 0}; } // TEST-NET-1
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientLocalEndpointNotOurs, ClientLocalEndpointNotOurs, all_protocols,
+                         NameGenerator);
+
+TEST_P(ClientLocalEndpointNotOurs, WHEN_local_address_is_not_this_hosts_THEN_connect_fails)
+{
+   const auto ec = connect();
+   EXPECT_EQ(ec, errc::address_not_available) << ec.message();
+   EXPECT_FALSE(protocol);
+}
+
+class ClientLocalEndpointOtherFamily : public ClientLocalEndpoint
+{
+protected:
+   ClientLocalEndpointOtherFamily() { local = {io::make_address("::1"), 0}; }
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientLocalEndpointOtherFamily, ClientLocalEndpointOtherFamily,
+                         all_protocols, NameGenerator);
+
+TEST_P(ClientLocalEndpointOtherFamily, WHEN_no_endpoint_is_of_its_family_THEN_connect_fails)
+{
+   const auto ec = connect();
+   EXPECT_EQ(ec, errc::address_family_not_supported) << ec.message();
    EXPECT_FALSE(protocol);
 }
 

@@ -305,6 +305,11 @@ they are for it:
    :end-before: // [endpoints-end]
    :dedent:
 
+:cpp:member:`local_endpoint <client::Config::local_endpoint>` is an address to connect from, and
+maybe a port, over TCP as over QUIC. Then only the endpoints of that address's family are tried.
+:cpp:member:`tls_verify <client::Config::tls_verify>` turns the check of the certificate off, which
+is for testing: the host of the URL still goes out as SNI, but anybody may answer for it.
+
 To get from HTTP/1.1 or HTTP/2 to HTTP/3, see :doc:`alt-svc`. Over TLS, a body that ends with the
 connection is complete only if the server has said so with a ``close_notify``: otherwise, it may
 have been cut by anyone, and reading it fails with :cpp:var:`errors::partial_message`.

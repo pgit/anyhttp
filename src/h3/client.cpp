@@ -380,7 +380,11 @@ Task<std::shared_ptr<Session::Impl>> async_connect_http3(Executor executor,
                                   .host = config.url.host_address(),
                                   .tls_ca_file = config.tls_ca_file,
                                   .tls_keylog_file = config.tls_keylog_file,
+                                  .verify = config.tls_verify,
                                   .idle_timeout = 30s};
+   if (config.local_endpoint)
+      quic_config.local_endpoint =
+         UdpEndpoint{config.local_endpoint->address(), config.local_endpoint->port()};
    const size_t max_header_size = config.max_header_size;
    co_return co_await quic::async_connect(
       std::move(executor), std::move(endpoints), std::move(quic_config),

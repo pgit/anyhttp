@@ -30,6 +30,7 @@
 #include <chrono>
 #include <concepts>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -314,12 +315,13 @@ TlsContext make_server_tls_context(const std::string& certificate_chain,
 
 /**
  * A client's TLS context: TLS 1.2 and up, the server's certificate verified against \p ca_file as
- * \c client::Config::tls_ca_file describes. ALPN offers "http/1.1", preceded by "h2" if that is
- * what \p protocol asks for. Secrets go to \p keylog_file, as with the server's. Throws if the CA
- * certificates or the key log cannot be loaded.
+ * \c client::Config::tls_ca_file describes -- or not at all, without \p verify. ALPN offers
+ * "http/1.1", preceded by "h2" if that is what \p protocol asks for. Secrets go to
+ * \p keylog_file, as with the server's. Throws if the CA certificates or the key log cannot be
+ * loaded.
  */
 TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol,
-                                   const std::string& keylog_file = {});
+                                   const std::string& keylog_file = {}, bool verify = true);
 
 namespace io
 {
@@ -368,8 +370,13 @@ void set_buffer_sizes(TcpSocket& socket, int send, int receive);
 /// Resolves \p host and \p port (a number): <tt>(error_code, endpoints)</tt>.
 IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, std::string port);
 
-/// Connects \p socket to the first of \p endpoints that takes it: <tt>(error_code, endpoint)</tt>.
-IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints);
+/**
+ * Connects \p socket to the first of \p endpoints that takes it: <tt>(error_code, endpoint)</tt>.
+ * With \p local, the socket is bound to it before each attempt, and only the endpoints of its
+ * family are tried -- if none is, this fails with \c errc::address_family_not_supported.
+ */
+IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints,
+                            std::optional<TcpEndpoint> local = {});
 
 inline TlsStream make_tls_stream(TcpSocket&& socket, TlsContext& context)
 {
