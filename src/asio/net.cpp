@@ -15,10 +15,10 @@
 #include <openssl/ssl.h>
 
 #include <algorithm>
-#include <cassert>
 #include <cstring>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 #include <vector>
 
@@ -62,7 +62,8 @@ static const AlpnList& server_alpn_list(const std::vector<std::string_view>& nam
 
    const auto it = std::ranges::find_if(
       server_alpn_lists, [&wire](const AlpnList& list) { return std::ranges::equal(list, wire); });
-   assert(it != std::end(server_alpn_lists)); // which is what server_alpn() lets through
+   if (it == std::end(server_alpn_lists)) // server_alpn() lets through only what is in there
+      throw std::logic_error("server_alpn_list: no static list for these protocols");
    return *it;
 }
 

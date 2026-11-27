@@ -18,6 +18,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <expected>
+#include <format>
 #include <iostream>
 #include <print>
 #include <ranges>
