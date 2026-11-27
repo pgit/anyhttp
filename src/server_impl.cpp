@@ -57,14 +57,14 @@ Server::Impl::Impl(Executor executor, Config config)
    mlogi("ctor");
    if (config_.use_strand && !multithreaded_runtime)
       throw std::invalid_argument("Config::use_strand: this runtime runs on one thread only");
-   listen_tcp();
+   const bool dual_stack = listen_tcp();
 
    //
    // HTTP/3 shares the endpoint the TCP acceptor is listening on, so it has to be set up after
    // listen_tcp(): with port=0 the actual port is only known once the acceptor is bound.
    //
    auto tcp_ep = io::local_endpoint(acceptor_);
-   quic_ = quic::make_quic_server(*this, UdpEndpoint{tcp_ep.address(), tcp_ep.port()});
+   quic_ = quic::make_quic_server(*this, UdpEndpoint{tcp_ep.address(), tcp_ep.port()}, dual_stack);
    quic_->add_application("h3", h3::make_http3_application(*this));
 
    //
@@ -170,15 +170,22 @@ void Server::Impl::remove_session(const std::shared_ptr<Session::Impl>& session)
 
 // =================================================================================================
 
-void Server::Impl::listen_tcp()
+//
+// Listens on Config::listen_address, and returns whether that is either family: "*" is "::", with
+// the IPv6 socket taking IPv4 clients, too.
+//
+bool Server::Impl::listen_tcp()
 {
    error_code ec;
-   auto address = io::make_address(config().listen_address, ec);
+   const auto address = io::parse_address(config().listen_address, ec);
    if (ec)
-      mlogw("error resolving '{}': {}", config().listen_address, ec.message());
+      throw std::system_error(ec, std::format("listen_address '{}'", config().listen_address));
 
-   io::listen(acceptor_, TcpEndpoint(address, config().port), config().reuse_port);
-   mlogi("TCP listening on {}", io::local_endpoint(acceptor_));
+   const bool dual_stack = !address;
+   io::listen(acceptor_, TcpEndpoint(address ? *address : io::make_address("::"), config().port),
+              config().reuse_port, dual_stack);
+   mlogi("TCP listening on {}{}", io::local_endpoint(acceptor_), dual_stack ? ", dual-stack" : "");
+   return dual_stack;
 }
 
 // =================================================================================================

@@ -732,7 +732,7 @@ TEST_P(QuicStreams, WHEN_a_local_address_is_given_THEN_the_server_sees_the_conne
    };
    run([&]() -> Task<void> {
       auto config = client_config();
-      config.local_endpoint = UdpEndpoint{io::make_address("127.0.0.3"), 0};
+      config.local_address = "127.0.0.3";
       auto connection = co_await connect(config);
       EXPECT_EQ(connection.remote_endpoint(),
                 UdpEndpoint(io::make_address("127.0.0.2"), server->local_endpoint().port()));
@@ -762,7 +762,8 @@ TEST_P(QuicStreams, WHEN_a_local_port_is_given_THEN_the_server_sees_the_connecti
    };
    run([&]() -> Task<void> {
       auto config = client_config();
-      config.local_endpoint = local;
+      config.local_address = "127.0.0.3";
+      config.local_port = local.port();
       auto connection = co_await connect(config);
       auto body = co_await echoed(connection, "from a port of its own");
       EXPECT_EQ(body, "from a port of its own");
@@ -774,7 +775,7 @@ TEST_P(QuicStreams, WHEN_the_local_address_is_not_this_hosts_THEN_connect_fails)
 {
    run([&]() -> Task<void> {
       auto config = client_config();
-      config.local_endpoint = UdpEndpoint{io::make_address("192.0.2.1"), 0}; // TEST-NET-1
+      config.local_address = "192.0.2.1"; // TEST-NET-1
       auto [ec, connection] =
          co_await quic::connect(context.get_executor(), "127.0.0.2", port(), config);
       EXPECT_EQ(ec, errc::address_not_available) << ec.message();
@@ -786,12 +787,49 @@ TEST_P(QuicStreams, WHEN_the_local_address_is_of_the_other_family_THEN_connect_f
 {
    run([&]() -> Task<void> {
       auto config = client_config();
-      config.local_endpoint = UdpEndpoint{io::make_address("::1"), 0};
+      config.local_address = "::1";
       auto [ec, connection] =
          co_await quic::connect(context.get_executor(), "127.0.0.2", port(), config);
       EXPECT_EQ(ec, errc::address_family_not_supported) << ec.message();
       EXPECT_FALSE(connection);
    }());
+}
+
+TEST_P(QuicStreams, WHEN_the_local_address_is_not_an_address_THEN_connect_fails)
+{
+   run([&]() -> Task<void> {
+      auto config = client_config();
+      config.local_address = "localhost"; // a name
+      auto [ec, connection] =
+         co_await quic::connect(context.get_executor(), "127.0.0.2", port(), config);
+      EXPECT_EQ(ec, errc::invalid_argument) << ec.message();
+      EXPECT_FALSE(connection);
+   }());
+}
+
+// "*", either family, with a port: the port is bound, with the unspecified address of the server's.
+TEST_P(QuicStreams, WHEN_only_a_local_port_is_given_THEN_the_server_sees_the_connection_from_it)
+{
+   auto probe = io::make_udp_socket(context.get_executor());
+   const UdpEndpoint any_port{io::make_address("127.0.0.1"), 0};
+   ASSERT_FALSE(io::open(probe, any_port));
+   ASSERT_FALSE(io::bind(probe, any_port));
+   const auto port = io::local_endpoint(probe).port();
+   io::close(probe);
+
+   UdpEndpoint seen;
+   serverConnection = [&](quic::Connection connection) -> Task<void> {
+      seen = connection.remote_endpoint();
+      co_await echo_streams(std::move(connection));
+   };
+   run([&]() -> Task<void> {
+      auto config = client_config();
+      config.local_port = port;
+      auto connection = co_await connect(config);
+      auto body = co_await echoed(connection, "from a port alone");
+      EXPECT_EQ(body, "from a port alone");
+   }());
+   EXPECT_EQ(seen.port(), port);
 }
 
 TEST_P(QuicStreams, WHEN_a_device_is_given_THEN_the_connection_goes_through_it)

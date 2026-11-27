@@ -22,8 +22,14 @@ namespace anyhttp::server
 /// What a \ref Server is made with.
 struct Config
 {
-   /// The address to listen on, for TCP and for HTTP/3 alike.
-   std::string listen_address = "::";
+   /**
+    * The address to listen on, for TCP and for HTTP/3 alike: \c "*", the default, is every address
+    * of both families, on an IPv6 socket that takes IPv4 clients, too (dual stack). \c "0.0.0.0"
+    * is every IPv4 address and \c "::" every IPv6 one, but only those, and anything else is the
+    * one address, IPv4-mapped IPv6 ones as IPv4. The constructor throws \c errc::invalid_argument
+    * for what is not an address.
+    */
+   std::string listen_address = "*";
 
    /// The port to listen on, for TCP and for HTTP/3 alike. Zero has the kernel pick one, see
    /// \ref Server::local_endpoint.

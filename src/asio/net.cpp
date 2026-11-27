@@ -113,7 +113,7 @@ TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol
 namespace io
 {
 
-void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port)
+void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port, bool dual_stack)
 {
    acceptor.open(endpoint.protocol());
    acceptor.set_option(boost::asio::socket_base::reuse_address(true));
@@ -122,17 +122,17 @@ void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port)
          boost::asio::detail::socket_option::boolean<SOL_SOCKET, SO_REUSEPORT>(true));
 
    //
-   // Accept IPv4 clients on an IPv6 listener, too. This has to go after open() -- there is no
-   // socket to set it on before that -- and before bind(), which is when it takes effect. Not
-   // fatal if it fails: most systems are dual-stack by default (net.ipv6.bindv6only=0) anyway.
+   // Accept IPv4 clients on an IPv6 listener, too, or not, whatever the system's default is
+   // (net.ipv6.bindv6only). This has to go after open() -- there is no socket to set it on before
+   // that -- and before bind(), which is when it takes effect. Not fatal if it fails.
    //
    if (endpoint.protocol() == boost::asio::ip::tcp::v6())
    {
       error_code ec;
-      acceptor.set_option(boost::asio::ip::v6_only(false), ec);
+      acceptor.set_option(boost::asio::ip::v6_only(!dual_stack), ec);
       if (ec)
-         logw("[{}] error enabling dual-stack on {}: {}", log_prefix(Role::server), endpoint,
-              ec.what());
+         logw("[{}] error {} dual-stack on {}: {}", log_prefix(Role::server),
+              dual_stack ? "enabling" : "disabling", endpoint, ec.what());
    }
 
    acceptor.bind(endpoint);
@@ -177,18 +177,19 @@ IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, st
 // is in TIME_WAIT.
 //
 IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints,
-                            std::optional<TcpEndpoint> local)
+                            std::optional<IpAddress> local, uint16_t port)
 {
-   if (!local)
+   if (!local && port == 0)
       co_return co_await boost::asio::async_connect(socket, endpoints, boost::asio::as_tuple);
 
    error_code ec = make_error_code(endpoints.empty() ? errc::host_unreachable
                                                      : errc::address_family_not_supported);
    for (const auto& endpoint : endpoints)
    {
-      if (endpoint.address().is_v4() != local->address().is_v4())
+      const auto address = bind_address(local, endpoint.address());
+      if (!address)
       {
-         logd("not connecting to {}: not of the family of {}", endpoint, *local);
+         logd("not connecting to {}: not of the family of the local address", endpoint);
          continue;
       }
 
@@ -196,10 +197,10 @@ IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoint
       socket.close(ignored);
       if (socket.open(endpoint.protocol(), ec); ec)
          continue;
-      if (local->port() != 0)
+      if (port != 0)
          if (socket.set_option(boost::asio::socket_base::reuse_address(true), ec); ec)
             continue;
-      if (socket.bind(*local, ec); ec)
+      if (socket.bind({*address, port}, ec); ec)
          continue;
       std::tie(ec) = co_await socket.async_connect(endpoint, boost::asio::as_tuple);
       if (!ec)

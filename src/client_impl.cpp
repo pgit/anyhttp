@@ -137,6 +137,15 @@ Task<std::vector<TcpEndpoint>> Client::Impl::resolve(std::string host, std::stri
 Task<Session> Client::Impl::async_connect()
 {
    //
+   // Where the connection comes from, see Config::local_address -- what is not an address fails
+   // before anything goes out, over HTTP/3 as well.
+   //
+   error_code invalid;
+   const auto local = io::parse_address(config().local_address, invalid);
+   if (invalid)
+      throw_error(invalid);
+
+   //
    // Where the connection goes is up to the caller, if the caller has said so, and then nothing
    // that is to be learned about the host of the URL matters.
    //
@@ -185,7 +194,7 @@ Task<Session> Client::Impl::async_connect()
    //
    auto socket = io::make_socket(executor_);
    auto [connect_ec, endpoint] =
-      co_await io::connect(socket, std::move(endpoints), config().local_endpoint);
+      co_await io::connect(socket, std::move(endpoints), local, config().local_port);
    if (connect_ec)
       throw_error(connect_ec);
 

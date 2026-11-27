@@ -331,10 +331,11 @@ inline TcpAcceptor make_acceptor(const Executor& executor) { return TcpAcceptor(
 
 /**
  * Opens \p acceptor on \p endpoint and starts listening: with SO_REUSEADDR (and SO_REUSEPORT
- * if \p reuse_port), and on an IPv6
- * endpoint for IPv4 clients, too (dual stack, if the system allows it). Throws what fails.
+ * if \p reuse_port), and on an IPv6 endpoint for IPv6 clients only, or with \p dual_stack for
+ * IPv4 clients, too (if the system allows either). Throws what fails.
  */
-void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port = false);
+void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port = false,
+            bool dual_stack = false);
 
 inline TcpEndpoint local_endpoint(const TcpAcceptor& acceptor) { return acceptor.local_endpoint(); }
 
@@ -372,11 +373,13 @@ IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, st
 
 /**
  * Connects \p socket to the first of \p endpoints that takes it: <tt>(error_code, endpoint)</tt>.
- * With \p local, the socket is bound to it before each attempt, and only the endpoints of its
- * family are tried -- if none is, this fails with \c errc::address_family_not_supported.
+ * From \p local, as io::parse_address() has it, and \p port: with either, the socket is bound
+ * before each attempt, to io::bind_address() and \p port, with SO_REUSEADDR for a port. Only the
+ * endpoints of \p local's family are tried -- if none is, this fails with
+ * \c errc::address_family_not_supported. A cancelled attempt is the last one.
  */
 IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints,
-                            std::optional<TcpEndpoint> local = {});
+                            std::optional<IpAddress> local = {}, uint16_t port = 0);
 
 inline TlsStream make_tls_stream(TcpSocket&& socket, TlsContext& context)
 {

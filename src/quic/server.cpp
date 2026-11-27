@@ -323,7 +323,7 @@ struct QuicBatch
 class QuicServerImpl : public QuicServer, public std::enable_shared_from_this<QuicServerImpl>
 {
 public:
-   QuicServerImpl(server::Server::Impl& parent, const UdpEndpoint& endpoint);
+   QuicServerImpl(server::Server::Impl& parent, const UdpEndpoint& endpoint, bool dual_stack);
 
    /// For log lines that belong to no connection, see anyhttp::log_prefix().
    std::string log_prefix() const { return anyhttp::log_prefix(Role::server); }
@@ -782,7 +782,8 @@ void QuicServerSession::resend_conn_close()
 // QuicServerImpl: the UDP socket, the receive loop and the connection-ID demux.
 // =================================================================================================
 
-QuicServerImpl::QuicServerImpl(server::Server::Impl& parent, const UdpEndpoint& endpoint)
+QuicServerImpl::QuicServerImpl(server::Server::Impl& parent, const UdpEndpoint& endpoint,
+                               bool dual_stack)
    : parent_(parent), tls_(parent.config(), &QuicServerImpl::alpn_select_cb, this),
      executor_(config().use_strand ? new_strand(parent.get_executor()) : parent.get_executor()),
      socket_(io::make_udp_socket(executor_))
@@ -796,7 +797,8 @@ QuicServerImpl::QuicServerImpl(server::Server::Impl& parent, const UdpEndpoint& 
    };
    if (endpoint.address().is_v6())
    {
-      std::ignore = io::set_option(socket_, IPPROTO_IPV6, IPV6_V6ONLY, 0); // if the system lets us
+      // IPv4 clients, too, or not, as the TCP acceptor, if the system lets us
+      std::ignore = io::set_option(socket_, IPPROTO_IPV6, IPV6_V6ONLY, dual_stack ? 0 : 1);
       enable(IPPROTO_IPV6, IPV6_RECVTCLASS);
       enable(IPPROTO_IPV6, IPV6_MTU_DISCOVER);
       enable(IPPROTO_IPV6, IPV6_RECVPKTINFO);
@@ -1216,9 +1218,9 @@ Task<void> QuicServerImpl::udp_receive_loop()
 // =================================================================================================
 
 std::shared_ptr<QuicServer> make_quic_server(server::Server::Impl& server,
-                                             const UdpEndpoint& endpoint)
+                                             const UdpEndpoint& endpoint, bool dual_stack)
 {
-   return std::make_shared<QuicServerImpl>(server, endpoint);
+   return std::make_shared<QuicServerImpl>(server, endpoint, dual_stack);
 }
 
 // =================================================================================================
