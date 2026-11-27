@@ -301,8 +301,8 @@ TEST_P(ClientTlsServerPrefersHttp11, WHEN_server_prefers_http11_THEN_client_spea
 }
 
 //
-// A client that offers only HTTP/1.1 agrees on nothing with this server, and speaks HTTP/1.1 all
-// the same, without ALPN -- or is refused, on COROSIO, see server::Config::tls_protocols.
+// A client that offers only HTTP/1.1 agrees on nothing with this server, and is refused, see
+// server::Config::tls_protocols.
 //
 class ClientTlsServerHttp2Only : public ClientTls
 {
@@ -313,18 +313,18 @@ protected:
 INSTANTIATE_TEST_SUITE_P(ClientTlsServerHttp2Only, ClientTlsServerHttp2Only, all_protocols,
                          NameGenerator);
 
-TEST_P(ClientTlsServerHttp2Only, WHEN_server_offers_http2_only_THEN_client_speaks_what_it_asked)
+TEST_P(ClientTlsServerHttp2Only, WHEN_server_offers_http2_only_THEN_http11_client_is_refused)
 {
-#if ANYHTTP_COROSIO
    if (GetParam() == Protocol::h1)
    {
       expect_failure(connect());
       EXPECT_FALSE(protocol);
-      return;
    }
-#endif
-   EXPECT_EQ(connect(), error_code{});
-   EXPECT_EQ(protocol, GetParam());
+   else
+   {
+      EXPECT_EQ(connect(), error_code{});
+      EXPECT_EQ(protocol, GetParam());
+   }
 }
 
 // -------------------------------------------------------------------------------------------------

@@ -102,10 +102,10 @@ struct Config
     * What the server offers over TLS on TCP, by ALPN, in its order of preference: \c Protocol::h2
     * and \c Protocol::h1, either or both. A connection speaks the first of them that the client
     * offers as well. One that offers no ALPN at all gets HTTP/1.1, which is what TLS without a
-    * protocol agreed on speaks, and so does one that offers none of them -- except on the COROSIO
-    * I/O runtime, whose TLS refuses that one with the "no_application_protocol" alert of RFC 7301
-    * (section 3.2). So \c {Protocol::h1} serves HTTP/1.1 only, and \c {Protocol::h1, Protocol::h2}
-    * HTTP/2 only to a client that offers nothing else.
+    * protocol agreed on speaks; one that offers none of them is refused, with the
+    * "no_application_protocol" alert of RFC 7301 (section 3.2). So \c {Protocol::h1} serves
+    * HTTP/1.1 only, and \c {Protocol::h1, Protocol::h2} HTTP/2 only to a client that offers nothing
+    * else.
     *
     * Cleartext is not affected: HTTP/2 there is by prior knowledge or by an upgrade, and both are
     * served whatever this says. Nor is HTTP/3, which is QUIC's to negotiate, see

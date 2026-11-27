@@ -76,7 +76,9 @@ static int next_proto_cb(SSL* s, const unsigned char** data, unsigned int* len, 
 
 //
 // ALPN, picking the first protocol of ours, the list in \p arg, that the client offers -- our
-// preference wins, not the client's order.
+// preference wins, not the client's order. A client that offers none of them is refused with the
+// "no_application_protocol" alert (RFC 7301, section 3.2), as corosio's TLS does; one that offers
+// no ALPN at all never gets here.
 //
 static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned char* outlen,
                                 const unsigned char* in, unsigned int inlen, void* arg)
@@ -97,7 +99,7 @@ static int alpn_select_proto_cb(SSL* ssl, const unsigned char** out, unsigned ch
       }
    }
 
-   return SSL_TLSEXT_ERR_NOACK;
+   return SSL_TLSEXT_ERR_ALERT_FATAL;
 }
 
 TlsContext make_server_tls_context(const std::string& certificate_chain,

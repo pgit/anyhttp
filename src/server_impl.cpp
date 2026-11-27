@@ -248,9 +248,9 @@ Task<void> Server::Impl::handle_connection(Executor executor, TcpSocket socket)
 
       //
       // Everything that is not "h2" is served as HTTP/1.1, including the empty ALPN of a client
-      // that offered none at all (curl --no-alpn) and one nobody agreed on. Refusing those would
-      // buy nothing: HTTP/1.1 is what a connection without a negotiated protocol speaks anyway.
-      // (corosio's TLS refuses the latter itself, see server::Config::tls_protocols.)
+      // that offered none at all (curl --no-alpn): HTTP/1.1 is what a connection without a
+      // negotiated protocol speaks. One that offered only protocols we do not speak has been
+      // refused by the handshake, see server::Config::tls_protocols.
       //
       if (alpn == "h2")
          session = h2::make_server_session(*this, executor, std::move(tls));

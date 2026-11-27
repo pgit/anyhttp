@@ -98,8 +98,8 @@ server throws.
 Over TLS, the server offers HTTP/2 and HTTP/1.1 by ALPN, and takes HTTP/2 where the client offers
 it as well. :cpp:member:`tls_protocols <server::Config::tls_protocols>` says what to offer instead,
 in the server's order of preference: ``{Protocol::h1}`` serves HTTP/1.1 only, as a server that has
-no HTTP/2 does. Cleartext and HTTP/3 are not affected. A client that offers none of them speaks
-HTTP/1.1 all the same on the ASIO runtime, and Corosio's TLS refuses it.
+no HTTP/2 does. Cleartext and HTTP/3 are not affected. A client that offers none of them is
+refused, and one that offers no ALPN at all speaks HTTP/1.1.
 
 A first client
 --------------
