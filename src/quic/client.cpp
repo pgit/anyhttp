@@ -136,7 +136,8 @@ public:
    // Connect-time setup, in two steps: the socket, which reports what the system made of it, and
    // the connection on it, with the application `factory` makes, which returns 0 on success.
    //
-   error_code open(const UdpEndpoint& remote, const ClientConfig& config);
+   error_code open(const UdpEndpoint& remote, const ClientConfig& config,
+                   const std::optional<UdpEndpoint>& local);
    int init(const UdpEndpoint& remote, const ClientConfig& config,
             const ApplicationFactory& factory);
 
@@ -187,10 +188,11 @@ QuicClientSession::~QuicClientSession()
 // -------------------------------------------------------------------------------------------------
 
 //
-// The device and the local endpoint, if the config has them, go before connect(), which would
-// pick both by the routes otherwise.
+// The device, if the config has one, and the \p local endpoint, if there is one to bind to, go
+// before connect(), which would pick both by the routes otherwise.
 //
-error_code QuicClientSession::open(const UdpEndpoint& remote, const ClientConfig& config)
+error_code QuicClientSession::open(const UdpEndpoint& remote, const ClientConfig& config,
+                                   const std::optional<UdpEndpoint>& local)
 {
    if (auto ec = io::open(socket_, remote))
    {
@@ -203,10 +205,10 @@ error_code QuicClientSession::open(const UdpEndpoint& remote, const ClientConfig
          logw("QuicClientSession::open: device '{}': {}", config.device, ec.message());
          return ec;
       }
-   if (config.local_endpoint)
-      if (auto ec = io::bind(socket_, *config.local_endpoint))
+   if (local)
+      if (auto ec = io::bind(socket_, *local))
       {
-         logw("QuicClientSession::open: bind to {}: {}", *config.local_endpoint, ec.message());
+         logw("QuicClientSession::open: bind to {}: {}", *local, ec.message());
          return ec;
       }
    if (auto ec = io::connect(socket_, remote))
@@ -470,6 +472,11 @@ Task<std::shared_ptr<QuicSession>> async_connect(Executor executor,
    if (endpoints.empty())
       throw_error(make_error_code(errc::host_unreachable));
 
+   error_code invalid;
+   const auto local_address = io::parse_address(config.local_address, invalid);
+   if (invalid)
+      throw_error(invalid);
+
    //
    // What the last attempt failed with, see the declaration. Every endpoint that is tried sets it,
    // so it keeps this value only if none was.
@@ -479,15 +486,18 @@ Task<std::shared_ptr<QuicSession>> async_connect(Executor executor,
    for (const auto& endpoint : endpoints)
    {
       const UdpEndpoint remote{endpoint.address(), endpoint.port()};
-      if (config.local_endpoint &&
-          config.local_endpoint->address().is_v4() != remote.address().is_v4())
+      const auto address = io::bind_address(local_address, remote.address());
+      if (!address)
       {
-         logd("not connecting to {}: not of the family of {}", remote, *config.local_endpoint);
+         logd("not connecting to {}: not of the family of '{}'", remote, config.local_address);
          continue;
       }
+      std::optional<UdpEndpoint> local;
+      if (local_address || config.local_port != 0)
+         local.emplace(*address, config.local_port);
 
       auto session = std::make_shared<QuicClientSession>(executor);
-      if (auto ec = session->open(remote, config))
+      if (auto ec = session->open(remote, config, local))
       {
          failed = ec;
          continue;

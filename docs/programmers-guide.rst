@@ -73,7 +73,10 @@ A :cpp:class:`server::Server` is made on an executor, and from then on everythin
 there. There is no thread behind it, so nothing happens unless the context runs. It starts
 listening as it is made, on TCP and UDP, on the same port, and serves HTTP/1.1, HTTP/2 and HTTP/3
 from there, with TLS and without. So there is nothing to choose: try it with ``curl``, which takes
-the test PKI that the build makes in ``pki/out``.
+the test PKI that the build makes in ``pki/out``. It listens on every address of both families,
+``"*"``, which :cpp:member:`listen_address <server::Config::listen_address>` narrows down:
+``"0.0.0.0"`` and ``"::"`` are every address of one family, IPv4 and IPv6, and anything else is
+that one address.
 
 .. code-block:: sh
 
@@ -305,8 +308,10 @@ they are for it:
    :end-before: // [endpoints-end]
    :dedent:
 
-:cpp:member:`local_endpoint <client::Config::local_endpoint>` is an address to connect from, and
-maybe a port, over TCP as over QUIC. Then only the endpoints of that address's family are tried.
+:cpp:member:`local_address <client::Config::local_address>` is the address to connect from, over
+TCP as over QUIC, and :cpp:member:`local_port <client::Config::local_port>` the port. The addresses
+mean what they do to the server: ``"*"``, the default, is either family, ``"0.0.0.0"`` and
+``"::"`` one family each, and only the endpoints of that family are tried.
 :cpp:member:`tls_verify <client::Config::tls_verify>` turns the check of the certificate off, which
 is for testing: the host of the URL still goes out as SNI, but anybody may answer for it.
 
@@ -519,8 +524,9 @@ An empty name checks the chain only and sends no SNI, and :cpp:member:`quic::Con
 turns the check off altogether, for testing.
 
 Where the client sends from is up to the system's routes, unless
-:cpp:member:`quic::Config::local_endpoint` has an address to bind to, and maybe a port. Then only
-the server's endpoints of that address's family are tried. :cpp:member:`quic::Config::device`
+:cpp:member:`quic::Config::local_address` has an address to bind to, or a family, and
+:cpp:member:`quic::Config::local_port` a port. Then only the server's endpoints of that family are
+tried. :cpp:member:`quic::Config::device`
 names an interface to send through instead of the one the routes pick, on Linux.
 :cpp:func:`remote_endpoint() <quic::Connection::remote_endpoint>` tells the server where a
 connection comes from, and the client where it goes.

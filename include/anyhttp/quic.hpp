@@ -32,7 +32,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -73,13 +72,18 @@ struct Config
    std::chrono::nanoseconds idle_timeout = std::chrono::seconds{30};
 
    /**
-    * Client: the address and port to send from, bound before connecting, with port 0 for any
-    * port. Only those of the server's endpoints that are of its family are tried, and if none
-    * is, connect() fails with \c errc::address_family_not_supported; an address that is not one
-    * of this host's fails with \c errc::address_not_available. Without it, the system picks the
-    * address by its routes, and any port.
+    * Client: the address to send from. \c "*", the default, is the one the system's routes pick,
+    * of whichever family each of the server's endpoints is of. \c "0.0.0.0" is the same for IPv4
+    * only and \c "::" for IPv6 only, and any other address is bound before connecting,
+    * IPv4-mapped IPv6 ones as IPv4. Only those of the server's endpoints that are of its family
+    * are tried, and if none is, connect() fails with \c errc::address_family_not_supported. An
+    * address that is not one of this host's fails with \c errc::address_not_available, and what
+    * is not an address at all with \c errc::invalid_argument.
     */
-   std::optional<UdpEndpoint> local_endpoint{};
+   std::string local_address = "*";
+
+   /// Client: the port to send from, 0, the default, for any.
+   uint16_t local_port = 0;
 
    /**
     * Client: the name of the network interface to send through, such as \c "eth0", whatever the

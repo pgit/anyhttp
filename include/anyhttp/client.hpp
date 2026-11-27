@@ -8,7 +8,7 @@
 
 #include <boost/url.hpp>
 
-#include <optional>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -44,17 +44,24 @@ struct Config
    std::vector<TcpEndpoint> endpoints{};
 
    /**
-    * The address and port to connect from, bound before connecting, with port 0 for any port.
-    * Only those of the server's endpoints that are of its family are tried, and if none is,
-    * \c async_connect() fails with \c errc::address_family_not_supported; an address that is not
-    * one of this host's fails it with \c errc::address_not_available. A port is bound with
-    * SO_REUSEADDR, so that it can be connected from again while an earlier connection from it is
-    * in TIME_WAIT -- though not to the same server endpoint, which the kernel refuses with
-    * \c errc::address_not_available until the TIME_WAIT is over. With HTTP/3, it is the
-    * address and port the UDP socket is bound to, see \c quic::Config::local_endpoint. Without
-    * it, the system picks the address by its routes, and any port.
+    * The address to connect from. \c "*", the default, is the one the system's routes pick, of
+    * whichever family each of the server's endpoints is of. \c "0.0.0.0" is the same for IPv4 only
+    * and \c "::" for IPv6 only, and any other address is bound before connecting, IPv4-mapped IPv6
+    * ones as IPv4. Only those of the server's endpoints that are of its family are tried, and if
+    * none is, \c async_connect() fails with \c errc::address_family_not_supported. An address
+    * that is not one of this host's fails it with \c errc::address_not_available, and what is not
+    * an address at all with \c errc::invalid_argument. The same goes for HTTP/3, see
+    * \c quic::Config::local_address.
     */
-   std::optional<TcpEndpoint> local_endpoint{};
+   std::string local_address = "*";
+
+   /**
+    * The port to connect from, 0, the default, for any. A port is bound with SO_REUSEADDR, so that
+    * it can be connected from again while an earlier connection from it is in TIME_WAIT -- though
+    * not to the same server endpoint, which the kernel refuses with
+    * \c errc::address_not_available until the TIME_WAIT is over.
+    */
+   uint16_t local_port = 0;
 
    /**
     * What to speak. An "https" \c url means TLS, and the server has a say in it: \c h1 offers
