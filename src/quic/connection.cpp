@@ -206,7 +206,8 @@ IoTask<Connection> connect_to(Executor executor, Target target, std::string host
                                  .tls_keylog_file = config.tls_keylog_file,
                                  .verify = config.tls_verify,
                                  .idle_timeout = config.idle_timeout,
-                                 .local_endpoint = config.local_endpoint,
+                                 .local_address = config.local_address,
+                                 .local_port = config.local_port,
                                  .device = config.device};
       auto factory = [config](QuicSession& s) -> std::unique_ptr<QuicApplication> {
          return std::make_unique<StreamApplication>(s, config, nullptr);

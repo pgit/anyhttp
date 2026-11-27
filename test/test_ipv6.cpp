@@ -47,16 +47,16 @@ TEST_P(IPv6, WHEN_server_listens_on_ipv6_loopback_THEN_get_succeeds)
 // -------------------------------------------------------------------------------------------------
 
 //
-// A dual-stack listener on "::" reached over IPv4. The socket is AF_INET6 but the peer is not: the
-// kernel reports the local address as v4-mapped (::ffff:127.0.0.1) through IPV6_PKTINFO, and the
-// response has to go back out from that.
+// A dual-stack listener on "*", which is "::" for IPv4 clients, too, reached over IPv4. The socket
+// is AF_INET6 but the peer is not: the kernel reports the local address as v4-mapped
+// (::ffff:127.0.0.1) through IPV6_PKTINFO, and the response has to go back out from that.
 //
 class DualStack : public IPv6
 {
 protected:
    DualStack() { url = boost::urls::url{"http://127.0.0.1/custom"}; }
 
-   void configure_server(server::Config& config) override { config.listen_address = "::"; }
+   void configure_server(server::Config& config) override { config.listen_address = "*"; }
 };
 
 INSTANTIATE_TEST_SUITE_P(DualStack, DualStack, ValuesIn(protocols()), NameGenerator);
@@ -83,7 +83,7 @@ class DualStackSecondaryAddress : public IPv6
 protected:
    DualStackSecondaryAddress() { url = boost::urls::url{"http://127.0.0.2/custom"}; }
 
-   void configure_server(server::Config& config) override { config.listen_address = "::"; }
+   void configure_server(server::Config& config) override { config.listen_address = "*"; }
 };
 
 INSTANTIATE_TEST_SUITE_P(DualStackSecondaryAddress, DualStackSecondaryAddress,
@@ -98,3 +98,67 @@ TEST_P(DualStackSecondaryAddress, WHEN_server_is_reached_on_a_secondary_address_
       EXPECT_EQ(message.body(), "Hello, 127.0.0.2!");
    };
 }
+
+// =================================================================================================
+
+//
+// A listener of one family: "::" turns IPv4 clients away, and "0.0.0.0" IPv6 ones, over TCP and
+// QUIC alike -- nothing is listening for them.
+//
+class ListenOneFamily : public Client
+{
+protected:
+   error_code connect()
+   {
+      error_code result;
+      auto connect = [](ListenOneFamily* self, error_code& result) -> Task<void> {
+         auto [ec, session] = co_await self->client->connect();
+         result = ec;
+         self->server.reset();
+      };
+      launch(client->get_executor(), connect(this, result));
+      run();
+      return result;
+   }
+};
+
+class IPv6Only : public ListenOneFamily
+{
+protected:
+   IPv6Only() { url = boost::urls::url{"http://127.0.0.1/custom"}; }
+
+   void configure_server(server::Config& config) override { config.listen_address = "::"; }
+};
+
+INSTANTIATE_TEST_SUITE_P(IPv6Only, IPv6Only, ValuesIn(protocols()), NameGenerator);
+
+TEST_P(IPv6Only, WHEN_ipv6_only_server_is_reached_over_ipv4_THEN_connect_is_refused)
+{
+   const auto ec = connect();
+   EXPECT_EQ(ec, errc::connection_refused) << ec.message();
+}
+
+class IPv4Only : public ListenOneFamily
+{
+protected:
+   IPv4Only() { url = boost::urls::url{"http://[::1]/custom"}; }
+
+   void configure_server(server::Config& config) override { config.listen_address = "0.0.0.0"; }
+};
+
+INSTANTIATE_TEST_SUITE_P(IPv4Only, IPv4Only, ValuesIn(protocols()), NameGenerator);
+
+TEST_P(IPv4Only, WHEN_ipv4_only_server_is_reached_over_ipv6_THEN_connect_is_refused)
+{
+   const auto ec = connect();
+   EXPECT_EQ(ec, errc::connection_refused) << ec.message();
+}
+
+TEST(ListenAddress, WHEN_it_is_not_an_address_THEN_constructor_throws)
+{
+   IoContext context;
+   EXPECT_ANY_THROW(server::Server(context.get_executor(),
+                                   server::Config{.listen_address = "localhost", .port = 0}));
+}
+
+// -------------------------------------------------------------------------------------------------

@@ -55,9 +55,10 @@ public:
 };
 
 /// Binds the UDP socket to `endpoint`, usually the address and port the TCP acceptor is already
-/// listening on, so that all three HTTP versions share one endpoint.
+/// listening on, so that all three HTTP versions share one endpoint. An IPv6 endpoint takes IPv4
+/// clients only with `dual_stack`, as the acceptor does.
 std::shared_ptr<QuicServer> make_quic_server(server::Server::Impl& server,
-                                             const UdpEndpoint& endpoint);
+                                             const UdpEndpoint& endpoint, bool dual_stack);
 
 // =================================================================================================
 

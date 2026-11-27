@@ -77,7 +77,7 @@ public:
    void start();
    void destroy();
 
-   void listen_tcp();
+   bool listen_tcp();
 
    const Config& config() const { return config_; }
    Executor get_executor() const noexcept { return executor_; }

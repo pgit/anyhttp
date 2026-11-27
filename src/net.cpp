@@ -86,4 +86,35 @@ error_code send(UdpSocket& socket, boost::asio::const_buffer buffer) noexcept
    return {};
 }
 
+// =================================================================================================
+// Addresses, see anyhttp/net.hpp.
+// =================================================================================================
+
+std::optional<IpAddress> parse_address(std::string_view text, error_code& ec) noexcept
+{
+   ec = {};
+   if (text.empty() || text == "*")
+      return std::nullopt;
+   auto address = make_address(text, ec);
+   if (ec)
+   {
+      ec = make_error_code(errc::invalid_argument); // whatever each runtime says to it
+      return std::nullopt;
+   }
+   return normalize(address);
+}
+
+std::optional<IpAddress> bind_address(const std::optional<IpAddress>& local,
+                                      const IpAddress& remote) noexcept
+{
+   if (!local)
+   {
+      error_code ec;
+      return make_address(remote.is_v4() ? "0.0.0.0" : "::", ec);
+   }
+   if (local->is_v4() != remote.is_v4())
+      return std::nullopt;
+   return local;
+}
+
 } // namespace anyhttp::io (in the runtime's namespace)

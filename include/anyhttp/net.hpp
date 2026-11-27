@@ -124,6 +124,26 @@ inline IpAddress make_address(std::string_view text)
    return address;
 }
 
+//
+// What both runtimes do the same way with addresses, defined in src/net.cpp.
+//
+
+/**
+ * An address as a Config has one, to listen on or to send from: \c "*", or nothing, is either
+ * family, and parses to \c std::nullopt; \c "0.0.0.0" and \c "::" are one family each, IPv4 and
+ * IPv6; and any other address is itself. An IPv4-mapped IPv6 address is the IPv4 one it maps.
+ * \c errc::invalid_argument in \p ec if \p text is none of these.
+ */
+std::optional<IpAddress> parse_address(std::string_view text, error_code& ec) noexcept;
+
+/**
+ * The address to bind to for sending from \p local, as parse_address() has it, to \p remote: the
+ * unspecified one of \p remote's family if \p local is of either, \p local if it is of that family,
+ * and nothing if it is of the other.
+ */
+std::optional<IpAddress> bind_address(const std::optional<IpAddress>& local,
+                                      const IpAddress& remote) noexcept;
+
 /// An endpoint in the form the socket API takes it: for the native handle, and for ngtcp2.
 struct SocketAddress
 {

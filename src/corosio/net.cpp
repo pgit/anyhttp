@@ -80,7 +80,7 @@ TlsContext make_client_tls_context(const std::string& ca_file, Protocol protocol
 namespace io
 {
 
-void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port)
+void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port, bool dual_stack)
 {
    const auto family =
       endpoint.address().is_v4() ? boost::corosio::family::v4 : boost::corosio::family::v6;
@@ -94,12 +94,12 @@ void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port)
          throw std::system_error(ec, "reuse_port");
    }
 
-   // Accept IPv4 clients on an IPv6 listener, too, see asio/net.cpp.
+   // Accept IPv4 clients on an IPv6 listener, too, or not, see asio/net.cpp.
    if (family == boost::corosio::family::v6)
    {
-      if (auto ec = acceptor.set_option(boost::corosio::socket_option::v6_only(false)))
-         logw("[{}] error enabling dual-stack on {}: {}", log_prefix(Role::server), endpoint,
-              ec.message());
+      if (auto ec = acceptor.set_option(boost::corosio::socket_option::v6_only(!dual_stack)))
+         logw("[{}] error {} dual-stack on {}: {}", log_prefix(Role::server),
+              dual_stack ? "enabling" : "disabling", endpoint, ec.message());
    }
 
    if (auto ec = acceptor.bind(endpoint))
@@ -139,15 +139,17 @@ IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, st
 }
 
 IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints,
-                            std::optional<TcpEndpoint> local)
+                            std::optional<IpAddress> local, uint16_t port)
 {
    error_code ec = make_error_code(
       !local || endpoints.empty() ? errc::host_unreachable : errc::address_family_not_supported);
+   const bool bind = local || port != 0;
    for (const auto& endpoint : endpoints)
    {
-      if (local && endpoint.address().is_v4() != local->address().is_v4())
+      const auto address = bind_address(local, endpoint.address());
+      if (!address)
       {
-         logd("not connecting to {}: not of the family of {}", endpoint, *local);
+         logd("not connecting to {}: not of the family of the local address", endpoint);
          continue;
       }
 
@@ -155,10 +157,9 @@ IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoint
       if ((ec = socket.open(endpoint.address().is_v4() ? boost::corosio::family::v4
                                                        : boost::corosio::family::v6)))
          continue;
-      if (local && local->port() != 0 &&
-          (ec = socket.set_option(boost::corosio::socket_option::reuse_address(true))))
+      if (port != 0 && (ec = socket.set_option(boost::corosio::socket_option::reuse_address(true))))
          continue;
-      if (local && (ec = socket.bind(*local)))
+      if (bind && (ec = socket.bind({*address, port})))
          continue;
       std::tie(ec) = co_await socket.connect(endpoint);
       if (!ec)

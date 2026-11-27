@@ -646,63 +646,107 @@ TEST_P(ClientTlsNoVerifyWrongHost, WHEN_certificate_is_for_another_host_but_veri
 // =================================================================================================
 
 //
-// client::Config::local_endpoint, which the server's listener sees a TCP connection come from.
-// 127.0.0.3 is on loopback, too, on Linux.
+// client::Config::local_address and local_port, which the server's listener sees a TCP connection
+// come from. 127.0.0.3 is on loopback, too, on Linux.
 //
-TEST_F(ClientConnect, WHEN_local_endpoint_is_given_THEN_connection_comes_from_there)
+class ClientLocalAddress : public ClientConnect
 {
-   auto acceptor = io::make_acceptor(context.get_executor());
-   io::listen(acceptor, {io::make_address("127.0.0.2"), 0});
-   const auto server = io::local_endpoint(acceptor);
+protected:
+   /// Connects to a listener on 127.0.0.2 from \p address and \p port, and returns where the
+   /// listener saw the connection come from, if it did.
+   std::optional<TcpEndpoint> connect_from(std::string address, uint16_t port = 0)
+   {
+      auto acceptor = io::make_acceptor(context.get_executor());
+      io::listen(acceptor, {io::make_address("127.0.0.2"), 0});
+      const auto server = io::local_endpoint(acceptor);
 
-   std::optional<TcpEndpoint> seen;
-   auto accept = [this](TcpAcceptor& acceptor, std::optional<TcpEndpoint>& seen) -> Task<void> {
-      auto socket = io::make_socket(context.get_executor());
-      check(co_await io::accept(acceptor, socket));
-      seen = io::remote_endpoint(socket);
-   };
-   launch(context.get_executor(), accept(acceptor, seen),
-          [](const std::exception_ptr& ep) { EXPECT_FALSE(ep) << what(ep); });
+      std::optional<TcpEndpoint> seen;
+      auto accept = [this](TcpAcceptor& acceptor, std::optional<TcpEndpoint>& seen) -> Task<void> {
+         auto socket = io::make_socket(context.get_executor());
+         check(co_await io::accept(acceptor, socket));
+         seen = io::remote_endpoint(socket);
+      };
+      launch(context.get_executor(), accept(acceptor, seen),
+             [](const std::exception_ptr& ep) { EXPECT_FALSE(ep) << what(ep); });
 
-   auto url = boost::urls::url("http://127.0.0.2/");
-   url.set_port_number(server.port());
-   client::Client client(context.get_executor(),
-                         {.url = url,
-                          .local_endpoint = TcpEndpoint{io::make_address("127.0.0.3"), 0},
-                          .protocol = Protocol::h1});
+      auto url = boost::urls::url("http://127.0.0.2/");
+      url.set_port_number(server.port());
+      client::Client client(context.get_executor(), {.url = url,
+                                                     .local_address = std::move(address),
+                                                     .local_port = port,
+                                                     .protocol = Protocol::h1});
+      auto connect_or_close = [](client::Client& client, error_code& result,
+                                 TcpAcceptor& acceptor) -> Task<void> {
+         co_await connect(client, result);
+         if (result)
+            io::close(acceptor); // or its accept() would wait for ever
+      };
+      launch(context.get_executor(), connect_or_close(client, result, acceptor));
+      context.run();
+      return seen;
+   }
+
+   /// A free port, the kernel's pick for a listener: closing that leaves nothing behind.
+   uint16_t free_port()
+   {
+      auto probe = io::make_acceptor(context.get_executor());
+      io::listen(probe, {io::make_address("127.0.0.3"), 0});
+      const auto port = io::local_endpoint(probe).port();
+      io::close(probe);
+      return port;
+   }
+
    error_code result;
-   auto connect_or_close = [](client::Client& client, error_code& result,
-                              TcpAcceptor& acceptor) -> Task<void> {
-      co_await connect(client, result);
-      if (result)
-         io::close(acceptor); // or its accept() would wait for ever
-   };
-   launch(context.get_executor(), connect_or_close(client, result, acceptor));
-   context.run();
+};
 
+TEST_F(ClientLocalAddress, WHEN_local_address_is_given_THEN_connection_comes_from_there)
+{
+   const auto seen = connect_from("127.0.0.3");
    EXPECT_EQ(result, error_code{}) << result.message();
    ASSERT_TRUE(seen);
    EXPECT_EQ(seen->address(), io::make_address("127.0.0.3"));
 }
 
+TEST_F(ClientLocalAddress, WHEN_local_address_is_ipv4_mapped_THEN_it_is_the_ipv4_address)
+{
+   const auto seen = connect_from("::ffff:127.0.0.3");
+   EXPECT_EQ(result, error_code{}) << result.message();
+   ASSERT_TRUE(seen);
+   EXPECT_EQ(seen->address(), io::make_address("127.0.0.3"));
+}
+
+// "*" is either family, so the port alone is bound, and to the server's family.
+TEST_F(ClientLocalAddress, WHEN_any_address_of_either_family_and_a_port_THEN_that_port_is_used)
+{
+   const auto port = free_port();
+   const auto seen = connect_from("*", port);
+   EXPECT_EQ(result, error_code{}) << result.message();
+   ASSERT_TRUE(seen);
+   EXPECT_EQ(seen->port(), port);
+}
+
+TEST_F(ClientLocalAddress, WHEN_any_ipv4_address_and_a_port_THEN_that_port_is_used)
+{
+   const auto port = free_port();
+   const auto seen = connect_from("0.0.0.0", port);
+   EXPECT_EQ(result, error_code{}) << result.message();
+   ASSERT_TRUE(seen);
+   EXPECT_EQ(seen->port(), port);
+}
+
 //
-// With a port, too: the first connection from it is still around, in FIN_WAIT or TIME_WAIT, when
-// the second binds it again, which takes SO_REUSEADDR. The client closes first, so that what is
-// left behind is on its side, and connects to another server the second time, as two connections
-// that are the same in all four of address and port cannot be.
+// With a port: the first connection from it is still around, in FIN_WAIT or TIME_WAIT, when the
+// second binds it again, which takes SO_REUSEADDR. The client closes first, so that what is left
+// behind is on its side, and connects to another server the second time, as two connections that
+// are the same in all four of address and port cannot be.
 //
-TEST_F(ClientConnect, WHEN_local_port_is_given_THEN_it_can_be_connected_from_again)
+TEST_F(ClientLocalAddress, WHEN_local_port_is_given_THEN_it_can_be_connected_from_again)
 {
    auto first = io::make_acceptor(context.get_executor());
    auto second = io::make_acceptor(context.get_executor());
    io::listen(first, {io::make_address("127.0.0.2"), 0});
    io::listen(second, {io::make_address("127.0.0.2"), 0});
-
-   // A free port, the kernel's pick for a listener: closing that leaves nothing behind.
-   auto probe = io::make_acceptor(context.get_executor());
-   io::listen(probe, {io::make_address("127.0.0.3"), 0});
-   const TcpEndpoint local{io::make_address("127.0.0.3"), io::local_endpoint(probe).port()};
-   io::close(probe);
+   const TcpEndpoint local{io::make_address("127.0.0.3"), free_port()};
 
    std::vector<TcpEndpoint> seen;
    auto serve = [this](TcpAcceptor& acceptor, std::vector<TcpEndpoint>& seen) -> Task<void> {
@@ -723,7 +767,8 @@ TEST_F(ClientConnect, WHEN_local_port_is_given_THEN_it_can_be_connected_from_aga
       for (auto* acceptor : acceptors)
       {
          auto socket = io::make_socket(context.get_executor());
-         auto [ec, endpoint] = co_await io::connect(socket, {io::local_endpoint(*acceptor)}, local);
+         auto [ec, endpoint] = co_await io::connect(socket, {io::local_endpoint(*acceptor)},
+                                                    local.address(), local.port());
          results.push_back(ec);
          if (ec)
             io::close(*acceptor); // or its accept() would wait for ever
@@ -738,54 +783,107 @@ TEST_F(ClientConnect, WHEN_local_port_is_given_THEN_it_can_be_connected_from_aga
 }
 
 //
-// What a local endpoint can go wrong with is the same over TCP and QUIC: an address that is not
-// this host's, and one of a family that none of the server's endpoints is of.
+// What a local address can go wrong with is the same over TCP and QUIC: one that is not this
+// host's, one of a family that none of the server's endpoints is of, and one that is not an
+// address at all.
 //
-class ClientLocalEndpoint : public ClientTls
+class ClientLocalAddressTls : public ClientTls
 {
 protected:
-   void configure_client(client::Config& config) override { config.local_endpoint = local; }
+   void configure_client(client::Config& config) override { config.local_address = local; }
 
-   TcpEndpoint local{io::make_address("127.0.0.3"), 0};
+   std::string local = "127.0.0.3";
 };
 
-INSTANTIATE_TEST_SUITE_P(ClientLocalEndpoint, ClientLocalEndpoint, all_protocols, NameGenerator);
+INSTANTIATE_TEST_SUITE_P(ClientLocalAddressTls, ClientLocalAddressTls, all_protocols,
+                         NameGenerator);
 
-TEST_P(ClientLocalEndpoint, WHEN_local_endpoint_is_on_this_host_THEN_connect_succeeds)
+TEST_P(ClientLocalAddressTls, WHEN_local_address_is_on_this_host_THEN_connect_succeeds)
 {
    EXPECT_EQ(connect(), error_code{});
    EXPECT_EQ(protocol, GetParam());
 }
 
-class ClientLocalEndpointNotOurs : public ClientLocalEndpoint
+class ClientLocalAddressAnyIPv4 : public ClientLocalAddressTls
 {
 protected:
-   ClientLocalEndpointNotOurs() { local = {io::make_address("192.0.2.1"), 0}; } // TEST-NET-1
+   ClientLocalAddressAnyIPv4() { local = "0.0.0.0"; }
 };
 
-INSTANTIATE_TEST_SUITE_P(ClientLocalEndpointNotOurs, ClientLocalEndpointNotOurs, all_protocols,
+INSTANTIATE_TEST_SUITE_P(ClientLocalAddressAnyIPv4, ClientLocalAddressAnyIPv4, all_protocols,
                          NameGenerator);
 
-TEST_P(ClientLocalEndpointNotOurs, WHEN_local_address_is_not_this_hosts_THEN_connect_fails)
+TEST_P(ClientLocalAddressAnyIPv4, WHEN_local_address_is_any_ipv4_one_THEN_connect_succeeds)
+{
+   EXPECT_EQ(connect(), error_code{});
+   EXPECT_EQ(protocol, GetParam());
+}
+
+class ClientLocalAddressNotOurs : public ClientLocalAddressTls
+{
+protected:
+   ClientLocalAddressNotOurs() { local = "192.0.2.1"; } // TEST-NET-1
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientLocalAddressNotOurs, ClientLocalAddressNotOurs, all_protocols,
+                         NameGenerator);
+
+TEST_P(ClientLocalAddressNotOurs, WHEN_local_address_is_not_this_hosts_THEN_connect_fails)
 {
    const auto ec = connect();
    EXPECT_EQ(ec, errc::address_not_available) << ec.message();
    EXPECT_FALSE(protocol);
 }
 
-class ClientLocalEndpointOtherFamily : public ClientLocalEndpoint
+//
+// The server is on 127.0.0.2, IPv4 only, and so "::" -- any address, but of IPv6 -- has no
+// endpoint to go to, no more than "::1" has.
+//
+class ClientLocalAddressOtherFamily : public ClientLocalAddressTls
 {
 protected:
-   ClientLocalEndpointOtherFamily() { local = {io::make_address("::1"), 0}; }
+   ClientLocalAddressOtherFamily() { local = "::1"; }
 };
 
-INSTANTIATE_TEST_SUITE_P(ClientLocalEndpointOtherFamily, ClientLocalEndpointOtherFamily,
+INSTANTIATE_TEST_SUITE_P(ClientLocalAddressOtherFamily, ClientLocalAddressOtherFamily,
                          all_protocols, NameGenerator);
 
-TEST_P(ClientLocalEndpointOtherFamily, WHEN_no_endpoint_is_of_its_family_THEN_connect_fails)
+TEST_P(ClientLocalAddressOtherFamily, WHEN_no_endpoint_is_of_its_family_THEN_connect_fails)
 {
    const auto ec = connect();
    EXPECT_EQ(ec, errc::address_family_not_supported) << ec.message();
+   EXPECT_FALSE(protocol);
+}
+
+class ClientLocalAddressAnyIPv6 : public ClientLocalAddressTls
+{
+protected:
+   ClientLocalAddressAnyIPv6() { local = "::"; }
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientLocalAddressAnyIPv6, ClientLocalAddressAnyIPv6, all_protocols,
+                         NameGenerator);
+
+TEST_P(ClientLocalAddressAnyIPv6, WHEN_any_ipv6_address_and_server_is_ipv4_THEN_connect_fails)
+{
+   const auto ec = connect();
+   EXPECT_EQ(ec, errc::address_family_not_supported) << ec.message();
+   EXPECT_FALSE(protocol);
+}
+
+class ClientLocalAddressInvalid : public ClientLocalAddressTls
+{
+protected:
+   ClientLocalAddressInvalid() { local = "localhost"; } // a name, not an address
+};
+
+INSTANTIATE_TEST_SUITE_P(ClientLocalAddressInvalid, ClientLocalAddressInvalid, all_protocols,
+                         NameGenerator);
+
+TEST_P(ClientLocalAddressInvalid, WHEN_local_address_is_not_an_address_THEN_connect_fails)
+{
+   const auto ec = connect();
+   EXPECT_EQ(ec, errc::invalid_argument) << ec.message();
    EXPECT_FALSE(protocol);
 }
 

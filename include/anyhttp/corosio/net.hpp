@@ -318,7 +318,8 @@ inline TcpAcceptor make_acceptor(const Executor& executor)
    return TcpAcceptor(executor.context());
 }
 
-void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port = false);
+void listen(TcpAcceptor& acceptor, const TcpEndpoint& endpoint, bool reuse_port = false,
+            bool dual_stack = false);
 
 inline TcpEndpoint local_endpoint(const TcpAcceptor& acceptor) { return acceptor.local_endpoint(); }
 
@@ -340,7 +341,7 @@ IoTask<std::vector<TcpEndpoint>> resolve(Executor executor, std::string host, st
 
 /// Connects \p socket to the first of \p endpoints that takes it, see asio/net.hpp.
 IoTask<TcpEndpoint> connect(TcpSocket& socket, std::vector<TcpEndpoint> endpoints,
-                            std::optional<TcpEndpoint> local = {});
+                            std::optional<IpAddress> local = {}, uint16_t port = 0);
 
 inline TlsStream make_tls_stream(TcpSocket&& socket, TlsContext& context)
 {
