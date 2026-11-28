@@ -6,6 +6,8 @@
 // here, or on the compiler's command line) runs the tests on several threads, with a strand per
 // connection.
 //
+#include "test_fixtures_common.hpp"
+
 #include <boost/capy/results.hpp>
 #include <boost/capy/task.hpp>
 #include <boost/capy/when_all.hpp>
@@ -179,6 +181,7 @@ public:
    MOCK_METHOD(void, on_complete, (error_code ec), ());
    inline static const error_code Success{};
 
+protected:
    void SetUp() override
    {
       Client::SetUp();

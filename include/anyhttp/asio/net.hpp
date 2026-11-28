@@ -3,16 +3,15 @@
 //
 // The network half of the runtime layer for Boost.Asio, see anyhttp/net.hpp.
 //
-// The sessions are templates over the stream they run on, and there are three of those: a plain
-// TCP socket, a TLS stream on top of one and the type-erased any_async_stream. Beyond the async
-// read and write operations, which all of them have in common already, a session needs three more
-// things from its stream: the underlying socket, to shut it down or close it, an executor to run
-// its loops on, and whether it is encrypted (which tells h2 from h2c). None of them is spelled the
-// same way by all three, so they are reached through this trait instead. Ending the
-// stream itself, which only TLS has to do, is async and comes as a free function below.
+// The sessions are templates over the stream they run on, and there are two of those: a plain
+// TCP socket and a TLS stream on top of one. Beyond the async read and write operations, which
+// both have in common already, a session needs three more things from its stream: the underlying
+// socket, to shut it down or close it, an executor to run its loops on, and whether it is
+// encrypted (which tells h2 from h2c). The two do not spell all of these the same way, so they are
+// reached through this trait instead. Ending the stream itself, which only TLS has to do, is async
+// and comes as a free function below.
 //
 
-#include "anyhttp/asio/any_async_stream.hpp"
 #include "anyhttp/runtime.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
@@ -49,22 +48,12 @@ using TlsContext = boost::asio::ssl::context;
 using TlsStream = boost::asio::ssl::stream<TcpSocket>;
 using UdpSocket = boost::asio::ip::udp::socket;
 
-/// What the server serves cleartext HTTP/1.1 and h2c over: for ASIO, the type-erased stream,
-/// which keeps it exercised.
-using PlainServerStream = any_async_stream;
-
-inline PlainServerStream make_plain_server_stream(TcpSocket&& socket)
-{
-   return make_any_async_stream(std::move(socket));
-}
-
 //
 // The stream types the backends instantiate their session factories for, as X-macros: the
 // factory templates are defined in one source file per backend and explicitly instantiated there,
 // and these keep the lists out of the backends.
 //
-#define ANYHTTP_SERVER_STREAMS(X)                                                                  \
-   X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream) X(::anyhttp::any_async_stream)
+#define ANYHTTP_SERVER_STREAMS(X) X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream)
 #define ANYHTTP_CLIENT_STREAMS(X) X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream)
 
 // -------------------------------------------------------------------------------------------------
@@ -160,23 +149,10 @@ struct stream_traits<boost::asio::ssl::stream<Layer>>
    static bool is_tls(const stream_type&) noexcept { return true; }
 };
 
-/// The type-erased stream already offers all three, its implementation has to provide them.
-template <>
-struct stream_traits<any_async_stream>
-{
-   using stream_type = any_async_stream;
-
-   static auto& get_socket(stream_type& stream) noexcept { return stream.get_socket(); }
-   static auto get_executor(stream_type& stream) noexcept { return stream.get_executor(); }
-   static bool is_tls(const stream_type& stream) noexcept { return stream.is_tls(); }
-};
-
 // -------------------------------------------------------------------------------------------------
 
-//
-// What the four get_socket() above have in common is TcpSocketBase, declared next to the
-// type-erased stream, which returns it directly.
-//
+/// What the get_socket() of both specializations above return a reference to.
+using TcpSocketBase = boost::asio::basic_socket<boost::asio::ip::tcp, boost::asio::any_io_executor>;
 
 /**
  * An async stream that is backed by a TCP socket and knows the executor it runs on -- in other
@@ -300,7 +276,6 @@ Task<error_code> async_teardown(Stream& stream)
 
 static_assert(SocketStream<boost::asio::ip::tcp::socket>);
 static_assert(SocketStream<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>);
-static_assert(SocketStream<any_async_stream>);
 static_assert(!SocketStream<boost::asio::ip::tcp::socket&>); // rvalues only, see above
 
 // -------------------------------------------------------------------------------------------------

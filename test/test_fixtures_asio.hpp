@@ -5,6 +5,8 @@
 // names and members, in the same order. MULTITHREADED (defined here, or on the compiler's command
 // line) runs the tests on several threads, with a strand per connection.
 //
+#include "test_fixtures_common.hpp"
+
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/bind_immediate_executor.hpp>

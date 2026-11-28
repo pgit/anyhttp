@@ -7,7 +7,7 @@
 //
 // Each runtime defines, in asio/net.hpp or corosio/net.hpp (documented in asio/net.hpp):
 //
-//    Types        TcpSocket, TcpAcceptor, TlsContext, TlsStream, UdpSocket, PlainServerStream,
+//    Types        TcpSocket, TcpAcceptor, TlsContext, TlsStream, UdpSocket,
 //                 ANYHTTP_SERVER_STREAMS(X), ANYHTTP_CLIENT_STREAMS(X)
 //    I/O          io::read_some(), io::write(), io::peek(), io::receive(), io::wait_readable(),
 //                 in Asio's buffers on both runtimes
