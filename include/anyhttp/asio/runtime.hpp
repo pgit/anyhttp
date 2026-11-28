@@ -451,6 +451,8 @@ auto when_either(Task<A> a, Task<B> b)
    return std::move(a) || std::move(b);
 }
 
+// -------------------------------------------------------------------------------------------------
+
 /**
  * Lets a coroutine that has been cancelled go on awaiting, to clean up after the cancellation:
  * ASIO throws from everything it awaits after that otherwise -- a nested coroutine included, which

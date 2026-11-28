@@ -541,6 +541,8 @@ Task<std::variant<detail::value_t<A>, detail::value_t<B>>> when_either(Task<A> a
    }
 }
 
+// -------------------------------------------------------------------------------------------------
+
 /// A stop request can not be taken back: nothing to reset, see asio/runtime.hpp.
 inline Task<void> reset_cancellation() { co_return; }
 

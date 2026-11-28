@@ -260,8 +260,7 @@ Task<void> Server::Impl::handle_connection(Executor executor, TcpSocket socket)
    else if (detected == detail::Detected::h2c)
    {
       logi("[{}] new connection, h2c (prior knowledge, {} bytes buffered)", prefix, buffer.size());
-      session =
-         h2::make_server_session(*this, executor, make_plain_server_stream(std::move(socket)));
+      session = h2::make_server_session(*this, executor, std::move(socket));
    }
 
    //
@@ -270,8 +269,7 @@ Task<void> Server::Impl::handle_connection(Executor executor, TcpSocket socket)
    else
    {
       logi("[{}] new connection, h1 (no HTTP/2 client preface)", prefix);
-      session =
-         h1::make_server_session(*this, executor, make_plain_server_stream(std::move(socket)));
+      session = h1::make_server_session(*this, executor, std::move(socket));
    }
 
    //

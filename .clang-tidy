@@ -20,5 +20,5 @@ CheckOptions:
   - key:             modernize-use-nullptr.NullMacros
     value:           'NULL'
   - key:             performance-unnecessary-value-param.AllowedTypes
-    value:           'std::(__[A-Za-z0-9_]+::)*exception_ptr$'
+    value:           'std::(__[A-Za-z0-9_]+::)*exception_ptr$;[Ee]xecutor$'
 ...

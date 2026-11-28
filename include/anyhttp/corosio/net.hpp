@@ -123,11 +123,6 @@ private:
    std::unique_ptr<std::byte[]> linearized_;
 };
 
-/// Cleartext goes over the plain socket: there is no type-erased stream to exercise here.
-using PlainServerStream = TcpSocket;
-
-inline PlainServerStream make_plain_server_stream(TcpSocket&& socket) { return std::move(socket); }
-
 #define ANYHTTP_SERVER_STREAMS(X) X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream)
 #define ANYHTTP_CLIENT_STREAMS(X) X(::anyhttp::TcpSocket) X(::anyhttp::TlsStream)
 

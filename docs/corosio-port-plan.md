@@ -155,6 +155,8 @@ the h3 write path also run under ASAN. From step 5 on, COROSIO's own tests must 
    ASIO serves cleartext over; the backends instantiate for the stream types of the
    `ANYHTTP_SERVER_STREAMS`/`ANYHTTP_CLIENT_STREAMS` X-macros. Spike `openssl_stream` over
    `PrefixedStream` first, including full duplex (corosio#330/#331).
+   *Retired 2026-11-28:* `any_async_stream` and its type-erased buffers are gone, ASIO serves
+   cleartext over the plain socket too.
 5. **COROSIO half of the runtime layer, plus the public front ends.** Bring it up one protocol at a
    time, each with its slice of tests in `build-corosio`:
    - 5a: h2c with prior knowledge

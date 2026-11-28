@@ -80,9 +80,7 @@ install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/anyhttp
     PATTERN "h3" EXCLUDE
     PATTERN "quic" EXCLUDE
     PATTERN "net.hpp" EXCLUDE
-    PATTERN "*_impl.hpp" EXCLUDE
-    PATTERN "any_async_stream.hpp" EXCLUDE
-    PATTERN "buffer_array.hpp" EXCLUDE)
+    PATTERN "*_impl.hpp" EXCLUDE)
 install(DIRECTORY ${http_SOURCE_DIR}/include/boost ${capy_SOURCE_DIR}/include/boost
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT Development
     FILES_MATCHING PATTERN "*.hpp")
